@@ -158,16 +158,29 @@ class ModelStub(BaseHTTPRequestHandler):
 
     repo: Path  # set on the class before serving
 
+    def do_GET(self) -> None:  # noqa: N802
+        """`/v1/models`, which preflight reads to verify the model id.
+
+        Answering it in llama-swap's shape means the smoke test covers the
+        endpoint check rather than having to disable it.
+        """
+        payload = {
+            "object": "list",
+            "data": [{"id": "local-model", "object": "model", "owned_by": "llama-swap"}],
+        }
+        self._respond(payload)
+
     def do_POST(self) -> None:  # noqa: N802
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length) or b"{}")
         model = body.get("model", "stub")
 
         if "/messages" in self.path:
-            payload = self._anthropic(model)
+            self._respond(self._anthropic(model))
         else:
-            payload = self._openai(model)
+            self._respond(self._openai(model))
 
+    def _respond(self, payload: dict) -> None:
         raw = json.dumps(payload).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -586,6 +599,11 @@ def main() -> int:
         check(
             f"executor endpoint resolves from {EXECUTOR_API_BASE_VAR}" in checks,
             "resolved the executor endpoint from the environment",
+            checks,
+        )
+        check(
+            "endpoint offers 'local-model'" in checks,
+            "verified the model id against the endpoint's /v1/models",
             checks,
         )
 

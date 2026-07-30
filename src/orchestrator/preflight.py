@@ -15,7 +15,9 @@ this validates *this host* — not the config in the abstract.
 
 from __future__ import annotations
 
+import json
 import os
+import urllib.request
 from dataclasses import dataclass
 
 from orchestrator.approval import approval_problem
@@ -49,6 +51,7 @@ def run_preflight(
     check_aider: bool = True,
     check_models: bool = True,
     check_approval: bool = True,
+    check_endpoint: bool = True,
     for_resume: bool = False,
 ) -> list[Check]:
     runner = runner or CommandRunner(
@@ -76,6 +79,8 @@ def run_preflight(
 
     checks.extend(_plan_checks(cfg, git))
     checks.extend(_endpoint_checks(cfg))
+    if check_endpoint:
+        checks.extend(check_executor_endpoint(cfg))
     checks.extend(_environment_checks(cfg, runner, run_tests=run_tests))
 
     if check_aider:
@@ -348,6 +353,108 @@ def _endpoint_checks(cfg: ProjectConfig) -> list[Check]:
             Check(f"{role} endpoint resolves from {endpoint.api_base_env}", True, resolved)
         )
     return checks
+
+
+def check_executor_endpoint(cfg: ProjectConfig) -> list[Check]:
+    """The local endpoint answers, and offers the model the config names.
+
+    A mistyped model id fails every single stage, and does it as an opaque
+    executor error rather than as anything that names the cause. One HTTP GET
+    here turns that into a validation failure that prints the names the server
+    actually accepts.
+
+    The `openai/` in `openai/qwen3-coder-next` is a litellm routing prefix,
+    stripped before the request leaves Aider. What the server sees — and what
+    must match — is the remainder.
+    """
+    try:
+        api_base = cfg.executor.resolve_api_base()
+    except KeyError:
+        # Reported by _endpoint_checks. Nothing to reach yet.
+        return []
+    if not api_base:
+        # No api_base means the real OpenAI endpoint, which needs no proving.
+        return []
+
+    url = api_base.rstrip("/") + "/models"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as response:
+            body = response.read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001 - urllib raises a wide family
+        return [
+            Check(
+                "executor endpoint answers",
+                False,
+                f"GET {url} failed: {e}\nno agent stage can run without it",
+            )
+        ]
+
+    checks = [Check("executor endpoint answers", True, url)]
+
+    names = _model_names(body)
+    if names is None:
+        # Not every OpenAI-compatible server implements /v1/models the same way.
+        # Refusing to run over that would be worse than not checking.
+        checks.append(
+            Check(
+                "executor model is offered by the endpoint",
+                False,
+                f"{url} answered, but not with a recognisable model list, so the "
+                "model id could not be verified. Check it by hand.",
+                fatal=False,
+            )
+        )
+        return checks
+
+    wanted = _served_model_name(cfg.executor.model)
+    if wanted in names:
+        checks.append(
+            Check(f"endpoint offers {wanted!r}", True, f"{len(names)} model(s) available")
+        )
+    else:
+        checks.append(
+            Check(
+                f"endpoint offers {wanted!r}",
+                False,
+                f"{url} does not list {wanted!r}. It offers: "
+                + ", ".join(sorted(names))
+                + f".\nexecutor.model is {cfg.executor.model!r}; everything after "
+                "the provider prefix must match a name the server accepts. If "
+                "this endpoint lists models lazily, this is the check to "
+                "reconsider.",
+            )
+        )
+    return checks
+
+
+def _served_model_name(configured: str) -> str:
+    """The model name as the server will see it, minus the litellm prefix."""
+    return configured.split("/", 1)[1] if "/" in configured else configured
+
+
+def _model_names(body: str) -> set[str] | None:
+    """Every name the endpoint answers to, or None if the shape is unfamiliar.
+
+    Aliases count: llama-swap lets a model respond to names that are not its
+    id, and rejecting a configured alias would be a false failure.
+    """
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        return None
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("data"), list):
+        return None
+
+    names: set[str] = set()
+    for entry in parsed["data"]:
+        if not isinstance(entry, dict):
+            continue
+        if isinstance(entry.get("id"), str):
+            names.add(entry["id"])
+        aliases = (entry.get("meta") or {}).get("llamaswap", {}).get("aliases")
+        if isinstance(aliases, list):
+            names.update(a for a in aliases if isinstance(a, str))
+    return names or None
 
 
 def _model_checks(cfg: ProjectConfig) -> list[Check]:
