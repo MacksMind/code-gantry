@@ -180,6 +180,13 @@ class PlannerConfig(_EndpointConfig):
     provider: Literal["anthropic"] = "anthropic"
     model: str
     api_key_env: str = "ANTHROPIC_API_KEY"
+    # Anthropic's ephemeral cache lasts about five minutes by default. Between
+    # two planner calls sits a whole stage — an executor attempt, a scoped
+    # suite, a review, a full suite — which on a large project is comfortably
+    # longer than that, so the prefix expires before it is ever reused. "1h"
+    # buys a longer window at a higher write cost; leave unset to take the
+    # provider default.
+    cache_ttl: str | None = None
     request_timeout_seconds: float = 900.0
     max_retries: int = 2
 
@@ -188,6 +195,10 @@ class ReviewerConfig(_EndpointConfig):
     provider: Literal["openai"] = "openai"
     model: str
     api_key_env: str = "OPENAI_API_KEY"
+    # OpenAI caches automatically on prefix, with a short default lifetime.
+    # "24h" extends it, at the cost of the prefix being stored for that long —
+    # a data-retention decision for the operator, so there is no default.
+    prompt_cache_retention: str | None = None
     request_timeout_seconds: float = 600.0
     max_retries: int = 2
 

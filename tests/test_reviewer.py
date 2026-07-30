@@ -235,3 +235,39 @@ class TestIssuesAsFeedback:
 
     def test_summary_alone_when_there_are_no_issues(self):
         assert "Just wrong." in issues_as_feedback("Just wrong.", [])
+
+
+class TestReviewerCacheControls:
+    """OpenAI caches automatically, but not unconditionally.
+
+    A cache key groups a run's reviews so they route to the same cache rather
+    than competing for one, and retention decides whether the prefix survives
+    the minutes a full Rails suite takes between two reviews. Verified against
+    the live API before being wired in — both fields are accepted.
+    """
+
+    def test_a_cache_key_is_sent(self):
+        client = StubClient(response(parsed=ReviewVerdict(verdict="approved", summary="ok", issues=[])))
+        OpenAIReviewer(cfg_with().reviewer, client=client).review(
+            MESSAGES, cache_key="proj-slug"
+        )
+        assert client.calls[0]["prompt_cache_key"] == "proj-slug"
+
+    def test_no_cache_key_sends_no_field(self):
+        client = StubClient(response(parsed=ReviewVerdict(verdict="approved", summary="ok", issues=[])))
+        OpenAIReviewer(cfg_with().reviewer, client=client).review(MESSAGES)
+        assert "prompt_cache_key" not in client.calls[0]
+
+    def test_retention_is_sent_when_configured(self):
+        client = StubClient(response(parsed=ReviewVerdict(verdict="approved", summary="ok", issues=[])))
+        OpenAIReviewer(
+            cfg_with(prompt_cache_retention="24h").reviewer, client=client
+        ).review(MESSAGES)
+        assert client.calls[0]["prompt_cache_retention"] == "24h"
+
+    def test_retention_is_absent_by_default(self):
+        # Extended retention stores the prefix for longer, which is a data
+        # policy decision the operator makes, not a default we impose.
+        client = StubClient(response(parsed=ReviewVerdict(verdict="approved", summary="ok", issues=[])))
+        OpenAIReviewer(cfg_with().reviewer, client=client).review(MESSAGES)
+        assert "prompt_cache_retention" not in client.calls[0]

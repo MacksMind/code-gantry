@@ -30,6 +30,28 @@ def leading_text(messages):
     return block[0]["text"] if isinstance(block, list) else block
 
 
+class TestCacheLifetime:
+    """The prefix has to still be cached when the next call arrives.
+
+    Anthropic's ephemeral cache defaults to five minutes. Between two planner
+    calls sits a stage: an executor attempt, a scoped suite, a review, and a
+    full suite. On a large Rails suite that is comfortably more than five
+    minutes, so a correctly-marked prefix would expire before it was ever
+    reused and every call would pay full price anyway.
+    """
+
+    def test_the_configured_ttl_reaches_the_cache_control_marker(self):
+        from orchestrator.planner import _system_blocks
+
+        blocks = _system_blocks(cache_ttl="1h")
+        assert blocks[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+
+    def test_no_ttl_leaves_the_provider_default(self):
+        from orchestrator.planner import _system_blocks
+
+        assert _system_blocks()[0]["cache_control"] == {"type": "ephemeral"}
+
+
 class TestPlannerCacheBreakpoint:
     def test_the_stable_prefix_is_marked_cacheable(self):
         messages = build_planner_messages(

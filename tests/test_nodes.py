@@ -39,8 +39,10 @@ class StubPlanner:
 class StubReviewer:
     outcomes: list = field(default_factory=list)
     calls: int = 0
+    cache_keys: list = field(default_factory=list)
 
-    def review(self, messages):
+    def review(self, messages, cache_key=None):
+        self.cache_keys.append(cache_key)
         self.calls += 1
         if self.outcomes:
             return self.outcomes.pop(0)

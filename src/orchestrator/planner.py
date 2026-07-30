@@ -260,7 +260,7 @@ class AnthropicPlanner:
                 # budget truncates the verdict rather than the reasoning.
                 max_tokens=16_000,
                 output_config={"effort": "high"},
-                system=_system_blocks(),
+                system=_system_blocks(self.cfg.cache_ttl),
                 messages=messages,
                 output_format=PlannerResponse,
             )
@@ -399,7 +399,20 @@ what actually happened, and where that leaves the plan.\
 """
 
 
-def _system_blocks() -> list[dict]:
+def cache_control(ttl: str | None = None) -> dict:
+    """The cache_control marker, with an optional longer lifetime.
+
+    The default ephemeral window is about five minutes. A stage takes longer
+    than that on any real project, so without a longer TTL the prefix expires
+    between planner calls and the marker buys nothing.
+    """
+    marker = {"type": "ephemeral"}
+    if ttl:
+        marker["ttl"] = ttl
+    return marker
+
+
+def _system_blocks(cache_ttl: str | None = None) -> list[dict]:
     """The system prompt as a cacheable block.
 
     It never changes across a run, so it belongs in the cached prefix along
@@ -409,7 +422,7 @@ def _system_blocks() -> list[dict]:
         {
             "type": "text",
             "text": PLANNER_SYSTEM_PROMPT,
-            "cache_control": {"type": "ephemeral"},
+            "cache_control": cache_control(cache_ttl),
         }
     ]
 

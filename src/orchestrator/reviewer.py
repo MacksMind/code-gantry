@@ -74,7 +74,9 @@ class ReviewOutcome:
 
 
 class ReviewerClient(Protocol):
-    def review(self, messages: list[dict[str, str]]) -> ReviewOutcome: ...
+    def review(
+        self, messages: list[dict[str, str]], cache_key: str | None = None
+    ) -> ReviewOutcome: ...
 
 
 def _blocked(reason: str) -> ReviewOutcome:
@@ -86,12 +88,28 @@ class OpenAIReviewer:
         self.cfg = cfg
         self._client = client if client is not None else _build_openai_client(cfg)
 
-    def review(self, messages: list[dict[str, str]]) -> ReviewOutcome:
+    def review(
+        self, messages: list[dict[str, str]], cache_key: str | None = None
+    ) -> ReviewOutcome:
+        """One review.
+
+        `cache_key` groups a run's reviews so they route to the same cache
+        rather than competing for one. OpenAI caches on prefix automatically,
+        but the key materially improves the hit rate when many similar requests
+        share a long stable prefix — which is exactly this workload.
+        """
+        extra: dict = {}
+        if cache_key:
+            extra["prompt_cache_key"] = cache_key
+        if self.cfg.prompt_cache_retention:
+            extra["prompt_cache_retention"] = self.cfg.prompt_cache_retention
+
         try:
             completion = self._client.chat.completions.parse(
                 model=self.cfg.model,
                 messages=messages,
                 response_format=ReviewVerdict,
+                **extra,
             )
         except Exception as e:  # noqa: BLE001 - any failure means "no verdict"
             return _blocked(f"The reviewer call failed: {e}")

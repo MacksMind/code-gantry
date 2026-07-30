@@ -476,7 +476,11 @@ def review(state: RunState, rt: Runtime) -> dict:
     )
 
     rt.log(f"[review] {stage.id}: calling reviewer")
-    outcome = rt.reviewer.review(messages)
+    # Keyed by project rather than by run: successive runs and resumes share
+    # the same plan snapshot prefix, so they should share the same cache.
+    outcome = rt.reviewer.review(
+        messages, cache_key=f"orchestrator:{state.get('project_slug') or 'project'}"
+    )
 
     rt.write_artifact(
         state["stage_index"], stage.id, state.get("revision", 0), attempt,
