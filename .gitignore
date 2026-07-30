@@ -8,5 +8,14 @@ __pycache__/
 # Run artifacts: state databases, logs, reports. Never committed.
 runs/
 
+# Per-project run state. `config.yaml` is versioned; these are not.
+#
+# approval.json especially: it records that a human read this machine's config
+# and accepted the commands in it. Committing that would let a checkout arrive
+# pre-approved, which is the one thing approval exists to prevent.
+projects/*/approval.json
+projects/*/status.md
+projects/*/plan-snapshot/
+
 # Run configs may carry sensitive paths; keep them out of history.
 *.local.yaml
