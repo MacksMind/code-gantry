@@ -1,12 +1,18 @@
 """Node logic.
 
-Each function takes (state, runtime) and returns a partial state update, the
-same contract LangGraph expects — but with the runtime passed explicitly, so
-every node is callable from a test with a stubbed executor and reviewer.
+Each function takes (state, runtime) and returns a partial state update — the
+contract LangGraph expects, but with the runtime passed explicitly so every node
+is callable from a test with a stubbed planner, executor, and reviewer.
 
-`next_hop` is set here and read by the graph's conditional edges. Routing
-lives in the state rather than in control flow so a checkpoint records not
-just where a run stopped but which way it was about to go.
+The shape of the loop is three escalation tiers. A failure goes back to the
+executor if the executor can plausibly fix it, back to the planner if the
+*stage* was drawn wrongly, and to a human only for a broken environment, a
+containment breach, or something the planner could not fix. The design goal is
+that a run stops for a good reason or not at all.
+
+`next_hop` is set here and read by the graph's conditional edges. Routing lives
+in state rather than control flow so a checkpoint records not just where a run
+stopped but which way it was about to go.
 """
 
 from __future__ import annotations
@@ -14,26 +20,219 @@ from __future__ import annotations
 import json
 import time
 
-from orchestrator.config import Stage
-from orchestrator.prompts import build_executor_prompt, build_review_messages
+from orchestrator.config import Stage, validate_stage
+from orchestrator.globs import matches_any
+from orchestrator.planner import append_status
+from orchestrator.prompts import (
+    build_executor_prompt,
+    build_planner_messages,
+    build_review_messages,
+)
 from orchestrator.reviewer import issues_as_feedback
 from orchestrator.runtime import Runtime
-from orchestrator.state import RunState, fresh_stage_fields
-from orchestrator.verify import run_verify
+from orchestrator.state import (
+    RunState,
+    accumulate_usage,
+    fresh_revision_fields,
+    fresh_stage_fields,
+)
+from orchestrator.verify import Layer, Route, run_verify
+
+STATUS_TAIL_CHARS = 4_000
 
 
-def current_stage(state: RunState, rt: Runtime) -> Stage:
-    return rt.cfg.stages[state["stage_index"]]
+def current_stage(state: RunState, rt: Runtime) -> Stage | None:
+    fields = state.get("current")
+    return Stage(**fields) if fields else None
 
 
-def current_stage_or_none(state: RunState, rt: Runtime) -> Stage | None:
-    """None once the stage list is exhausted.
+def _attempt(state: RunState) -> int:
+    return state.get("verify_attempt", 0) + state.get("rework_attempt", 0)
 
-    `finalize` escalates after `advance` has already moved past the last
-    stage, so an escalation is not always attributable to a stage.
-    """
+
+# --- plan ----------------------------------------------------------------
+
+
+def plan(state: RunState, rt: Runtime) -> dict:
+    """Derive the next stage, or revise the one that just failed."""
+    stage = current_stage(state, rt)
+    limits = rt.cfg.limits
+
+    if stage is not None and state.get("planner_interventions", 0) >= limits.max_planner_interventions:
+        return _escalate(
+            "planner",
+            f"The planner's global budget is exhausted "
+            f"({limits.max_planner_interventions} interventions). The last "
+            f"failure was: {(state.get('last_failure') or {}).get('summary')}",
+        )
+
+    if len(state.get("completed") or []) >= limits.max_stages:
+        return _escalate(
+            "planner",
+            f"The run reached max_stages ({limits.max_stages}) without the "
+            "planner declaring the project complete. Either the plan is larger "
+            "than the cap or the planner is not converging.",
+        )
+
+    messages = build_planner_messages(
+        cfg=rt.cfg,
+        plan=rt.plan,
+        completed=state.get("completed") or [],
+        current_stage=stage,
+        failure=state.get("last_failure"),
+        revision=state.get("revision", 0),
+        interventions_used=state.get("planner_interventions", 0),
+        interventions_max=limits.max_planner_interventions,
+        status_tail=_status_tail(rt),
+    )
+
+    rt.log(f"[plan] {'revising ' + stage.id if stage else 'deriving next stage'}")
+    outcome = rt.planner.plan(messages)
+
+    usage = accumulate_usage(
+        state.get("run_usage"),
+        planner_prompt_tokens=outcome.usage.prompt_tokens,
+        planner_completion_tokens=outcome.usage.completion_tokens,
+    )
+
+    append_status(
+        rt.project.project_dir,
+        stage_index=state.get("stage_index", 0),
+        stage_id=stage.id if stage else None,
+        revision=state.get("revision", 0),
+        verdict=outcome.verdict,
+        entry=outcome.status_entry,
+        reasoning=outcome.reasoning,
+    )
+    rt.write_artifact(
+        state.get("stage_index", 0),
+        stage.id if stage else "plan",
+        state.get("revision", 0),
+        _attempt(state),
+        "planner.json",
+        json.dumps(
+            {
+                "verdict": outcome.verdict,
+                "reasoning": outcome.reasoning,
+                "revision_mode": outcome.revision_mode,
+                "stage": outcome.stage_fields,
+                "usage": {
+                    "prompt_tokens": outcome.usage.prompt_tokens,
+                    "cached_tokens": outcome.usage.cached_tokens,
+                    "completion_tokens": outcome.usage.completion_tokens,
+                },
+                "client_failure": outcome.failed,
+            },
+            indent=2,
+        ),
+    )
+
+    notes = list(state.get("planner_notes") or [])
+    notes.append(f"{outcome.verdict}: {outcome.reasoning}")
+    base = {"run_usage": usage, "planner_notes": notes}
+
+    if outcome.verdict == "project_complete":
+        rt.log("[plan] project complete")
+        return {**base, "next_hop": "finalize"}
+
+    if outcome.verdict == "blocked":
+        return {
+            **base,
+            **_escalate("planner", f"The planner blocked the run: {outcome.reasoning}"),
+        }
+
+    new_stage = rt.cfg.stage_from_planner(outcome.stage_fields or {})
+    problems = validate_stage(new_stage, rt.cfg)
+    if problems:
+        # A malformed spec is the planner's error to fix, but it does not get
+        # to burn the budget on it indefinitely — the intervention still counts.
+        return {
+            **base,
+            **_escalate(
+                "planner",
+                "The planner produced a stage that failed validation:\n"
+                + "\n".join(f"- {p}" for p in problems),
+            ),
+        }
+
+    if outcome.verdict == "revise":
+        interventions = state.get("planner_interventions", 0) + 1
+        keep_branch = outcome.revision_mode == "extend"
+        rt.log(
+            f"[plan] revising {new_stage.id} (revision "
+            f"{state.get('revision', 0) + 1}, {outcome.revision_mode})"
+        )
+
+        update = {
+            **base,
+            **fresh_revision_fields(),
+            "current": new_stage.model_dump(),
+            "revision": state.get("revision", 0) + 1,
+            "planner_interventions": interventions,
+            "next_hop": "precheck",
+        }
+
+        if not keep_branch:
+            # The approach was wrong: discard the branch and re-cut from the
+            # project tip on the way through precheck.
+            update["stage_branch"] = None
+            update["stage_start_sha"] = ""
+        else:
+            # Scope was merely too narrow. Anything the planner declined to
+            # adopt is reverted; the rest of the stage's work survives.
+            _revert_unadopted(state, rt, new_stage)
+
+        return update
+
+    # next_stage
+    rt.log(f"[plan] next stage: {new_stage.id}")
     index = state.get("stage_index", 0)
-    return rt.cfg.stages[index] if index < len(rt.cfg.stages) else None
+    if stage is not None:
+        # A predecessor inserted in front of a failing stage takes its slot; the
+        # failing stage's work is abandoned rather than half-merged.
+        interventions = state.get("planner_interventions", 0) + 1
+    else:
+        interventions = state.get("planner_interventions", 0)
+
+    return {
+        **base,
+        **fresh_stage_fields(),
+        "current": new_stage.model_dump(),
+        "revision": 0,
+        "stage_index": index,
+        "planner_interventions": interventions,
+        "next_hop": "precheck",
+    }
+
+
+def _revert_unadopted(state: RunState, rt: Runtime, revised: Stage) -> None:
+    """Revert out-of-scope paths the planner chose not to adopt.
+
+    The child branch is the quarantine, so containment never required
+    destroying work. If the revised stage widened `edit_files` to cover a path,
+    the existing work on it stands. If not, that path alone goes back to the
+    stage baseline — and the rest of the stage's work is untouched.
+    """
+    failure = state.get("last_failure") or {}
+    offending = failure.get("out_of_scope_paths") or []
+    if not offending:
+        return
+
+    unadopted = [p for p in offending if not matches_any(p, revised.edit_files)]
+    if not unadopted:
+        rt.log("[plan] planner adopted every out-of-scope path; work stands")
+        return
+
+    rt.log(f"[plan] reverting {len(unadopted)} unadopted path(s)")
+    rt.git.revert_paths(state["stage_start_sha"], unadopted)
+
+
+def _status_tail(rt: Runtime) -> str | None:
+    path = rt.project.status
+    if not path.is_file():
+        return None
+    text = path.read_text()
+    return text[-STATUS_TAIL_CHARS:] if len(text) > STATUS_TAIL_CHARS else text
 
 
 # --- precheck ------------------------------------------------------------
@@ -41,49 +240,55 @@ def current_stage_or_none(state: RunState, rt: Runtime) -> Stage | None:
 
 def precheck(state: RunState, rt: Runtime) -> dict:
     stage = current_stage(state, rt)
+    if stage is None:  # pragma: no cover - graph never routes here without one
+        return {"next_hop": "plan"}
+
     update: dict = {}
-
-    # Entering the stage for the first time: pin the baseline every diff and
-    # every gate for this stage is measured against.
-    if not state.get("stage_start_sha"):
-        update["stage_start_sha"] = rt.git.head_sha()
-        update["stage_started_at"] = time.time()
-
-    rt.log(f"[precheck] stage {stage.id} ({stage.kind})")
+    rt.log(f"[precheck] stage {stage.id} revision {state.get('revision', 0)}")
 
     for command in stage.preconditions:
         result = rt.runner.run(command)
         if not result.ok:
-            # An unmet precondition is an ordering error in the config. No
-            # amount of rework fixes a stage that should not have started.
+            # An unmet precondition is an ordering problem the planner owns —
+            # but note it cannot rewrite the precondition itself, since those
+            # are operator-only. The escalation must say so plainly.
             return {
                 **update,
-                "failure_layer": "precondition",
-                "next_hop": "escalate",
-                "escalation_reason": (
-                    f"Precondition failed for stage {stage.id!r}:\n"
-                    f"{result.summary()}\n{result.output}"
+                **_planner_failure(
+                    state,
+                    "precondition",
+                    f"precondition never passed: {command}",
+                    f"{result.summary()}\n{result.output}",
                 ),
             }
 
     setup = stage.effective_setup_command(rt.cfg)
     if setup:
-        # Run before the executor, not only before verify: the executor runs
-        # the test command itself via --auto-test and cannot be handed a stale
-        # container or unresolved dependencies.
+        # Before the executor, not only before verify: the executor runs the
+        # test command itself and cannot be handed a stale environment.
         result = rt.runner.run(setup)
         if not result.ok:
             return {
                 **update,
-                "failure_layer": "setup",
-                "next_hop": "escalate",
-                "escalation_reason": (
-                    f"Environment setup failed before stage {stage.id!r}:\n"
-                    f"{result.summary()}\n{result.output}"
+                **_escalate(
+                    "setup",
+                    f"Environment setup failed before stage {stage.id!r}. A "
+                    "broken environment is not a planning defect.\n"
+                    f"{result.summary()}\n{result.output}",
                 ),
             }
 
-    update["next_hop"] = "gate" if stage.kind == "manual" else "execute"
+    # Cut or resume the child branch. Anything on it is quarantined: nothing
+    # reaches the project branch without passing the review gate.
+    if not state.get("stage_branch"):
+        branch = rt.cfg.stage_branch(state.get("stage_index", 0), stage.id)
+        start = rt.git.cut_stage_branch(branch, rt.cfg.project_branch)
+        update["stage_branch"] = branch
+        update["stage_start_sha"] = start
+        update["stage_started_at"] = time.time()
+        rt.log(f"[precheck] cut {branch} at {start[:12]}")
+
+    update["next_hop"] = "execute"
     return update
 
 
@@ -92,67 +297,51 @@ def precheck(state: RunState, rt: Runtime) -> dict:
 
 def execute(state: RunState, rt: Runtime) -> dict:
     stage = current_stage(state, rt)
-    attempt = state["verify_attempt"] + state["rework_attempt"]
+    attempt = _attempt(state)
     feedback = list(state.get("review_feedback") or [])
 
     if stage.kind == "script":
-        rt.log(f"[execute] stage {stage.id}: script")
+        rt.log(f"[execute] {stage.id}: script")
         result = rt.executor.run_script_stage(stage)
     else:
-        # A rework is a fresh invocation. Nothing of the prior attempt's
-        # conversation carries over, so the prompt restates everything.
         context, context_results = rt.executor.gather_context(stage)
-        failed_context = [r for r in context_results if not r.ok]
-        if failed_context:
-            return {
-                "next_hop": "escalate",
-                "failure_layer": "precondition",
-                "escalation_reason": (
-                    f"A context command failed for stage {stage.id!r}, so the "
-                    "executor prompt would have been built from missing "
-                    f"information:\n{failed_context[0].summary()}\n"
-                    f"{failed_context[0].output}"
-                ),
-            }
+        failed = [r for r in context_results if not r.ok]
+        if failed:
+            return _planner_failure(
+                state,
+                "precondition",
+                "a context command failed, so the executor prompt would have "
+                "been built from missing information",
+                f"{failed[0].summary()}\n{failed[0].output}",
+            )
 
-        prompt = build_executor_prompt(stage, rt.cfg, context=context, feedback=feedback)
-        rt.write_attempt_artifact(
-            state["stage_index"], stage.id, attempt, "prompt.md", prompt
+        prompt = build_executor_prompt(
+            stage, rt.cfg, context=context, feedback=feedback
         )
-        rt.log(f"[execute] stage {stage.id}: attempt {attempt}")
+        rt.write_artifact(
+            state["stage_index"], stage.id, state.get("revision", 0), attempt,
+            "prompt.md", prompt,
+        )
+        rt.log(f"[execute] {stage.id}: attempt {attempt}")
         result = rt.executor.run_agent_stage(stage, prompt)
 
-    rt.write_attempt_artifact(
-        state["stage_index"], stage.id, attempt, "executor.log", result.log
+    rt.write_artifact(
+        state["stage_index"], stage.id, state.get("revision", 0), attempt,
+        "executor.log", result.log,
     )
 
     if result.ok:
         return {"next_hop": "verify"}
 
-    # The executor itself failed or timed out. Treat it as a retryable
-    # attempt, with its own output as the feedback.
     what = "timed out" if result.timed_out else "exited non-zero"
-    return _retry_or_escalate(
+    return _retry_or_plan(
         state,
         rt,
-        stage,
         layer="tests",
+        summary=f"the executor {what}",
         feedback=f"The previous attempt's executor {what}:\n{result.log}",
-        reason=f"The executor {what} for stage {stage.id!r}",
+        detail=result.log,
     )
-
-
-# --- gate ----------------------------------------------------------------
-
-
-def gate(state: RunState, rt: Runtime) -> dict:
-    stage = current_stage(state, rt)
-    rt.log(f"[gate] stage {stage.id} awaiting human")
-    return {
-        "status": "awaiting_human",
-        "next_hop": "end",
-        "escalation_reason": None,
-    }
 
 
 # --- verify --------------------------------------------------------------
@@ -160,7 +349,7 @@ def gate(state: RunState, rt: Runtime) -> dict:
 
 def verify(state: RunState, rt: Runtime) -> dict:
     stage = current_stage(state, rt)
-    attempt = state["verify_attempt"] + state["rework_attempt"]
+    attempt = _attempt(state)
 
     outcome = run_verify(
         stage=stage,
@@ -168,57 +357,63 @@ def verify(state: RunState, rt: Runtime) -> dict:
         git=rt.git,
         runner=rt.runner,
         stage_start_sha=state["stage_start_sha"],
+        stage_branch=state.get("stage_branch"),
+        project_branch=state.get("project_branch"),
+        base_ref=state.get("base_ref"),
+        base_sha=state.get("base_sha"),
     )
 
-    rt.write_attempt_artifact(
-        state["stage_index"],
-        stage.id,
-        attempt,
+    rt.write_artifact(
+        state["stage_index"], stage.id, state.get("revision", 0), attempt,
         "verify.log",
         "\n\n".join(f"{r.summary()}\n{r.output}" for r in outcome.results),
     )
 
-    accumulated_flakes = state["flake_reruns"] + outcome.flake_reruns
-    accumulated_test_time = state["test_seconds"] + outcome.test_seconds
+    accumulated = {
+        "flake_reruns": state.get("flake_reruns", 0) + outcome.flake_reruns,
+        "test_seconds": state.get("test_seconds", 0.0) + outcome.test_seconds,
+    }
 
     if outcome.passed:
-        rt.log(f"[verify] stage {stage.id}: all layers passed")
+        rt.log(f"[verify] {stage.id}: all gates passed")
         return {
-            "flake_reruns": accumulated_flakes,
-            "test_seconds": accumulated_test_time,
+            **accumulated,
             "failure_layer": None,
-            "next_hop": "review" if stage.reviews_enabled else "advance",
+            "next_hop": "review" if stage.review else "advance",
         }
 
     layer = outcome.failed_layer.value if outcome.failed_layer else "tests"
-    rt.log(f"[verify] stage {stage.id}: failed at {layer}")
+    rt.log(f"[verify] {stage.id}: failed at {layer} ({outcome.route})")
 
-    base = {
-        "flake_reruns": accumulated_flakes,
-        "test_seconds": accumulated_test_time,
-        "last_test_output": outcome.feedback,
-    }
-
-    if not outcome.retryable:
+    if outcome.route is Route.HUMAN:
         return {
-            **base,
-            "failure_layer": layer,
-            "next_hop": "escalate",
-            "escalation_reason": (
-                f"Stage {stage.id!r} failed the {layer} gate, which does not "
-                f"consume a retry:\n{outcome.feedback}"
+            **accumulated,
+            **_escalate(layer, f"{outcome.summary}\n\n{outcome.feedback}"),
+        }
+
+    if outcome.route is Route.PLANNER:
+        return {
+            **accumulated,
+            **_planner_failure(
+                state,
+                layer,
+                outcome.summary,
+                outcome.feedback,
+                out_of_scope_paths=outcome.out_of_scope_paths,
+                failing_paths=outcome.failing_paths,
             ),
         }
 
     return {
-        **base,
-        **_retry_or_escalate(
+        **accumulated,
+        **_retry_or_plan(
             state,
             rt,
-            stage,
             layer=layer,
+            summary=outcome.summary,
             feedback=outcome.feedback,
-            reason=f"Stage {stage.id!r} kept failing the {layer} gate",
+            detail=outcome.feedback,
+            failing_paths=outcome.failing_paths,
         ),
     }
 
@@ -227,90 +422,123 @@ def verify(state: RunState, rt: Runtime) -> dict:
 
 
 def review(state: RunState, rt: Runtime) -> dict:
+    """The composite merge gate: reviewer approval *and* a green full suite.
+
+    Cheapest first, short-circuiting. The reviewer call is seconds and pennies;
+    a full suite is minutes. A stage the reviewer would reject never pays for a
+    suite run, and because the suite runs only after approval it costs one
+    execution per stage that lands — linear in stages, not in attempts.
+    """
     stage = current_stage(state, rt)
-    attempt = state["verify_attempt"] + state["rework_attempt"]
+    attempt = _attempt(state)
 
     diff = rt.git.diff(state["stage_start_sha"])
-    documents = _read_reference_docs(rt)
     messages = build_review_messages(
-        stage=stage, cfg=rt.cfg, diff=diff, documents=documents
+        stage=stage,
+        cfg=rt.cfg,
+        diff=diff,
+        plan=rt.plan,
+        completed=state.get("completed") or [],
     )
 
-    rt.log(f"[review] stage {stage.id}: calling reviewer")
+    rt.log(f"[review] {stage.id}: calling reviewer")
     outcome = rt.reviewer.review(messages)
 
-    rt.write_attempt_artifact(
-        state["stage_index"],
-        stage.id,
-        attempt,
-        "review.json",
-        json.dumps(outcome.as_dict(), indent=2),
+    rt.write_artifact(
+        state["stage_index"], stage.id, state.get("revision", 0), attempt,
+        "review.json", json.dumps(outcome.as_dict(), indent=2),
     )
 
-    usage = dict(state.get("stage_usage") or {})
-    usage["prompt_tokens"] = usage.get("prompt_tokens", 0) + outcome.usage.prompt_tokens
-    usage["cached_tokens"] = usage.get("cached_tokens", 0) + outcome.usage.cached_tokens
-    usage["completion_tokens"] = (
-        usage.get("completion_tokens", 0) + outcome.usage.completion_tokens
+    usage = accumulate_usage(
+        state.get("run_usage"),
+        prompt_tokens=outcome.usage.prompt_tokens,
+        cached_tokens=outcome.usage.cached_tokens,
+        completion_tokens=outcome.usage.completion_tokens,
     )
-
+    stage_usage = accumulate_usage(
+        state.get("stage_usage"),
+        prompt_tokens=outcome.usage.prompt_tokens,
+        cached_tokens=outcome.usage.cached_tokens,
+        completion_tokens=outcome.usage.completion_tokens,
+    )
     rt.log(
-        f"[review] stage {stage.id}: {outcome.verdict} — {outcome.summary} "
-        f"({outcome.usage.prompt_tokens} prompt, "
-        f"{outcome.usage.cached_tokens} cached, "
-        f"{outcome.usage.completion_tokens} completion)"
+        f"[review] {stage.id}: {outcome.verdict} — {outcome.summary} "
+        f"({outcome.usage.prompt_tokens} prompt, {outcome.usage.cached_tokens} cached)"
     )
 
     base = {
-        "stage_usage": usage,
+        "run_usage": usage,
+        "stage_usage": stage_usage,
         "review_verdict": outcome.verdict,
+        "review_summary": outcome.summary,
     }
 
-    if outcome.verdict == "approved":
-        return {**base, "next_hop": "advance", "review_summary": outcome.summary}
-
     if outcome.verdict == "blocked":
-        # Blocked does not consume a retry: the problem is upstream of the
-        # executor, and grinding through rework attempts will not fix it.
+        # Not a human's problem: with a planner in the loop, "the instruction is
+        # wrong" is a planning problem with a planning fix.
         return {
             **base,
-            "next_hop": "escalate",
-            "escalation_reason": (
-                f"The reviewer blocked stage {stage.id!r}: {outcome.summary}\n"
-                + "\n".join(
+            **_planner_failure(
+                state,
+                "review",
+                f"the reviewer blocked the stage: {outcome.summary}",
+                "\n".join(
                     f"- [{i.severity}] {i.file}: {i.description}"
                     for i in outcome.issues
-                )
+                ),
             ),
         }
 
-    feedback = list(state.get("review_feedback") or [])
-    feedback.append(issues_as_feedback(outcome.summary, outcome.issues))
-
-    if state["rework_attempt"] >= rt.cfg.limits.max_rework_retries:
+    if outcome.verdict == "rework":
+        feedback = list(state.get("review_feedback") or [])
+        feedback.append(issues_as_feedback(outcome.summary, outcome.issues))
         return {
             **base,
-            "review_feedback": feedback,
-            "next_hop": "escalate",
-            "escalation_reason": (
-                f"Stage {stage.id!r} was rejected "
-                f"{state['rework_attempt'] + 1} times "
-                f"(max_rework_retries={rt.cfg.limits.max_rework_retries}). "
-                f"Last verdict: {outcome.summary}"
-            ),
+            **_rework_or_plan(state, rt, feedback, outcome.summary),
         }
 
-    if rt.cfg.rework_reset:
-        # Each attempt should produce one clean single-purpose diff, not the
-        # rejected attempt plus its correction.
-        rt.log(f"[review] resetting to {state['stage_start_sha'][:8]} before rework")
-        rt.git.reset_hard(state["stage_start_sha"])
+    # Approved. Now the expensive half.
+    if not stage.full_suite_required(rt.cfg) or not rt.cfg.full_test_command:
+        return {**base, "next_hop": "advance"}
+
+    rt.log(f"[review] {stage.id}: approved; running the full suite")
+    result = rt.runner.run(rt.cfg.full_test_command)
+    seconds = result.duration_seconds
+
+    if not result.ok:
+        # Same re-run-once rule as iteration. It matters more here: the full
+        # suite has far more surface for ordering and timing flakes, and a flake
+        # at this gate wastes a planner intervention rather than an executor
+        # attempt.
+        rerun = rt.runner.run(rt.cfg.full_test_command)
+        seconds += rerun.duration_seconds
+        if rerun.ok:
+            rt.log(f"[review] {stage.id}: full suite flaked, passed on re-run")
+            return {
+                **base,
+                "test_seconds": state.get("test_seconds", 0.0) + seconds,
+                "flake_reruns_review_gate": state.get("flake_reruns_review_gate", 0) + 1,
+                "next_hop": "advance",
+            }
+
+        feedback = list(state.get("review_feedback") or [])
+        feedback.append(
+            "The reviewer approved this stage but the full suite failed, so it "
+            f"cannot land:\n{rerun.summary()}\n{rerun.output}"
+        )
+        return {
+            **base,
+            "test_seconds": state.get("test_seconds", 0.0) + seconds,
+            **_rework_or_plan(
+                state, rt, feedback, "approved but the full suite was red",
+                layer="full_suite",
+            ),
+        }
 
     return {
         **base,
-        "review_feedback": feedback,
-        "rework_attempt": state["rework_attempt"] + 1,
-        "next_hop": "execute",
+        "test_seconds": state.get("test_seconds", 0.0) + seconds,
+        "next_hop": "advance",
     }
 
 
@@ -320,45 +548,55 @@ def review(state: RunState, rt: Runtime) -> dict:
 def advance(state: RunState, rt: Runtime) -> dict:
     stage = current_stage(state, rt)
     start_sha = state["stage_start_sha"]
+    branch = state["stage_branch"]
 
-    # The only place the orchestrator commits on its own behalf: squash
-    # whatever the stage left uncommitted into one labelled commit.
-    end_sha = rt.git.commit_all(f"[{stage.id}] {_first_line(stage)}")
-    if end_sha is None:
-        end_sha = rt.git.head_sha()
+    # Commit anything the executor left uncommitted, then squash the whole
+    # child branch onto the project branch as one commit. Aider's intermediate
+    # commits — some of them red, since it commits before testing — are
+    # discarded by the squash. That is why "every commit on the project branch
+    # is green" and "Aider commits before testing" are both true.
+    rt.git.commit_all(f"[{stage.id}] wip")
+    merge_sha = rt.git.squash_merge(
+        branch, rt.cfg.project_branch, f"[{stage.id}] {_first_line(stage)}"
+    )
+    rt.git.delete_branch(branch)
 
-    commit_range = f"{start_sha[:12]}..{end_sha[:12]}" if end_sha != start_sha else None
     usage = state.get("stage_usage") or {}
-
     result = {
         "id": stage.id,
         "kind": stage.kind,
-        "outcome": "complete",
-        "commit_range": commit_range,
+        "index": state["stage_index"],
+        "revisions": state.get("revision", 0),
+        "verify_retries": state.get("verify_attempt", 0),
+        "rework_attempts": state.get("rework_attempt", 0),
+        "flake_reruns_iteration": state.get("flake_reruns", 0),
+        "flake_reruns_review_gate": state.get("flake_reruns_review_gate", 0),
+        "instruction": stage.instruction or "",
+        "base_sha": start_sha,
+        "merge_sha": merge_sha or rt.git.head_sha(),
         "wall_seconds": max(time.time() - (state.get("stage_started_at") or 0), 0.0),
-        "test_seconds": state["test_seconds"],
-        "verify_retries": state["verify_attempt"],
-        "rework_attempts": state["rework_attempt"],
-        "flake_reruns": state["flake_reruns"],
-        "failed_layer": None,
+        "test_seconds": state.get("test_seconds", 0.0),
         "review_verdict": state.get("review_verdict"),
         "review_summary": state.get("review_summary"),
+        "verify_failures": [],
+        "planner_notes": list(state.get("planner_notes") or []),
+        "config_hash": state.get("config_hash", ""),
         "prompt_tokens": usage.get("prompt_tokens", 0),
         "cached_tokens": usage.get("cached_tokens", 0),
         "completion_tokens": usage.get("completion_tokens", 0),
     }
 
-    history = list(state.get("history") or [])
-    history.append(result)
-
-    next_index = state["stage_index"] + 1
-    rt.log(f"[advance] stage {stage.id} complete ({commit_range or 'no new commits'})")
+    completed = list(state.get("completed") or [])
+    completed.append(result)
+    rt.log(f"[advance] {stage.id} landed as {result['merge_sha'][:12]}")
 
     return {
         **fresh_stage_fields(),
-        "history": history,
-        "stage_index": next_index,
-        "next_hop": "precheck" if next_index < len(rt.cfg.stages) else "finalize",
+        "completed": completed,
+        "current": None,
+        "stage_index": state["stage_index"] + 1,
+        "revision": 0,
+        "next_hop": "plan",
     }
 
 
@@ -368,22 +606,19 @@ def advance(state: RunState, rt: Runtime) -> dict:
 def finalize(state: RunState, rt: Runtime) -> dict:
     command = rt.cfg.full_test_command
     if not command:
-        rt.log("[finalize] no full_test_command configured")
         return {"status": "complete", "next_hop": "end"}
 
-    rt.log("[finalize] running the full suite")
+    rt.log("[finalize] running the full suite on the project branch tip")
     result = rt.runner.run(command)
     if result.ok:
         return {"status": "complete", "next_hop": "end"}
 
-    # Every stage passed on its own; their composition did not.
     return {
-        "next_hop": "escalate",
-        "failure_layer": "tests",
-        "escalation_reason": (
-            "Every stage passed individually, but the full suite failed at the "
-            f"end of the run:\n{result.summary()}\n{result.output}"
-        ),
+        **_escalate(
+            "full_suite",
+            "Every stage passed on its own, but the full suite failed on the "
+            f"project branch tip:\n{result.summary()}\n{result.output}",
+        )
     }
 
 
@@ -393,13 +628,7 @@ def finalize(state: RunState, rt: Runtime) -> dict:
 def escalate(state: RunState, rt: Runtime) -> dict:
     reason = state.get("escalation_reason") or "escalated without a recorded reason"
     rt.log(f"[escalate] {reason}")
-
-    stage = current_stage_or_none(state, rt)
-
-    # Deliberately not appended to `history`, which records *completed*
-    # stages. A run that escalates, gets fixed, and is resumed would otherwise
-    # carry both an "escalated" and a "complete" row for the same stage. The
-    # report renders the failed stage from these fields instead.
+    stage = current_stage(state, rt)
     return {
         "status": "escalated",
         "failed_stage_id": stage.id if stage else None,
@@ -410,19 +639,52 @@ def escalate(state: RunState, rt: Runtime) -> dict:
 # --- helpers -------------------------------------------------------------
 
 
-def _retry_or_escalate(
-    state: RunState, rt: Runtime, stage: Stage, layer: str, feedback: str, reason: str
+def _escalate(layer: str, reason: str) -> dict:
+    return {"failure_layer": layer, "escalation_reason": reason, "next_hop": "escalate"}
+
+
+def _planner_failure(
+    state: RunState,
+    layer: str,
+    summary: str,
+    detail: str,
+    out_of_scope_paths: list[str] | None = None,
+    failing_paths: list[str] | None = None,
 ) -> dict:
-    consumed = state["verify_attempt"]
+    """Hand the failure to the planner with what it needs to act on."""
+    return {
+        "failure_layer": layer,
+        "last_failure": {
+            "layer": layer,
+            "summary": summary,
+            "detail": detail,
+            "out_of_scope_paths": out_of_scope_paths or [],
+            "failing_paths": failing_paths or [],
+        },
+        "next_hop": "plan",
+    }
+
+
+def _retry_or_plan(
+    state: RunState,
+    rt: Runtime,
+    layer: str,
+    summary: str,
+    feedback: str,
+    detail: str,
+    failing_paths: list[str] | None = None,
+) -> dict:
+    """Executor retry while the budget holds, then the planner."""
+    consumed = state.get("verify_attempt", 0)
     if consumed >= rt.cfg.limits.max_test_retries:
-        return {
-            "failure_layer": layer,
-            "next_hop": "escalate",
-            "escalation_reason": (
-                f"{reason} after {consumed + 1} attempts "
-                f"(max_test_retries={rt.cfg.limits.max_test_retries}):\n{feedback}"
-            ),
-        }
+        return _planner_failure(
+            state,
+            layer,
+            f"{summary} after {consumed + 1} attempts "
+            f"(max_test_retries={rt.cfg.limits.max_test_retries})",
+            detail,
+            failing_paths=failing_paths,
+        )
 
     accumulated = list(state.get("review_feedback") or [])
     accumulated.append(feedback)
@@ -434,16 +696,38 @@ def _retry_or_escalate(
     }
 
 
-def _read_reference_docs(rt: Runtime) -> list[tuple[str, str]]:
-    documents = []
-    for ref, path in zip(rt.cfg.reference_docs, rt.cfg.reference_doc_paths()):
-        try:
-            documents.append((ref, path.read_text()))
-        except OSError as e:  # pragma: no cover - validate catches this first
-            rt.log(f"[review] could not read reference doc {ref}: {e}")
-    return documents
+def _rework_or_plan(
+    state: RunState,
+    rt: Runtime,
+    feedback: list[str],
+    summary: str,
+    layer: str = "review",
+) -> dict:
+    """Rework while the budget holds, then the planner."""
+    consumed = state.get("rework_attempt", 0)
+    if consumed >= rt.cfg.limits.max_rework_retries:
+        return _planner_failure(
+            state,
+            layer,
+            f"{summary} — rejected {consumed + 1} times "
+            f"(max_rework_retries={rt.cfg.limits.max_rework_retries})",
+            "\n\n".join(feedback[-2:]),
+        )
+
+    if rt.cfg.rework_reset:
+        # One clean single-purpose diff per attempt, rather than the rejected
+        # attempt plus its correction.
+        rt.log(f"[review] resetting to {state['stage_start_sha'][:8]} before rework")
+        rt.git.reset_hard(state["stage_start_sha"])
+
+    return {
+        "failure_layer": layer,
+        "review_feedback": feedback,
+        "rework_attempt": consumed + 1,
+        "next_hop": "execute",
+    }
 
 
 def _first_line(stage: Stage) -> str:
-    text = stage.instruction or stage.command or stage.human_steps or stage.id
+    text = stage.instruction or stage.command or stage.id
     return text.strip().splitlines()[0][:70]

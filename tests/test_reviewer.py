@@ -26,11 +26,12 @@ def cfg_with(**reviewer_overrides):
     return parse_config(
         {
             "target_repo": "/tmp/x",
-            "branch": "work",
+            "project_branch": "work",
+            "plan_root": "PLAN.md",
             "test_command": "pytest",
             "executor": {"model": "m"},
+            "planner": {"model": "claude-opus-5"},
             "reviewer": reviewer,
-            "stages": [{"id": "s1", "instruction": "do it", "edit_files": ["a"]}],
         }
     )
 

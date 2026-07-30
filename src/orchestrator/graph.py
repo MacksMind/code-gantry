@@ -1,12 +1,12 @@
 """LangGraph wiring.
 
-Deliberately thin. All the logic is in `nodes`; this module only binds the
-runtime into each node, declares the edges, and owns the checkpointer. That
-split means the loop's behaviour is testable without LangGraph, and a change
-in its API surface touches one file.
+Deliberately thin. All the logic is in `nodes`; this module binds the runtime
+into each node, declares the edges, and owns the checkpointer — so the loop's
+behaviour is testable without LangGraph, and a change in its API surface touches
+one file.
 
-The edges match PLAN.md's edge list exactly. Routing reads `next_hop` from
-state, which each node sets.
+The edges match PLAN.md's edge list exactly. Note what is largely *absent*:
+paths straight to `escalate`. That is the point of the design.
 """
 
 from __future__ import annotations
@@ -20,12 +20,12 @@ from langgraph.graph import END, START, StateGraph
 
 from orchestrator import nodes
 from orchestrator.runtime import Runtime
-from orchestrator.state import RunState
+from orchestrator.state import RunState, resume_entry_point
 
 NODES: dict[str, Callable] = {
+    "plan": nodes.plan,
     "precheck": nodes.precheck,
     "execute": nodes.execute,
-    "gate": nodes.gate,
     "verify": nodes.verify,
     "review": nodes.review,
     "advance": nodes.advance,
@@ -33,46 +33,20 @@ NODES: dict[str, Callable] = {
     "escalate": nodes.escalate,
 }
 
-# Where each node is allowed to send the run. Keeping this declarative makes
-# it checkable against the spec's edge list rather than buried in lambdas.
+# Where each node may send the run. Declarative so it is checkable against the
+# spec rather than buried in lambdas.
 EDGES: dict[str, list[str]] = {
-    "precheck": ["execute", "gate", "escalate"],
-    "execute": ["verify", "execute", "escalate"],
-    "gate": ["end"],
-    "verify": ["review", "advance", "execute", "escalate"],
-    "review": ["advance", "execute", "escalate"],
-    "advance": ["precheck", "finalize"],
+    "plan": ["precheck", "finalize", "escalate"],
+    "precheck": ["execute", "plan", "escalate"],
+    "execute": ["verify", "execute", "plan"],
+    "verify": ["review", "advance", "execute", "plan", "escalate"],
+    "review": ["advance", "execute", "plan"],
+    "advance": ["plan"],
     "finalize": ["end", "escalate"],
     "escalate": ["end"],
 }
 
-
-def entry_router(rt: Runtime) -> Callable[[RunState], str]:
-    """Where a fresh invocation begins.
-
-    A manual stage being resumed goes to `verify`: the human has been told
-    what to do, and the orchestrator's only remaining job is to confirm the
-    work landed green. Routing it back through `precheck` would re-enter
-    `gate` and pause again without ever checking — and it would do that
-    forever.
-
-    That has to hold whether the run paused cleanly (`awaiting_human`) or
-    escalated because the work was not there yet. Both are resumed the same
-    way by a human who has since done something.
-    """
-
-    def route(state: RunState) -> str:
-        if state.get("status") == "awaiting_human":
-            return "verify"
-
-        if state.get("resuming"):
-            index = state.get("stage_index", 0)
-            if index < len(rt.cfg.stages) and rt.cfg.stages[index].kind == "manual":
-                return "verify"
-
-        return "precheck"
-
-    return route
+ENTRY_POINTS = ["plan", "precheck", "verify"]
 
 
 def _router(allowed: list[str]) -> Callable[[RunState], str]:
@@ -82,10 +56,8 @@ def _router(allowed: list[str]) -> Callable[[RunState], str]:
             return END
         if hop not in allowed:
             # A node asking for an edge the spec does not have is a bug in the
-            # node, and silently rerouting would hide it.
-            raise RuntimeError(
-                f"node routed to {hop!r}, which is not one of {allowed}"
-            )
+            # node; silently rerouting would hide it.
+            raise RuntimeError(f"node routed to {hop!r}, not one of {allowed}")
         return hop
 
     return route
@@ -97,11 +69,13 @@ def build_graph(rt: Runtime, checkpointer=None):
     for name, fn in NODES.items():
         builder.add_node(name, _bind(fn, rt))
 
-    builder.add_conditional_edges(START, entry_router(rt), ["precheck", "verify"])
+    builder.add_conditional_edges(START, resume_entry_point, ENTRY_POINTS)
     for name, allowed in EDGES.items():
         targets = [t for t in allowed if t != "end"]
         builder.add_conditional_edges(
-            name, _router(allowed), targets + [END] if "end" in allowed else targets
+            name,
+            _router(allowed),
+            targets + [END] if "end" in allowed else targets,
         )
 
     return builder.compile(checkpointer=checkpointer)
@@ -116,11 +90,11 @@ def _bind(fn: Callable, rt: Runtime) -> Callable:
 
 
 def open_checkpointer(db_path: Path | str) -> tuple[SqliteSaver, sqlite3.Connection]:
-    """A SQLite checkpointer under this project's runs directory.
+    """A SQLite checkpointer under the project's runs directory.
 
     The connection is returned so the caller owns its lifetime — a resume
-    happens in a fresh process and must reopen the same file. `check_same_thread`
-    is off because LangGraph may touch it from a worker thread.
+    happens in a fresh process and must reopen the same file.
+    `check_same_thread` is off because LangGraph may touch it from a worker.
     """
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -128,13 +102,21 @@ def open_checkpointer(db_path: Path | str) -> tuple[SqliteSaver, sqlite3.Connect
     return SqliteSaver(conn), conn
 
 
-def recursion_limit(stage_count: int, max_test_retries: int, max_rework_retries: int) -> int:
+def recursion_limit(
+    max_stages: int,
+    max_test_retries: int,
+    max_rework_retries: int,
+    max_planner_interventions: int,
+) -> int:
     """LangGraph's default of 25 super-steps is far too low here.
 
-    A single stage can legitimately cost (retries + reworks) trips around
-    execute → verify → review, and a run has many stages. Exhausting the limit
-    would surface as an opaque framework error rather than an escalation.
+    A stage can legitimately cost (retries + reworks) trips around
+    execute → verify → review, a project has many stages, and every planner
+    intervention adds a lap. Exhausting the limit surfaces as an opaque
+    framework error rather than an escalation — the one failure mode this tool
+    must not have — so the ceiling is computed with slack rather than tuned.
     """
-    per_stage_nodes = 4  # precheck, execute, verify, review/advance
+    per_stage_nodes = 5  # plan, precheck, execute, verify, review/advance
     loops = max_test_retries + max_rework_retries + 1
-    return 50 + stage_count * per_stage_nodes * loops
+    stage_cost = per_stage_nodes * loops
+    return 100 + max_stages * stage_cost + max_planner_interventions * stage_cost

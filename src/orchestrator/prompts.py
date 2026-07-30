@@ -1,69 +1,72 @@
-"""Prompt construction for the executor and the reviewer.
+"""Prompt construction for the executor, the reviewer, and the planner.
 
-Pure string building, kept separate from the clients that send it so it can
-be tested without a model.
+Pure string building, kept apart from the clients that send it so it can be
+tested without a model.
 
-Two design points carry weight:
+**Ordering is the caching strategy, not presentation.** Both paid models get the
+plan snapshot and the completed-stage history first — large, append-only, and
+byte-identical across the stages of a run — and the per-stage material last.
+Providers cache on matching prompt prefixes, so reordering these for
+readability would silently multiply the cost of every call.
 
-- The executor is told the stage's constraints and forbidden patterns, not
-  just the reviewer. The executor sees one stage at a time and cannot
-  otherwise know that a technically-correct edit is illegal in this one;
-  finding out at review time wastes a whole attempt.
-- The review messages are ordered stable-first. OpenAI caches on matching
-  prompt prefixes, so the reference documents and stage list lead and the
-  per-stage diff comes last. Reordering for readability would silently
-  double the cost of every review.
+Note what is *not* in the prefix: projected future stages. They do not exist
+yet, and including them would break the prefix every time the planner derived
+one.
 """
 
 from __future__ import annotations
 
-from orchestrator.config import RunConfig, Stage
+from orchestrator.config import ProjectConfig, Stage
+from orchestrator.plandoc import PlanTree
+from orchestrator.state import FailureDetail, StageResult
 
 REVIEW_SYSTEM_PROMPT = """\
-You are the reviewer in a two-model refactoring loop. A local model makes the
-edits; you inspect the resulting diff at each stage boundary and decide
-whether the work may advance.
+You are the reviewer in an unattended refactoring loop. A local model makes the
+edits; a planner decides what each stage should be; you decide whether a
+finished stage may land on the project branch.
 
-The tests already pass — that is a precondition of you being called, not
-something you need to confirm. Your job is what a test suite cannot check:
-whether this diff does what the stage asked, stays inside the stage's
-constraints, and remains consistent with decisions made in earlier stages.
-The executor sees only one stage at a time, so cross-stage drift is yours to
-catch and nobody else's.
+The stage's tests already pass — that is a precondition of you being called,
+not something to confirm. Your job is what a test suite cannot check: whether
+this diff does what the stage asked, stays inside the stage's constraints, and
+remains consistent with the stages that came before it. The executor sees one
+stage at a time and cannot see the plan, so cross-stage drift is yours to catch
+and nobody else's.
 
 Return one of three verdicts:
 
-- "approved" — the diff does what the stage asked and honours its
-  constraints. Minor stylistic preferences are not grounds for rework.
-- "rework" — there is a specific, fixable defect in this diff. Say precisely
-  what is wrong and why it matters, so the next attempt can act on it.
+- "approved" — the diff does what the stage asked and honours its constraints.
+  Minor stylistic preferences are not grounds for rework. Approval means it is
+  squash-merged to the project branch, so hold it to the standard of a commit
+  you would be content to find in the history later.
+- "rework" — a specific, fixable defect in this diff. Say precisely what is
+  wrong and why it matters, so the next attempt can act on it.
 - "blocked" — the stage instruction itself is wrong, or the plan has a flaw
-  that reworking this diff will not fix. Use this when the problem is
-  upstream of the executor. It stops the run for a human decision, which is
-  the correct outcome when the instruction cannot be satisfied as written.
-  Do not grind through rework attempts on an impossible instruction.
+  that reworking this diff will not fix. This does not stop the run: it routes
+  to the planner, which can revise the stage or insert a predecessor. Use it
+  freely when the problem is upstream of the executor rather than grinding
+  through rework attempts on an instruction that cannot be satisfied.
 
-Judge only the diff you are shown against the stage you are given.\
+Judge only the diff you are shown, against the stage you are given.\
 """
 
 
 def build_executor_prompt(
     stage: Stage,
-    cfg: RunConfig,
+    cfg: ProjectConfig,
     context: list[tuple[str, str]] | None = None,
     feedback: list[str] | None = None,
 ) -> str:
     """The message handed to the executor.
 
-    A rework attempt is a *fresh* invocation, so everything the executor
-    needs must be restated — no conversation history carries over.
+    A rework is a *fresh* invocation with no conversation history, so everything
+    it needs is restated. It cannot see the plan document, the other stages, or
+    the reviewer — only this.
     """
     parts: list[str] = []
 
     if feedback:
         parts.append(
-            "A previous attempt at this task was rejected. Start again from "
-            "the current state of the repository and address the feedback "
+            "A previous attempt at this task was rejected. Address the feedback "
             "below. Do not repeat the rejected approach."
         )
 
@@ -83,9 +86,8 @@ def build_executor_prompt(
     if stage.require_new_tests:
         parts.append(
             "## Tests are required\n\n"
-            "Write the tests for this behaviour first, then the "
-            "implementation that satisfies them. A change with no tests will "
-            "be rejected."
+            "Write the tests for this behaviour first, then the implementation "
+            "that satisfies them. A change with no tests will be rejected."
         )
 
     if stage.edit_files:
@@ -93,79 +95,99 @@ def build_executor_prompt(
         parts.append(
             "## Files you may change\n\n"
             f"{listed}\n\n"
-            "Editing anything outside this list will fail the stage. If the "
-            "task appears to require a file that is not listed, stop and say "
-            "so rather than editing it."
+            "Editing anything outside this list fails the stage. If the task "
+            "appears to require a file that is not listed, stop and say so "
+            "rather than editing it."
         )
+
+    if stage.read_files:
+        listed = "\n".join(f"- {glob}" for glob in stage.read_files)
+        parts.append(f"## Context you may read but not change\n\n{listed}")
 
     if stage.forbidden_patterns:
         listed = "\n".join(f"- /{p}/" for p in stage.forbidden_patterns)
         parts.append(
             "## Patterns you must not introduce\n\n"
             f"{listed}\n\n"
-            "These are checked mechanically against the lines you add. They "
-            "may be correct elsewhere in the project but are out of bounds "
-            "for this stage."
+            "These are checked mechanically against the lines you add. They may "
+            "be correct elsewhere in the project but are out of bounds here."
         )
 
     if context:
         blocks = [
-            f"### `{command}`\n\n```\n{output.strip()}\n```" for command, output in context
+            f"### `{command}`\n\n```\n{output.strip()}\n```"
+            for command, output in context
         ]
-        parts.append("## Context gathered from the repository\n\n" + "\n\n".join(blocks))
+        parts.append(
+            "## Context gathered from the repository\n\n" + "\n\n".join(blocks)
+        )
 
     if feedback:
-        listed = "\n\n".join(f"{i}. {item}" for i, item in enumerate(feedback, start=1))
+        listed = "\n\n".join(
+            f"{i}. {item}" for i, item in enumerate(feedback, start=1)
+        )
         parts.append(f"## Feedback on previous attempts\n\n{listed}")
 
     return "\n\n".join(parts)
 
 
-def build_review_messages(
-    stage: Stage,
-    cfg: RunConfig,
-    diff: str,
-    documents: list[tuple[str, str]],
-) -> list[dict[str, str]]:
-    """Chat messages for the reviewer, ordered stable payload first.
+def _plan_block(plan: PlanTree) -> str:
+    return (
+        "## The plan\n\n"
+        "This is the authority for the project. A stage instruction is a "
+        "pointer into it, not a substitute for it.\n\n"
+        + plan.as_prompt_payload()
+    )
 
-    Messages before the last are byte-identical across every stage of a run.
-    That is what makes prefix caching hit, and it is why the diff is last.
-    """
-    messages = [{"role": "system", "content": REVIEW_SYSTEM_PROMPT}]
 
-    stable: list[str] = []
-
-    if documents:
-        blocks = [
-            f"### {name}\n\n{body.strip()}" for name, body in documents
-        ]
-        stable.append(
-            "## Reference documents\n\n"
-            "These are the authority for this refactor. A stage instruction "
-            "is a pointer into them, not a substitute for them.\n\n"
-            + "\n\n".join(blocks)
+def _history_block(completed: list[StageResult]) -> str:
+    if not completed:
+        return (
+            "## Completed stages\n\nNone yet — this is the first stage of the "
+            "project."
         )
 
-    stage_list = "\n\n".join(
-        f"### Stage {i}: {s.id}"
-        + (f" ({s.kind})" if s.kind != "agent" else "")
-        + "\n\n"
-        + (s.instruction or s.command or s.human_steps or "")
-        + (f"\n\nConstraints: {s.constraints}" if s.constraints else "")
-        for i, s in enumerate(cfg.stages, start=1)
-    )
-    stable.append(
-        "## Every stage in this run, in order\n\n"
-        "You are shown all of them so you can catch drift from decisions made "
-        "in earlier stages, and changes that belong to a later stage leaking "
-        "into this one.\n\n" + stage_list
+    entries = []
+    for entry in completed:
+        line = f"### Stage {entry.get('index')}: {entry.get('id')}"
+        if entry.get("revisions"):
+            line += f" (took {entry['revisions'] + 1} revisions)"
+        line += "\n\n" + (entry.get("instruction") or "").strip()
+        if entry.get("merge_sha"):
+            line += f"\n\nLanded as `{entry['merge_sha'][:12]}`."
+        if entry.get("review_summary"):
+            line += f"\nReviewer: {entry['review_summary']}"
+        entries.append(line)
+
+    return (
+        "## Completed stages, in order\n\n"
+        "Each landed as one commit on the project branch after passing review "
+        "and the full suite.\n\n" + "\n\n".join(entries)
     )
 
-    messages.append({"role": "user", "content": "\n\n".join(stable)})
+
+def build_review_messages(
+    stage: Stage,
+    cfg: ProjectConfig,
+    diff: str,
+    plan: PlanTree,
+    completed: list[StageResult],
+) -> list[dict[str, str]]:
+    """Chat messages for the reviewer, stable payload first.
+
+    Everything before the last message is byte-identical across the stages of a
+    run — that is what makes prefix caching hit, and why the diff is last.
+    """
+    messages = [{"role": "system", "content": REVIEW_SYSTEM_PROMPT}]
+    messages.append(
+        {
+            "role": "user",
+            "content": _plan_block(plan) + "\n\n" + _history_block(completed),
+        }
+    )
 
     current: list[str] = [
-        f"## The stage under review: {stage.id}\n\n{stage.instruction or stage.command or stage.human_steps or ''}"
+        f"## The stage under review: {stage.id}\n\n{stage.instruction or ''}"
     ]
 
     if stage.constraints:
@@ -179,15 +201,133 @@ def build_review_messages(
         current.append(
             "## Acceptance criteria\n\n"
             f"{stage.acceptance}\n\n"
-            "This stage creates new code, so there is no prior behaviour to "
-            "compare against. Judge it against these criteria."
+            "This stage creates new behaviour, so there is no prior behaviour "
+            "to compare against. Judge it against these criteria."
         )
 
-    current.append(f"## The diff\n\n```diff\n{diff.strip()}\n```")
+    current.append(
+        "## The cumulative stage diff\n\n"
+        "This is the whole stage, not the delta since any earlier rejection — "
+        "the same way a pull-request re-review shows the whole diff.\n\n"
+        f"```diff\n{diff.strip()}\n```"
+    )
     current.append(
         "Return your verdict now. If the stage instruction itself cannot be "
-        "satisfied as written, return \"blocked\" rather than \"rework\"."
+        'satisfied as written, return "blocked" rather than "rework" — that '
+        "routes to the planner, not to a human."
     )
 
     messages.append({"role": "user", "content": "\n\n".join(current)})
     return messages
+
+
+def build_planner_messages(
+    cfg: ProjectConfig,
+    plan: PlanTree,
+    completed: list[StageResult],
+    current_stage: Stage | None = None,
+    failure: FailureDetail | None = None,
+    revision: int = 0,
+    interventions_used: int = 0,
+    interventions_max: int = 0,
+    status_tail: str | None = None,
+) -> list[dict[str, str]]:
+    """Chat messages for the planner.
+
+    Same prefix as the reviewer for the same reason: the plan and the completed
+    history lead, the situation-specific material follows.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": _plan_block(plan) + "\n\n" + _history_block(completed),
+        }
+    ]
+
+    current: list[str] = []
+
+    if status_tail:
+        current.append(
+            "## Recent entries from status.md\n\n"
+            "Your own record of what was expected versus what happened.\n\n"
+            + status_tail.strip()
+        )
+
+    if current_stage is None:
+        current.append(
+            "## Your task now: derive the next stage\n\n"
+            "Given the plan and the stages already completed, produce the next "
+            "stage — or return `project_complete` if the plan has been "
+            "executed."
+        )
+    else:
+        current.append(
+            f"## Your task now: the current stage failed\n\n"
+            f"Stage `{current_stage.id}` (revision {revision}) did not land.\n\n"
+            "### What it was asked to do\n\n"
+            f"{current_stage.instruction or ''}\n\n"
+            "### Its declared scope\n\n"
+            + "\n".join(f"- {g}" for g in current_stage.edit_files)
+        )
+
+        if current_stage.constraints:
+            current.append(
+                f"### Its constraints\n\n{current_stage.constraints}"
+            )
+
+        if failure:
+            current.append(_failure_block(failure))
+
+        current.append(
+            "Decide whether to revise this stage, insert a predecessor stage "
+            "before it, or stop. A revision keeps the stage's identity, so the "
+            "report reads as one stage that took two attempts rather than "
+            "pretending they were different work.\n\n"
+            "If you revise, `revision_mode` decides the fate of the work "
+            "already on the branch: `extend` keeps it (right when the scope was "
+            "merely too narrow), `restart` discards it (right when the approach "
+            "was wrong)."
+        )
+
+    if interventions_max:
+        remaining = max(interventions_max - interventions_used, 0)
+        current.append(
+            f"## Budget\n\n"
+            f"You have {remaining} intervention(s) left out of "
+            f"{interventions_max} for this run. When they are gone the run "
+            "escalates to a human. Spend them on stages drawn wrongly, not on "
+            "restating the same instruction."
+        )
+
+    messages.append({"role": "user", "content": "\n\n".join(current)})
+    return messages
+
+
+def _failure_block(failure: FailureDetail) -> str:
+    """What the planner needs to tell "widen this stage" from "insert a
+    predecessor" — the specific damage, not an exit code."""
+    parts = [
+        "### How it failed\n\n"
+        f"Gate: **{failure.get('layer')}**\n"
+        f"Summary: {failure.get('summary')}"
+    ]
+
+    if failure.get("out_of_scope_paths"):
+        listed = "\n".join(f"- {p}" for p in failure["out_of_scope_paths"])
+        parts.append(
+            "### Files touched outside the declared scope\n\n"
+            f"{listed}\n\n"
+            "If these legitimately belong to this stage, widen `edit_files` to "
+            "include them and the work already done stands. If they do not, "
+            "leave them out — they will be reverted and the rest of the stage's "
+            "work is kept."
+        )
+
+    if failure.get("failing_paths"):
+        listed = "\n".join(f"- {p}" for p in failure["failing_paths"])
+        parts.append(f"### Paths implicated in the failure\n\n{listed}")
+
+    if failure.get("detail"):
+        parts.append(f"### Detail\n\n```\n{failure['detail'].strip()}\n```")
+
+    return "\n\n".join(parts)

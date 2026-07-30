@@ -2,8 +2,8 @@
 
 LangGraph nodes receive only state, so the collaborators are bound in via a
 Runtime the graph closes over. Keeping them here rather than reaching for
-globals is what lets the node logic be tested with a stubbed executor and
-reviewer and no network.
+globals is what lets the node logic be tested with a stubbed planner, executor,
+and reviewer and no network.
 """
 
 from __future__ import annotations
@@ -13,23 +13,63 @@ from pathlib import Path
 from typing import Callable
 
 from orchestrator.commands import CommandRunner
-from orchestrator.config import RunConfig
+from orchestrator.config import ProjectConfig
 from orchestrator.executor import Executor
 from orchestrator.gitops import Git
+from orchestrator.plandoc import PlanTree, load_snapshot
+from orchestrator.planner import PlannerClient
 from orchestrator.reviewer import ReviewerClient
+
+PROJECTS_ROOT = Path("projects")
+
+
+class ProjectPaths:
+    """Layout of `projects/<slug>/`.
+
+    Everything the orchestrator owns lives here. The target repo receives
+    product code and plan-document revisions, and nothing else.
+    """
+
+    def __init__(self, slug: str, root: Path | str = PROJECTS_ROOT):
+        self.slug = slug
+        self.root = Path(root)
+
+    @property
+    def project_dir(self) -> Path:
+        return self.root / self.slug
+
+    @property
+    def config(self) -> Path:
+        return self.project_dir / "config.yaml"
+
+    @property
+    def plan_snapshot(self) -> Path:
+        return self.project_dir / "plan-snapshot"
+
+    @property
+    def status(self) -> Path:
+        return self.project_dir / "status.md"
+
+    @property
+    def runs_dir(self) -> Path:
+        return self.project_dir / "runs"
+
+    def run_dir(self, run_id: str) -> Path:
+        return self.runs_dir / run_id
+
+    def ensure(self) -> None:
+        self.project_dir.mkdir(parents=True, exist_ok=True)
+        self.runs_dir.mkdir(exist_ok=True)
 
 
 class RunPaths:
-    """Layout of `./runs/<run_id>/`. The target repo stays free of
-    orchestrator artifacts."""
-
-    def __init__(self, root: Path | str, run_id: str):
-        self.root = Path(root)
+    def __init__(self, project: ProjectPaths, run_id: str):
+        self.project = project
         self.run_id = run_id
 
     @property
     def run_dir(self) -> Path:
-        return self.root / self.run_id
+        return self.project.run_dir(self.run_id)
 
     @property
     def state_db(self) -> Path:
@@ -43,8 +83,18 @@ class RunPaths:
     def report(self) -> Path:
         return self.run_dir / "report.md"
 
-    def attempt_dir(self, index: int, stage_id: str, attempt: int) -> Path:
-        return self.run_dir / "stages" / f"{index}-{stage_id}-attempt-{attempt}"
+    @property
+    def metadata(self) -> Path:
+        return self.run_dir / "run.json"
+
+    def attempt_dir(
+        self, index: int, stage_id: str, revision: int, attempt: int
+    ) -> Path:
+        return (
+            self.run_dir
+            / "stages"
+            / f"{index:03d}-{stage_id}-rev-{revision}-attempt-{attempt}"
+        )
 
     def ensure(self) -> None:
         self.run_dir.mkdir(parents=True, exist_ok=True)
@@ -53,18 +103,40 @@ class RunPaths:
 
 @dataclass
 class Runtime:
-    cfg: RunConfig
+    cfg: ProjectConfig
+    project: ProjectPaths
     paths: RunPaths
     git: Git
     runner: CommandRunner
     executor: Executor
+    planner: PlannerClient
     reviewer: ReviewerClient
     log: Callable[[str], None] = field(default=lambda _msg: None)
+    _plan: PlanTree | None = None
 
-    def write_attempt_artifact(
-        self, index: int, stage_id: str, attempt: int, name: str, body: str
+    @property
+    def plan(self) -> PlanTree:
+        """The run's plan snapshot, read once and held.
+
+        The reviewer and planner judge against the plan as it stood when the run
+        began; the planner's own revisions land in the live documents and show up
+        as divergence in status.md. Nothing is silently substituted underneath
+        them mid-run.
+        """
+        if self._plan is None:
+            self._plan = load_snapshot(self.paths.project.plan_snapshot)
+        return self._plan
+
+    def write_artifact(
+        self,
+        index: int,
+        stage_id: str,
+        revision: int,
+        attempt: int,
+        name: str,
+        body: str,
     ) -> Path:
-        directory = self.paths.attempt_dir(index, stage_id, attempt)
+        directory = self.paths.attempt_dir(index, stage_id, revision, attempt)
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / name
         path.write_text(body)
@@ -72,8 +144,10 @@ class Runtime:
 
 
 def build_runtime(
-    cfg: RunConfig,
+    cfg: ProjectConfig,
+    project: ProjectPaths,
     paths: RunPaths,
+    planner: PlannerClient,
     reviewer: ReviewerClient,
     log: Callable[[str], None] | None = None,
 ) -> Runtime:
@@ -85,10 +159,12 @@ def build_runtime(
     )
     return Runtime(
         cfg=cfg,
+        project=project,
         paths=paths,
         git=Git(cfg.target_repo),
         runner=runner,
         executor=Executor(cfg, runner),
+        planner=planner,
         reviewer=reviewer,
         log=logger,
     )

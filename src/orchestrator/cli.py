@@ -1,13 +1,16 @@
 """Command line interface.
 
-    orchestrator run <config.yaml>        start a new run
-    orchestrator resume <run_id>          continue an interrupted or gated run
-    orchestrator status <run_id>          where a run stopped and why
-    orchestrator validate <config.yaml>   check config without executing
+    orchestrator init <plan-doc>      draft a project config from a plan document
+    orchestrator validate <project>   prove the config works on this host
+    orchestrator approve <project>    record that a human read it
+    orchestrator run <project>        start a run
+    orchestrator resume <run_id>      continue after an interruption or escalation
+    orchestrator status <run_id>      where a run stopped and why
 
-Exit codes matter for scripting: 0 on success, 1 on escalation or validation
-failure, 2 when a run is paused waiting on a human. A gated run is not a
-failure and should not read as one.
+`init` may prompt — it is a human at a terminal doing one-time setup. `run` and
+`resume` execute unattended and must never block on input.
+
+Exit codes: 0 complete, 1 failed or escalated.
 """
 
 from __future__ import annotations
@@ -15,136 +18,90 @@ from __future__ import annotations
 import json
 import re
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import click
 
-from orchestrator.config import ConfigError, RunConfig, load_config
+from orchestrator.approval import approval_problem, config_hash, record_approval
+from orchestrator.config import ConfigError, ProjectConfig, load_config
+from orchestrator.discover import derive_target_repo, draft_config
 from orchestrator.gitops import Git
 from orchestrator.graph import build_graph, open_checkpointer, recursion_limit
+from orchestrator.plandoc import resolve_plan_tree, snapshot_tree
+from orchestrator.planner import make_planner
 from orchestrator.preflight import format_checks, run_preflight
 from orchestrator.report import build_report
 from orchestrator.reviewer import make_reviewer
 from orchestrator.runlog import RunLog
-from orchestrator.runtime import RunPaths, build_runtime
+from orchestrator.runtime import PROJECTS_ROOT, ProjectPaths, RunPaths, build_runtime
 from orchestrator.state import new_state
 
 EXIT_OK = 0
 EXIT_FAILED = 1
-EXIT_AWAITING_HUMAN = 2
-
-RUNS_ROOT = Path("runs")
 
 
 @click.group()
 def main() -> None:
-    """Drive a multistage refactor with a local executor and a paid reviewer."""
+    """Drive a long refactor with a local executor, a planner, and a reviewer."""
 
 
 @main.command()
-@click.argument("config_path", type=click.Path(exists=True, path_type=Path))
-@click.option("--run-id", default=None, help="Override the generated run id.")
-@click.option(
-    "--skip-preflight-tests",
-    is_flag=True,
-    help="Skip running the test suites during preflight. Faster, but a "
-    "target repo that is already red will not be caught.",
-)
-def run(config_path: Path, run_id: str | None, skip_preflight_tests: bool) -> None:
-    """Start a new run from a config file."""
-    cfg = _load(config_path)
+@click.argument("plan_doc", type=click.Path(exists=True, path_type=Path))
+@click.option("--slug", default=None, help="Project directory name under projects/.")
+def init(plan_doc: Path, slug: str | None) -> None:
+    """Draft a project config from a plan document.
 
-    checks = run_preflight(cfg, run_tests=not skip_preflight_tests)
-    click.echo(format_checks(checks))
-    if any(c.blocking for c in checks):
-        click.echo("\npreflight failed; nothing was run", err=True)
+    Discovery splits along the same line as the planner's write permissions:
+    executable fields come from deterministic repo inspection, never a model.
+    """
+    repo = derive_target_repo(plan_doc)
+    if repo is None:
+        click.echo(
+            f"{plan_doc} is not inside a git repository.\n\n"
+            "The plan document must live in the target repo: the repo copy is "
+            "what the orchestrator operates against and what the planner "
+            "revises. Copy it in, commit it, and re-run init against the copy.",
+            err=True,
+        )
         sys.exit(EXIT_FAILED)
 
-    run_id = run_id or _generate_run_id(cfg)
-    paths = RunPaths(RUNS_ROOT, run_id)
-    paths.ensure()
+    plan_rel = plan_doc.resolve().relative_to(repo.resolve()).as_posix()
+    slug = slug or _slugify(plan_doc.stem)
+    project = ProjectPaths(slug)
 
-    git = Git(cfg.target_repo)
-    base_sha = git.rev_parse(cfg.base_ref)
-    if not git.branch_exists(cfg.branch):
-        git.create_branch(cfg.branch, base=cfg.base_ref)
-    else:
-        git.checkout(cfg.branch)
+    if project.config.exists() and not click.confirm(
+        f"{project.config} already exists. Overwrite?", default=False
+    ):
+        click.echo("left alone")
+        sys.exit(EXIT_OK)
 
-    _write_run_metadata(paths, config_path, run_id)
+    project.ensure()
+    draft, notes = draft_config(repo, plan_rel)
+    project.config.write_text(draft)
 
-    state = new_state(
-        run_id=run_id,
-        config_path=str(config_path.resolve()),
-        target_repo=str(cfg.target_repo),
-        base_ref=cfg.base_ref,
-        base_sha=base_sha,
-        branch=cfg.branch,
-        stage_ids=[s.id for s in cfg.stages],
+    click.echo(f"wrote {project.config}\n")
+    for note in notes:
+        click.echo(f"  {note}")
+    click.echo(
+        "\nEvery discovered field carries a provenance comment, so reviewing it "
+        "is a check of reasoning rather than of values. Read it, fix what is "
+        f"wrong, then:\n\n  orchestrator validate {slug}\n"
+        f"  orchestrator approve {slug}"
     )
 
-    click.echo(f"\nrun {run_id}: {len(cfg.stages)} stage(s) on {cfg.branch}\n")
-    sys.exit(_drive(cfg, paths, state))
-
 
 @main.command()
-@click.argument("run_id")
-def resume(run_id: str) -> None:
-    """Continue an interrupted or gated run from its last checkpoint."""
-    paths = RunPaths(RUNS_ROOT, run_id)
-    metadata = _read_run_metadata(paths)
-    cfg = _load(Path(metadata["config_path"]))
-
-    saved = _load_state(cfg, paths, run_id)
-    if saved is None:
-        click.echo(f"no checkpoint found for run {run_id}", err=True)
-        sys.exit(EXIT_FAILED)
-
-    _assert_stages_unchanged(saved, cfg)
-
-    checks = run_preflight(cfg, run_tests=False, for_resume=True)
-    click.echo(format_checks(checks))
-    if any(c.blocking for c in checks):
-        click.echo("\npreflight failed; nothing was resumed", err=True)
-        sys.exit(EXIT_FAILED)
-
-    stage_id = saved.get("stage_ids", [])[saved.get("stage_index", 0)]
-    click.echo(f"\nresuming run {run_id} at stage {stage_id}\n")
-    # The checkpointed state is the input; `resuming` tells the entry router
-    # that a manual stage should go straight to verify rather than back
-    # through gate, which would pause again without ever checking the work.
-    sys.exit(_drive(cfg, paths, {"next_hop": "", "resuming": True}))
-
-
-@main.command()
-@click.argument("run_id")
-def status(run_id: str) -> None:
-    """Show where a run stopped and why."""
-    paths = RunPaths(RUNS_ROOT, run_id)
-    try:
-        metadata = _read_run_metadata(paths)
-    except (OSError, json.JSONDecodeError):
-        click.echo(f"no such run: {run_id}", err=True)
-        sys.exit(EXIT_FAILED)
-
-    cfg = _load(Path(metadata["config_path"]))
-    saved = _load_state(cfg, paths, run_id)
-    if saved is None:
-        click.echo(f"run {run_id} has no checkpoint yet", err=True)
-        sys.exit(EXIT_FAILED)
-
-    click.echo(build_report(saved, cfg))
-    sys.exit(_exit_code(saved.get("status", "running")))
-
-
-@main.command()
-@click.argument("config_path", type=click.Path(exists=True, path_type=Path))
+@click.argument("slug")
 @click.option("--skip-tests", is_flag=True, help="Do not run the test suites.")
-def validate(config_path: Path, skip_tests: bool) -> None:
-    """Check a config without executing any stage."""
-    cfg = _load(config_path)
-    checks = run_preflight(cfg, run_tests=not skip_tests)
+def validate(slug: str, skip_tests: bool) -> None:
+    """Prove the config works against this host, before approval."""
+    project = ProjectPaths(slug)
+    cfg = _load(project.config)
+    checks = run_preflight(
+        cfg, project_dir=project, run_tests=not skip_tests, check_approval=False
+    )
     click.echo(format_checks(checks))
 
     blocking = [c for c in checks if c.blocking]
@@ -153,26 +110,180 @@ def validate(config_path: Path, skip_tests: bool) -> None:
     if blocking:
         click.echo(f"{len(blocking)} blocking problem(s)", err=True)
         sys.exit(EXIT_FAILED)
-    click.echo(f"config is runnable ({len(warnings)} warning(s))")
+    click.echo(
+        f"config works on this host ({len(warnings)} warning(s)). "
+        f"Approve it with: orchestrator approve {slug}"
+    )
+
+
+@main.command()
+@click.argument("slug")
+def approve(slug: str) -> None:
+    """Record that a human read this config.
+
+    There is no `approved: true` field, because such a field could be set by
+    anything. Approval is a hash of the exact bytes reviewed.
+    """
+    project = ProjectPaths(slug)
+    cfg = _load(project.config)
+
+    click.echo("Commands this config will run unattended:\n")
+    for label, command in cfg.all_commands():
+        click.echo(f"  {label}: {command}")
+    click.echo("")
+
+    approval = record_approval(
+        project.project_dir, project.config, now=datetime.now(timezone.utc).isoformat()
+    )
+    click.echo(f"approved {approval.config_sha256[:16]} at {approval.approved_at}")
+    click.echo("Editing the config invalidates this and requires approving again.")
+
+
+@main.command()
+@click.argument("slug")
+@click.option("--run-id", default=None, help="Override the generated run id.")
+@click.option(
+    "--skip-preflight-tests",
+    is_flag=True,
+    help="Skip the suites during preflight. Faster, but an already-red repo "
+    "will not be caught.",
+)
+def run(slug: str, run_id: str | None, skip_preflight_tests: bool) -> None:
+    """Start a run against a project."""
+    project = ProjectPaths(slug)
+    cfg = _load(project.config)
+
+    problem = approval_problem(project.project_dir, project.config)
+    if problem:
+        click.echo(f"refusing to start: {problem}", err=True)
+        sys.exit(EXIT_FAILED)
+
+    checks = run_preflight(cfg, project_dir=project, run_tests=not skip_preflight_tests)
+    click.echo(format_checks(checks))
+    if any(c.blocking for c in checks):
+        click.echo("\npreflight failed; nothing was run", err=True)
+        sys.exit(EXIT_FAILED)
+
+    run_id = run_id or _generate_run_id(cfg)
+    paths = RunPaths(project, run_id)
+    paths.ensure()
+
+    git = Git(cfg.target_repo)
+    # Rework discards child branches, and the reflog is the only recovery path
+    # for an attempt the operator later wants to inspect.
+    previous_gc = git.disable_gc()
+    base_sha = git.ensure_project_branch(cfg.project_branch, cfg.base_ref)
+
+    # Snapshot the plan as it stands at the run's baseline. The reviewer and
+    # planner judge against this; the planner's own revisions land in the live
+    # documents and show up as divergence in status.md.
+    tree = resolve_plan_tree(git, cfg.plan_root, base_sha)
+    if not tree.ok:
+        click.echo("plan could not be resolved:\n" + "\n".join(tree.problems), err=True)
+        git.restore_gc(previous_gc)
+        sys.exit(EXIT_FAILED)
+    snapshot_tree(tree, project.plan_snapshot)
+
+    state = new_state(
+        run_id=run_id,
+        project_slug=slug,
+        config_hash=config_hash(project.config),
+        target_repo=str(cfg.target_repo),
+        base_ref=cfg.base_ref,
+        base_sha=base_sha,
+        project_branch=cfg.project_branch,
+        started_at=time.time(),
+    )
+    _write_metadata(paths, slug, run_id)
+
+    click.echo(
+        f"\nrun {run_id} on {cfg.project_branch} "
+        f"(plan: {len(tree.documents)} document(s))\n"
+    )
+    try:
+        code = _drive(cfg, project, paths, state)
+    finally:
+        git.restore_gc(previous_gc)
+    sys.exit(code)
+
+
+@main.command()
+@click.argument("run_id")
+def resume(run_id: str) -> None:
+    """Continue after an interruption or an escalation a human has fixed."""
+    project, cfg = _locate_run(run_id)
+    paths = RunPaths(project, run_id)
+
+    saved = _load_state(cfg, project, paths, run_id)
+    if saved is None:
+        click.echo(f"no checkpoint for run {run_id}", err=True)
+        sys.exit(EXIT_FAILED)
+
+    problem = approval_problem(project.project_dir, project.config)
+    if problem:
+        click.echo(f"refusing to resume: {problem}", err=True)
+        sys.exit(EXIT_FAILED)
+
+    checks = run_preflight(cfg, project_dir=project, run_tests=False, for_resume=True)
+    click.echo(format_checks(checks))
+    if any(c.blocking for c in checks):
+        click.echo("\npreflight failed; nothing was resumed", err=True)
+        sys.exit(EXIT_FAILED)
+
+    git = Git(cfg.target_repo)
+    previous_gc = git.disable_gc()
+    click.echo(f"\nresuming {run_id} (last failure: {saved.get('failure_layer')})\n")
+    try:
+        # `resuming` tells the entry router how to re-enter: verify for a
+        # repository-state failure, so the human's fix is checked rather than
+        # discarded; plan for a planning failure.
+        code = _drive(cfg, project, paths, {"resuming": True, "next_hop": ""})
+    finally:
+        git.restore_gc(previous_gc)
+    sys.exit(code)
+
+
+@main.command()
+@click.argument("run_id")
+def status(run_id: str) -> None:
+    """Show where a run stopped and why."""
+    project, cfg = _locate_run(run_id)
+    paths = RunPaths(project, run_id)
+    saved = _load_state(cfg, project, paths, run_id)
+    if saved is None:
+        click.echo(f"run {run_id} has no checkpoint yet", err=True)
+        sys.exit(EXIT_FAILED)
+    click.echo(build_report(saved, cfg))
+    sys.exit(EXIT_OK if saved.get("status") == "complete" else EXIT_FAILED)
 
 
 # --- internals -----------------------------------------------------------
 
 
-def _drive(cfg: RunConfig, paths: RunPaths, graph_input: dict) -> int:
+def _drive(
+    cfg: ProjectConfig, project: ProjectPaths, paths: RunPaths, graph_input: dict
+) -> int:
     saver, conn = open_checkpointer(paths.state_db)
     log = RunLog(paths.run_log)
     try:
-        rt = build_runtime(cfg, paths, make_reviewer(cfg.reviewer), log=log)
+        rt = build_runtime(
+            cfg,
+            project,
+            paths,
+            planner=make_planner(cfg.planner),
+            reviewer=make_reviewer(cfg.reviewer),
+            log=log,
+        )
         graph = build_graph(rt, checkpointer=saver)
         final = graph.invoke(
             graph_input,
             {
                 "configurable": {"thread_id": paths.run_id},
                 "recursion_limit": recursion_limit(
-                    len(cfg.stages),
+                    cfg.limits.max_stages,
                     cfg.limits.max_test_retries,
                     cfg.limits.max_rework_retries,
+                    cfg.limits.max_planner_interventions,
                 ),
             },
         )
@@ -185,19 +296,10 @@ def _drive(cfg: RunConfig, paths: RunPaths, graph_input: dict) -> int:
     click.echo("")
     click.echo(report)
     click.echo(f"report written to {paths.report}")
-    return _exit_code(final.get("status", "running"))
+    return EXIT_OK if final.get("status") == "complete" else EXIT_FAILED
 
 
-def _exit_code(status: str) -> int:
-    if status == "complete":
-        return EXIT_OK
-    if status == "awaiting_human":
-        # Not a failure. A paused run should not read as one to a script.
-        return EXIT_AWAITING_HUMAN
-    return EXIT_FAILED
-
-
-def _load(config_path: Path) -> RunConfig:
+def _load(config_path: Path) -> ProjectConfig:
     try:
         return load_config(config_path)
     except ConfigError as e:
@@ -205,12 +307,12 @@ def _load(config_path: Path) -> RunConfig:
         sys.exit(EXIT_FAILED)
 
 
-def _load_state(cfg: RunConfig, paths: RunPaths, run_id: str) -> dict | None:
+def _load_state(cfg, project, paths, run_id) -> dict | None:
     saver, conn = open_checkpointer(paths.state_db)
     try:
-        # A throwaway runtime: reading state needs the graph shape, not a
-        # reviewer, and building one would demand an API key just to read.
-        rt = build_runtime(cfg, paths, reviewer=None)
+        # A throwaway runtime: reading state needs the graph shape, not models,
+        # and building them would demand API keys just to read a report.
+        rt = build_runtime(cfg, project, paths, planner=None, reviewer=None)
         graph = build_graph(rt, checkpointer=saver)
         snapshot = graph.get_state({"configurable": {"thread_id": run_id}})
         return dict(snapshot.values) if snapshot and snapshot.values else None
@@ -218,36 +320,29 @@ def _load_state(cfg: RunConfig, paths: RunPaths, run_id: str) -> dict | None:
         conn.close()
 
 
-def _assert_stages_unchanged(saved: dict, cfg: RunConfig) -> None:
-    """Refuse to resume into a config that has been edited underneath the run.
-
-    Silently applying a changed stage list to a half-finished run would make
-    the report describe work that never happened.
-    """
-    before = saved.get("stage_ids") or []
-    after = [s.id for s in cfg.stages]
-    if before != after:
-        click.echo(
-            "the config's stage list has changed since this run started:\n"
-            f"  was: {before}\n  now: {after}\n"
-            "start a new run rather than resuming into a different plan",
-            err=True,
-        )
-        sys.exit(EXIT_FAILED)
+def _locate_run(run_id: str) -> tuple[ProjectPaths, ProjectConfig]:
+    """Find which project owns a run id."""
+    if PROJECTS_ROOT.is_dir():
+        for candidate in sorted(PROJECTS_ROOT.iterdir()):
+            if (candidate / "runs" / run_id / "run.json").is_file():
+                project = ProjectPaths(candidate.name)
+                return project, _load(project.config)
+    click.echo(f"no such run: {run_id}", err=True)
+    sys.exit(EXIT_FAILED)
 
 
-def _generate_run_id(cfg: RunConfig) -> str:
+def _generate_run_id(cfg: ProjectConfig) -> str:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    slug = re.sub(r"[^A-Za-z0-9]+", "-", cfg.branch).strip("-").lower()
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", cfg.project_branch).strip("-").lower()
     return f"{stamp}-{slug}" if slug else stamp
 
 
-def _write_run_metadata(paths: RunPaths, config_path: Path, run_id: str) -> None:
-    (paths.run_dir / "run.json").write_text(
+def _write_metadata(paths: RunPaths, slug: str, run_id: str) -> None:
+    paths.metadata.write_text(
         json.dumps(
             {
                 "run_id": run_id,
-                "config_path": str(config_path.resolve()),
+                "project_slug": slug,
                 "started_at": datetime.now(timezone.utc).isoformat(),
             },
             indent=2,
@@ -255,8 +350,8 @@ def _write_run_metadata(paths: RunPaths, config_path: Path, run_id: str) -> None
     )
 
 
-def _read_run_metadata(paths: RunPaths) -> dict:
-    return json.loads((paths.run_dir / "run.json").read_text())
+def _slugify(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "-", value).strip("-").lower() or "project"
 
 
 if __name__ == "__main__":  # pragma: no cover

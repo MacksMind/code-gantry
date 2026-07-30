@@ -22,7 +22,7 @@ import os
 from dataclasses import dataclass, field
 
 from orchestrator.commands import CommandResult, CommandRunner
-from orchestrator.config import RunConfig, Stage
+from orchestrator.config import ProjectConfig, Stage
 
 # The flags we build. preflight checks each of these against `aider --help`
 # so a release that renamed one fails validation instead of stage 1.
@@ -49,7 +49,7 @@ class ExecutionResult:
     results: list[CommandResult] = field(default_factory=list)
 
 
-def build_aider_argv(stage: Stage, cfg: RunConfig, prompt: str) -> list[str]:
+def build_aider_argv(stage: Stage, cfg: ProjectConfig, prompt: str) -> list[str]:
     """Assemble the Aider invocation.
 
     The API key is deliberately absent: it goes through the environment, so it
@@ -88,7 +88,7 @@ def build_aider_argv(stage: Stage, cfg: RunConfig, prompt: str) -> list[str]:
 
 
 class Executor:
-    def __init__(self, cfg: RunConfig, runner: CommandRunner):
+    def __init__(self, cfg: ProjectConfig, runner: CommandRunner):
         self.cfg = cfg
         self.runner = runner
 
