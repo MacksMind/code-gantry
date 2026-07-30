@@ -213,7 +213,9 @@ def _cost_section(state: RunState, cfg: ProjectConfig) -> list[str]:
     cached = run_usage.get("cached_tokens", 0)
     completion = run_usage.get("completion_tokens", 0)
     planner_prompt = run_usage.get("planner_prompt_tokens", 0)
+    planner_cached = run_usage.get("planner_cached_tokens", 0)
     planner_completion = run_usage.get("planner_completion_tokens", 0)
+    planner_cached_pct = (planner_cached / planner_prompt * 100) if planner_prompt else 0.0
 
     test_seconds = sum(e.get("test_seconds", 0.0) for e in completed)
     cached_pct = (cached / prompt * 100) if prompt else 0.0
@@ -231,7 +233,9 @@ def _cost_section(state: RunState, cfg: ProjectConfig) -> list[str]:
         "",
         f"- Interventions used: {state.get('planner_interventions', 0)} of "
         f"{cfg.limits.max_planner_interventions}",
-        f"- Prompt tokens: {planner_prompt:,}",
+        f"- Prompt tokens: {planner_prompt:,} "
+        f"({planner_cached:,} cached, {planner_cached_pct:.0f}%)",
+        f"- Uncached prompt tokens: {planner_prompt - planner_cached:,}",
         f"- Completion tokens: {planner_completion:,}",
         "",
         f"Total test-suite runtime: {test_seconds:.0f}s across "
@@ -249,6 +253,16 @@ def _cost_section(state: RunState, cfg: ProjectConfig) -> list[str]:
             "plan snapshot and completed history are supposed to form a stable "
             "cacheable prefix — a low proportion means something is varying in "
             "it, and every review is costing more than it should."
+        )
+        lines.append("")
+
+    if planner_prompt and planner_cached_pct < 50:
+        lines.append(
+            f"> Only {planner_cached_pct:.0f}% of planner prompt tokens were "
+            "cached. The plan snapshot, the repository layout and the completed "
+            "history lead the planner's prompt precisely so they can be cached "
+            "behind one breakpoint — a low proportion means the prefix is "
+            "varying between calls, or the breakpoint is not being honoured."
         )
         lines.append("")
 

@@ -249,7 +249,27 @@ def build_planner_messages(
         leading += "\n\n## What the repository contains\n\n" + layout
     leading += "\n\n" + _history_block(completed)
 
-    messages = [{"role": "user", "content": leading}]
+    # The breakpoint, and the reason the ordering above exists. Anthropic
+    # caching is explicit: without this marker the plan snapshot, the repository
+    # layout and the completed history are re-billed in full on every planner
+    # call, which is most of the prompt and the entire economic argument for
+    # calling a paid model at checkpoints.
+    #
+    # It goes here and nowhere else. A breakpoint after content that changes
+    # between calls would invalidate the cache every time, which costs more than
+    # not caching at all.
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": leading,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+    ]
 
     current: list[str] = []
 

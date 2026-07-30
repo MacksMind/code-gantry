@@ -71,6 +71,7 @@ class StageResult(TypedDict, total=False):
     cached_tokens: int
     completion_tokens: int
     planner_prompt_tokens: int
+    planner_cached_tokens: int
     planner_completion_tokens: int
 
 
@@ -201,6 +202,7 @@ def _zero_usage() -> dict[str, int]:
         "cached_tokens": 0,
         "completion_tokens": 0,
         "planner_prompt_tokens": 0,
+        "planner_cached_tokens": 0,
         "planner_completion_tokens": 0,
     }
 

@@ -97,6 +97,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
     usage = accumulate_usage(
         state.get("run_usage"),
         planner_prompt_tokens=outcome.usage.prompt_tokens,
+        planner_cached_tokens=outcome.usage.cached_tokens,
         planner_completion_tokens=outcome.usage.completion_tokens,
     )
 

@@ -247,6 +247,23 @@ class TestPlannerBudgets:
         assert repo not in destination.parents
         assert destination.is_dir()
 
+    def test_planner_cached_tokens_are_recorded(self, repo, tmp_path):
+        # The client extracts cache_read_input_tokens and it was being thrown
+        # away, so the report could not show whether the planner's cacheable
+        # prefix was working — which is the design's economic premise.
+        planner = StubPlanner(
+            [
+                PlannerOutcome(
+                    "next_stage", "r", "e",
+                    stage_fields=planned_stage(),
+                    usage=PlannerUsage(12_000, 11_200, 300),
+                )
+            ]
+        )
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        out = nodes.plan(state, rt)
+        assert out["run_usage"]["planner_cached_tokens"] == 11_200
+
     def test_the_wall_clock_budget_escalates(self, repo, tmp_path):
         cfg, rt, state = make(repo, tmp_path, limits={"wall_clock_hours": 2})
         state["session_started_at"] = time.time() - 3 * 3600

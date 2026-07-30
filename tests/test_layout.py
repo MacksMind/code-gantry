@@ -101,6 +101,12 @@ def test_output_is_deterministic():
     assert summarize_layout(paths) == summarize_layout(list(reversed(paths)))
 
 
+def _leading(messages):
+    """Text of the planner's leading (cacheable) content block."""
+    block = messages[0]["content"]
+    return block[0]["text"] if isinstance(block, list) else block
+
+
 class TestReachesThePlanner:
     """Wiring, not formatting. The block is worthless if it never arrives."""
 
@@ -117,7 +123,7 @@ class TestReachesThePlanner:
         messages = build_planner_messages(
             cfg=None, plan=plan, completed=[], layout="- `src/` (1)\n  src/calc.py"
         )
-        assert "src/calc.py" in messages[0]["content"]
+        assert "src/calc.py" in _leading(messages)
 
     def test_it_leads_so_it_stays_cacheable(self):
         # It is read once at the base sha and never changes, so it belongs in
@@ -138,8 +144,8 @@ class TestReachesThePlanner:
             layout="LAYOUT_MARKER",
             status_tail="TAIL_MARKER",
         )
-        assert "LAYOUT_MARKER" in messages[0]["content"]
-        assert "TAIL_MARKER" not in messages[0]["content"]
+        assert "LAYOUT_MARKER" in _leading(messages)
+        assert "TAIL_MARKER" not in _leading(messages)
 
     def test_a_repo_with_no_layout_still_builds_a_prompt(self):
         from orchestrator.plandoc import PlanDocument, PlanTree
@@ -152,4 +158,4 @@ class TestReachesThePlanner:
             skipped=[],
         )
         messages = build_planner_messages(cfg=None, plan=plan, completed=[], layout="")
-        assert messages[0]["content"].strip()
+        assert _leading(messages).strip()
