@@ -26,6 +26,16 @@ def current_stage(state: RunState, rt: Runtime) -> Stage:
     return rt.cfg.stages[state["stage_index"]]
 
 
+def current_stage_or_none(state: RunState, rt: Runtime) -> Stage | None:
+    """None once the stage list is exhausted.
+
+    `finalize` escalates after `advance` has already moved past the last
+    stage, so an escalation is not always attributable to a stage.
+    """
+    index = state.get("stage_index", 0)
+    return rt.cfg.stages[index] if index < len(rt.cfg.stages) else None
+
+
 # --- precheck ------------------------------------------------------------
 
 
@@ -384,30 +394,17 @@ def escalate(state: RunState, rt: Runtime) -> dict:
     reason = state.get("escalation_reason") or "escalated without a recorded reason"
     rt.log(f"[escalate] {reason}")
 
-    stage = current_stage(state, rt)
-    usage = state.get("stage_usage") or {}
-    history = list(state.get("history") or [])
-    history.append(
-        {
-            "id": stage.id,
-            "kind": stage.kind,
-            "outcome": "escalated",
-            "commit_range": None,
-            "wall_seconds": max(time.time() - (state.get("stage_started_at") or 0), 0.0),
-            "test_seconds": state["test_seconds"],
-            "verify_retries": state["verify_attempt"],
-            "rework_attempts": state["rework_attempt"],
-            "flake_reruns": state["flake_reruns"],
-            "failed_layer": state.get("failure_layer"),
-            "review_verdict": state.get("review_verdict"),
-            "review_summary": state.get("review_summary"),
-            "prompt_tokens": usage.get("prompt_tokens", 0),
-            "cached_tokens": usage.get("cached_tokens", 0),
-            "completion_tokens": usage.get("completion_tokens", 0),
-        }
-    )
+    stage = current_stage_or_none(state, rt)
 
-    return {"status": "escalated", "history": history, "next_hop": "end"}
+    # Deliberately not appended to `history`, which records *completed*
+    # stages. A run that escalates, gets fixed, and is resumed would otherwise
+    # carry both an "escalated" and a "complete" row for the same stage. The
+    # report renders the failed stage from these fields instead.
+    return {
+        "status": "escalated",
+        "failed_stage_id": stage.id if stage else None,
+        "next_hop": "end",
+    }
 
 
 # --- helpers -------------------------------------------------------------

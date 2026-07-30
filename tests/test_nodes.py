@@ -481,11 +481,27 @@ class TestFinalize:
 
 
 class TestEscalate:
-    def test_records_the_failed_stage_in_history(self, repo, tmp_path):
+    def test_records_which_stage_failed(self, repo, tmp_path):
         cfg, rt, state = make(repo, tmp_path)
         state["escalation_reason"] = "because"
         state["failure_layer"] = "scope"
         out = nodes.escalate(state, rt)
         assert out["status"] == "escalated"
-        assert out["history"][-1]["outcome"] == "escalated"
-        assert out["history"][-1]["failed_layer"] == "scope"
+        assert out["failed_stage_id"] == "s1"
+
+    def test_does_not_append_to_history(self, repo, tmp_path):
+        # history records completed stages. A run that escalates, gets fixed,
+        # and is resumed would otherwise carry both an "escalated" and a
+        # "complete" row for the same stage.
+        cfg, rt, state = make(repo, tmp_path)
+        state["history"] = [{"id": "earlier", "outcome": "complete"}]
+        out = nodes.escalate(state, rt)
+        assert "history" not in out or out["history"] == state["history"]
+
+    def test_handles_escalating_after_the_last_stage(self, repo, tmp_path):
+        # A full-suite failure in finalize runs with stage_index past the end.
+        cfg, rt, state = make(repo, tmp_path)
+        state["stage_index"] = 1
+        out = nodes.escalate(state, rt)
+        assert out["status"] == "escalated"
+        assert out["failed_stage_id"] is None

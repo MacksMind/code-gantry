@@ -8,7 +8,7 @@ stage.
 
 import pytest
 
-from orchestrator.graph import EDGES, NODES, _entry, _router, recursion_limit
+from orchestrator.graph import EDGES, NODES, _router, entry_router, recursion_limit
 
 
 class TestEdgeTable:
@@ -54,16 +54,38 @@ class TestRouter:
 
 
 class TestEntryPoint:
+    def _route(self, kinds=("agent",)):
+        from types import SimpleNamespace
+
+        stages = [SimpleNamespace(kind=k) for k in kinds]
+        rt = SimpleNamespace(cfg=SimpleNamespace(stages=stages))
+        return entry_router(rt)
+
     def test_a_new_run_starts_at_precheck(self):
-        assert _entry({"status": "running"}) == "precheck"
+        assert self._route()({"status": "running"}) == "precheck"
 
     def test_a_gated_run_resumes_at_verify(self):
         # The human has done the work; the orchestrator's job on resume is to
         # confirm it landed green, not to re-run the stage.
-        assert _entry({"status": "awaiting_human"}) == "verify"
+        assert self._route()({"status": "awaiting_human"}) == "verify"
 
-    def test_an_escalated_run_starts_at_precheck(self):
-        assert _entry({"status": "escalated"}) == "precheck"
+    def test_a_resumed_manual_stage_goes_to_verify_even_after_escalating(self):
+        # Routing it back through precheck would re-enter gate and pause again
+        # without ever checking the work — forever.
+        route = self._route(kinds=("manual",))
+        state = {"status": "escalated", "resuming": True, "stage_index": 0}
+        assert route(state) == "verify"
+
+    def test_a_resumed_agent_stage_starts_at_precheck(self):
+        # Retrying an agent stage from the top is right: its executor needs to
+        # run again.
+        route = self._route(kinds=("agent",))
+        assert route({"status": "escalated", "resuming": True, "stage_index": 0}) == "precheck"
+
+    def test_a_fresh_run_of_a_manual_stage_goes_to_precheck(self):
+        # It has to reach gate at least once to tell the human what to do.
+        route = self._route(kinds=("manual",))
+        assert route({"status": "running", "stage_index": 0}) == "precheck"
 
 
 class TestRecursionLimit:

@@ -65,6 +65,11 @@ class RunState(TypedDict, total=False):
     history: list[StageResult]
     status: Status
     escalation_reason: str | None
+    failed_stage_id: str | None
+
+    # True when this invocation is a resume rather than a fresh run. The entry
+    # router needs it: a manual stage being resumed must go straight to verify.
+    resuming: bool
 
     # Set by each node, read by the conditional edges. Explicit routing keeps
     # the decision visible in the checkpoint rather than hidden in control
@@ -105,6 +110,8 @@ def new_state(
         history=[],
         status="running",
         escalation_reason=None,
+        failed_stage_id=None,
+        resuming=False,
         next_hop="",
     )
 
@@ -119,6 +126,7 @@ def fresh_stage_fields() -> dict:
         "flake_reruns": 0,
         "test_seconds": 0.0,
         "failure_layer": None,
+        "failed_stage_id": None,
         "last_test_output": None,
         "review_feedback": [],
         "review_verdict": None,

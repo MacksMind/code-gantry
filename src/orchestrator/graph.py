@@ -47,14 +47,32 @@ EDGES: dict[str, list[str]] = {
 }
 
 
-def _entry(state: RunState) -> str:
+def entry_router(rt: Runtime) -> Callable[[RunState], str]:
     """Where a fresh invocation begins.
 
-    A run paused at a manual stage resumes at `verify`, to confirm the human's
-    work landed green before advancing. Anything else starts the current stage
-    from the top.
+    A manual stage being resumed goes to `verify`: the human has been told
+    what to do, and the orchestrator's only remaining job is to confirm the
+    work landed green. Routing it back through `precheck` would re-enter
+    `gate` and pause again without ever checking — and it would do that
+    forever.
+
+    That has to hold whether the run paused cleanly (`awaiting_human`) or
+    escalated because the work was not there yet. Both are resumed the same
+    way by a human who has since done something.
     """
-    return "verify" if state.get("status") == "awaiting_human" else "precheck"
+
+    def route(state: RunState) -> str:
+        if state.get("status") == "awaiting_human":
+            return "verify"
+
+        if state.get("resuming"):
+            index = state.get("stage_index", 0)
+            if index < len(rt.cfg.stages) and rt.cfg.stages[index].kind == "manual":
+                return "verify"
+
+        return "precheck"
+
+    return route
 
 
 def _router(allowed: list[str]) -> Callable[[RunState], str]:
@@ -79,7 +97,7 @@ def build_graph(rt: Runtime, checkpointer=None):
     for name, fn in NODES.items():
         builder.add_node(name, _bind(fn, rt))
 
-    builder.add_conditional_edges(START, _entry, ["precheck", "verify"])
+    builder.add_conditional_edges(START, entry_router(rt), ["precheck", "verify"])
     for name, allowed in EDGES.items():
         targets = [t for t in allowed if t != "end"]
         builder.add_conditional_edges(
