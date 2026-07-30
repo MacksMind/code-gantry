@@ -347,13 +347,30 @@ def execute(state: RunState, rt: Runtime) -> dict:
     if result.ok:
         return {"next_hop": "verify"}
 
-    what = "timed out" if result.timed_out else "exited non-zero"
+    if result.timed_out:
+        what = "timed out"
+        advice = ""
+    elif result.unapplied_edit:
+        # Precision matters here: the model wrote plenty, in a shape the editor
+        # could not apply. Telling it "you produced no changes" invites it to
+        # write the same thing again, louder.
+        what = "could not apply the model's reply"
+        advice = (
+            "\n\nThe model's response was not in a form the editor could turn "
+            "into a file edit — it produced text, not an applicable change. "
+            "Restate the edit in the exact format the editor expects, naming "
+            "the file before each block."
+        )
+    else:
+        what = "exited non-zero"
+        advice = ""
+
     return _retry_or_plan(
         state,
         rt,
         layer="tests",
         summary=f"the executor {what}",
-        feedback=f"The previous attempt's executor {what}:\n{result.log}",
+        feedback=f"The previous attempt's executor {what}:\n{result.log}{advice}",
         detail=result.log,
     )
 

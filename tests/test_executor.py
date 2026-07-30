@@ -319,6 +319,37 @@ class TestRunAgentStage:
         assert not result.ok
         assert "DEFINITELY_NOT_SET_ANYWHERE" in result.log
 
+    def test_an_unapplied_edit_is_a_failed_attempt(self, repo, tmp_path, monkeypatch):
+        # Aider exits 0 even when the model's reply was unparseable and no edit
+        # was applied. Left alone, that surfaces two gates later as "the attempt
+        # produced no changes" — which is false, and useless as feedback: the
+        # model produced plenty, in the wrong shape.
+        bindir = tmp_path / "bin3"
+        bindir.mkdir()
+        script = bindir / "aider"
+        script.write_text(
+            "#!/bin/sh\n"
+            "echo 'The LLM did not conform to the edit format.'\n"
+            "echo 'Only 3 reflections allowed, stopping.'\n"
+            "exit 0\n"
+        )
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+        monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+
+        cfg, stage = cfg_with(target_repo=str(repo))
+        result = Executor(cfg, CommandRunner(cwd=repo, timeout=60)).run_agent_stage(
+            stage, "p"
+        )
+        assert not result.ok
+        assert "edit format" in result.log
+
+    def test_a_clean_aider_run_stays_successful(self, repo, fake_aider):
+        cfg, stage = cfg_with(target_repo=str(repo))
+        result = Executor(cfg, CommandRunner(cwd=repo, timeout=60)).run_agent_stage(
+            stage, "p"
+        )
+        assert result.ok
+
     def test_nonzero_exit_is_a_failed_attempt(self, repo, tmp_path, monkeypatch):
         bindir = tmp_path / "bin2"
         bindir.mkdir()

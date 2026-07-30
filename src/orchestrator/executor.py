@@ -55,6 +55,16 @@ AIDER_FLAGS = [
 # dozens of times.
 NO_BROWSER = "/usr/bin/true %s"
 
+# Aider exits 0 when the model's reply could not be turned into an edit. The
+# attempt failed, and saying so here — rather than letting it surface two gates
+# later as "the attempt produced no changes" — is the difference between telling
+# the model its output was the wrong shape and telling it, falsely, that it
+# produced nothing.
+UNAPPLIED_EDIT_MARKERS = (
+    "did not conform to the edit format",
+    "reflections allowed, stopping",
+)
+
 # Aider's client library requires *some* key for an `openai/`-prefixed model,
 # even when the endpoint it is pointed at serves without auth. The `sk-` prefix
 # satisfies any naive format check along the way.
@@ -80,6 +90,10 @@ class ExecutionResult:
     log: str = ""
     timed_out: bool = False
     results: list[CommandResult] = field(default_factory=list)
+    # Aider ran and exited cleanly, but produced no edit because it could not
+    # parse the model's reply. A different failure from a crash, and one the
+    # retry should be told about precisely.
+    unapplied_edit: bool = False
 
 
 def build_aider_argv(
@@ -191,11 +205,15 @@ class Executor:
             timeout=self.cfg.limits.aider_timeout_seconds,
             env=env,
         )
+        unapplied = result.ok and any(
+            marker in result.output for marker in UNAPPLIED_EDIT_MARKERS
+        )
         return ExecutionResult(
-            ok=result.ok,
+            ok=result.ok and not unapplied,
             log=result.output,
             timed_out=result.timed_out,
             results=[result],
+            unapplied_edit=unapplied,
         )
 
     def run_script_stage(self, stage: Stage) -> ExecutionResult:
