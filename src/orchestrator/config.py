@@ -251,6 +251,7 @@ class Stage(_Strict):
 
     # --- operator-only (policy) ---
     require_new_tests: bool = False
+    require_scoped_tests: bool = False
     review: bool = True
     full_suite_on_approval: bool | None = None
 
@@ -279,6 +280,7 @@ class StageDefaults(_Strict):
     context_commands: list[str] = []
     checks: list[str] = []
     require_new_tests: bool = False
+    require_scoped_tests: bool = False
     review: bool = True
 
 
@@ -393,6 +395,7 @@ class ProjectConfig(_Strict):
             context_commands=list(defaults.context_commands),
             checks=list(defaults.checks),
             require_new_tests=defaults.require_new_tests,
+            require_scoped_tests=defaults.require_scoped_tests,
             review=defaults.review,
         )
 

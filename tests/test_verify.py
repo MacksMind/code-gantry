@@ -478,3 +478,59 @@ class TestUnscopedFallbackIsVisible:
         out = verify(repo, cfg, stage, sha)
         assert out.passed
         assert out.unscoped_tests is False
+
+
+class TestRequireScopedTests:
+    """Policy: a stage must identify which specs prove it.
+
+    A prompt asking the planner for test_paths is a hope. With this on, a stage
+    that identifies no specs fails to the planner *before* the suite runs, so
+    the cost is one redraw rather than a full suite on this attempt and on
+    every reviewer round trip after it.
+
+    Off by default: some projects genuinely have stages nothing covers, and
+    failing those would be worse than running the suite.
+    """
+
+    def test_an_unscoped_stage_fails_to_the_planner(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo)  # app.py only — nothing matching a test file pattern
+        cfg, stage = build(
+            repo,
+            {"require_scoped_tests": True},
+            scoped_test_command="true {paths}",
+        )
+        out = verify(repo, cfg, stage, sha)
+        assert not out.passed
+        assert out.failed_layer is Layer.TESTS
+        assert out.route is Route.PLANNER
+        assert "test_paths" in out.feedback
+
+    def test_declared_test_paths_satisfy_it(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(
+            repo,
+            {"require_scoped_tests": True, "test_paths": ["spec/thing_spec.rb"]},
+            scoped_test_command="true {paths}",
+        )
+        assert verify(repo, cfg, stage, sha).passed
+
+    def test_editing_a_spec_satisfies_it(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo, name="spec/thing_spec.rb", text="x\n")
+        cfg, stage = build(
+            repo,
+            {"require_scoped_tests": True, "edit_files": ["spec/**"]},
+            scoped_test_command="true {paths}",
+            test_file_patterns=["spec/**"],
+        )
+        assert verify(repo, cfg, stage, sha).passed
+
+    def test_off_by_default_it_just_runs_the_suite(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(repo, scoped_test_command="true {paths}")
+        out = verify(repo, cfg, stage, sha)
+        assert out.passed
+        assert out.unscoped_tests is True

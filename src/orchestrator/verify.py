@@ -331,6 +331,24 @@ def _layer_tests(ctx: _Context, outcome: VerifyOutcome):
         command == ctx.cfg.test_command
     )
 
+    if outcome.unscoped_tests and ctx.stage.require_scoped_tests:
+        # Before the suite runs, not after. The cost of a redraw is one planner
+        # call; the cost of letting this through is the whole suite on this
+        # attempt and on every reviewer round trip that follows it.
+        return _fail(
+            Layer.TESTS,
+            Route.PLANNER,
+            "the stage does not identify which specs prove it",
+            "Nothing identified the specs this stage affects: its diff touched "
+            "no test files and it declared no `test_paths`, so the only sound "
+            "check left is the entire suite — on this attempt and again on "
+            "every rework.\n\n"
+            "Redraw it with `test_paths` naming the specs that exercise the "
+            "code it changes, even though it does not modify them. If nothing "
+            "covers this code, widen `edit_files` and have the stage add a "
+            "spec instead.",
+        )
+
     result = ctx.runner.run(command)
     outcome.results.append(result)
     outcome.test_seconds += result.duration_seconds
