@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Run artifacts: state databases, logs, reports. Never committed.
+runs/
+
+# Run configs may carry sensitive paths; keep them out of history.
+*.local.yaml

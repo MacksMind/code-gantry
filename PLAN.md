@@ -54,8 +54,11 @@ from the outside, the same way Aider does.
 - `uv` for dependency management, with a `pyproject.toml`
 - Aider invoked as a subprocess in headless mode (`aider --message`), not
   imported as a library
-- Reviewer called via direct HTTP/SDK call to the model API — no agentic
-  CLI wrapper, since review needs no tool access
+- Reviewer called via direct SDK call to the model API — no agentic CLI
+  wrapper, since review needs no tool access. Behind a small
+  `ReviewerClient` protocol so the provider is swappable; OpenAI is the
+  first and only implementation, using the SDK's native structured-output
+  parsing
 - `pytest` for the orchestrator's own tests
 - YAML for run configuration
 
@@ -316,8 +319,10 @@ failed is a wasted retry.
 
 ## Reviewer contract
 
-The reviewer must return structured output, not prose. Prompt it to reply
-with JSON only, and parse it:
+The reviewer must return structured output, not prose. Use the provider's
+native structured-output support — for OpenAI, `chat.completions.parse` with
+a Pydantic `response_format`, which enforces the schema server-side rather
+than hoping the model complies. The shape:
 
 ```json
 {
@@ -339,8 +344,12 @@ with JSON only, and parse it:
   or that the plan has a flaw that reworking this stage won't fix.
   Escalate immediately without consuming a retry; this is a human decision.
 
-Parse defensively: strip markdown fences, and treat an unparseable response
-as `blocked` rather than guessing.
+Parse defensively anyway, and treat anything that does not yield a valid
+verdict as `blocked` rather than guessing. Schema enforcement makes malformed
+JSON unlikely but not impossible: a refusal, a `length` finish reason
+truncating the response, or a transport error all produce no usable verdict,
+and the safe interpretation of "the reviewer did not answer" is "stop and
+ask a human."
 
 Expect `blocked` to fire regularly on real work, and treat that as the node
 earning its cost rather than as a malfunction. A stage instruction written
@@ -363,11 +372,17 @@ plan is frequently ahead of, or behind, what is actually there.
    technically-correct edit is illegal in *this* stage's context.
 5. **The stage diff.**
 
-Cache the reference-document and stage-list portion of the prompt. It is
-large and byte-identical across every stage of a run, and prompt caching is
-the difference between this being affordable and not. The economic argument
-for splitting executor from reviewer depends on the paid model being invoked
-at checkpoints with a mostly-cached prefix.
+**This order is the caching strategy, not just presentation.** Items 1 and 2
+are large and byte-identical across every stage of a run; items 3 through 5
+change per stage. OpenAI caches automatically on matching prompt *prefixes*,
+so putting the stable payload first and the stage-specific diff last is what
+makes the cache hit. Reordering these for readability would silently double
+the cost of every review.
+
+Log the cached-token count so a regression here is visible rather than
+merely expensive. The economic argument for splitting executor from reviewer
+depends on the paid model being invoked at checkpoints with a mostly-cached
+prefix.
 
 ## Rework prompt construction
 
@@ -450,9 +465,9 @@ executor:
   map_tokens: 0                    # repo map off; stages declare their files
 
 reviewer:
-  provider: "anthropic"
+  provider: "openai"              # the only implementation in v1
   model: "<model-id>"
-  api_key_env: "ANTHROPIC_API_KEY"
+  api_key_env: "OPENAI_API_KEY"
 
 limits:
   max_test_retries: 3      # per stage, any retryable verify layer failing
