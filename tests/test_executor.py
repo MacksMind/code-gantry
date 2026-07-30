@@ -132,6 +132,30 @@ class TestAiderArgv:
         argv = build_aider_argv(stage, cfg, "p")
         assert argv[-1] == "--no-gitignore"
 
+    def test_aider_may_not_touch_gitignore(self):
+        # Aider adds `.aider*` to .gitignore by default. That is a file no stage
+        # declares, so it fails the scope gate on the first attempt of every
+        # project — as it did on the first real run.
+        cfg, stage = cfg_with(executor={"model": "m"})
+        assert "--no-gitignore" in build_aider_argv(stage, cfg, "p")
+
+    def test_model_warnings_are_suppressed(self):
+        # Paired with --yes-always, a warning becomes "Open documentation url
+        # for more info?" answered yes — which opens a browser tab mid-run.
+        cfg, stage = cfg_with(executor={"model": "m"})
+        assert "--no-show-model-warnings" in build_aider_argv(stage, cfg, "p")
+
+    def test_edit_format_is_passed_when_configured(self):
+        # Local models frequently cannot produce Aider's default diff format.
+        cfg, stage = cfg_with(executor={"model": "m", "edit_format": "whole"})
+        argv = build_aider_argv(stage, cfg, "p")
+        assert argv[argv.index("--edit-format") + 1] == "whole"
+
+    def test_no_edit_format_flag_when_unset(self):
+        # Aider's per-model default is better than a guess of ours.
+        cfg, stage = cfg_with(executor={"model": "m"})
+        assert "--edit-format" not in build_aider_argv(stage, cfg, "p")
+
     def test_never_puts_a_key_in_argv(self):
         cfg, stage = cfg_with(executor={"model": "m", "api_key_env": "SOME_KEY"})
         argv = build_aider_argv(stage, cfg, "p")
@@ -168,6 +192,15 @@ class TestRunAgentStage:
         recorded = json.loads(fake_aider.read_text())
         assert "sk-secret-value" not in " ".join(recorded["argv"])
         assert recorded["env"]["OPENAI_API_KEY"] == "sk-secret-value"
+
+    def test_no_browser_can_be_opened(self, repo, fake_aider):
+        # Belt and braces with --no-show-model-warnings: an edit-format error
+        # prints a docs URL too, and --yes-always answers yes to opening it.
+        # An unattended overnight run must not accumulate browser tabs.
+        cfg, stage = cfg_with(target_repo=str(repo))
+        Executor(cfg, CommandRunner(cwd=repo, timeout=60)).run_agent_stage(stage, "p")
+        recorded = json.loads(fake_aider.read_text())
+        assert "%s" in recorded["env"]["BROWSER"], "must be a no-op command, not a name"
 
     def test_a_local_endpoint_needs_no_configured_key(self, repo, fake_aider):
         # llama-swap and llama.cpp serve without auth, so there is nothing for

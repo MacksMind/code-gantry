@@ -38,7 +38,18 @@ AIDER_FLAGS = [
     "--map-tokens",
     "--file",
     "--read",
+    "--no-gitignore",
+    "--no-show-model-warnings",
+    "--edit-format",
+    "--model-metadata-file",
 ]
+
+# A command, not a browser name: Python's webbrowser module treats an entry
+# containing %s as a command line to run, so this consumes the URL and does
+# nothing. Aider pairs --yes-always with prompts like "Open documentation url
+# for more info?", and an unattended overnight run must not answer yes to that
+# dozens of times.
+NO_BROWSER = "/usr/bin/true %s"
 
 # Aider's client library requires *some* key for an `openai/`-prefixed model,
 # even when the endpoint it is pointed at serves without auth. The `sk-` prefix
@@ -69,7 +80,21 @@ def build_aider_argv(stage: Stage, cfg: ProjectConfig, prompt: str) -> list[str]
         "--no-stream",
         "--model",
         ex.model,
+        # Aider adds `.aider*` to .gitignore by default. No stage declares that
+        # file, so it fails the scope gate on the first attempt of every
+        # project. The orchestrator owns this repository's git; Aider does not
+        # need to tidy it.
+        "--no-gitignore",
+        # A model warning becomes "Open documentation url for more info?",
+        # which --yes-always answers for us.
+        "--no-show-model-warnings",
     ]
+
+    if ex.edit_format:
+        argv += ["--edit-format", ex.edit_format]
+
+    if ex.model_metadata_file:
+        argv += ["--model-metadata-file", ex.model_metadata_file]
 
     api_base = ex.resolve_api_base()
     if api_base:
@@ -157,7 +182,7 @@ class Executor:
         none set at all, so a placeholder is supplied here. That is a
         client-side requirement, not the server's.
         """
-        env: dict[str, str] = {}
+        env: dict[str, str] = {"BROWSER": NO_BROWSER}
         name = self.cfg.executor.api_key_env
         api_base = self.cfg.executor.resolve_api_base()
 

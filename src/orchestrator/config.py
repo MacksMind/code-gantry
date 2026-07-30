@@ -157,6 +157,17 @@ class ExecutorConfig(_EndpointConfig):
     model: str
     api_key_env: str | None = None
     lint_command: str | None = None
+    # Aider's default varies by model and is usually right for hosted ones. A
+    # local model frequently cannot produce a valid diff — the first real run
+    # ended in "the LLM did not conform to the edit format" — and `whole` trades
+    # tokens for reliability. Left unset so Aider's per-model default applies.
+    edit_format: str | None = None
+    # A path to Aider's own metadata JSON, passed through unchanged. litellm has
+    # no entry for a local model id, so without this Aider guesses at the context
+    # window and warns about it. A path rather than the values themselves: the
+    # numbers describe the endpoint, not the project, and they are Aider's
+    # schema to define rather than ours to mirror.
+    model_metadata_file: str | None = None
     # Repo map off by default: stages declare the files they need, and an
     # unscoped map swamps a local model's context before the task is stated.
     map_tokens: int = 0

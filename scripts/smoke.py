@@ -60,6 +60,16 @@ REVIEWER_MODEL = "gpt-5.6-sol"
 # endpoint check verifies against the real server.
 LIVE_EXECUTOR_MODEL = "qwen3-coder-next"
 
+# What llama.cpp reports as n_ctx_slot for that model. litellm has no entry for
+# a local model id, so without this Aider guesses the context window and warns
+# about it — and with --yes-always the warning opens a browser tab.
+#
+# The input budget is the slot size minus the output budget, deliberately: they
+# share one window, so declaring the full slot as input invites an overflow at
+# exactly the moment the model has most to say.
+LIVE_CONTEXT_TOKENS = 262_144
+LIVE_OUTPUT_TOKENS = 32_768
+
 # The two stages the stand-in planner derives, in order. Each is exactly what a
 # real planner may return: declarative fields only, no command anywhere.
 STAGES = [
@@ -98,7 +108,9 @@ if "--help" in sys.argv:
     # executor.AIDER_FLAGS fails the smoke test rather than passing it.
     print(
         "--message --yes-always --no-stream --model --openai-api-base "
-        "--test-cmd --auto-test --lint-cmd --map-tokens --file --read"
+        "--test-cmd --auto-test --lint-cmd --map-tokens --file --read "
+        "--no-gitignore --no-show-model-warnings --edit-format "
+        "--model-metadata-file"
     )
     sys.exit(0)
 
@@ -375,6 +387,13 @@ def build_repo(root: Path) -> Path:
     (repo / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
 
     git(repo, "init", "-b", "main")
+    # Persisted locally, not just passed per-invocation: with a real Aider it is
+    # Aider that commits, and it would otherwise inherit the operator's global
+    # identity and signing settings. An unattended run cannot answer a pinentry
+    # prompt, so a signed commit is a hang, not an error.
+    git(repo, "config", "user.name", "Smoke Test")
+    git(repo, "config", "user.email", "smoke@example.invalid")
+    git(repo, "config", "commit.gpgsign", "false")
     git(repo, "add", "-A")
     git(repo, "commit", "-m", "Add a calculator with one operation")
     return repo
@@ -421,6 +440,34 @@ def git_config(repo: Path, key: str) -> str | None:
     return done.stdout.strip() if done.returncode == 0 else None
 
 
+def write_model_metadata(root: Path) -> Path:
+    """Aider's own metadata schema, for a model litellm has never heard of.
+
+    Kept outside the target repository. Aider would discover a
+    `.aider.model.metadata.json` at the repo root by accident, which would put
+    orchestrator-host configuration into the repository under test — against the
+    rule that the target repo receives product code and plan revisions, nothing
+    else. Passing the path keeps that boundary intact.
+    """
+    path = root / "model-metadata.json"
+    path.write_text(
+        json.dumps(
+            {
+                f"openai/{LIVE_EXECUTOR_MODEL}": {
+                    "max_input_tokens": LIVE_CONTEXT_TOKENS - LIVE_OUTPUT_TOKENS,
+                    "max_output_tokens": LIVE_OUTPUT_TOKENS,
+                    "input_cost_per_token": 0,
+                    "output_cost_per_token": 0,
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                }
+            },
+            indent=2,
+        )
+    )
+    return path
+
+
 def write_fake_aider(bin_dir: Path) -> None:
     bin_dir.mkdir(parents=True, exist_ok=True)
     aider = bin_dir / "aider"
@@ -449,7 +496,7 @@ def cli(work: Path, env: dict, *args: str, expect: int = 0) -> str:
     return output
 
 
-def patch_config(config: Path, live: bool = False) -> None:
+def patch_config(config: Path, live: bool = False, metadata_file: Path | None = None) -> None:
     """Do what an operator does after `init`: fill in what it could not infer.
 
     Each replacement asserts the placeholder was there. If `init`'s draft
@@ -499,6 +546,19 @@ def patch_config(config: Path, live: bool = False) -> None:
                     f"`init` no longer drafts {model!r}; scripts/smoke.py needs "
                     "updating"
                 )
+
+    if metadata_file:
+        # `whole` because the first real run ended in "the LLM did not conform
+        # to the edit format": a 3B-active MoE could not produce a valid diff.
+        # Whole-file rewrites cost tokens and buy reliability, which is the
+        # right trade at 256k of context on a toy repo.
+        text = text.replace(
+            "  map_tokens: 0",
+            f'  edit_format: "whole"\n'
+            f'  model_metadata_file: "{metadata_file}"\n'
+            "  map_tokens: 0",
+            1,
+        )
 
     swap("max_stages: 60", "max_stages: 6")
     config.write_text(text)
@@ -646,7 +706,15 @@ def main() -> int:
         help="Use the real planner, reviewer, and endpoint. Aider stays fake, so "
         "this exercises planning and review without generating code. Costs money.",
     )
+    parser.add_argument(
+        "--real-aider",
+        action="store_true",
+        help="Use the installed aider against the configured local model, "
+        "instead of the stand-in. Implies --live.",
+    )
     args = parser.parse_args()
+    if args.real_aider:
+        args.live = True
 
     if args.live:
         missing = [
@@ -662,7 +730,13 @@ def main() -> int:
 
     try:
         repo = build_repo(root)
-        write_fake_aider(root / "bin")
+        metadata_file = None
+        if not args.real_aider:
+            write_fake_aider(root / "bin")
+        else:
+            (root / "bin").mkdir(parents=True, exist_ok=True)
+            metadata_file = write_model_metadata(root)
+            print("using the installed aider against the configured local model\n")
         # In live mode nothing talks to the stand-in: both paid models go to
         # their real APIs and the executor endpoint check goes to the real one.
         server = None if args.live else serve(repo)
@@ -692,7 +766,7 @@ def main() -> int:
         cli(work, env, "init", str(repo / "docs" / "plan.md"), "--slug", SLUG)
         config = work / "projects" / SLUG / "config.yaml"
         check(config.is_file(), "drafted a config")
-        patch_config(config, live=args.live)
+        patch_config(config, live=args.live, metadata_file=metadata_file)
 
         print("\nrun, before approval")
         refused = cli(work, env, "run", SLUG, expect=1)
