@@ -61,6 +61,19 @@ NO_BROWSER = "/usr/bin/true %s"
 PLACEHOLDER_API_KEY = "sk-no-key-required"
 
 
+def _absolute(path: Path | str) -> str:
+    """Any path handed to Aider, made absolute first.
+
+    Aider runs with its working directory set to the target repository, so a
+    relative path resolves *inside the repository under test*. That is how the
+    history files, having just been moved out of the repo, landed straight back
+    in it — as `projects/…` at the repo root, failing the scope gate exactly as
+    before. Resolution happens here, against the orchestrator's own cwd, which
+    is what run-relative paths like `projects/<slug>/…` are relative to.
+    """
+    return str(Path(path).expanduser().resolve())
+
+
 @dataclass
 class ExecutionResult:
     ok: bool
@@ -111,13 +124,13 @@ def build_aider_argv(
         argv += ["--edit-format", ex.edit_format]
 
     if ex.model_metadata_file:
-        argv += ["--model-metadata-file", ex.model_metadata_file]
+        argv += ["--model-metadata-file", _absolute(ex.model_metadata_file)]
 
     if history_dir is not None:
         argv += [
-            "--chat-history-file", str(history_dir / "aider-chat.md"),
-            "--input-history-file", str(history_dir / "aider-input.txt"),
-            "--llm-history-file", str(history_dir / "aider-llm.txt"),
+            "--chat-history-file", _absolute(history_dir / "aider-chat.md"),
+            "--input-history-file", _absolute(history_dir / "aider-input.txt"),
+            "--llm-history-file", _absolute(history_dir / "aider-llm.txt"),
         ]
 
     api_base = ex.resolve_api_base()

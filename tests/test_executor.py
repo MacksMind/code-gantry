@@ -9,6 +9,7 @@ without the real tool.
 import json
 import os
 import stat
+from pathlib import Path
 
 import pytest
 
@@ -166,6 +167,26 @@ class TestAiderArgv:
         for flag in ("--chat-history-file", "--input-history-file", "--llm-history-file"):
             assert flag in argv, flag
             assert argv[argv.index(flag) + 1].startswith(str(tmp_path))
+
+    def test_paths_handed_to_aider_are_absolute(self, monkeypatch, tmp_path):
+        # Aider runs with its cwd set to the target repo, so a relative path
+        # resolves *inside the repository under test* — which is how the
+        # history files ended up back in the repo they were moved out of.
+        monkeypatch.chdir(tmp_path)
+        cfg, stage = cfg_with(
+            executor={"model": "m", "model_metadata_file": "meta/models.json"}
+        )
+        argv = build_aider_argv(
+            stage, cfg, "p", history_dir=Path("projects/p/runs/r/stages/000")
+        )
+        for flag in (
+            "--chat-history-file",
+            "--input-history-file",
+            "--llm-history-file",
+            "--model-metadata-file",
+        ):
+            value = argv[argv.index(flag) + 1]
+            assert Path(value).is_absolute(), f"{flag} got a relative path: {value}"
 
     def test_no_history_flags_without_a_destination(self):
         cfg, stage = cfg_with(executor={"model": "m"})
