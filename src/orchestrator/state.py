@@ -109,6 +109,14 @@ class RunState(TypedDict, total=False):
     stage_start_sha: str
     stage_started_at: float
     started_at: float
+    # `wall_clock_hours` bounds one unattended session, not a project's total
+    # elapsed time. A run escalated at midnight and resumed after breakfast has
+    # not spent the night working, and measuring from `started_at` would refuse
+    # to resume it. `resume` therefore starts a fresh session clock.
+    session_started_at: float
+    # Frozen when the run stops, so `status` on an old run reports the hours it
+    # took rather than the hours since.
+    session_seconds: float
 
     last_failure: FailureDetail | None
     failure_layer: str | None
@@ -161,6 +169,7 @@ def new_state(
         stage_start_sha="",
         stage_started_at=0.0,
         started_at=started_at,
+        session_started_at=started_at,
         last_failure=None,
         failure_layer=None,
         failed_stage_id=None,
@@ -257,6 +266,12 @@ def resume_entry_point(state: RunState) -> str:
         return "plan"
     if layer in REPO_STATE_FAILURES:
         return "verify"
+    if layer == "budget":
+        # Time ran out, which is a defect in neither the repository nor the
+        # plan — so it is in neither set. But a stage may have been awaiting
+        # revision when the deadline hit, and precheck would re-run it unrevised
+        # and discard the diagnosis. Hand it back to the planner.
+        return "plan"
     # Interrupted mid-run with no recorded failure: nothing to verify, so pick
     # up where the stage was.
     return "precheck" if state.get("current") else "plan"

@@ -74,6 +74,10 @@ def plan(state: RunState, rt: Runtime) -> dict:
             "than the cap or the planner is not converging.",
         )
 
+    overrun = _wall_clock_overrun(state, limits)
+    if overrun is not None:
+        return _escalate("budget", overrun)
+
     messages = build_planner_messages(
         cfg=rt.cfg,
         plan=rt.plan,
@@ -606,12 +610,12 @@ def advance(state: RunState, rt: Runtime) -> dict:
 def finalize(state: RunState, rt: Runtime) -> dict:
     command = rt.cfg.full_test_command
     if not command:
-        return {"status": "complete", "next_hop": "end"}
+        return {"status": "complete", "next_hop": "end", **_session_elapsed(state)}
 
     rt.log("[finalize] running the full suite on the project branch tip")
     result = rt.runner.run(command)
     if result.ok:
-        return {"status": "complete", "next_hop": "end"}
+        return {"status": "complete", "next_hop": "end", **_session_elapsed(state)}
 
     return {
         **_escalate(
@@ -633,10 +637,64 @@ def escalate(state: RunState, rt: Runtime) -> dict:
         "status": "escalated",
         "failed_stage_id": stage.id if stage else None,
         "next_hop": "end",
+        **_session_elapsed(state),
     }
 
 
 # --- helpers -------------------------------------------------------------
+
+
+def _session_elapsed(state: RunState) -> dict:
+    """Freeze how long this session ran, at the point it stopped.
+
+    Recorded rather than computed at report time so that `status` on a run from
+    last week reports the hours it actually took, not the hours since.
+    """
+    started = state.get("session_started_at") or state.get("started_at") or 0.0
+    if not started:
+        return {}
+    return {"session_seconds": max(time.time() - started, 0.0)}
+
+
+def _wall_clock_overrun(state: RunState, limits) -> str | None:
+    """The session's time budget, checked before any further paid work.
+
+    Enforced at `plan` rather than inside a stage, which means the deadline can
+    be overshot by at most one stage. That is deliberate: killing an executor
+    mid-attempt would leave a child branch dangling and throw away work that may
+    be minutes from landing. The rule is "no new planner call past the
+    deadline", not "stop mid-sentence".
+
+    Measured from `session_started_at`, so resuming an escalated run gets a
+    fresh budget rather than inheriting the hours a human spent asleep.
+    """
+    budget_hours = limits.wall_clock_hours
+    if not budget_hours or budget_hours <= 0:
+        return None
+
+    # Fall back to the run start for checkpoints written before the session
+    # clock existed; a missing value must not read as the epoch.
+    started = state.get("session_started_at") or state.get("started_at") or 0.0
+    if not started:
+        return None
+
+    elapsed_hours = (time.time() - started) / 3600.0
+    if elapsed_hours < budget_hours:
+        return None
+
+    reason = (
+        f"The session reached its wall_clock_hours budget "
+        f"({budget_hours:g}h; {elapsed_hours:.1f}h elapsed) before the planner "
+        "declared the project complete. Nothing is broken — the work simply did "
+        "not fit. Everything that landed is on the project branch, and "
+        "`resume` starts a fresh budget."
+    )
+    failure = (state.get("last_failure") or {}).get("summary")
+    if failure:
+        # The stage being revised when time ran out still matters; escalating
+        # for time must not swallow why.
+        reason += f" The stage in flight was being revised because: {failure}"
+    return reason
 
 
 def _escalate(layer: str, reason: str) -> dict:

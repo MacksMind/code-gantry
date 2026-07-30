@@ -231,6 +231,41 @@ class TestPlannerBudgets:
         assert out["next_hop"] == "escalate"
         assert "max_stages" in out["escalation_reason"]
 
+    def test_the_wall_clock_budget_escalates(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path, limits={"wall_clock_hours": 2})
+        state["session_started_at"] = time.time() - 3 * 3600
+        out = nodes.plan(state, rt)
+        assert out["next_hop"] == "escalate"
+        assert "wall_clock_hours" in out["escalation_reason"]
+
+    def test_inside_the_wall_clock_budget_proceeds(self, repo, tmp_path):
+        planner = StubPlanner(
+            [PlannerOutcome("next_stage", "first", "e", stage_fields=planned_stage())]
+        )
+        cfg, rt, state = make(
+            repo, tmp_path, planner=planner, limits={"wall_clock_hours": 8}
+        )
+        state["session_started_at"] = time.time() - 3600
+        assert nodes.plan(state, rt)["next_hop"] == "precheck"
+
+    def test_the_deadline_reports_the_underlying_failure(self, repo, tmp_path):
+        # Escalating for time must not lose why the stage was being revised.
+        cfg, rt, state = make(repo, tmp_path, limits={"wall_clock_hours": 1})
+        state = with_stage(state, rt)
+        state["session_started_at"] = time.time() - 2 * 3600
+        state["last_failure"] = {"layer": "tests", "summary": "3 specs red"}
+        out = nodes.plan(state, rt)
+        assert out["next_hop"] == "escalate"
+        assert "3 specs red" in out["escalation_reason"]
+
+    def test_a_missing_session_start_falls_back_to_the_run_start(self, repo, tmp_path):
+        # A checkpoint written before this field existed must not read as a
+        # session that began at the epoch and blow the budget instantly.
+        cfg, rt, state = make(repo, tmp_path, limits={"wall_clock_hours": 8})
+        state.pop("session_started_at", None)
+        state["started_at"] = time.time() - 60
+        assert nodes.plan(state, rt)["next_hop"] == "finalize"
+
     def test_deriving_a_first_stage_costs_no_intervention(self, repo, tmp_path):
         planner = StubPlanner(
             [PlannerOutcome("next_stage", "r", "e", stage_fields=planned_stage())]

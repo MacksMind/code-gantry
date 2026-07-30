@@ -237,7 +237,21 @@ def resume(run_id: str) -> None:
         # `resuming` tells the entry router how to re-enter: verify for a
         # repository-state failure, so the human's fix is checked rather than
         # discarded; plan for a planning failure.
-        code = _drive(cfg, project, paths, {"resuming": True, "next_hop": ""})
+        #
+        # The session clock restarts. `wall_clock_hours` bounds one unattended
+        # stretch, and the hours between an escalation and a human getting to it
+        # were not spent working — measuring from the original run start would
+        # make a run escalated overnight impossible to resume.
+        code = _drive(
+            cfg,
+            project,
+            paths,
+            {
+                "resuming": True,
+                "next_hop": "",
+                "session_started_at": time.time(),
+            },
+        )
     finally:
         git.restore_gc(previous_gc)
     sys.exit(code)

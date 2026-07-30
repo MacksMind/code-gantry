@@ -164,6 +164,47 @@ def _stage_details(state: RunState) -> list[str]:
     return lines
 
 
+def _wall_clock_lines(state: RunState, cfg: ProjectConfig) -> list[str]:
+    """How much of the session's time budget the run used.
+
+    Worth printing even on a clean completion: the first real run against a
+    large suite is how an operator learns whether `wall_clock_hours` and
+    `max_stages` are compatible numbers, and that is far easier to see as
+    "3.1h of 14h across 12 stages" than to derive from timestamps.
+    """
+    budget = cfg.limits.wall_clock_hours
+    elapsed = state.get("session_seconds")
+    if not budget or budget <= 0 or elapsed is None:
+        return []
+
+    completed = state.get("completed") or []
+    elapsed_hours = elapsed / 3600.0
+
+    lines = [
+        f"Session wall clock: {elapsed_hours:.1f}h of a {budget:g}h budget, "
+        f"across {len(completed)} landed stage(s). The budget bounds one "
+        "unattended session and is checked before each planner call, so a "
+        "stage in flight is never killed mid-attempt; `resume` starts a fresh "
+        "one.",
+        "",
+    ]
+
+    if completed and elapsed_hours:
+        per_stage = elapsed_hours / len(completed)
+        projected = per_stage * cfg.limits.max_stages
+        if projected > budget:
+            lines.append(
+                f"> At {per_stage:.2f}h per landed stage, `max_stages` "
+                f"({cfg.limits.max_stages}) projects to {projected:.0f}h — more "
+                f"than the {budget:g}h budget. The two limits disagree about how "
+                "big this project is; one of them needs raising, or the run will "
+                "stop on time rather than on completion."
+            )
+            lines.append("")
+
+    return lines
+
+
 def _cost_section(state: RunState, cfg: ProjectConfig) -> list[str]:
     completed = state.get("completed") or []
     run_usage = state.get("run_usage") or {}
@@ -199,6 +240,8 @@ def _cost_section(state: RunState, cfg: ProjectConfig) -> list[str]:
         "once per stage that lands, so it is linear in stages, not attempts.",
         "",
     ]
+
+    lines.extend(_wall_clock_lines(state, cfg))
 
     if prompt and cached_pct < 50:
         lines.append(

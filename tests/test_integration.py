@@ -441,6 +441,53 @@ class TestReportOnRealRun:
         # The economic check: cached proportion is visible.
         assert "cached" in report
 
+    def test_reports_the_session_against_its_wall_clock_budget(
+        self, repo, tmp_path, fake_aider
+    ):
+        # The first real run is how an operator learns whether wall_clock_hours
+        # and max_stages are compatible numbers, so the figure must be printed
+        # on a clean completion, not only when it is exceeded.
+        fake_aider.write_text(json.dumps([{"app.py": "a\n"}]))
+        planner = ScriptedPlanner([
+            PlannerOutcome("next_stage", "r", "e", stage_fields=stage_spec()),
+            PlannerOutcome("project_complete", "done", "e"),
+        ])
+        cfg, project, paths, final = drive(repo, tmp_path, planner=planner)
+        assert final["status"] == "complete"
+        assert final["session_seconds"] >= 0
+        report = build_report(final, cfg)
+        assert "Session wall clock" in report
+
+    def test_warns_when_max_stages_cannot_fit_the_budget(self, repo, tmp_path, fake_aider):
+        fake_aider.write_text(json.dumps([{"app.py": "a\n"}]))
+        planner = ScriptedPlanner([
+            PlannerOutcome("next_stage", "r", "e", stage_fields=stage_spec()),
+            PlannerOutcome("project_complete", "done", "e"),
+        ])
+        cfg, project, paths, final = drive(repo, tmp_path, planner=planner)
+        # One stage took some measurable time; at 60 stages of that, a budget of
+        # a few seconds cannot possibly hold.
+        final = {**final, "session_seconds": 600.0}
+        cfg.limits.max_stages = 60
+        cfg.limits.wall_clock_hours = 1
+        report = build_report(final, cfg)
+        assert "limits disagree" in report or "disagree about how" in report
+
+    def test_a_wall_clock_stop_escalates_with_an_honest_reason(
+        self, repo, tmp_path, fake_aider
+    ):
+        planner = ScriptedPlanner([
+            PlannerOutcome("next_stage", "r", "e", stage_fields=stage_spec()),
+        ])
+        cfg, project, paths, final = drive(
+            repo, tmp_path, planner=planner, limits={"wall_clock_hours": 1e-12}
+        )
+        assert final["status"] == "escalated"
+        assert final["failure_layer"] == "budget"
+        assert "wall_clock_hours" in final["escalation_reason"]
+        # Not a defect: the report must not imply something broke.
+        assert "Nothing is broken" in final["escalation_reason"]
+
     def test_describes_an_escalation_with_the_resume_hint(self, repo, tmp_path, fake_aider):
         planner = ScriptedPlanner([PlannerOutcome("blocked", "cannot proceed", "e")])
         cfg, project, paths, final = drive(repo, tmp_path, planner=planner)

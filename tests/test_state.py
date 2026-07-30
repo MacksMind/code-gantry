@@ -51,6 +51,11 @@ class TestInitialState:
     def test_planner_interventions_start_at_zero(self):
         assert a_state()["planner_interventions"] == 0
 
+    def test_the_session_clock_starts_with_the_run(self):
+        # A fresh run's session is the run. They diverge only on resume.
+        state = a_state()
+        assert state["session_started_at"] == state["started_at"] == 1000.0
+
     def test_no_awaiting_human_status(self):
         # There is no planned pause; a human's involvement is an escalation.
         assert a_state()["status"] in ("running", "complete", "escalated")
@@ -155,6 +160,17 @@ class TestResumeRouting:
     def test_resuming_an_interruption_with_no_stage_replans(self):
         state = a_state(resuming=True, failure_layer=None, current=None)
         assert resume_entry_point(state) == "plan"
+
+    def test_resuming_after_a_budget_stop_replans(self):
+        # Time ran out while a stage was awaiting revision. Re-entering at
+        # precheck would re-run it unrevised and throw the diagnosis away.
+        state = a_state(resuming=True, failure_layer="budget", current={"id": "s1"})
+        assert resume_entry_point(state) == "plan"
+
+    def test_a_budget_stop_is_neither_repo_state_nor_planning(self):
+        # It is not a defect in either place — the work just did not fit.
+        assert "budget" not in REPO_STATE_FAILURES
+        assert "budget" not in PLANNING_FAILURES
 
     def test_never_routes_to_precheck_after_a_repo_failure(self):
         # This is the loop-forever bug: precheck re-runs the stage from the top.
