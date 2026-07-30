@@ -905,10 +905,12 @@ scoped_test_command: "docker compose run --rm test bundle exec rspec {paths}"
 full_suite_on_approval: true
 
 executor:
-  # llama-swap on the Spark. The name after `openai/` is a client-side routing
-  # prefix, stripped before the request; what reaches the endpoint in the body's
-  # `model` field is the remainder, so it must match a llama-swap config key.
-  model: "openai/<local-model-id>"
+  # llama-swap on the Spark. `openai/` is a litellm provider prefix — Aider
+  # routes through litellm, which needs telling that this endpoint speaks the
+  # OpenAI dialect. litellm strips it, so what reaches llama-swap in the request
+  # body's `model` field is the remainder, and that must match a model id from
+  # `curl <api_base>/models`. llama-swap never sees the prefix.
+  model: "openai/<model-id-from-/v1/models>"
   api_base: "http://<spark-host>:<port>/v1"
   # No api_key_env. A local endpoint serves without auth, so there is no key to
   # name; the placeholder Aider's client insists on is supplied by the executor.

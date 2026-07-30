@@ -390,7 +390,7 @@ def patch_config(config: Path) -> None:
         text = text.replace(old, new, 1)
 
     swap("project_branch: refactor/CHANGE-ME", f"project_branch: {BRANCH}")
-    swap('model: "openai/<local-model-id>"', 'model: "openai/local-model"')
+    swap('model: "openai/<model-id-from-/v1/models>"', 'model: "openai/local-model"')
     swap(
         'api_base: "http://<spark-host>:<port>/v1"',
         f'api_base: "http://127.0.0.1:{PORT}/v1"',
