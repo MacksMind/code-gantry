@@ -21,7 +21,7 @@ import urllib.request
 from dataclasses import dataclass
 
 from orchestrator.approval import approval_problem
-from orchestrator.commands import CommandRunner, truncate_middle
+from orchestrator.commands import CommandResult, CommandRunner, truncate_middle
 from orchestrator.config import ProjectConfig
 from orchestrator.executor import AIDER_FLAGS
 from orchestrator.gitops import Git, GitError
@@ -262,32 +262,31 @@ def _environment_checks(
     # same script — which is the sensible default — running it twice proves
     # nothing and costs a full suite. On the first real project that is 23
     # minutes to learn one thing.
-    already_run: set[str] = set()
+    # The saving is the second *run*, not the second verdict: a command that
+    # came back red is red under both labels, and reporting the twin as a pass
+    # would manufacture evidence of green from a run that failed.
+    already_run: dict[str, CommandResult] = {}
     for label, command in (
         ("test_command", cfg.test_command),
         ("full_test_command", cfg.full_test_command),
     ):
         if not command:
             continue
-        if command in already_run:
-            checks.append(
-                Check(
-                    f"{label} passes on a clean tree",
-                    True,
-                    "same command as above; not run twice",
-                    fatal=False,
-                )
-            )
-            continue
-        already_run.add(command)
-        result = runner.run(command)
+        seen = command in already_run
+        result = already_run.get(command) or runner.run(command)
+        already_run[command] = result
+        detail = (
+            "same command as above; not run twice" if seen and result.ok
+            else "" if result.ok
+            else "a target repo that is already red makes every subsequent "
+            f"verdict meaningless\n{_excerpt(result.output)}"
+        )
         checks.append(
             Check(
                 f"{label} passes on a clean tree",
                 result.ok,
-                "" if result.ok
-                else "a target repo that is already red makes every subsequent "
-                f"verdict meaningless\n{_excerpt(result.output)}",
+                detail,
+                fatal=not (seen and result.ok),
             )
         )
 

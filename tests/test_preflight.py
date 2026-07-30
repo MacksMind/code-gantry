@@ -325,3 +325,35 @@ class TestSuitesAreNotRunTwice:
             check_approval=False, check_endpoint=False,
         )
         assert marker.read_text().split() == ["a", "b"]
+
+    def test_the_skipped_twin_inherits_the_verdict(self, repo):
+        """Not re-running is a saving, not an acquittal.
+
+        The first real `validate` printed `[FAIL] test_command` and, two lines
+        later, `[ok] full_test_command passes on a clean tree`, for one red
+        suite run once. Reporting the deduplicated twin as a pass is worse
+        than running it twice: it manufactures evidence of green from a run
+        that was red.
+        """
+        command = "echo '9 examples, 3 failures'; exit 1"
+        cfg = parse_config(
+            {
+                "target_repo": str(repo),
+                "base_ref": "main",
+                "project_branch": "proj",
+                "plan_root": "PLAN.md",
+                "test_command": command,
+                "full_test_command": command,
+                "executor": {"model": "m"},
+                "planner": {"model": "claude-opus-5"},
+                "reviewer": {"model": "gpt-5.6-sol"},
+            }
+        )
+        checks = run_preflight(
+            cfg, check_aider=False, check_models=False,
+            check_approval=False, check_endpoint=False,
+        )
+        twin = [c for c in checks if "full_test_command" in c.name]
+        assert twin, "the deduplicated twin should still be reported"
+        assert not twin[0].ok, "a red suite cannot pass under a second label"
+        assert "9 examples, 3 failures" in twin[0].detail
