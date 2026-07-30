@@ -35,10 +35,14 @@ _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 # Fields the planner is allowed to author. Everything else in Stage is
 # operator-only. `nodes` and `planner` both import this; it is the single
 # definition of the partition.
+# `kind` is deliberately absent: a `script` stage needs an operator-authored
+# `command`, and with no static stage list there is nowhere for the operator to
+# put one. Every planner-derived stage is an `agent` stage; mechanical
+# transforms are expressed as an instruction to write and run a script, which
+# Aider does inside its own edit loop.
 PLANNER_WRITABLE_FIELDS = frozenset(
     {
         "id",
-        "kind",
         "instruction",
         "edit_files",
         "read_files",

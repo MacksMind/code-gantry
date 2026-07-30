@@ -230,7 +230,6 @@ class TestPlannerPartition:
     def test_allowlist_contains_only_declarative_fields(self):
         assert PLANNER_WRITABLE_FIELDS == {
             "id",
-            "kind",
             "instruction",
             "edit_files",
             "read_files",
@@ -254,6 +253,11 @@ class TestPlannerPartition:
     def test_policy_fields_are_not_writable(self):
         for field in ("require_new_tests", "review", "full_suite_on_approval"):
             assert field not in PLANNER_WRITABLE_FIELDS
+
+    def test_kind_is_not_planner_writable(self):
+        # A script stage needs an operator-authored command, and there is no
+        # static stage list to put one in — so the planner cannot ask for one.
+        assert "kind" not in PLANNER_WRITABLE_FIELDS
 
     def test_planner_output_is_filtered_not_trusted(self):
         # Even if the schema failed upstream, an executable field must not
