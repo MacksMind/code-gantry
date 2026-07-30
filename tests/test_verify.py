@@ -446,3 +446,35 @@ class TestRequireNewTests:
         edit(repo, "src/thing.py", "x\n")
         cfg, stage = build(repo)
         assert verify(repo, cfg, stage, sha).passed
+
+
+class TestUnscopedFallbackIsVisible:
+    """Falling back to the whole suite during iteration is worth knowing about.
+
+    `scoped_test_command` exists so an attempt runs only the specs it affects.
+    When a stage's diff touches no spec files and the planner declared no
+    test_paths, there is nothing to scope to and the full command runs instead
+    — correct, but on a real project that is eleven minutes, repeated for every
+    retry. Silent, it looks like the scoped path simply being slow.
+    """
+
+    def test_the_outcome_records_that_it_was_unscoped(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo)  # app.py only: nothing matching a test file pattern
+        cfg, stage = build(repo, scoped_test_command="true {paths}")
+        out = verify(repo, cfg, stage, sha)
+        assert out.passed
+        assert out.unscoped_tests is True
+
+    def test_a_scoped_run_is_not_flagged(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo, name="spec/thing_spec.rb", text="x\n")
+        cfg, stage = build(
+            repo,
+            {"edit_files": ["spec/**"]},
+            scoped_test_command="true {paths}",
+            test_file_patterns=["spec/**"],
+        )
+        out = verify(repo, cfg, stage, sha)
+        assert out.passed
+        assert out.unscoped_tests is False

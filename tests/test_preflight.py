@@ -274,3 +274,54 @@ class TestFailureOutputKeepsTheVerdict:
         failed = [c for c in checks if not c.ok and "test_command" in c.name]
         assert failed, "the failing command should have produced a check"
         assert "9 examples, 3 failures" in failed[0].detail
+
+
+class TestSuitesAreNotRunTwice:
+    """`validate` runs test_command and full_test_command.
+
+    When they are the same string that is the same suite twice, which on the
+    first real project is 23 minutes to learn one thing.
+    """
+
+    def test_an_identical_pair_runs_once(self, repo):
+        marker = repo / "runs.txt"
+        command = f"echo x >> {marker}"
+        cfg = parse_config(
+            {
+                "target_repo": str(repo),
+                "base_ref": "main",
+                "project_branch": "proj",
+                "plan_root": "PLAN.md",
+                "test_command": command,
+                "full_test_command": command,
+                "executor": {"model": "m"},
+                "planner": {"model": "claude-opus-5"},
+                "reviewer": {"model": "gpt-5.6-sol"},
+            }
+        )
+        run_preflight(
+            cfg, check_aider=False, check_models=False,
+            check_approval=False, check_endpoint=False,
+        )
+        assert marker.read_text().count("x") == 1
+
+    def test_a_differing_pair_still_runs_both(self, repo):
+        marker = repo / "runs.txt"
+        cfg = parse_config(
+            {
+                "target_repo": str(repo),
+                "base_ref": "main",
+                "project_branch": "proj",
+                "plan_root": "PLAN.md",
+                "test_command": f"echo a >> {marker}",
+                "full_test_command": f"echo b >> {marker}",
+                "executor": {"model": "m"},
+                "planner": {"model": "claude-opus-5"},
+                "reviewer": {"model": "gpt-5.6-sol"},
+            }
+        )
+        run_preflight(
+            cfg, check_aider=False, check_models=False,
+            check_approval=False, check_endpoint=False,
+        )
+        assert marker.read_text().split() == ["a", "b"]

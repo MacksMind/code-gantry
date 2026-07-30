@@ -434,6 +434,13 @@ def verify(state: RunState, rt: Runtime) -> dict:
         "last_diff_digest": outcome.diff_digest,
     }
 
+    if outcome.unscoped_tests:
+        rt.log(
+            f"[verify] {stage.id}: nothing identified which specs this stage "
+            "affects, so the whole suite ran. Declaring test_paths on the stage "
+            "would scope it."
+        )
+
     if outcome.passed:
         rt.log(f"[verify] {stage.id}: all gates passed")
         return {

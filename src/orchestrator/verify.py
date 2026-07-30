@@ -76,6 +76,10 @@ class VerifyOutcome:
     # Fingerprint of this attempt's diff, carried forward so the next attempt
     # can tell whether the executor actually moved.
     diff_digest: str = ""
+    # The tests layer fell back to the whole suite because nothing identified
+    # which specs this stage affects. Correct, but expensive enough on a real
+    # project to be worth surfacing rather than looking like a slow scoped run.
+    unscoped_tests: bool = False
 
 
 def run_verify(
@@ -122,6 +126,7 @@ def run_verify(
             failure.flake_reruns = outcome.flake_reruns
             failure.test_seconds = outcome.test_seconds
             failure.diff_digest = outcome.diff_digest
+            failure.unscoped_tests = outcome.unscoped_tests
             return failure
 
     return outcome
@@ -321,6 +326,10 @@ def _layer_tests(ctx: _Context, outcome: VerifyOutcome):
     command = resolve_test_command(ctx.stage, ctx.cfg, ctx.git, ctx.stage_start_sha)
     if not command:
         return None
+
+    outcome.unscoped_tests = bool(ctx.cfg.scoped_test_command) and (
+        command == ctx.cfg.test_command
+    )
 
     result = ctx.runner.run(command)
     outcome.results.append(result)

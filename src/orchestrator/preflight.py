@@ -258,12 +258,28 @@ def _environment_checks(
         )
         return checks
 
+    # Deduplicated by command, not by label: when a project points both at the
+    # same script — which is the sensible default — running it twice proves
+    # nothing and costs a full suite. On the first real project that is 23
+    # minutes to learn one thing.
+    already_run: set[str] = set()
     for label, command in (
         ("test_command", cfg.test_command),
         ("full_test_command", cfg.full_test_command),
     ):
         if not command:
             continue
+        if command in already_run:
+            checks.append(
+                Check(
+                    f"{label} passes on a clean tree",
+                    True,
+                    "same command as above; not run twice",
+                    fatal=False,
+                )
+            )
+            continue
+        already_run.add(command)
         result = runner.run(command)
         checks.append(
             Check(
