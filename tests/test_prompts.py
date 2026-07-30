@@ -186,3 +186,17 @@ class TestDeployableIncrements:
         lowered = PLANNER_SYSTEM_PROMPT.lower()
         assert "reorder" in lowered or "out of order" in lowered
         assert "defer" in lowered
+
+
+class TestScopedTestGuidance:
+    def test_the_prompt_says_what_omitting_test_paths_costs(self):
+        # A behaviour-preserving refactor changes no specs by design, so on a
+        # migration the scoped path depends almost entirely on the planner
+        # naming the specs that cover the code it touches. Left as a neutral
+        # optional field, it will be skipped, and every stage pays for a full
+        # suite on every retry.
+        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+
+        lowered = PLANNER_SYSTEM_PROMPT.lower()
+        assert "test_paths" in lowered
+        assert "whole suite" in lowered or "full suite" in lowered

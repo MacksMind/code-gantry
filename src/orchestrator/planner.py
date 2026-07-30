@@ -407,6 +407,13 @@ stage, an environment problem.
 - **Self-contained instruction.** The executor cannot see the plan document,
   the other stages, or this conversation. Everything it needs goes in
   `instruction`.
+- **Name the specs that cover it.** `test_paths` is how a stage's tests get
+  scoped to the specs it affects. Files the stage edits are picked up
+  automatically; this is for the ones that exercise the changed code *without*
+  changing — which, on a behaviour-preserving refactor, is all of them. Leaving
+  it empty on a stage that edits no spec means there is nothing to scope to and
+  the whole suite runs instead, on every attempt and every retry. On a large
+  project that is the single most expensive mistake you can make here.
 - **Constraints as reject-criteria.** If the work is only valid under some
   condition — a platform version, an ordering requirement — say so in
   `constraints`. The reviewer enforces it. Where the condition can be written
