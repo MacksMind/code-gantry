@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from orchestrator.commands import CommandResult, CommandRunner
 from orchestrator.config import ProjectConfig, Stage
@@ -42,6 +43,9 @@ AIDER_FLAGS = [
     "--no-show-model-warnings",
     "--edit-format",
     "--model-metadata-file",
+    "--chat-history-file",
+    "--input-history-file",
+    "--llm-history-file",
 ]
 
 # A command, not a browser name: Python's webbrowser module treats an entry
@@ -65,11 +69,24 @@ class ExecutionResult:
     results: list[CommandResult] = field(default_factory=list)
 
 
-def build_aider_argv(stage: Stage, cfg: ProjectConfig, prompt: str) -> list[str]:
+def build_aider_argv(
+    stage: Stage,
+    cfg: ProjectConfig,
+    prompt: str,
+    history_dir: Path | None = None,
+) -> list[str]:
     """Assemble the Aider invocation.
 
     The API key is deliberately absent: it goes through the environment, so it
     never appears in `ps` output or in our own run log.
+
+    `history_dir` relocates Aider's own scratch files. It writes
+    `.aider.chat.history.md` and `.aider.input.history` into the repository
+    root by default, which no stage declares and which therefore fails the
+    scope gate on the first attempt of every project. Pointing them at the
+    attempt directory keeps the target repository clean — it receives product
+    code and plan revisions, nothing else — and makes the model's actual
+    conversation a per-attempt artifact worth reading afterwards.
     """
     ex = cfg.executor
     argv = [
@@ -95,6 +112,13 @@ def build_aider_argv(stage: Stage, cfg: ProjectConfig, prompt: str) -> list[str]
 
     if ex.model_metadata_file:
         argv += ["--model-metadata-file", ex.model_metadata_file]
+
+    if history_dir is not None:
+        argv += [
+            "--chat-history-file", str(history_dir / "aider-chat.md"),
+            "--input-history-file", str(history_dir / "aider-input.txt"),
+            "--llm-history-file", str(history_dir / "aider-llm.txt"),
+        ]
 
     api_base = ex.resolve_api_base()
     if api_base:
@@ -139,10 +163,12 @@ class Executor:
             collected.append((command, result.output))
         return collected, results
 
-    def run_agent_stage(self, stage: Stage, prompt: str) -> ExecutionResult:
+    def run_agent_stage(
+        self, stage: Stage, prompt: str, history_dir: Path | None = None
+    ) -> ExecutionResult:
         try:
             env = self._executor_env()
-            argv = build_aider_argv(stage, self.cfg, prompt)
+            argv = build_aider_argv(stage, self.cfg, prompt, history_dir=history_dir)
         except KeyError as e:
             # A missing key or endpoint variable. Failing here beats letting
             # Aider fail opaquely on auth, or calling the wrong endpoint.

@@ -328,7 +328,16 @@ def execute(state: RunState, rt: Runtime) -> dict:
             "prompt.md", prompt,
         )
         rt.log(f"[execute] {stage.id}: attempt {attempt}")
-        result = rt.executor.run_agent_stage(stage, prompt)
+        # Aider's scratch files go beside this attempt's other artifacts rather
+        # than into the repository under test, where they would fail the scope
+        # gate. As a side effect the model's actual conversation is preserved
+        # per attempt, which is the first thing worth reading when a local
+        # model does something inexplicable.
+        history_dir = rt.paths.attempt_dir(
+            state["stage_index"], stage.id, state.get("revision", 0), attempt
+        )
+        history_dir.mkdir(parents=True, exist_ok=True)
+        result = rt.executor.run_agent_stage(stage, prompt, history_dir=history_dir)
 
     rt.write_artifact(
         state["stage_index"], stage.id, state.get("revision", 0), attempt,

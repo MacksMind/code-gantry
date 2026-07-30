@@ -56,6 +56,7 @@ class StubExecutor:
     ok: bool = True
     timed_out: bool = False
     prompts: list = field(default_factory=list)
+    history_dirs: list = field(default_factory=list)
 
     def gather_context(self, stage):
         return [], []
@@ -67,8 +68,9 @@ class StubExecutor:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text)
 
-    def run_agent_stage(self, stage, prompt):
+    def run_agent_stage(self, stage, prompt, history_dir=None):
         self.prompts.append(prompt)
+        self.history_dirs.append(history_dir)
         self._apply()
         return ExecutionResult(ok=self.ok, log="executor log", timed_out=self.timed_out)
 
@@ -230,6 +232,20 @@ class TestPlannerBudgets:
         out = nodes.plan(state, rt)
         assert out["next_hop"] == "escalate"
         assert "max_stages" in out["escalation_reason"]
+
+    def test_aider_history_lands_in_the_attempt_directory(self, repo, tmp_path):
+        # Not in the repository under test: Aider's scratch files fail the
+        # scope gate there, and they are worth keeping as artifacts anyway.
+        planner = StubPlanner(
+            [PlannerOutcome("next_stage", "first", "e", stage_fields=planned_stage())]
+        )
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        state = with_stage(state, rt)
+        nodes.execute(state, rt)
+        destination = rt.executor.history_dirs[-1]
+        assert destination is not None
+        assert repo not in destination.parents
+        assert destination.is_dir()
 
     def test_the_wall_clock_budget_escalates(self, repo, tmp_path):
         cfg, rt, state = make(repo, tmp_path, limits={"wall_clock_hours": 2})

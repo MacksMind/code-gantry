@@ -156,6 +156,21 @@ class TestAiderArgv:
         cfg, stage = cfg_with(executor={"model": "m"})
         assert "--edit-format" not in build_aider_argv(stage, cfg, "p")
 
+    def test_history_files_are_written_outside_the_repo(self, tmp_path):
+        # Aider writes .aider.chat.history.md and .aider.input.history into the
+        # repo root. No stage declares them, so they fail the scope gate on the
+        # first attempt of every project — which is exactly what happened, and
+        # cost a planner intervention to work around.
+        cfg, stage = cfg_with(executor={"model": "m"})
+        argv = build_aider_argv(stage, cfg, "p", history_dir=tmp_path)
+        for flag in ("--chat-history-file", "--input-history-file", "--llm-history-file"):
+            assert flag in argv, flag
+            assert argv[argv.index(flag) + 1].startswith(str(tmp_path))
+
+    def test_no_history_flags_without_a_destination(self):
+        cfg, stage = cfg_with(executor={"model": "m"})
+        assert "--chat-history-file" not in build_aider_argv(stage, cfg, "p")
+
     def test_never_puts_a_key_in_argv(self):
         cfg, stage = cfg_with(executor={"model": "m", "api_key_env": "SOME_KEY"})
         argv = build_aider_argv(stage, cfg, "p")

@@ -110,7 +110,8 @@ if "--help" in sys.argv:
         "--message --yes-always --no-stream --model --openai-api-base "
         "--test-cmd --auto-test --lint-cmd --map-tokens --file --read "
         "--no-gitignore --no-show-model-warnings --edit-format "
-        "--model-metadata-file"
+        "--model-metadata-file --chat-history-file --input-history-file "
+        "--llm-history-file"
     )
     sys.exit(0)
 
