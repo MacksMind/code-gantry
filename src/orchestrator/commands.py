@@ -96,17 +96,53 @@ class CommandRunner:
         return env
 
     def run(self, command: str, timeout: int | None = None) -> CommandResult:
+        """Run a shell command string. Config commands use shell syntax
+        (`a && b`, `! grep -q x`), so a shell is required."""
+        return self._spawn(command, shell=True, label=command, timeout=timeout)
+
+    def run_argv(
+        self,
+        argv: Sequence[str],
+        timeout: int | None = None,
+        env: dict[str, str] | None = None,
+    ) -> CommandResult:
+        """Run an argument vector with no shell.
+
+        Used for the executor, whose prompt is a multi-line string full of
+        backticks and quotes. Passing that through a shell would be a
+        quoting minefield for no benefit.
+        """
+        return self._spawn(
+            list(argv),
+            shell=False,
+            label=" ".join(argv[:2]) + " ...",
+            timeout=timeout,
+            extra_env=env,
+        )
+
+    def _spawn(
+        self,
+        target,
+        shell: bool,
+        label: str,
+        timeout: int | None = None,
+        extra_env: dict[str, str] | None = None,
+    ) -> CommandResult:
         effective_timeout = self.timeout if timeout is None else timeout
         started = time.monotonic()
+
+        env = self._env()
+        if extra_env:
+            env.update(extra_env)
 
         # start_new_session puts the child in its own process group so a
         # timeout can kill everything it spawned. Killing only the shell
         # leaves docker/bundler/pytest children holding resources.
         proc = subprocess.Popen(
-            command,
-            shell=True,
+            target,
+            shell=shell,
             cwd=str(self.cwd),
-            env=self._env(),
+            env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -129,7 +165,7 @@ class CommandRunner:
 
         duration = time.monotonic() - started
         result = CommandResult(
-            command=command,
+            command=label,
             exit_code=proc.returncode if proc.returncode is not None else -1,
             stdout=truncate_middle(stdout or "", self.max_output_chars),
             stderr=truncate_middle(stderr or "", self.max_output_chars),
@@ -139,9 +175,9 @@ class CommandRunner:
 
         if self._log:
             if timed_out:
-                self._log(f"$ {command}\n  timed out after {duration:.1f}s")
+                self._log(f"$ {label}\n  timed out after {duration:.1f}s")
             else:
-                self._log(f"$ {command}\n  exit {result.exit_code} in {duration:.1f}s")
+                self._log(f"$ {label}\n  exit {result.exit_code} in {duration:.1f}s")
 
         return result
 

@@ -49,6 +49,9 @@ class ExecutorConfig(_Strict):
     # Repo map off by default: stages declare the files they need, and an
     # unscoped map swamps a local model's context before the task is stated.
     map_tokens: int = 0
+    # Aider's flag surface changes between releases. This is the escape hatch
+    # for correcting it without waiting on a code change.
+    extra_args: list[str] = []
 
 
 class ReviewerConfig(_Strict):
