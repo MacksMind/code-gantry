@@ -1,12 +1,16 @@
 # Refactor Orchestrator
 
-Drives a multistage code refactor by pairing a **local executor model** with a
-**paid reviewer model**. Aider (backed by a local model) does the editing; a
-frontier model inspects each stage's diff once the tests pass and either
-approves it or sends it back. The orchestrator owns the loop between them.
+Drives a long, multistage refactor by pairing a **local executor model** with two
+paid ones: a **planner** that decides what to do next, and a **reviewer** that
+decides whether it was done acceptably.
 
-[PLAN.md](PLAN.md) is the design document and the authority on why things work
-the way they do. This file is how to use it.
+The operating goal is to run as long as feasible without a human. A ten-page plan
+should execute in one unattended pass, producing a branch of granular,
+individually green, individually reviewed commits you can examine and deploy from
+on your own schedule.
+
+[PLAN.md](PLAN.md) is the design document and the authority on *why* things work
+this way. This file is how to use it.
 
 ## Install
 
@@ -15,160 +19,188 @@ uv sync --group dev
 uv run orchestrator --help
 ```
 
-Requires Python 3.11+, `git`, and — for `agent` stages — `aider` on PATH.
+Requires Python 3.11+, `git`, and — for agent stages — `aider` on PATH.
 
-## The shape of a run
+## The four terms
 
-**A run is one shippable unit of work: one branch, one eventual pull request.**
-Its stages are the internal steps of that unit, not a whole programme of work.
-A large refactor is many runs. Splitting a programme into runs is your job,
-done up front.
-
-Each stage is one of three kinds:
-
-| Kind | Who edits | Use it for |
+| Term | What it is | Maps to |
 |---|---|---|
-| `agent` | Aider + local model | The actual refactoring work |
-| `script` | A declared command | Mechanical transforms across many files — a `sed`, not a model |
-| `manual` | You | Version bumps, dependency resolution, deploys. The run pauses and waits |
+| **project** | A body of work defined by a plan document | `projects/<slug>/` and a long-lived project branch |
+| **stage** | One unit of work — the shippable unit | A child branch, squash-merged to the project branch |
+| **attempt** | One executor invocation within a stage | A counter |
+| **run** | One resumable execution session | `projects/<slug>/runs/<id>/`; no branch |
 
-## Commands
+There is **no static stage list**. The planner derives each stage from the plan
+document as the run proceeds.
+
+## Lifecycle
 
 ```bash
-orchestrator validate config.yaml    # check everything without running a stage
-orchestrator run config.yaml         # start a run
-orchestrator resume <run_id>         # continue an interrupted or paused run
-orchestrator status <run_id>         # where a run stopped and why
+orchestrator init docs/my_plan.md      # draft a config from a plan document
+orchestrator validate <slug>           # prove it works on this host
+orchestrator approve <slug>            # record that you read it
+orchestrator run <slug>                # go
+orchestrator resume <run_id>           # continue after an interruption or escalation
+orchestrator status <run_id>           # where it stopped and why
 ```
 
-Exit codes: `0` complete, `1` failed or escalated, `2` paused waiting on you.
-A paused run is not a failure.
+`init` may prompt — it's one-time human setup. `run` and `resume` execute
+unattended and never block on input.
 
-Run `validate` first. It checks the config, that the target repo is a clean git
-tree on the right base, that your test commands actually pass, that `aider`
-still has the flags this tool builds, and that the reviewer is reachable.
-Failing fast beats failing on stage 6.
+`validate` proves the config works *on this host* before you're asked to approve
+it, so approval is a review of policy rather than of whether `bin/test` exists.
+`approve` records a hash of the exact bytes you read; editing the config
+invalidates it. There is no `approved: true` field, because such a field could be
+set by anything.
 
-## Configuration
+## The capability partition
+
+Three models, three non-overlapping capabilities. This is the core safety
+property; everything else is mechanism.
+
+| Role | May write | May not |
+|---|---|---|
+| **Executor** (local, via Aider) | Product code inside the stage's `edit_files` | Anything outside it; any command |
+| **Planner** (Anthropic) | Stage specs — declarative fields only — plan revisions, the status log | Product code; **any executable field** |
+| **Reviewer** (OpenAI) | Nothing | Everything |
+
+**The planner may never author a command.** It is enforced twice: its
+structured-output schema has no field for one, and its response is filtered
+against an allowlist regardless. The orchestrator never runs a shell command that
+originated from model output — every command it executes is declared by you in an
+approved config.
+
+Where the planner needs to influence a command, it supplies *arguments*:
 
 ```yaml
-target_repo: /path/to/app
-base_ref: main
-branch: refactor/extract-order-service    # created for you; never base_ref
-
-setup_command: "docker compose up -d db"  # must be idempotent; runs more than once
-test_command: "bin/test"                  # scoped, runs on every attempt
-full_test_command: "bin/test --all"       # runs once at the end
-
-reference_docs:                           # included in every review prompt
-  - docs/refactor_plan.md
-
-executor:
-  model: "openai/<local-model-id>"
-  api_base: "http://<host>:<port>/v1"
-  api_key_env: "LOCAL_API_KEY"
-  lint_command: "<lint command>"
-  map_tokens: 0                           # repo map off; stages declare their files
-
-reviewer:
-  model: "gpt-5.5"
-  api_key_env: "OPENAI_API_KEY"
-
-limits:
-  max_test_retries: 3
-  max_rework_retries: 2
-  aider_timeout_seconds: 1800
-  command_timeout_seconds: 3600
-
-rework_strategy: fresh
-rework_reset: true
-
-stages:
-  - id: extract-service
-    kind: agent
-    instruction: |
-      Extract the order-processing logic into a service object.
-    edit_files:                           # required: the scope guard needs it
-      - "app/services/**"
-      - "spec/services/**"
-    read_files:                           # context only, not editable
-      - "app/controllers/application_controller.rb"
-    constraints: |
-      Must remain valid on <current platform version>.
-    forbidden_patterns:                   # checked against added lines only
-      - "SomeLaterVersionOnlyApi"
-    test_command: "bin/test spec/services"
-    checks:
-      - "bin/route-snapshot --diff"
-    preconditions:
-      - "! grep -rq 'LegacyMixin' app/"
-    context_commands:                     # stdout is injected into the prompt
-      - "bin/inventory-actions OrdersController"
+scoped_test_command: "docker compose run --rm test bundle exec rspec {paths}"
 ```
 
-Every command the orchestrator runs is declared here by you. Nothing is ever
-taken from model output — `context_commands` push command output *into* a
-prompt; no path exists in the other direction.
+`{paths}` is filled from the stage diff, optionally widened by planner-declared
+spec globs. Paths are declarative; the command string is yours.
 
-## What `verify` actually checks
+## Branch topology
 
-Cheapest gate first, stopping at the first failure:
+```
+main
+ └── feature/thing                    # cut once; the tool never merges it
+
+feature/thing-stage/001-<id>          # child branch; squash-merged, then deleted
+feature/thing-stage/002-<id>
+```
+
+Child branches sit **beside** the project branch, not under it — git refs are
+filesystem paths, so `refs/heads/feature/thing` and
+`refs/heads/feature/thing/stage-001` cannot coexist.
+
+A stage squash-merges on approval, so Aider's intermediate commits — some red,
+since it commits before it tests — never reach the project branch. That's how
+"every commit on the project branch is green" and "Aider commits before testing"
+are both true.
+
+The outer merge to `main` is yours. The tool never pushes.
+
+## The verify gate
+
+Ordered cheapest-first, short-circuiting. Routing is three-way:
 
 | # | Gate | On failure |
 |---|---|---|
-| 0 | `setup_command` | Escalates — a broken environment is not a bad diff |
-| 1 | Scope guard: nothing changed outside `edit_files` | Escalates — containment, not quality |
-| 2 | `forbidden_patterns` against **added lines** | Retries with the offending lines as feedback |
-| 3 | `test_command` (re-run once before consuming a retry) | Retries |
-| 4 | `checks` — each must exit zero | Retries |
-| 5 | `require_new_tests` — diff touches a test file | Retries |
+| 0 | `setup_command` | **Human** — a broken environment isn't a planning defect |
+| 1 | Branch identity — HEAD where expected, nothing rewritten | **Human** — a containment breach doesn't negotiate |
+| 2 | Scope guard — nothing changed outside `edit_files` | **Planner** — widen the stage, or revert just those paths |
+| 3 | `forbidden_patterns` against **added lines only** | Executor retry |
+| 4 | `test_command` (re-run once before consuming a retry) | Executor retry |
+| 5 | `checks` — each must exit zero | Executor retry |
+| 6 | `require_new_tests` — the diff touches a test file | Executor retry |
 
-A failing test is re-run once before it costs a retry, so a flaky
-browser-driven suite does not burn the budget and escalate falsely. Flake
-re-runs are reported.
+A scope violation **never discards the branch.** The child branch is already the
+quarantine, so containment doesn't require destroying work: the planner gets the
+out-of-scope path list, and if it widens `edit_files` the existing work stands.
+Only paths it declines get reverted — hours of correct work don't die because one
+unexpected spec got touched.
 
-## Reviewer verdicts
+## The merge gate
 
-- **approved** — advance.
-- **rework** — loop back with the issues as feedback. By default the tree is
-  reset to the stage baseline first, so each attempt produces one clean
-  single-purpose diff rather than a rejected attempt plus its correction.
-- **blocked** — the stage instruction itself is wrong. Escalates immediately
-  without consuming a retry, because grinding through reworks will not fix a
-  problem upstream of the executor.
+**A stage lands when the reviewer approves it *and* the full suite is green.**
+Evaluated cheapest-first: the reviewer is seconds and pennies, a full suite is
+minutes, so a stage the reviewer would reject never pays for a suite run. Because
+the suite runs only after approval, it costs one execution per stage that
+lands — linear in stages, not in attempts.
 
-Anything that yields no usable verdict — a refusal, a truncated response, a
-transport failure — is treated as `blocked`. "The reviewer did not answer"
-means stop and ask a human.
+Reviewer verdicts:
+
+- **approved** → full suite, then merge.
+- **rework** → back to the executor with the issues. The tree resets to the stage
+  baseline first by default, so each attempt is one clean single-purpose diff.
+- **blocked** → the instruction itself is wrong. Routes to the **planner**, not a
+  human: with a planner in the loop, that's a planning problem with a planning
+  fix.
+
+## Escalation tiers
+
+1. **Executor retry** — bounded by `max_test_retries` / `max_rework_retries`.
+2. **Planner intervention** — the stage was drawn wrongly. Bounded by
+   `max_planner_interventions`, which is **global across the run**: per-stage caps
+   let a pathological project consume unbounded paid inference one stage at a
+   time.
+3. **Human** — everything the planner couldn't fix, plus setup and
+   branch-identity failures.
+
+There is **no planned human step**. A human's involvement means something broke,
+so a deliberate mid-run pause would contradict one-shotting a plan. Work the
+orchestrator can't do escalates, you do it, and `resume` verifies it.
+
+`resume` re-enters based on how the run stopped: at `verify` for a
+repository-state failure, so your fix is checked rather than discarded; at the
+planner for a planning failure. The clean-tree requirement is start-only, since
+your fix is normally uncommitted.
+
+## Plan documents
+
+`plan_root` is a **document, not a directory** — pointing it at `docs/` would
+sweep every runbook and ADR into every paid call. Children resolve via explicit
+markdown links, one level deep, and **may not escape the root document's
+directory**.
+
+The resolved tree is snapshotted per run. The reviewer and planner judge against
+the plan as it stood when the run began; the planner's own revisions land in the
+live documents and show up as divergence in `status.md`.
 
 ## Output
 
 ```
-runs/<run_id>/
-  run.log                                  timeline of decisions
-  report.md                                stage outcomes, costs, undo command
-  state.db                                 checkpoint; resume reads this
-  run.json                                 which config this run used
-  stages/<n>-<id>-attempt-<m>/
-    prompt.md                              exactly what the executor was told
-    executor.log
-    verify.log                             each gate's command and result
-    review.json                            the parsed verdict and token usage
+projects/<slug>/
+  config.yaml          approval.json       # hash of the bytes you read
+  plan-snapshot/       status.md           # append-only expected-vs-actual log
+  runs/<run_id>/
+    report.md          run.log   state.db  run.json
+    stages/<n>-<id>-rev-<r>-attempt-<m>/
+      prompt.md  executor.log  verify.log  review.json  planner.json
 ```
 
-The target repo never receives orchestrator artifacts.
+`status.md` is append-only by design. A status page that always showed current
+state would discard the divergence over time between what the plan expected and
+what happened — which is the reason to keep it.
 
-`report.md` always includes a single command that undoes the entire run, and
-the reviewer's cached-token proportion — the economic premise of splitting
-executor from reviewer is that the paid model fires at checkpoints with a
-mostly-cached prefix, and the report is where you confirm that is still true.
+`report.md` gives each stage a pull-request-shaped record, and warns if the
+reviewer's cached-token proportion drops below half: the plan snapshot and
+completed history are meant to be a stable cacheable prefix, so a low figure
+means every review is costing more than it should.
 
 ## Safety
 
-- Refuses to start unless the target repo is a clean tree at `base_ref`.
-- Commits only to `branch`, which must differ from `base_ref`.
-- **No push, ever** — there is no code in this project that can.
-- Opening the pull request is yours. Deliberately.
+- Refuses to start unless the config hash matches an approved one.
+- A **denylist** refuses `git push`, `git checkout`/`switch`, `git merge`,
+  `git reset`, deploy tools, `sudo`, and recursive `rm` in any configured
+  command — *regardless of approval*. A human skims a sixty-line YAML once,
+  motivated to start a run; this is the backstop for that moment.
+- Commits only to the project branch and its children. **No push method
+  exists.**
+- `gc.auto` is disabled for the run, so the reflog can recover a discarded
+  attempt.
+- Every commit passes `-c commit.gpgsign=false`: an unattended run can't answer a
+  pinentry prompt.
 
 ## Tests
 
@@ -176,5 +208,5 @@ mostly-cached prefix, and the report is where you confirm that is still true.
 uv run pytest
 ```
 
-The suite drives the real graph, checkpointer, verify layers and git
-operations against fixture repos; only the two model calls are stubbed.
+The suite drives the real graph, checkpointer, verify layers, git operations and
+branch topology against fixture repos. Only the three model calls are stubbed.

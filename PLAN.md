@@ -112,6 +112,16 @@ output. Every command it runs is declared by the operator in an approved
 config file. `context_commands` inject command *output* into a prompt; no path
 exists in the reverse direction.
 
+**`kind` is not planner-writable either, which makes `script` stages
+unreachable.** A `script` stage needs an operator-authored `command`, and with no
+static stage list there is nowhere for the operator to put one. So every
+planner-derived stage is an `agent` stage, and a mechanical transform across
+hundreds of files is expressed as an instruction to write and run a script —
+Aider doing that inside its own edit loop is Aider's business, and the
+orchestrator still never executes model-authored shell itself. The `script` kind
+remains in the schema for a future operator-authored stage source; today it is
+reachable only from a test.
+
 **Where the planner needs to influence a command, it supplies arguments, not
 the command.** A stage's test run should be scoped to the specs it affects, and
 the planner knows which those are — but it may not author shell. So the

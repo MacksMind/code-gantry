@@ -139,12 +139,15 @@ def _repo_checks(cfg: ProjectConfig, git: Git, *, for_resume: bool) -> list[Chec
         )
     else:
         checks.append(Check(f"project branch {cfg.project_branch!r} is new", True))
+        matches = git.head_sha() == base_sha
         checks.append(
             Check(
                 f"HEAD matches base_ref {cfg.base_ref!r}",
-                git.head_sha() == base_sha,
-                f"HEAD is {git.head_sha()[:12]}, {cfg.base_ref} is {base_sha[:12]} "
-                "— the project branch would be cut from somewhere unexpected",
+                matches,
+                "" if matches
+                else f"HEAD is {git.head_sha()[:12]}, {cfg.base_ref} is "
+                f"{base_sha[:12]} — the project branch would be cut from "
+                "somewhere unexpected",
             )
         )
 

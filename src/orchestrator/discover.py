@@ -224,6 +224,17 @@ def _discover_test(repo: Path) -> tuple[str, str]:
         return "pytest", "a pyproject.toml, with no wrapper script found"
     if (repo / "package.json").is_file():
         return "npm test", "a package.json, with no wrapper script found"
+
+    # No manifest, but a conventional test layout is still a strong signal.
+    for directory in ("tests", "test", "spec"):
+        path = repo / directory
+        if not path.is_dir():
+            continue
+        if any(path.rglob("test_*.py")) or any(path.rglob("*_test.py")):
+            return "python -m pytest", f"python tests found under {directory}/"
+        if any(path.rglob("*_spec.rb")):
+            return "bundle exec rspec", f"ruby specs found under {directory}/"
+
     return "CHANGE-ME", "nothing recognisable — set this by hand"
 
 
