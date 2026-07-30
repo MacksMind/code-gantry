@@ -171,3 +171,65 @@ class TestEndpointEnvironmentChecks:
         )
         named = [c for c in checks if "SPARK_BASE" in c.name]
         assert named and named[0].blocking
+
+
+class TestEndpointRedaction:
+    """An address from the environment stays out of the output.
+
+    The whole reason `api_base_env` exists is that a hostname is an
+    infrastructure fact that should not be committed. Printing the resolved
+    value to the terminal — and from there into logs, transcripts, and
+    screenshots — gives most of that back. The variable name is what an
+    operator needs to fix a problem; the value is not.
+
+    A literal `api_base` is different: the operator wrote it into the config
+    themselves, so echoing it reveals nothing they did not already choose.
+    """
+
+    def test_a_resolved_address_is_not_printed(self, endpoint, monkeypatch):
+        monkeypatch.setenv("SECRET_BASE", endpoint)
+        cfg = parse_config(
+            {
+                "target_repo": "/tmp/app",
+                "base_ref": "main",
+                "project_branch": "proj",
+                "plan_root": "docs/plan.md",
+                "test_command": "true",
+                "executor": {
+                    "model": "openai/qwen3-coder-next",
+                    "api_base_env": "SECRET_BASE",
+                },
+                "planner": {"model": "claude-opus-5"},
+                "reviewer": {"model": "gpt-5.6-sol"},
+            }
+        )
+        checks = check_executor_endpoint(cfg)
+        rendered = "\n".join(f"{c.name} {c.detail}" for c in checks)
+        assert endpoint not in rendered
+        assert "SECRET_BASE" in rendered
+
+    def test_an_unreachable_address_is_not_printed_either(self, dead_port, monkeypatch):
+        # The failure path is where a URL is most tempting to include.
+        address = f"http://127.0.0.1:{dead_port}/v1"
+        monkeypatch.setenv("SECRET_BASE", address)
+        cfg = parse_config(
+            {
+                "target_repo": "/tmp/app",
+                "base_ref": "main",
+                "project_branch": "proj",
+                "plan_root": "docs/plan.md",
+                "test_command": "true",
+                "executor": {"model": "openai/m", "api_base_env": "SECRET_BASE"},
+                "planner": {"model": "claude-opus-5"},
+                "reviewer": {"model": "gpt-5.6-sol"},
+            }
+        )
+        checks = check_executor_endpoint(cfg)
+        rendered = "\n".join(f"{c.name} {c.detail}" for c in checks)
+        assert f"127.0.0.1:{dead_port}" not in rendered
+        assert "SECRET_BASE" in rendered
+
+    def test_a_literal_api_base_is_still_shown(self, endpoint):
+        # The operator wrote it in the config they approved.
+        checks = check_executor_endpoint(cfg_for("openai/qwen3-coder-next", endpoint))
+        assert any(endpoint in (c.detail or "") for c in checks)

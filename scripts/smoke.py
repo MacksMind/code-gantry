@@ -782,7 +782,8 @@ def main() -> int:
         check("[FAIL]" not in checks, "no blocking problems", checks)
         check("aider still accepts the flags we build" in checks, "checked aider's flags")
         check(
-            f"executor endpoint resolves from {EXECUTOR_API_BASE_VAR}" in checks,
+            f"executor endpoint resolves from {EXECUTOR_API_BASE_VAR}" in checks
+            and "127.0.0.1" not in checks.split("endpoint resolves")[1][:200],
             "resolved the executor endpoint from the environment",
             checks,
         )

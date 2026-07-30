@@ -350,9 +350,30 @@ def _endpoint_checks(cfg: ProjectConfig) -> list[Check]:
             )
             continue
         checks.append(
-            Check(f"{role} endpoint resolves from {endpoint.api_base_env}", True, resolved)
+            Check(
+                f"{role} endpoint resolves from {endpoint.api_base_env}",
+                True,
+                # Deliberately not the value: see endpoint_label.
+                f"{len(resolved)} characters, kept out of this output",
+            )
         )
     return checks
+
+
+def endpoint_label(endpoint) -> str:
+    """How to name an endpoint in output, without giving its address away.
+
+    `api_base_env` exists precisely so a hostname need not be committed.
+    Printing the resolved value to the terminal — and from there into logs,
+    transcripts and screenshots — hands most of that back. The variable name is
+    what an operator needs in order to fix a problem; the address is not.
+
+    A literal `api_base` is echoed as-is: the operator wrote it into the config
+    they approved, so it reveals nothing they did not already choose.
+    """
+    if endpoint.api_base_env:
+        return f"${endpoint.api_base_env}"
+    return endpoint.api_base or "(unset)"
 
 
 def check_executor_endpoint(cfg: ProjectConfig) -> list[Check]:
@@ -376,6 +397,7 @@ def check_executor_endpoint(cfg: ProjectConfig) -> list[Check]:
         # No api_base means the real OpenAI endpoint, which needs no proving.
         return []
 
+    label = endpoint_label(cfg.executor)
     url = api_base.rstrip("/") + "/models"
     try:
         with urllib.request.urlopen(url, timeout=10) as response:
@@ -385,11 +407,12 @@ def check_executor_endpoint(cfg: ProjectConfig) -> list[Check]:
             Check(
                 "executor endpoint answers",
                 False,
-                f"GET {url} failed: {e}\nno agent stage can run without it",
+                f"GET {label}/models failed: {_redact(e, api_base, label)}\n"
+                "no agent stage can run without it",
             )
         ]
 
-    checks = [Check("executor endpoint answers", True, url)]
+    checks = [Check("executor endpoint answers", True, f"{label}/models")]
 
     names = _model_names(body)
     if names is None:
@@ -399,7 +422,8 @@ def check_executor_endpoint(cfg: ProjectConfig) -> list[Check]:
             Check(
                 "executor model is offered by the endpoint",
                 False,
-                f"{url} answered, but not with a recognisable model list, so the "
+                f"{label}/models answered, but not with a recognisable model "
+                "list, so the "
                 "model id could not be verified. Check it by hand.",
                 fatal=False,
             )
@@ -416,7 +440,7 @@ def check_executor_endpoint(cfg: ProjectConfig) -> list[Check]:
             Check(
                 f"endpoint offers {wanted!r}",
                 False,
-                f"{url} does not list {wanted!r}. It offers: "
+                f"{label}/models does not list {wanted!r}. It offers: "
                 + ", ".join(sorted(names))
                 + f".\nexecutor.model is {cfg.executor.model!r}; everything after "
                 "the provider prefix must match a name the server accepts. If "
@@ -425,6 +449,11 @@ def check_executor_endpoint(cfg: ProjectConfig) -> list[Check]:
             )
         )
     return checks
+
+
+def _redact(value, address: str, label: str) -> str:
+    """Swap a resolved address out of a message for its variable name."""
+    return str(value).replace(address, label).replace(address.rstrip("/"), label)
 
 
 def _served_model_name(configured: str) -> str:
