@@ -371,7 +371,7 @@ def verify(state: RunState, rt: Runtime) -> dict:
     rt.write_artifact(
         state["stage_index"], stage.id, state.get("revision", 0), attempt,
         "verify.log",
-        "\n\n".join(f"{r.summary()}\n{r.output}" for r in outcome.results),
+        _verify_log(outcome),
     )
 
     accumulated = {
@@ -643,6 +643,33 @@ def escalate(state: RunState, rt: Runtime) -> dict:
 
 
 # --- helpers -------------------------------------------------------------
+
+
+def _verify_log(outcome) -> str:
+    """What the gates decided, and why.
+
+    Built from the verdict first and command output second. The scope, pattern
+    and branch-identity gates fail without running anything, so a log built
+    only from command results is empty for exactly the failures hardest to
+    diagnose afterwards — which is how the first live run left a human reading
+    planner.json to find out which regex had matched.
+    """
+    parts: list[str] = []
+    if outcome.passed:
+        parts.append("all gates passed")
+    else:
+        layer = getattr(outcome.failed_layer, "value", outcome.failed_layer)
+        route = getattr(outcome.route, "value", outcome.route)
+        parts.append(f"FAILED at layer {layer!r} (routed to {route})")
+        if outcome.summary:
+            parts.append(outcome.summary)
+        if outcome.feedback:
+            parts.append(outcome.feedback)
+
+    for result in outcome.results:
+        parts.append(f"{result.summary()}\n{result.output}")
+
+    return "\n\n".join(p for p in parts if p)
 
 
 def _session_elapsed(state: RunState) -> dict:

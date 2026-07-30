@@ -106,50 +106,74 @@ message = sys.argv[sys.argv.index("--message") + 1] if "--message" in sys.argv e
 calc = pathlib.Path("src/calc.py")
 body = calc.read_text()
 
+# Tests are appended to the *existing* test file rather than written to a new
+# one. A real planner scopes a stage to the files it expects to change and says
+# "add tests in the existing test file"; inventing tests/test_multiply.py
+# violated that scope on every attempt, which is a stand-in that ignores its
+# instructions rather than an orchestrator that mis-scoped.
+TEST_FILE = "tests/test_calc.py"
+
 IMPLEMENTATIONS = {
     "multiply": (
         "\\n\\ndef multiply(a, b):\\n    return a * b\\n",
-        "tests/test_multiply.py",
-        "from src.calc import multiply\\n\\n\\n"
-        "def test_multiply():\\n    assert multiply(3, 4) == 12\\n",
+        "\\n\\ndef test_multiply():\\n"
+        "    from src.calc import multiply\\n"
+        "    assert multiply(3, 4) == 12\\n"
+        "    assert multiply(-2, 3) == -6\\n"
+        "    assert multiply(0, 5) == 0\\n",
     ),
     "divide": (
         "\\n\\ndef divide(a, b):\\n"
         "    if b == 0:\\n"
         "        raise ValueError('divide by zero')\\n"
         "    return a / b\\n",
-        "tests/test_divide.py",
-        "import pytest\\n\\nfrom src.calc import divide\\n\\n\\n"
-        "def test_divide():\\n    assert divide(8, 2) == 4\\n\\n\\n"
-        "def test_divide_by_zero():\\n"
+        "\\n\\ndef test_divide():\\n"
+        "    import pytest\\n"
+        "    from src.calc import divide\\n"
+        "    assert divide(8, 2) == 4\\n"
         "    with pytest.raises(ValueError):\\n        divide(1, 0)\\n",
     ),
 }
 
-# Only ever implement what the instruction actually names. An earlier version
-# fell back to "the first unimplemented operation" so that a live planner's
-# wording could not stall the run — which promptly made this write `divide`
-# during the `multiply` stage, tripping that stage's own forbidden_patterns and
-# burning four retries per revision. A fake executor that does the wrong thing
-# is worse than one that admits it cannot help.
-named = [
-    op for op in IMPLEMENTATIONS if op in message.lower() and f"def {op}" not in body
-]
+# Which operation is this stage about? Not "which is mentioned" — a real
+# planner's constraints name what must NOT be built ("reject the stage if the
+# diff adds division"), and a plain keyword match implemented the prohibition.
+# Frequency separates the subject from the prohibitions cleanly: the stage's own
+# operation is named throughout, the forbidden ones once or twice in passing.
+lowered = message.lower()
+SYNONYMS = {"multiply": ("multiply", "multiplication"), "divide": ("divide", "division")}
+counts = {
+    op: sum(lowered.count(word) for word in words) for op, words in SYNONYMS.items()
+}
+ranked = sorted(counts.items(), key=lambda kv: -kv[1])
+
+subject = None
+if ranked[0][1] > 0 and ranked[0][1] > ranked[1][1]:
+    subject = ranked[0][0]
+
+named = [subject] if subject and f"def {subject}" not in body else []
 
 if named:
     op = named[0]
-    source, test_path, test_source = IMPLEMENTATIONS[op]
+    source, test_source = IMPLEMENTATIONS[op]
     calc.write_text(body + source)
-    pathlib.Path(test_path).write_text(test_source)
-    print(f"aider: implemented {op}")
+    tests = pathlib.Path(TEST_FILE)
+    tests.write_text(tests.read_text() + test_source)
+    print(f"aider: implemented {op}, with tests in {TEST_FILE}")
     sys.exit(0)
 
-already = [op for op in IMPLEMENTATIONS if op in message.lower()]
-if already:
-    print(f"aider: {already[0]} is already implemented; nothing to do")
+if subject:
+    print(f"aider: {subject} is already implemented; nothing to do")
     sys.exit(0)
 
-print(f"aider: this stand-in only implements {sorted(IMPLEMENTATIONS)}", file=sys.stderr)
+# Report the counts. Saying "already implemented" here would be a lie — the
+# real situation is that no operation clearly dominates the instruction, and a
+# stand-in that misreports why it did nothing wastes a debugging session.
+print(
+    f"aider: cannot tell which operation this stage is about (mention counts: "
+    f"{counts}); this stand-in implements only {sorted(IMPLEMENTATIONS)}",
+    file=sys.stderr,
+)
 sys.exit(1)
 '''
 

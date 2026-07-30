@@ -215,6 +215,28 @@ class TestTwoStageProject:
         assert (directory / "verify.log").exists()
         assert json.loads((directory / "review.json").read_text())["verdict"] == "approved"
 
+    def test_verify_log_records_why_a_commandless_gate_failed(
+        self, repo, tmp_path, fake_aider
+    ):
+        # The scope and pattern gates fail without running a command, so a
+        # verify.log built only from command results comes out empty — leaving
+        # the artifact that should explain an escalation blank. Found during
+        # the first live run, where diagnosing a pattern failure meant reading
+        # planner.json instead.
+        fake_aider.write_text(json.dumps([{"outside.py": "leaked\n"}]))
+        planner = ScriptedPlanner([
+            PlannerOutcome(
+                "next_stage", "r", "e",
+                stage_fields=stage_spec(edit_files=["app.py"]),
+            ),
+            PlannerOutcome("blocked", "giving up", "e"),
+        ])
+        cfg, project, paths, final = drive(repo, tmp_path, planner=planner)
+        log = (paths.attempt_dir(0, "extract", 0, 0) / "verify.log").read_text()
+        assert log.strip(), "a failing gate must record why"
+        assert "scope" in log.lower()
+        assert "outside.py" in log, "and must name what actually went wrong"
+
     def test_status_log_accumulates_planner_decisions(self, repo, tmp_path, fake_aider):
         fake_aider.write_text(json.dumps([{"app.py": "a\n"}]))
         planner = ScriptedPlanner([
