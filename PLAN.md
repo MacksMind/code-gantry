@@ -50,7 +50,12 @@ from the outside, the same way Aider does.
 ## Tech choices
 
 - Python 3.11+
-- LangGraph for the state machine (cycles, conditional edges, checkpointing)
+- LangGraph for the state machine (cycles, conditional edges, checkpointing).
+  Its default recursion limit of 25 super-steps is far too low here — a
+  multi-stage run burning its retries needs many more — so the limit is
+  computed from the stage count and the retry budgets. Exhausting it surfaces
+  as an opaque framework error rather than an escalation, which is the one
+  failure mode this tool must not have
 - `uv` for dependency management, with a `pyproject.toml`
 - Aider invoked as a subprocess in headless mode (`aider --message`), not
   imported as a library
@@ -206,17 +211,25 @@ class RunState(TypedDict):
     stages: list[Stage]
     stage_index: int
     stage_start_sha: str        # HEAD before this stage's first attempt
-    attempt: int                # rework attempts for the current stage
+    verify_attempt: int         # retryable verify failures, current stage
+    rework_attempt: int         # reviewer rejections, current stage
     last_test_output: str | None
     failure_layer: Literal[
         "precondition", "setup", "scope", "patterns",
         "tests", "checks", "new_tests",
     ] | None                    # which gate failed, for the report
+    failed_stage_id: str | None # set by escalate; history holds only completions
+    resuming: bool              # this invocation is a resume, not a fresh run
     flake_reruns: int           # re-runs that passed on retry, this stage
     review_feedback: list[str]  # accumulated feedback for current stage
     history: list[StageResult]  # completed stages, for the final report
     status: Literal["running", "complete", "escalated", "awaiting_human"]
 ```
+
+**Two retry counters, not one.** An earlier draft of this schema had a single
+`attempt`, but the limits below define two separate budgets —
+`max_test_retries` and `max_rework_retries` — and one counter cannot enforce
+both. They reset together when a stage completes.
 
 ### Diffs and commits
 
@@ -304,7 +317,11 @@ already has tooling that catches that class of regression, `checks` is how
 the orchestrator runs it.
 
 **5. New tests.** If the stage sets `require_new_tests: true`, the diff must
-add at least one test file. See "Greenfield and test-first stages".
+*touch* at least one test file. Touched rather than added, deliberately:
+adding cases to an existing spec is legitimate test-first work, and requiring
+a brand-new file would push the executor into creating redundant ones. What
+counts as a test file comes from `test_file_patterns`, so a project that names
+them unconventionally can say so. See "Greenfield and test-first stages".
 
 **Routing.** Layer 0 (setup) and layer 1 (scope guard) escalate without
 consuming a retry: both are containment or environment failures rather than
@@ -569,8 +586,20 @@ artifacts.
 
 The CLI must support resuming an interrupted run from its last checkpoint,
 picking up at the stage and attempt count where it stopped. Resume is also
-the mechanism for continuing past a `manual` stage: a run in
-`awaiting_human` status re-enters at `verify` for the gated stage.
+the mechanism for continuing past a `manual` stage.
+
+**A resumed `manual` stage always re-enters at `verify`, never at `precheck`.**
+This holds whether the run paused cleanly (`awaiting_human`) or escalated
+because the human's work was not there yet. Routing it back through `precheck`
+would re-enter `gate`, print the instructions again, and pause without ever
+checking — and it would do that every time, forever. The orchestrator has
+already told the human what to do; its only remaining job is to confirm the
+result.
+
+For the same reason, **the clean-tree requirement is start-only.** A gated
+stage is resumed precisely because a human just did work, and that work is
+normally uncommitted. Enforcing a clean tree on resume would make manual
+stages unusable.
 
 ## CLI
 
@@ -618,6 +647,12 @@ Per stage, the report records: stage id and kind, outcome, commit range,
 wall-clock time, test-suite runtime, retries consumed, flake re-runs,
 which verify layer failed when one did, reviewer issues raised, and
 reviewer token usage and cost.
+
+`history` holds **completed** stages only. The stage that stopped a run is
+recorded separately, in `failed_stage_id`, and rendered from live state. A
+stage that escalates, gets fixed, and completes on resume must appear once
+with one outcome — appending escalations to history produces two contradictory
+rows for the same stage.
 
 Log every reviewer API call's token usage, cached and uncached, so cost per
 stage is visible. The whole point of the split is that the paid model is
