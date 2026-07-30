@@ -21,11 +21,22 @@ import urllib.request
 from dataclasses import dataclass
 
 from orchestrator.approval import approval_problem
-from orchestrator.commands import CommandRunner
+from orchestrator.commands import CommandRunner, truncate_middle
 from orchestrator.config import ProjectConfig
 from orchestrator.executor import AIDER_FLAGS
 from orchestrator.gitops import Git, GitError
 from orchestrator.plandoc import resolve_plan_tree
+
+
+# Both ends, not just the tail. A test runner prints its verdict and then keeps
+# talking: the real target tallies deprecation warnings after the summary, so
+# keeping only the last 2000 characters reported nothing but deprecation noise
+# and dropped the "N examples, M failures" line entirely.
+_EXCERPT_CHARS = 4_000
+
+
+def _excerpt(output: str) -> str:
+    return truncate_middle(output or "", _EXCERPT_CHARS)
 
 
 @dataclass
@@ -220,7 +231,7 @@ def _environment_checks(
 
     if cfg.setup_command:
         first = runner.run(cfg.setup_command)
-        checks.append(Check("setup_command succeeds", first.ok, first.output[-2000:]))
+        checks.append(Check("setup_command succeeds", first.ok, _excerpt(first.output)))
         if not first.ok:
             return checks
 
@@ -235,7 +246,7 @@ def _environment_checks(
                 "" if second.ok
                 else "it succeeded once and failed when re-run. It runs at least "
                 "twice per stage, so this will fail mid-run.\n"
-                + second.output[-2000:],
+                + _excerpt(second.output),
             )
         )
         if not second.ok:
@@ -260,7 +271,7 @@ def _environment_checks(
                 result.ok,
                 "" if result.ok
                 else "a target repo that is already red makes every subsequent "
-                f"verdict meaningless\n{result.output[-2000:]}",
+                f"verdict meaningless\n{_excerpt(result.output)}",
             )
         )
 

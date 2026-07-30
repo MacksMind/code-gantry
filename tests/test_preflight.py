@@ -233,3 +233,44 @@ class TestEndpointRedaction:
         # The operator wrote it in the config they approved.
         checks = check_executor_endpoint(cfg_for("openai/qwen3-coder-next", endpoint))
         assert any(endpoint in (c.detail or "") for c in checks)
+
+
+class TestFailureOutputKeepsTheVerdict:
+    """A failing command's own summary must survive truncation.
+
+    Preflight kept the last 2000 characters, which is wrong for any tool that
+    prints something after its result. The real target's `bin/rspec` tallies
+    deprecation warnings at the end, so a failed full-suite run reported
+    nothing but deprecation noise — the "N examples, M failures" line had been
+    pushed out of the window entirely, and the operator could not tell whether
+    one spec had failed or two hundred.
+    """
+
+    def test_the_head_of_the_output_is_kept(self, repo):
+        cfg = parse_config(
+            {
+                "target_repo": str(repo),
+                "base_ref": "main",
+                "project_branch": "proj",
+                "plan_root": "PLAN.md",
+                # Prints its verdict, then 4000 characters of noise, then fails.
+                "test_command": (
+                    "echo '9 examples, 3 failures'; "
+                    "for i in $(seq 1 200); do echo 'DEPRECATION WARNING: something'; done; "
+                    "exit 1"
+                ),
+                "executor": {"model": "m"},
+                "planner": {"model": "claude-opus-5"},
+                "reviewer": {"model": "gpt-5.6-sol"},
+            }
+        )
+        checks = run_preflight(
+            cfg,
+            check_aider=False,
+            check_models=False,
+            check_approval=False,
+            check_endpoint=False,
+        )
+        failed = [c for c in checks if not c.ok and "test_command" in c.name]
+        assert failed, "the failing command should have produced a check"
+        assert "9 examples, 3 failures" in failed[0].detail
