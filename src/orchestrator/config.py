@@ -27,6 +27,8 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from orchestrator.flake import DEFAULT_FAILED_EXAMPLE_PATTERN
+
 StageKind = Literal["agent", "script"]
 
 # Stage ids name directories and git branches, so they must not contain
@@ -307,6 +309,17 @@ class ProjectConfig(_Strict):
 
     full_suite_on_approval: bool = True
 
+    # When a suite goes red, re-run only the examples that failed rather than
+    # the whole suite. Needs `scoped_test_command` to have somewhere to put
+    # them, and a pattern that can find them in the runner's output.
+    flake_rerun_examples: bool = True
+    # Regex, applied per line; group 1 must be a locator the scoped command
+    # accepts. The shipped default reads RSpec's "Failed examples:" block.
+    failed_example_pattern: str | None = DEFAULT_FAILED_EXAMPLE_PATTERN
+    # Above this many, a red suite is a broken stage rather than a flake, and
+    # re-running to prove it is minutes spent on a foregone conclusion.
+    flake_rerun_max_examples: int = 5
+
     # What counts as a test file for `require_new_tests`.
     test_file_patterns: list[str] = [
         "**/test_*.py",
@@ -544,6 +557,20 @@ def _structural_problems(cfg: ProjectConfig) -> list[str]:
             "scoped_test_command must contain a {paths} placeholder — that is "
             "the slot the orchestrator fills with the stage's changed files"
         )
+
+    if cfg.failed_example_pattern:
+        try:
+            compiled = re.compile(cfg.failed_example_pattern, re.MULTILINE)
+        except re.error as e:
+            problems.append(f"failed_example_pattern is not a valid regex: {e}")
+        else:
+            if compiled.groups != 1:
+                problems.append(
+                    "failed_example_pattern must have exactly one capture group, "
+                    "around the locator to re-run. With none it would match and "
+                    "yield nothing, which looks identical to a test runner we "
+                    "cannot read"
+                )
 
     if not cfg.test_command and not cfg.stage_defaults.checks:
         problems.append(

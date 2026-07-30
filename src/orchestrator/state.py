@@ -127,6 +127,11 @@ class RunState(TypedDict, total=False):
 
     flake_reruns: int
     flake_reruns_review_gate: int
+    # Locators of examples excused as suite flakes, accumulated across the run.
+    # A count alone tells the operator there is a problem and nothing about
+    # where; these names are the path back to a suite that does not need the
+    # excusing.
+    flaky_examples: list[str]
     test_seconds: float
     # Fingerprint of the last attempt's diff. An attempt that reproduces it
     # exactly has made no progress, and retrying costs a review for nothing.
@@ -185,6 +190,7 @@ def new_state(
         failed_stage_id=None,
         flake_reruns=0,
         flake_reruns_review_gate=0,
+        flaky_examples=[],
         test_seconds=0.0,
         planner_interventions=0,
         deferred=[],

@@ -53,8 +53,35 @@ def build_report(state: RunState, cfg: ProjectConfig) -> str:
 
     lines.extend(_stage_table(state))
     lines.extend(_stage_details(state))
+    lines.extend(_flaky_section(state))
     lines.extend(_cost_section(state, cfg))
     return "\n".join(lines) + "\n"
+
+
+def _flaky_section(state: RunState) -> list[str]:
+    """Examples excused as suite flakes, named.
+
+    Each one is a stage that nearly failed to land for a reason it did not
+    cause. They are listed together because the fix is not per-stage: it is a
+    property of the suite, and this is the work list for removing the need for
+    the excuse in the first place.
+    """
+    examples = state.get("flaky_examples") or []
+    if not examples:
+        return []
+
+    lines = ["## Examples excused as suite flakes", ""]
+    lines.append(
+        "These failed as part of a broader run and passed when re-run on their "
+        "own, in a file no stage had touched. Each is order- or "
+        "parallelism-dependent, and each one blocked a stage that had done "
+        "nothing wrong."
+    )
+    lines.append("")
+    for example in examples:
+        lines.append(f"- `{example}`")
+    lines.append("")
+    return lines
 
 
 def _deferred_section(state: RunState) -> list[str]:

@@ -21,6 +21,7 @@ import json
 import time
 
 from orchestrator.config import Stage, validate_stage
+from orchestrator.flake import adjudicate
 from orchestrator.globs import matches_any
 from orchestrator.planner import append_status
 from orchestrator.prompts import (
@@ -430,6 +431,7 @@ def verify(state: RunState, rt: Runtime) -> dict:
 
     accumulated = {
         "flake_reruns": state.get("flake_reruns", 0) + outcome.flake_reruns,
+        "flaky_examples": _merge_flaky(state, outcome.flaky_examples),
         "test_seconds": state.get("test_seconds", 0.0) + outcome.test_seconds,
         "last_diff_digest": outcome.diff_digest,
     }
@@ -577,25 +579,34 @@ def review(state: RunState, rt: Runtime) -> dict:
     seconds = result.duration_seconds
 
     if not result.ok:
-        # Same re-run-once rule as iteration. It matters more here: the full
-        # suite has far more surface for ordering and timing flakes, and a flake
-        # at this gate wastes a planner intervention rather than an executor
-        # attempt.
-        rerun = rt.runner.run(rt.cfg.full_test_command)
-        seconds += rerun.duration_seconds
-        if rerun.ok:
-            rt.log(f"[review] {stage.id}: full suite flaked, passed on re-run")
+        # Re-run what failed, not everything. It matters more here than during
+        # iteration: the full suite has far more surface for ordering flakes,
+        # and a flake at this gate wastes a planner intervention rather than an
+        # executor attempt. A spec the stage itself touched is exempt — see
+        # `flake.adjudicate`.
+        verdict = adjudicate(
+            output=result.output,
+            command=rt.cfg.full_test_command,
+            cfg=rt.cfg,
+            runner=rt.runner,
+            owned_paths=_stage_owned_paths(state, rt, stage),
+        )
+        seconds += verdict.seconds
+        if verdict.flaked:
+            rt.log(f"[review] {stage.id}: full suite flaked — {verdict.summary}")
             return {
                 **base,
                 "test_seconds": state.get("test_seconds", 0.0) + seconds,
                 "flake_reruns_review_gate": state.get("flake_reruns_review_gate", 0) + 1,
+                "flaky_examples": _merge_flaky(state, verdict.examples),
                 "next_hop": "advance",
             }
 
         feedback = list(state.get("review_feedback") or [])
         feedback.append(
             "The reviewer approved this stage but the full suite failed, so it "
-            f"cannot land:\n{rerun.summary()}\n{rerun.output}"
+            f"cannot land ({verdict.summary}):\n"
+            f"{(verdict.output or result.output)}"
         )
         return {
             **base,
@@ -611,6 +622,27 @@ def review(state: RunState, rt: Runtime) -> dict:
         "test_seconds": state.get("test_seconds", 0.0) + seconds,
         "next_hop": "advance",
     }
+
+
+def _merge_flaky(state: RunState, examples: list[str]) -> list[str]:
+    """Union, order-preserving. The same example flakes across stages."""
+    out = list(state.get("flaky_examples") or [])
+    for e in examples:
+        if e not in out:
+            out.append(e)
+    return out
+
+
+def _stage_owned_paths(state: RunState, rt: Runtime, stage: Stage) -> set[str]:
+    """Files whose failure this stage may not blame on the suite.
+
+    What it edited, plus the specs it declared cover it. Those are exactly the
+    places where "it passed when run alone" is as consistent with a regression
+    the stage introduced as with a pre-existing order dependence.
+    """
+    owned = set(rt.git.diff_names(state["stage_start_sha"]))
+    owned.update(p for p in stage.test_paths if p)
+    return owned
 
 
 # --- advance -------------------------------------------------------------

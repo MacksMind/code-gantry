@@ -275,6 +275,44 @@ class TestFlakeRerun:
         assert not out.passed
         assert out.flake_reruns == 0
 
+    def test_a_broad_suite_re_runs_only_what_failed(self, repo):
+        # Iteration falls back to the whole suite when a stage cannot be scoped.
+        # Re-running all of it to test one example's order dependence is the
+        # same waste as at the merge gate, and here it repeats every attempt.
+        log = repo.parent / "iteration-reran.txt"
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(
+            repo,
+            test_command=(
+                "echo \"Failed examples:\"; "
+                "echo \"rspec './spec/other_spec.rb[1:1]' # x\"; exit 1"
+            ),
+            scoped_test_command=f"echo {{paths}} >> {log}",
+        )
+        out = verify(repo, cfg, stage, sha)
+        assert out.passed
+        assert out.flake_reruns == 1
+        assert log.read_text().strip() == "./spec/other_spec.rb[1:1]"
+
+    def test_a_scoped_run_keeps_the_plain_re_run(self, repo):
+        # When the command is already narrowed to the stage's own specs there is
+        # nothing broader to blame, and every failing example is one the stage
+        # owns — so the honest re-run is the same command again.
+        flag = repo.parent / "scoped-flake-flag"
+        sha = Git(repo).head_sha()
+        edit(repo, "spec/app_spec.rb", "describe\n")
+        cfg, stage = build(
+            repo,
+            {"edit_files": ["spec/**"], "test_paths": ["spec/app_spec.rb"]},
+            scoped_test_command=(
+                f"if [ -f {flag} ]; then exit 0; else touch {flag}; exit 1; fi # {{paths}}"
+            ),
+        )
+        out = verify(repo, cfg, stage, sha)
+        assert out.passed
+        assert out.flake_reruns == 1
+
     def test_a_first_time_pass_is_not_rerun(self, repo):
         sha = Git(repo).head_sha()
         edit(repo)

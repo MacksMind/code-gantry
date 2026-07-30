@@ -137,6 +137,32 @@ Reviewer verdicts:
   human: with a planner in the loop, that's a planning problem with a planning
   fix.
 
+### When the suite is red for reasons the stage didn't cause
+
+Legacy suites are rarely order-independent, and a stage should not be blamed for
+that. When a broad suite fails, the orchestrator re-runs **only the examples that
+failed**, on their own — which tests order dependence directly, instead of
+re-rolling every other example in the suite and hoping.
+
+```yaml
+flake_rerun_examples: true        # default
+failed_example_pattern: …         # regex; group 1 is a re-runnable locator
+flake_rerun_max_examples: 5
+```
+
+The locators come from the test runner's own stdout and are substituted into
+`scoped_test_command`. Two guards keep this from laundering real failures:
+
+- **Ownership.** A failure in a file the stage edited, or named in `test_paths`,
+  is never excused — order dependence in a file the stage just touched is as
+  likely to be new as pre-existing.
+- **Volume.** Past `flake_rerun_max_examples`, a red suite is a broken stage, not
+  a flake, and the re-run is skipped.
+
+Anything excused is named in `report.md`, because a count with no names is not a
+work list. Runners whose output the pattern can't read fall back to re-running
+the whole suite once.
+
 ## Escalation tiers
 
 1. **Executor retry** — bounded by `max_test_retries` / `max_rework_retries`.

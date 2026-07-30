@@ -28,6 +28,7 @@ from enum import Enum
 
 from orchestrator.commands import CommandResult, CommandRunner, truncate_middle
 from orchestrator.config import ProjectConfig, Stage
+from orchestrator.flake import adjudicate
 from orchestrator.gitops import Git, GitError
 from orchestrator.globs import matches_any
 
@@ -67,6 +68,8 @@ class VerifyOutcome:
     feedback: str = ""
     results: list[CommandResult] = field(default_factory=list)
     flake_reruns: int = 0
+    # Locators excused as suite flakes, for the run-level list in the report.
+    flaky_examples: list[str] = field(default_factory=list)
     test_seconds: float = 0.0
     # Populated on a scope violation. The planner decides whether to adopt these
     # paths into the stage or have them reverted; the stage's other work is
@@ -358,11 +361,37 @@ def _layer_tests(ctx: _Context, outcome: VerifyOutcome):
 
     # One re-run before consuming a retry. Browser-driven and timing-sensitive
     # suites would otherwise spend the whole retry budget on noise.
-    rerun = ctx.runner.run(command)
-    outcome.results.append(rerun)
-    outcome.test_seconds += rerun.duration_seconds
+    #
+    # How to re-run depends on what just ran. A broad suite gets the failed
+    # examples re-run on their own, which tests the order dependence directly
+    # instead of re-rolling every other example in the suite. A command already
+    # scoped to the stage's own specs has nothing broader to blame — every
+    # failing example is one the stage owns — so it simply runs again.
+    broad = command in (ctx.cfg.test_command, ctx.cfg.full_test_command)
+    if broad:
+        verdict = adjudicate(
+            output=result.output,
+            command=command,
+            cfg=ctx.cfg,
+            runner=ctx.runner,
+            owned_paths=_owned_paths(ctx),
+        )
+        outcome.results.extend(verdict.results)
+        outcome.test_seconds += verdict.seconds
+        detail = verdict.summary
+        last_output = verdict.output or result.output
+        flaked = verdict.flaked
+        if flaked:
+            outcome.flaky_examples.extend(verdict.examples)
+    else:
+        rerun = ctx.runner.run(command)
+        outcome.results.append(rerun)
+        outcome.test_seconds += rerun.duration_seconds
+        detail = rerun.summary()
+        last_output = rerun.output
+        flaked = rerun.ok
 
-    if rerun.ok:
+    if flaked:
         outcome.flake_reruns += 1
         return None
 
@@ -370,9 +399,16 @@ def _layer_tests(ctx: _Context, outcome: VerifyOutcome):
         Layer.TESTS,
         Route.EXECUTOR,
         "the test command failed",
-        f"The test command failed.\n{rerun.summary()}\n{_clip(rerun.output)}",
-        failing_paths=_path_hints(rerun.output),
+        f"The test command failed.\n{detail}\n{_clip(last_output)}",
+        failing_paths=_path_hints(last_output),
     )
+
+
+def _owned_paths(ctx: _Context) -> set[str]:
+    """Files whose failure this stage may not blame on the suite."""
+    owned = set(ctx.git.diff_names(ctx.stage_start_sha))
+    owned.update(p for p in ctx.stage.test_paths if p)
+    return owned
 
 
 def resolve_test_command(

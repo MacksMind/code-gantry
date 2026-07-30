@@ -561,6 +561,61 @@ class TestReviewGate:
         assert out["next_hop"] == "advance"
         assert out["flake_reruns_review_gate"] == 1
 
+    def test_only_the_failed_examples_are_re_run_at_the_gate(self, repo, tmp_path):
+        # The whole point: on a 2,335-example suite the re-run was as likely to
+        # trip over a different order-dependent example as to clear the first
+        # one, so the stage was blamed for a property of the repository.
+        log = tmp_path / "gate-reran.txt"
+        cfg, rt, state = make(
+            repo, tmp_path,
+            full_test_command=(
+                "echo \"Failed examples:\"; "
+                "echo \"rspec './spec/requests/checkout_spec.rb[1:1]' # c\"; exit 1"
+            ),
+            scoped_test_command=f"echo {{paths}} >> {log}",
+        )
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("changed\n")
+        out = nodes.review(state, rt)
+        assert out["next_hop"] == "advance"
+        assert out["flake_reruns_review_gate"] == 1
+        assert log.read_text().strip() == "./spec/requests/checkout_spec.rb[1:1]"
+
+    def test_the_flaky_examples_are_named_for_the_report(self, repo, tmp_path):
+        # Excusing a flake and not saying which one leaves the operator with a
+        # count and nothing to fix. The list is the whole path back to a suite
+        # that does not need this machinery.
+        cfg, rt, state = make(
+            repo, tmp_path,
+            full_test_command=(
+                "echo \"Failed examples:\"; "
+                "echo \"rspec './spec/requests/checkout_spec.rb[1:1]' # c\"; exit 1"
+            ),
+            scoped_test_command="true {paths}",
+        )
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("changed\n")
+        out = nodes.review(state, rt)
+        assert out["flaky_examples"] == ["./spec/requests/checkout_spec.rb[1:1]"]
+
+    def test_a_spec_the_stage_touched_still_blocks_it(self, repo, tmp_path):
+        # Passing alone does not excuse a spec the stage was working on.
+        cfg, rt, state = make(
+            repo, tmp_path,
+            full_test_command=(
+                "echo \"Failed examples:\"; "
+                "echo \"rspec './spec/app_spec.rb[1:1]' # c\"; exit 1"
+            ),
+            scoped_test_command="true {paths}",
+        )
+        state = with_stage(state, rt, edit_files=["app.py", "spec/**"])
+        (repo / "app.py").write_text("changed\n")
+        (repo / "spec").mkdir(exist_ok=True)
+        (repo / "spec" / "app_spec.rb").write_text("describe\n")
+        out = nodes.review(state, rt)
+        assert out["next_hop"] != "advance"
+        assert not out.get("flake_reruns_review_gate")
+
     def test_the_full_suite_can_be_switched_off_per_stage(self, repo, tmp_path):
         marker = tmp_path / "suite-ran-2"
         cfg, rt, state = make(repo, tmp_path, full_test_command=f"touch {marker}")
