@@ -105,6 +105,37 @@ class PlannedStage(BaseModel):
     )
 
 
+class Deferral(BaseModel):
+    """A plan step taken out of order, recorded so it cannot be forgotten.
+
+    The planner may defer a step whose position in the plan is incidental.
+    The hazard is that it says so once and then, fifty calls later, reports
+    the project complete having quietly dropped the work. Structuring it
+    means the orchestrator carries the memory instead of the model.
+    """
+
+    plan_step: str = Field(
+        description="What in the plan is being skipped, quoted closely enough "
+        "that a human can find it."
+    )
+    reason: str = Field(description="Why it cannot be done now.")
+    blocked_on: str = Field(
+        default="",
+        description="What would unblock it — credentials, an environment, a "
+        "human decision.",
+    )
+    safe_because: str = Field(
+        default="",
+        description="Why nothing already done or still to come depends on it. "
+        "If you cannot say this, the order is required and you must keep it.",
+    )
+    resolved: bool = Field(
+        default=False,
+        description="Set true once the step has actually been done. Omitting a "
+        "deferral does not clear it; only this does.",
+    )
+
+
 class PlannerResponse(BaseModel):
     verdict: Verdict = Field(
         description=(
@@ -131,6 +162,15 @@ class PlannerResponse(BaseModel):
             "was wrong — discard the branch and re-cut."
         ),
     )
+    deferred: list[Deferral] = Field(
+        default_factory=list,
+        description=(
+            "Plan steps you are skipping for now, and any you are marking "
+            "resolved. These are carried for you between calls — you do not "
+            "need to repeat one to keep it alive, and omitting one does not "
+            "clear it."
+        ),
+    )
 
 
 @dataclass
@@ -148,6 +188,7 @@ class PlannerOutcome:
     stage_fields: dict | None = None
     revision_mode: RevisionMode | None = None
     usage: PlannerUsage = field(default_factory=PlannerUsage)
+    deferred: list[dict] = field(default_factory=list)
     # True when `blocked` is ours rather than the planner's, so the report does
     # not imply a judgement the model never made.
     failed: bool = False
@@ -216,6 +257,7 @@ class AnthropicPlanner:
                     status_entry=parsed.status_entry,
                     stage_fields=parsed.stage.model_dump() if parsed.stage else None,
                     revision_mode=parsed.revision_mode,
+                    deferred=[d.model_dump() for d in parsed.deferred],
                     usage=billed,
                     failed=False,
                 )

@@ -8,10 +8,11 @@
     orchestrator resume <run_id>      continue after an interruption or escalation
     orchestrator status <run_id>      where a run stopped and why
 
+Exit codes: 0 complete, 1 failed or escalated, 2 complete with deferred steps.
+
 `init` may prompt — it is a human at a terminal doing one-time setup. `run` and
 `resume` execute unattended and must never block on input.
 
-Exit codes: 0 complete, 1 failed or escalated.
 """
 
 from __future__ import annotations
@@ -41,6 +42,10 @@ from orchestrator.state import new_state
 
 EXIT_OK = 0
 EXIT_FAILED = 1
+# Complete, but the planner skipped part of the plan. Distinct from both, so a
+# script can tell "finished" from "finished, with work outstanding" without
+# treating a deferral as a failure or waving it through as a success.
+EXIT_DEFERRED = 2
 
 
 @click.group()
@@ -299,7 +304,7 @@ def status(run_id: str) -> None:
         click.echo(f"run {run_id} has no checkpoint yet", err=True)
         sys.exit(EXIT_FAILED)
     click.echo(build_report(saved, cfg))
-    sys.exit(EXIT_OK if saved.get("status") == "complete" else EXIT_FAILED)
+    sys.exit(_exit_code(saved))
 
 
 # --- internals -----------------------------------------------------------
@@ -341,7 +346,15 @@ def _drive(
     click.echo("")
     click.echo(report)
     click.echo(f"report written to {paths.report}")
-    return EXIT_OK if final.get("status") == "complete" else EXIT_FAILED
+    return _exit_code(final)
+
+
+def _exit_code(state: dict) -> int:
+    from orchestrator.state import outstanding_deferrals
+
+    if state.get("status") != "complete":
+        return EXIT_FAILED
+    return EXIT_DEFERRED if outstanding_deferrals(state.get("deferred")) else EXIT_OK
 
 
 def _load(config_path: Path) -> ProjectConfig:

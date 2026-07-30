@@ -133,6 +133,9 @@ class RunState(TypedDict, total=False):
     last_diff_digest: str
 
     planner_interventions: int
+    # Plan steps the planner took out of order. Union-merged and never dropped
+    # by omission: silent loss is the failure this exists to prevent.
+    deferred: list[dict]
     planner_notes: list[str]
     review_feedback: list[str]
     review_verdict: str | None
@@ -184,6 +187,7 @@ def new_state(
         flake_reruns_review_gate=0,
         test_seconds=0.0,
         planner_interventions=0,
+        deferred=[],
         planner_notes=[],
         review_feedback=[],
         review_verdict=None,
@@ -253,6 +257,38 @@ def fresh_revision_fields() -> dict:
         "review_verdict": None,
         "review_summary": None,
     }
+
+
+def merge_deferrals(existing: list[dict], reported: list[dict]) -> list[dict]:
+    """Union by plan_step, keeping insertion order.
+
+    Never a replacement. The planner sends what it currently believes is
+    outstanding, and a call that omits one must not delete it — a model
+    forgetting is exactly the failure this structure exists to prevent.
+    Resolution is explicit instead, via the `resolved` flag.
+
+    Order is preserved because this is rendered into a cached prompt prefix,
+    and reshuffling it would invalidate the cache for no reason.
+    """
+    merged = [dict(entry) for entry in existing]
+    by_step = {entry.get("plan_step"): entry for entry in merged}
+
+    for entry in reported:
+        step = entry.get("plan_step")
+        if not step:
+            continue
+        if step in by_step:
+            by_step[step].update(entry)
+        else:
+            new = dict(entry)
+            merged.append(new)
+            by_step[step] = new
+    return merged
+
+
+def outstanding_deferrals(entries: list[dict] | None) -> list[dict]:
+    """Those not yet marked resolved."""
+    return [e for e in (entries or []) if not e.get("resolved")]
 
 
 def accumulate_usage(current: dict[str, int] | None, **deltas: int) -> dict[str, int]:

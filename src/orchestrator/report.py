@@ -15,7 +15,7 @@ invoice.
 from __future__ import annotations
 
 from orchestrator.config import ProjectConfig
-from orchestrator.state import RunState
+from orchestrator.state import RunState, outstanding_deferrals
 
 
 def build_report(state: RunState, cfg: ProjectConfig) -> str:
@@ -49,10 +49,60 @@ def build_report(state: RunState, cfg: ProjectConfig) -> str:
     if status == "escalated":
         lines.extend(_escalation_section(state))
 
+    lines.extend(_deferred_section(state))
+
     lines.extend(_stage_table(state))
     lines.extend(_stage_details(state))
     lines.extend(_cost_section(state, cfg))
     return "\n".join(lines) + "\n"
+
+
+def _deferred_section(state: RunState) -> list[str]:
+    """Plan steps the run skipped.
+
+    High in the report, above the stage table, because it is the one thing a
+    green run can be hiding. "Complete" must never be read as "everything in
+    the plan happened" when it did not.
+    """
+    entries = state.get("deferred") or []
+    still_open = outstanding_deferrals(entries)
+    if not entries:
+        return []
+
+    lines = ["## Deferred plan steps", ""]
+    if still_open:
+        lines.append(
+            f"**{len(still_open)} step(s) in the plan were not done.** The "
+            "planner judged their position in the plan incidental and took "
+            "them out of order. Nothing here failed — it was skipped."
+        )
+        lines.append("")
+        for entry in still_open:
+            lines.append(f"- **{entry.get('plan_step')}**")
+            if entry.get("reason"):
+                lines.append(f"  - why not now: {entry['reason']}")
+            if entry.get("blocked_on"):
+                lines.append(f"  - blocked on: {entry['blocked_on']}")
+            if entry.get("safe_because"):
+                lines.append(
+                    f"  - the planner judged this safe because: "
+                    f"{entry['safe_because']}"
+                )
+        lines.append("")
+        lines.append(
+            "That judgement is the planner's and is not verified. Read it "
+            "before treating this run as finished."
+        )
+        lines.append("")
+
+    done = [e for e in entries if e.get("resolved")]
+    if done:
+        lines.append(
+            "Deferred earlier and since completed: "
+            + ", ".join(str(e.get("plan_step")) for e in done)
+        )
+        lines.append("")
+    return lines
 
 
 def _escalation_section(state: RunState) -> list[str]:

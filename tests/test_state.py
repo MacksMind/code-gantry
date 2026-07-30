@@ -11,7 +11,9 @@ from orchestrator.state import (
     accumulate_usage,
     fresh_revision_fields,
     fresh_stage_fields,
+    merge_deferrals,
     new_state,
+    outstanding_deferrals,
     resume_entry_point,
 )
 
@@ -189,3 +191,47 @@ class TestPauseRouting:
     def test_a_pause_is_neither_repo_state_nor_planning(self):
         assert "paused" not in REPO_STATE_FAILURES
         assert "paused" not in PLANNING_FAILURES
+
+
+class TestDeferralMerge:
+    """Union, never replacement.
+
+    The planner sends what it believes is outstanding. If a call omits one,
+    that must not delete it — silent loss is the exact failure this exists to
+    prevent. Resolution is explicit instead.
+    """
+
+    def test_a_new_deferral_is_recorded(self):
+        out = merge_deferrals([], [{"plan_step": "AWS audit", "reason": "no creds"}])
+        assert len(out) == 1
+
+    def test_omitting_one_does_not_drop_it(self):
+        existing = [{"plan_step": "AWS audit", "reason": "no creds"}]
+        assert merge_deferrals(existing, []) == existing
+
+    def test_the_same_step_is_not_duplicated(self):
+        existing = [{"plan_step": "AWS audit", "reason": "no creds"}]
+        out = merge_deferrals(existing, [{"plan_step": "AWS audit", "reason": "still"}])
+        assert len(out) == 1
+
+    def test_a_later_call_can_resolve_one(self):
+        existing = [{"plan_step": "AWS audit", "reason": "no creds"}]
+        out = merge_deferrals(
+            existing, [{"plan_step": "AWS audit", "reason": "done", "resolved": True}]
+        )
+        assert out[0]["resolved"] is True
+
+    def test_outstanding_excludes_resolved(self):
+        entries = [
+            {"plan_step": "a", "resolved": True},
+            {"plan_step": "b", "resolved": False},
+            {"plan_step": "c"},
+        ]
+        assert [d["plan_step"] for d in outstanding_deferrals(entries)] == ["b", "c"]
+
+    def test_order_is_stable(self):
+        # It is rendered into a cached prompt prefix; reordering would
+        # invalidate the cache for no reason.
+        existing = [{"plan_step": "a"}, {"plan_step": "b"}]
+        out = merge_deferrals(existing, [{"plan_step": "a", "reason": "again"}])
+        assert [d["plan_step"] for d in out] == ["a", "b"]

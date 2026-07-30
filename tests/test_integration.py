@@ -518,3 +518,83 @@ class TestReportOnRealRun:
         report = build_report(final, cfg)
         assert "Why it stopped" in report
         assert "orchestrator resume" in report
+
+
+class TestDeferredPlanSteps:
+    """A deferral must outlive the call that made it.
+
+    The whole point is that the planner mentions a skipped step once and the
+    orchestrator remembers it thereafter — through later stages, into the
+    report, and into the exit code.
+    """
+
+    def _run_with_deferral(self, repo, tmp_path, fake_aider, resolve=False):
+        fake_aider.write_text(json.dumps([{"app.py": "a\n"}, {"src/b.py": "b\n"}]))
+        deferral = {
+            "plan_step": "Audit CloudWatch logs",
+            "reason": "needs AWS credentials this run does not have",
+            "blocked_on": "AWS access",
+            "safe_because": "nothing later reads the audit output",
+        }
+        second = dict(deferral, resolved=True) if resolve else {}
+        planner = ScriptedPlanner([
+            PlannerOutcome(
+                "next_stage", "r", "e",
+                stage_fields=stage_spec(id="one"), deferred=[deferral],
+            ),
+            PlannerOutcome(
+                "next_stage", "r", "e",
+                stage_fields=stage_spec(id="two"),
+                deferred=[second] if second else [],
+            ),
+            PlannerOutcome("project_complete", "done", "e"),
+        ])
+        return drive(repo, tmp_path, planner=planner)
+
+    def test_it_survives_later_stages_that_never_mention_it(
+        self, repo, tmp_path, fake_aider
+    ):
+        cfg, project, paths, final = self._run_with_deferral(repo, tmp_path, fake_aider)
+        assert final["status"] == "complete"
+        assert [d["plan_step"] for d in final["deferred"]] == ["Audit CloudWatch logs"]
+
+    def test_the_report_says_the_plan_was_not_finished(
+        self, repo, tmp_path, fake_aider
+    ):
+        cfg, project, paths, final = self._run_with_deferral(repo, tmp_path, fake_aider)
+        report = build_report(final, cfg)
+        assert "Deferred plan steps" in report
+        assert "AWS access" in report
+        assert "not verified" in report
+
+    def test_a_complete_run_with_deferrals_exits_distinctly(
+        self, repo, tmp_path, fake_aider
+    ):
+        from orchestrator.cli import EXIT_DEFERRED, EXIT_OK, _exit_code
+
+        cfg, project, paths, final = self._run_with_deferral(repo, tmp_path, fake_aider)
+        assert _exit_code(final) == EXIT_DEFERRED
+        assert EXIT_DEFERRED != EXIT_OK
+
+    def test_resolving_it_restores_a_clean_exit(self, repo, tmp_path, fake_aider):
+        from orchestrator.cli import EXIT_OK, _exit_code
+
+        cfg, project, paths, final = self._run_with_deferral(
+            repo, tmp_path, fake_aider, resolve=True
+        )
+        assert final["deferred"][0]["resolved"] is True
+        assert _exit_code(final) == EXIT_OK
+
+    def test_the_planner_is_shown_its_own_outstanding_deferrals(
+        self, repo, tmp_path, fake_aider
+    ):
+        from orchestrator.prompts import build_planner_messages
+
+        messages = build_planner_messages(
+            cfg=None,
+            plan=PlanTree(root=PlanDocument(path="p.md", content="plan")),
+            completed=[],
+            deferred=[{"plan_step": "Audit CloudWatch logs", "reason": "no creds"}],
+        )
+        leading = messages[0]["content"][0]["text"]
+        assert "Audit CloudWatch logs" in leading

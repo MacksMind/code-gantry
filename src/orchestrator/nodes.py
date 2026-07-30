@@ -35,6 +35,8 @@ from orchestrator.state import (
     accumulate_usage,
     fresh_revision_fields,
     fresh_stage_fields,
+    merge_deferrals,
+    outstanding_deferrals,
 )
 from orchestrator.verify import Layer, Route, run_verify
 
@@ -104,6 +106,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
         interventions_max=limits.max_planner_interventions,
         status_tail=_status_tail(rt),
         layout=rt.layout(state.get("base_sha") or ""),
+        deferred=state.get("deferred") or [],
     )
 
     rt.log(f"[plan] {'revising ' + stage.id if stage else 'deriving next stage'}")
@@ -150,10 +153,18 @@ def plan(state: RunState, rt: Runtime) -> dict:
 
     notes = list(state.get("planner_notes") or [])
     notes.append(f"{outcome.verdict}: {outcome.reasoning}")
-    base = {"run_usage": usage, "planner_notes": notes}
+    deferred = merge_deferrals(state.get("deferred") or [], outcome.deferred)
+    base = {"run_usage": usage, "planner_notes": notes, "deferred": deferred}
 
     if outcome.verdict == "project_complete":
-        rt.log("[plan] project complete")
+        still_open = outstanding_deferrals(deferred)
+        if still_open:
+            rt.log(
+                f"[plan] project complete, with {len(still_open)} deferred step(s) "
+                "outstanding"
+            )
+        else:
+            rt.log("[plan] project complete")
         return {**base, "next_hop": "finalize"}
 
     if outcome.verdict == "blocked":

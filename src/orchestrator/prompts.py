@@ -140,6 +140,47 @@ def _plan_block(plan: PlanTree) -> str:
     )
 
 
+def _deferred_block(deferred: list[dict] | None) -> str:
+    """Plan steps taken out of order, carried for the planner.
+
+    In the cached prefix with the history, and for the same reason: it changes
+    only when a deferral is added or resolved, not on every call. Rendering it
+    at all is the point — the planner does not have to remember, and cannot
+    quietly stop mentioning one.
+    """
+    outstanding = [d for d in (deferred or []) if not d.get("resolved")]
+    resolved = [d for d in (deferred or []) if d.get("resolved")]
+
+    if not outstanding and not resolved:
+        return (
+            "## Deferred plan steps\n\nNone. You have taken the plan in order "
+            "so far."
+        )
+
+    lines = ["## Deferred plan steps", ""]
+    if outstanding:
+        lines.append(
+            "Still outstanding. You must not return `project_complete` without "
+            "listing these in `reasoning`; take one on as a stage whenever it "
+            "becomes possible, and mark it resolved when it lands."
+        )
+        lines.append("")
+        for entry in outstanding:
+            lines.append(f"- **{entry.get('plan_step')}**")
+            if entry.get("reason"):
+                lines.append(f"  - deferred because: {entry['reason']}")
+            if entry.get("blocked_on"):
+                lines.append(f"  - blocked on: {entry['blocked_on']}")
+            if entry.get("safe_because"):
+                lines.append(f"  - judged safe because: {entry['safe_because']}")
+    if resolved:
+        lines.append("")
+        lines.append("Already resolved: " + ", ".join(
+            str(e.get("plan_step")) for e in resolved
+        ))
+    return "\n".join(lines)
+
+
 def _history_block(completed: list[StageResult]) -> str:
     if not completed:
         return (
@@ -232,6 +273,7 @@ def build_planner_messages(
     interventions_max: int = 0,
     status_tail: str | None = None,
     layout: str | None = None,
+    deferred: list[dict] | None = None,
 ) -> list[dict[str, str]]:
     """Chat messages for the planner.
 
@@ -248,6 +290,7 @@ def build_planner_messages(
     if layout:
         leading += "\n\n## What the repository contains\n\n" + layout
     leading += "\n\n" + _history_block(completed)
+    leading += "\n\n" + _deferred_block(deferred)
 
     # The breakpoint, and the reason the ordering above exists. Anthropic
     # caching is explicit: without this marker the plan snapshot, the repository
