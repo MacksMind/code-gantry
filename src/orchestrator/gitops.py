@@ -91,6 +91,24 @@ class Git:
     def commit_subject(self, ref: str = "HEAD") -> str:
         return self._out("log", "-1", "--pretty=%s", ref)
 
+    def show_file(self, sha: str, path: str) -> str:
+        """Read a file as it stood at `sha`.
+
+        Plan documents are read at the run's base sha, not at the branch tip,
+        so a concurrent edit on `main` cannot change what a run thinks it was
+        asked to do.
+        """
+        proc = self._run("show", f"{sha}:{path}", check=False)
+        if proc.returncode != 0:
+            raise GitError(
+                f"{path!r} does not exist at {sha[:12]}: "
+                f"{proc.stderr.strip() or proc.stdout.strip()}"
+            )
+        return proc.stdout
+
+    def file_exists_at(self, sha: str, path: str) -> bool:
+        return self._run("cat-file", "-e", f"{sha}:{path}", check=False).returncode == 0
+
     # --- branches -------------------------------------------------------
 
     def create_branch(self, name: str, base: str) -> None:
