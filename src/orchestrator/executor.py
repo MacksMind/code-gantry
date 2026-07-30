@@ -55,6 +55,32 @@ AIDER_FLAGS = [
 # dozens of times.
 NO_BROWSER = "/usr/bin/true %s"
 
+# Aider makes its own commits, in a subprocess we do not drive. The
+# orchestrator's own commits already pass `-c commit.gpgsign=false`, but that
+# does nothing for Aider's, which inherit the operator's global git config.
+# With signing on, every attempt tries to reach a GPG agent: fine while the
+# passphrase is cached, and over a fourteen-hour run it will not stay cached —
+# after which each attempt either fails or waits on a pinentry dialog nobody is
+# there to answer.
+#
+# Injected through git's own environment-variable config mechanism rather than
+# by editing the operator's config or the target repo's. There is nothing to
+# remember to restore, nothing left behind if the run dies, and no change to
+# how that repository behaves for anyone else. Aider's commits are squashed
+# away on merge in any case, so nothing signed is being lost.
+GIT_CONFIG_OVERRIDES = (
+    ("commit.gpgsign", "false"),
+    ("tag.gpgsign", "false"),
+)
+
+
+def _git_config_env() -> dict[str, str]:
+    env = {"GIT_CONFIG_COUNT": str(len(GIT_CONFIG_OVERRIDES))}
+    for index, (key, value) in enumerate(GIT_CONFIG_OVERRIDES):
+        env[f"GIT_CONFIG_KEY_{index}"] = key
+        env[f"GIT_CONFIG_VALUE_{index}"] = value
+    return env
+
 # Aider exits 0 when the model's reply could not be turned into an edit. The
 # attempt failed, and saying so here — rather than letting it surface two gates
 # later as "the attempt produced no changes" — is the difference between telling
@@ -239,7 +265,7 @@ class Executor:
         none set at all, so a placeholder is supplied here. That is a
         client-side requirement, not the server's.
         """
-        env: dict[str, str] = {"BROWSER": NO_BROWSER}
+        env: dict[str, str] = {"BROWSER": NO_BROWSER, **_git_config_env()}
         name = self.cfg.executor.api_key_env
         api_base = self.cfg.executor.resolve_api_base()
 

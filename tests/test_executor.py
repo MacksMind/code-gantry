@@ -458,3 +458,55 @@ class TestContextCommands:
         )
         assert collected == []
         assert results == []
+
+
+class TestAiderCommitsAreNotSigned:
+    """Aider makes its own commits, in a subprocess we do not drive.
+
+    The orchestrator's own commits already pass `-c commit.gpgsign=false`, but
+    that does nothing for Aider's, which inherit the operator's global config.
+    With signing on — as it is on the first real target — every executor
+    attempt would try to reach a GPG agent. If the passphrase is cached it
+    works; over a fourteen-hour run it will not stay cached, and then each
+    attempt either fails or waits on a pinentry dialog nobody is there to
+    answer.
+
+    Injected through the environment rather than by editing the operator's
+    config or the target repo's: nothing to remember to restore, nothing left
+    behind if the run dies, and no change to how that repo behaves for anyone
+    else.
+    """
+
+    def _git_env(self, recorded):
+        env = recorded["env"]
+        count = int(env.get("GIT_CONFIG_COUNT", "0"))
+        return {
+            env[f"GIT_CONFIG_KEY_{i}"]: env[f"GIT_CONFIG_VALUE_{i}"]
+            for i in range(count)
+        }
+
+    def test_signing_is_disabled_for_the_executor(self, repo, fake_aider):
+        cfg, stage = cfg_with(target_repo=str(repo))
+        Executor(cfg, CommandRunner(cwd=repo, timeout=60)).run_agent_stage(stage, "p")
+        assert self._git_env(json.loads(fake_aider.read_text()))["commit.gpgsign"] == "false"
+
+    def test_tag_signing_too(self, repo, fake_aider):
+        cfg, stage = cfg_with(target_repo=str(repo))
+        Executor(cfg, CommandRunner(cwd=repo, timeout=60)).run_agent_stage(stage, "p")
+        assert self._git_env(json.loads(fake_aider.read_text()))["tag.gpgsign"] == "false"
+
+    def test_the_operators_own_config_is_untouched(self, repo, fake_aider):
+        # The mechanism is environment-only. Nothing writes to a config file.
+        import subprocess
+
+        before = subprocess.run(
+            ["git", "-C", str(repo), "config", "--local", "--list"],
+            capture_output=True, text=True,
+        ).stdout
+        cfg, stage = cfg_with(target_repo=str(repo))
+        Executor(cfg, CommandRunner(cwd=repo, timeout=60)).run_agent_stage(stage, "p")
+        after = subprocess.run(
+            ["git", "-C", str(repo), "config", "--local", "--list"],
+            capture_output=True, text=True,
+        ).stdout
+        assert before == after
