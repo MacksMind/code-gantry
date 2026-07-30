@@ -125,6 +125,24 @@ class RunConfig(_Strict):
 
     reference_docs: list[str] = []
 
+    # What counts as a test file for `require_new_tests`. Defaults cover the
+    # common conventions; override for a project that names them otherwise.
+    test_file_patterns: list[str] = [
+        "**/test_*.py",
+        "**/*_test.py",
+        "**/*_test.go",
+        "**/*_test.rb",
+        "**/*_spec.rb",
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.test.js",
+        "**/*.spec.ts",
+        "**/*.spec.js",
+        "test/**",
+        "tests/**",
+        "spec/**",
+    ]
+
     executor: ExecutorConfig
     reviewer: ReviewerConfig
     limits: Limits = Limits()
