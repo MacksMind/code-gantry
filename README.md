@@ -210,3 +210,24 @@ uv run pytest
 
 The suite drives the real graph, checkpointer, verify layers, git operations and
 branch topology against fixture repos. Only the three model calls are stubbed.
+
+```bash
+uv run python scripts/smoke.py          # ~15s, no network, no API keys
+uv run python scripts/smoke.py --keep   # leave the sandbox for inspection
+```
+
+The smoke test covers the one thing `pytest` cannot: that the CLI, run from a
+shell against a real git repository, completes a whole project unattended.
+`init → run (refused) → validate → approve → run`, then it asserts the promises
+— child branches deleted, `main` untouched, one squashed commit per stage,
+`gc.auto` restored, artifacts written.
+
+Three things stand in for the outside world: a fake `aider` on PATH that speaks
+the real flag surface, and one HTTP server answering in Anthropic's and OpenAI's
+actual wire formats. Everything else — git, the merges, the checkpointer, the
+subprocess runner — is real.
+
+The stand-in planner derives its answer from **what has landed on the project
+branch**, not from a call counter, so it is idempotent under retries. A
+counter-driven stub hands out a different stage on every rework, and the
+confusion looks exactly like an orchestrator bug.
