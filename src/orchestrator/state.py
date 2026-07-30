@@ -31,6 +31,7 @@ FailureLayer = Literal[
     "tests",
     "checks",
     "new_tests",
+    "progress",
     "review",
     "full_suite",
     "planner",
@@ -41,7 +42,7 @@ FailureLayer = Literal[
 # escalation would re-run the stage and discard the human's fix.
 REPO_STATE_FAILURES = frozenset(
     {"setup", "branch", "scope", "patterns", "tests", "checks", "new_tests",
-     "review", "full_suite"}
+     "progress", "review", "full_suite"}
 )
 PLANNING_FAILURES = frozenset({"precondition", "planner"})
 
@@ -125,6 +126,9 @@ class RunState(TypedDict, total=False):
     flake_reruns: int
     flake_reruns_review_gate: int
     test_seconds: float
+    # Fingerprint of the last attempt's diff. An attempt that reproduces it
+    # exactly has made no progress, and retrying costs a review for nothing.
+    last_diff_digest: str
 
     planner_interventions: int
     planner_notes: list[str]
@@ -170,6 +174,7 @@ def new_state(
         stage_started_at=0.0,
         started_at=started_at,
         session_started_at=started_at,
+        last_diff_digest="",
         last_failure=None,
         failure_layer=None,
         failed_stage_id=None,
@@ -215,6 +220,7 @@ def fresh_stage_fields() -> dict:
         "flake_reruns": 0,
         "flake_reruns_review_gate": 0,
         "test_seconds": 0.0,
+        "last_diff_digest": "",
         "last_failure": None,
         "failure_layer": None,
         "failed_stage_id": None,
@@ -235,6 +241,9 @@ def fresh_revision_fields() -> dict:
     return {
         "verify_attempt": 0,
         "rework_attempt": 0,
+        # A redrawn stage is a different instruction, so reproducing the old
+        # diff under it is not evidence of being stuck.
+        "last_diff_digest": "",
         "last_failure": None,
         "failure_layer": None,
         "review_feedback": [],

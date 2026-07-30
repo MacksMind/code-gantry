@@ -21,13 +21,14 @@ force to a planner intervention, which costs more than an executor attempt.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from enum import Enum
 
 from orchestrator.commands import CommandResult, CommandRunner, truncate_middle
 from orchestrator.config import ProjectConfig, Stage
-from orchestrator.gitops import Git
+from orchestrator.gitops import Git, GitError
 from orchestrator.globs import matches_any
 
 # How much of a failing command's output to carry forward. Enough for a
@@ -44,6 +45,7 @@ class Layer(str, Enum):
     SETUP = "setup"
     BRANCH = "branch"
     SCOPE = "scope"
+    PROGRESS = "progress"
     PATTERNS = "patterns"
     TESTS = "tests"
     CHECKS = "checks"
@@ -71,6 +73,9 @@ class VerifyOutcome:
     # never discarded for them.
     out_of_scope_paths: list[str] = field(default_factory=list)
     failing_paths: list[str] = field(default_factory=list)
+    # Fingerprint of this attempt's diff, carried forward so the next attempt
+    # can tell whether the executor actually moved.
+    diff_digest: str = ""
 
 
 def run_verify(
@@ -83,6 +88,7 @@ def run_verify(
     project_branch: str | None = None,
     base_ref: str | None = None,
     base_sha: str | None = None,
+    previous_diff_digest: str | None = None,
 ) -> VerifyOutcome:
     outcome = VerifyOutcome(passed=True)
     context = _Context(
@@ -95,12 +101,16 @@ def run_verify(
         project_branch=project_branch,
         base_ref=base_ref,
         base_sha=base_sha,
+        previous_diff_digest=previous_diff_digest,
     )
+
+    outcome.diff_digest = _diff_digest(git, stage_start_sha)
 
     for layer in (
         _layer_setup,
         _layer_branch,
         _layer_scope,
+        _layer_progress,
         _layer_patterns,
         _layer_tests,
         _layer_checks,
@@ -111,6 +121,7 @@ def run_verify(
             failure.results = outcome.results
             failure.flake_reruns = outcome.flake_reruns
             failure.test_seconds = outcome.test_seconds
+            failure.diff_digest = outcome.diff_digest
             return failure
 
     return outcome
@@ -127,6 +138,7 @@ class _Context:
     project_branch: str | None
     base_ref: str | None
     base_sha: str | None
+    previous_diff_digest: str | None = None
 
 
 def _fail(
@@ -234,7 +246,46 @@ def _layer_scope(ctx: _Context, outcome: VerifyOutcome):
     )
 
 
-# --- layer 3: forbidden patterns -----------------------------------------
+# --- layer 3: no progress ------------------------------------------------
+
+
+def _diff_digest(git: Git, stage_start_sha: str) -> str:
+    try:
+        return hashlib.sha256(git.diff(stage_start_sha).encode()).hexdigest()
+    except GitError:  # pragma: no cover - a broken repo fails louder elsewhere
+        return ""
+
+
+def _layer_progress(ctx: _Context, outcome: VerifyOutcome):
+    """The attempt reproduced the previous one exactly.
+
+    Retrying an executor that has just demonstrated it cannot move spends money
+    to learn nothing. Observed live: three rework attempts produced identical
+    diffs and drew three identical reviewer verdicts, and with a real local
+    model each of those is minutes of inference as well as a paid review.
+
+    Routed to the planner rather than the executor for the same reason: another
+    identical attempt is not a fix. Only a redrawn stage is.
+    """
+    if not ctx.previous_diff_digest or not outcome.diff_digest:
+        return None
+    if outcome.diff_digest != ctx.previous_diff_digest:
+        return None
+
+    return _fail(
+        Layer.PROGRESS,
+        Route.PLANNER,
+        "the attempt reproduced the previous diff exactly",
+        "This attempt produced a byte-identical diff to the one before it, so "
+        "the feedback from that attempt changed nothing. The executor cannot "
+        "make progress on this stage as drawn — retrying it again would cost "
+        "another attempt and another review for the same result. Redraw the "
+        "stage: narrow it, widen its scope, give it a clearer instruction, or "
+        "insert a predecessor that makes it achievable.",
+    )
+
+
+# --- layer 4: forbidden patterns -----------------------------------------
 
 
 def _layer_patterns(ctx: _Context, outcome: VerifyOutcome):

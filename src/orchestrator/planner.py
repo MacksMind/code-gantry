@@ -157,6 +157,20 @@ class PlannerClient(Protocol):
     def plan(self, messages: list[dict]) -> PlannerOutcome: ...
 
 
+# One corrective retry for a malformed answer, and no more. Two identical
+# failures mean the problem is not transient.
+_MALFORMED_RETRIES = 1
+
+
+def _add_usage(a: PlannerUsage, b: PlannerUsage) -> PlannerUsage:
+    """Bill every attempt. A discarded answer still cost tokens."""
+    return PlannerUsage(
+        prompt_tokens=a.prompt_tokens + b.prompt_tokens,
+        cached_tokens=a.cached_tokens + b.cached_tokens,
+        completion_tokens=a.completion_tokens + b.completion_tokens,
+    )
+
+
 def _blocked(reason: str) -> PlannerOutcome:
     return PlannerOutcome(
         verdict="blocked",
@@ -172,6 +186,72 @@ class AnthropicPlanner:
         self._client = client if client is not None else _build_anthropic_client(cfg)
 
     def plan(self, messages: list[dict]) -> PlannerOutcome:
+        """One planner decision, with a single corrective retry.
+
+        A malformed answer — the right verdict with a required field missing —
+        is not a reason to end an unattended run. It happened on the first live
+        run: `revise` arrived without a stage spec and the run escalated on the
+        spot. The model is stochastic, this costs one extra call, and the
+        alternative is a coin flip on surviving fourteen hours.
+
+        Exactly one retry, and only for malformed output. A refusal is a
+        decision and a truncation will recur; neither is worth paying twice for.
+        """
+        conversation = list(messages)
+        billed = PlannerUsage()
+
+        for remaining in (_MALFORMED_RETRIES, 0):
+            terminal, parsed, usage = self._attempt(conversation)
+            billed = _add_usage(billed, usage)
+
+            if terminal is not None:
+                terminal.usage = billed
+                return terminal
+
+            problem = _semantic_problem(parsed)
+            if problem is None:
+                return PlannerOutcome(
+                    verdict=parsed.verdict,
+                    reasoning=parsed.reasoning,
+                    status_entry=parsed.status_entry,
+                    stage_fields=parsed.stage.model_dump() if parsed.stage else None,
+                    revision_mode=parsed.revision_mode,
+                    usage=billed,
+                    failed=False,
+                )
+
+            if not remaining:
+                outcome = _blocked(problem)
+                outcome.usage = billed
+                return outcome
+
+            # Appended, never prepended: the plan and repository layout at the
+            # head of the conversation are the cacheable prefix, and rewriting
+            # them to carry a correction would discard the cache to say
+            # something that belongs at the end anyway.
+            conversation = conversation + [
+                {
+                    "role": "user",
+                    "content": (
+                        f"Your previous response could not be used: {problem}.\n\n"
+                        "Answer again, complete this time. Keep the same "
+                        "judgement — this is a formatting correction, not an "
+                        "invitation to reconsider."
+                    ),
+                }
+            ]
+
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    def _attempt(
+        self, messages: list[dict]
+    ) -> tuple[PlannerOutcome | None, PlannerResponse | None, PlannerUsage]:
+        """One call. Returns (terminal outcome, parsed response, usage).
+
+        A terminal outcome means stop: the transport failed, the model refused,
+        or the answer was truncated. Otherwise `parsed` is what came back, still
+        to be checked for contradictions the schema cannot express.
+        """
         try:
             response = self._client.messages.parse(
                 model=self.cfg.model,
@@ -185,45 +265,29 @@ class AnthropicPlanner:
                 output_format=PlannerResponse,
             )
         except Exception as e:  # noqa: BLE001 - any failure means "no plan"
-            return _blocked(f"the planner call failed: {e}")
+            return _blocked(f"the planner call failed: {e}"), None, PlannerUsage()
 
         usage = _extract_usage(getattr(response, "usage", None))
 
         # A refusal or a truncation is not a plan. Check before reading output.
         stop_reason = getattr(response, "stop_reason", None)
         if stop_reason == "refusal":
-            outcome = _blocked("the planner refused to answer")
-            outcome.usage = usage
-            return outcome
+            return _blocked("the planner refused to answer"), None, usage
         if stop_reason == "max_tokens":
-            outcome = _blocked(
-                "the planner's response was truncated, so its verdict cannot "
-                "be trusted"
+            return (
+                _blocked(
+                    "the planner's response was truncated, so its verdict "
+                    "cannot be trusted"
+                ),
+                None,
+                usage,
             )
-            outcome.usage = usage
-            return outcome
 
         parsed = getattr(response, "parsed_output", None)
         if parsed is None:
-            outcome = _blocked("the planner returned no parsable verdict")
-            outcome.usage = usage
-            return outcome
+            return _blocked("the planner returned no parsable verdict"), None, usage
 
-        problem = _semantic_problem(parsed)
-        if problem:
-            outcome = _blocked(problem)
-            outcome.usage = usage
-            return outcome
-
-        return PlannerOutcome(
-            verdict=parsed.verdict,
-            reasoning=parsed.reasoning,
-            status_entry=parsed.status_entry,
-            stage_fields=parsed.stage.model_dump() if parsed.stage else None,
-            revision_mode=parsed.revision_mode,
-            usage=usage,
-            failed=False,
-        )
+        return None, parsed, usage
 
 
 def _semantic_problem(parsed: PlannerResponse) -> str | None:

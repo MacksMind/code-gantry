@@ -138,19 +138,23 @@ IMPLEMENTATIONS = {
 # Which operation is this stage about? Not "which is mentioned" — a real
 # planner's constraints name what must NOT be built ("reject the stage if the
 # diff adds division"), and a plain keyword match implemented the prohibition.
-# Frequency separates the subject from the prohibitions cleanly: the stage's own
-# operation is named throughout, the forbidden ones once or twice in passing.
+#
+# Nor "which is mentioned most": a live planner produced a multiply stage
+# mentioning both exactly five times, because every prohibition it wrote about
+# division was matched by a requirement about multiplication.
+#
+# Position is the reliable signal. The prompt states the task before it
+# constrains it, so whichever operation is named *first* is the subject.
 lowered = message.lower()
 SYNONYMS = {"multiply": ("multiply", "multiplication"), "divide": ("divide", "division")}
-counts = {
-    op: sum(lowered.count(word) for word in words) for op, words in SYNONYMS.items()
-}
-ranked = sorted(counts.items(), key=lambda kv: -kv[1])
 
-subject = None
-if ranked[0][1] > 0 and ranked[0][1] > ranked[1][1]:
-    subject = ranked[0][0]
+positions = {}
+for op, words in SYNONYMS.items():
+    found = [lowered.find(word) for word in words if lowered.find(word) >= 0]
+    if found:
+        positions[op] = min(found)
 
+subject = min(positions, key=positions.get) if positions else None
 named = [subject] if subject and f"def {subject}" not in body else []
 
 if named:
@@ -170,8 +174,8 @@ if subject:
 # real situation is that no operation clearly dominates the instruction, and a
 # stand-in that misreports why it did nothing wastes a debugging session.
 print(
-    f"aider: cannot tell which operation this stage is about (mention counts: "
-    f"{counts}); this stand-in implements only {sorted(IMPLEMENTATIONS)}",
+    f"aider: cannot tell which operation this stage is about (first mentions: "
+    f"{positions}); this stand-in implements only {sorted(IMPLEMENTATIONS)}",
     file=sys.stderr,
 )
 sys.exit(1)

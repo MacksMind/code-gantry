@@ -366,6 +366,7 @@ def verify(state: RunState, rt: Runtime) -> dict:
         project_branch=state.get("project_branch"),
         base_ref=state.get("base_ref"),
         base_sha=state.get("base_sha"),
+        previous_diff_digest=state.get("last_diff_digest") or None,
     )
 
     rt.write_artifact(
@@ -377,6 +378,7 @@ def verify(state: RunState, rt: Runtime) -> dict:
     accumulated = {
         "flake_reruns": state.get("flake_reruns", 0) + outcome.flake_reruns,
         "test_seconds": state.get("test_seconds", 0.0) + outcome.test_seconds,
+        "last_diff_digest": outcome.diff_digest,
     }
 
     if outcome.passed:

@@ -284,6 +284,64 @@ class TestFlakeRerun:
         assert counter.read_text().count("run") == 1
 
 
+class TestNoProgressGuard:
+    """An attempt that reproduces the previous diff exactly.
+
+    Observed live: three rework attempts produced byte-identical diffs and drew
+    three byte-identical reviewer verdicts. Each rework costs a paid review and,
+    with a real local model, minutes of inference. Retrying an executor that
+    just demonstrated it cannot move is spending money to learn nothing.
+    """
+
+    def test_an_identical_diff_stops_the_retry_loop(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(repo)
+
+        first = verify(repo, cfg, stage, sha)
+        assert first.passed
+        assert first.diff_digest
+
+        again = verify(repo, cfg, stage, sha, previous_diff_digest=first.diff_digest)
+        assert not again.passed
+        assert again.failed_layer is Layer.PROGRESS
+
+    def test_it_routes_to_the_planner_not_another_retry(self, repo):
+        # The executor has shown it cannot do this. Only a redrawn stage helps.
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(repo)
+        first = verify(repo, cfg, stage, sha)
+        again = verify(repo, cfg, stage, sha, previous_diff_digest=first.diff_digest)
+        assert again.route is Route.PLANNER
+
+    def test_a_changed_diff_passes_through(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(repo)
+        first = verify(repo, cfg, stage, sha)
+
+        edit(repo, text="changed again\n")
+        second = verify(repo, cfg, stage, sha, previous_diff_digest=first.diff_digest)
+        assert second.passed
+        assert second.diff_digest != first.diff_digest
+
+    def test_the_first_attempt_has_nothing_to_compare(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(repo)
+        assert verify(repo, cfg, stage, sha, previous_diff_digest=None).passed
+
+    def test_an_empty_diff_is_reported_as_no_changes_not_no_progress(self, repo):
+        # Two different failures. "You changed nothing" is the executor's
+        # problem; "you changed the same thing twice" is the stage's.
+        sha = Git(repo).head_sha()
+        cfg, stage = build(repo)
+        out = verify(repo, cfg, stage, sha)
+        assert not out.passed
+        assert out.failed_layer is Layer.SCOPE
+
+
 class TestScopedTestCommand:
     def test_uses_the_paths_from_the_diff(self, repo):
         # The planner supplies paths; the operator supplies the command.

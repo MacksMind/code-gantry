@@ -175,6 +175,106 @@ class TestSemanticValidation:
         assert "revision_mode" in outcome.reasoning
 
 
+class SequenceClient:
+    """Answers each call with the next scripted result."""
+
+    def __init__(self, results):
+        self._results = list(results)
+        self.calls = []
+        self.messages = SimpleNamespace(parse=self._parse)
+
+    def _parse(self, **kwargs):
+        self.calls.append(kwargs)
+        result = self._results.pop(0) if self._results else self._results
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+class TestMalformedResponseIsRetried:
+    """A stochastic model omitting an optional field must not end the run.
+
+    Found live: the planner answered `revise` with no stage spec, and the run
+    escalated on the spot. Over a fourteen-hour unattended session that is a
+    coin flip on whether the whole thing survives.
+    """
+
+    def test_a_missing_stage_spec_is_retried(self):
+        bad = PlannerResponse(
+            verdict="next_stage", reasoning="r", status_entry="e", stage=None
+        )
+        good = PlannerResponse(
+            verdict="next_stage", reasoning="r", status_entry="e", stage=a_stage()
+        )
+        client = SequenceClient([response(parsed=bad), response(parsed=good)])
+        outcome = AnthropicPlanner(cfg(), client=client).plan(MESSAGES)
+        assert outcome.verdict == "next_stage"
+        assert len(client.calls) == 2
+
+    def test_the_retry_tells_the_planner_what_was_wrong(self):
+        bad = PlannerResponse(
+            verdict="next_stage", reasoning="r", status_entry="e", stage=None
+        )
+        good = PlannerResponse(
+            verdict="next_stage", reasoning="r", status_entry="e", stage=a_stage()
+        )
+        client = SequenceClient([response(parsed=bad), response(parsed=good)])
+        AnthropicPlanner(cfg(), client=client).plan(MESSAGES)
+        retry_messages = client.calls[1]["messages"]
+        assert "stage spec" in retry_messages[-1]["content"]
+
+    def test_the_correction_is_appended_so_the_prefix_stays_cacheable(self):
+        bad = PlannerResponse(
+            verdict="next_stage", reasoning="r", status_entry="e", stage=None
+        )
+        good = PlannerResponse(
+            verdict="next_stage", reasoning="r", status_entry="e", stage=a_stage()
+        )
+        client = SequenceClient([response(parsed=bad), response(parsed=good)])
+        AnthropicPlanner(cfg(), client=client).plan(MESSAGES)
+        first, retry = client.calls[0]["messages"], client.calls[1]["messages"]
+        assert retry[: len(first)] == first
+
+    def test_a_second_malformed_response_blocks(self):
+        bad = PlannerResponse(
+            verdict="revise", reasoning="r", status_entry="e", stage=a_stage()
+        )
+        client = SequenceClient([response(parsed=bad), response(parsed=bad)])
+        outcome = AnthropicPlanner(cfg(), client=client).plan(MESSAGES)
+        assert outcome.verdict == "blocked"
+        assert "revision_mode" in outcome.reasoning
+        assert len(client.calls) == 2, "exactly one retry, not a loop"
+
+    def test_both_attempts_are_billed(self):
+        # The discarded attempt cost real tokens; hiding them would understate
+        # the run's cost.
+        bad = PlannerResponse(
+            verdict="next_stage", reasoning="r", status_entry="e", stage=None
+        )
+        good = PlannerResponse(
+            verdict="next_stage", reasoning="r", status_entry="e", stage=a_stage()
+        )
+        client = SequenceClient([response(parsed=bad), response(parsed=good)])
+        outcome = AnthropicPlanner(cfg(), client=client).plan(MESSAGES)
+        assert outcome.usage.prompt_tokens == 18_000
+        assert outcome.usage.completion_tokens == 800
+
+    def test_a_good_response_costs_only_one_call(self):
+        good = PlannerResponse(
+            verdict="next_stage", reasoning="r", status_entry="e", stage=a_stage()
+        )
+        client = SequenceClient([response(parsed=good)])
+        AnthropicPlanner(cfg(), client=client).plan(MESSAGES)
+        assert len(client.calls) == 1
+
+    def test_a_refusal_is_not_retried(self):
+        # A refusal is a decision, not a malformed answer.
+        client = SequenceClient([response(parsed=None, stop_reason="refusal")])
+        outcome = AnthropicPlanner(cfg(), client=client).plan(MESSAGES)
+        assert outcome.verdict == "blocked"
+        assert len(client.calls) == 1
+
+
 class TestDefensiveHandling:
     def test_a_transport_failure_becomes_blocked(self):
         outcome, _ = plan_with(RuntimeError("connection reset"))
