@@ -4,6 +4,7 @@
     orchestrator validate <project>   prove the config works on this host
     orchestrator approve <project>    record that a human read it
     orchestrator run <project>        start a run
+    orchestrator pause <run_id>       stop cleanly at the next stage boundary
     orchestrator resume <run_id>      continue after an interruption or escalation
     orchestrator status <run_id>      where a run stopped and why
 
@@ -209,6 +210,32 @@ def run(slug: str, run_id: str | None, skip_preflight_tests: bool) -> None:
 
 @main.command()
 @click.argument("run_id")
+@click.option("--note", default="", help="Why, recorded for when you come back.")
+def pause(run_id: str, note: str) -> None:
+    """Ask a running run to stop at the next stage boundary.
+
+    Not a kill. The flag is read before each planner call, so the run finishes
+    whatever stage is in flight, lands it or fails it normally, and stops with
+    nothing half-done and a clean tree. Interrupting the process instead leaves
+    a partially applied executor edit and a stage branch nobody owns.
+    """
+    project, _cfg = _locate_run(run_id)
+    paths = RunPaths(project, run_id)
+    if not paths.run_dir.is_dir():
+        click.echo(f"no such run: {run_id}", err=True)
+        sys.exit(EXIT_FAILED)
+
+    paths.pause_flag.write_text(note)
+    click.echo(
+        f"{run_id} will stop after the stage in flight finishes.\n"
+        "A stage can take a while — watch the run log, or `orchestrator status "
+        f"{run_id}` once it stops.\n"
+        f"Continue with: orchestrator resume {run_id}"
+    )
+
+
+@main.command()
+@click.argument("run_id")
 def resume(run_id: str) -> None:
     """Continue after an interruption or an escalation a human has fixed."""
     project, cfg = _locate_run(run_id)
@@ -229,6 +256,10 @@ def resume(run_id: str) -> None:
     if any(c.blocking for c in checks):
         click.echo("\npreflight failed; nothing was resumed", err=True)
         sys.exit(EXIT_FAILED)
+
+    # Clear the pause before starting, or the run would stop again at the first
+    # planner call and look like it had ignored the resume.
+    paths.pause_flag.unlink(missing_ok=True)
 
     git = Git(cfg.target_repo)
     previous_gc = git.disable_gc()

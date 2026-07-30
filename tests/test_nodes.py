@@ -701,3 +701,38 @@ class TestEscalate:
         cfg, rt, state = make(repo, tmp_path)
         state = with_stage(state, rt)
         assert "completed" not in nodes.escalate(state, rt)
+
+
+class TestOperatorPause:
+    """Stopping cleanly, on request, without killing work in flight.
+
+    Interrupting the process leaves a half-finished executor and a dirty tree.
+    Checked at the same point as the budgets — before the next planner call —
+    so the run stops between stages with everything landed and nothing pending.
+    """
+
+    def test_a_pause_flag_stops_the_run(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        rt.paths.pause_flag.write_text("paused by operator\n")
+        out = nodes.plan(state, rt)
+        assert out["next_hop"] == "escalate"
+        assert out["failure_layer"] == "paused"
+
+    def test_the_reason_says_nothing_is_wrong(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        rt.paths.pause_flag.write_text("")
+        reason = nodes.plan(state, rt)["escalation_reason"]
+        assert "resume" in reason.lower()
+        assert "paused" in reason.lower()
+
+    def test_no_flag_means_no_pause(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        assert nodes.plan(state, rt)["next_hop"] == "finalize"
+
+    def test_the_planner_is_not_called_when_paused(self, repo, tmp_path):
+        # The point is to stop before spending, not after.
+        planner = StubPlanner()
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        rt.paths.pause_flag.write_text("")
+        nodes.plan(state, rt)
+        assert planner.calls == []

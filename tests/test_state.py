@@ -177,3 +177,15 @@ class TestResumeRouting:
         for layer in REPO_STATE_FAILURES:
             state = a_state(resuming=True, failure_layer=layer, current={"id": "s1"})
             assert resume_entry_point(state) != "precheck", layer
+
+
+class TestPauseRouting:
+    def test_resuming_after_a_pause_replans(self):
+        # A pause is not a failure. It stops at a stage boundary with no stage
+        # in flight, so the planner picks up where it left off.
+        state = a_state(resuming=True, failure_layer="paused", current=None)
+        assert resume_entry_point(state) == "plan"
+
+    def test_a_pause_is_neither_repo_state_nor_planning(self):
+        assert "paused" not in REPO_STATE_FAILURES
+        assert "paused" not in PLANNING_FAILURES

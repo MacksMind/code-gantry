@@ -88,6 +88,16 @@ class RunPaths:
     def metadata(self) -> Path:
         return self.run_dir / "run.json"
 
+    @property
+    def pause_flag(self) -> Path:
+        """Written by `orchestrator pause`, read before each planner call.
+
+        A file rather than a signal: the run may be on another terminal, in a
+        different session, or under nohup, and a file is the one channel that
+        reaches it in all three without the process having to be found first.
+        """
+        return self.run_dir / "paused"
+
     def attempt_dir(
         self, index: int, stage_id: str, revision: int, attempt: int
     ) -> Path:

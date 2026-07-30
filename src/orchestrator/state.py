@@ -32,6 +32,7 @@ FailureLayer = Literal[
     "checks",
     "new_tests",
     "progress",
+    "paused",
     "review",
     "full_suite",
     "planner",
@@ -277,11 +278,11 @@ def resume_entry_point(state: RunState) -> str:
         return "plan"
     if layer in REPO_STATE_FAILURES:
         return "verify"
-    if layer == "budget":
-        # Time ran out, which is a defect in neither the repository nor the
-        # plan — so it is in neither set. But a stage may have been awaiting
-        # revision when the deadline hit, and precheck would re-run it unrevised
-        # and discard the diagnosis. Hand it back to the planner.
+    if layer in ("budget", "paused"):
+        # Neither is a defect in the repository or the plan, so neither is in
+        # either set. But a stage may have been awaiting revision when the stop
+        # came, and precheck would re-run it unrevised and discard the
+        # diagnosis. Hand it back to the planner.
         return "plan"
     # Interrupted mid-run with no recorded failure: nothing to verify, so pick
     # up where the stage was.

@@ -78,6 +78,21 @@ def plan(state: RunState, rt: Runtime) -> dict:
     if overrun is not None:
         return _escalate("budget", overrun)
 
+    # Checked here, with the budgets, and for the same reason: this is the
+    # point where the run is between stages with nothing in flight. Stopping
+    # anywhere else means a half-finished executor and a dirty tree.
+    if rt.paths.pause_flag.exists():
+        note = rt.paths.pause_flag.read_text().strip()
+        return _escalate(
+            "paused",
+            "Paused at your request, between stages. Nothing is wrong and "
+            "nothing is half-done: everything that landed is on the project "
+            "branch and no stage was in flight.\n\n"
+            + (f"Your note: {note}\n\n" if note else "")
+            + f"`orchestrator resume {state.get('run_id')}` picks up from the "
+            "next stage.",
+        )
+
     messages = build_planner_messages(
         cfg=rt.cfg,
         plan=rt.plan,
