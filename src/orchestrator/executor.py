@@ -71,8 +71,9 @@ def build_aider_argv(stage: Stage, cfg: ProjectConfig, prompt: str) -> list[str]
         ex.model,
     ]
 
-    if ex.api_base:
-        argv += ["--openai-api-base", ex.api_base]
+    api_base = ex.resolve_api_base()
+    if api_base:
+        argv += ["--openai-api-base", api_base]
 
     test_command = stage.effective_test_command(cfg)
     if test_command:
@@ -116,11 +117,11 @@ class Executor:
     def run_agent_stage(self, stage: Stage, prompt: str) -> ExecutionResult:
         try:
             env = self._executor_env()
+            argv = build_aider_argv(stage, self.cfg, prompt)
         except KeyError as e:
-            # Failing here beats letting Aider fail opaquely on auth.
+            # A missing key or endpoint variable. Failing here beats letting
+            # Aider fail opaquely on auth, or calling the wrong endpoint.
             return ExecutionResult(ok=False, log=str(e.args[0]))
-
-        argv = build_aider_argv(stage, self.cfg, prompt)
         result = self.runner.run_argv(
             argv,
             timeout=self.cfg.limits.aider_timeout_seconds,
@@ -158,7 +159,7 @@ class Executor:
         """
         env: dict[str, str] = {}
         name = self.cfg.executor.api_key_env
-        api_base = self.cfg.executor.api_base
+        api_base = self.cfg.executor.resolve_api_base()
 
         if name:
             if name not in os.environ:

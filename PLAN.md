@@ -911,7 +911,10 @@ executor:
   # body's `model` field is the remainder, and that must match a model id from
   # `curl <api_base>/models`. llama-swap never sees the prefix.
   model: "openai/<model-id-from-/v1/models>"
-  api_base: "http://<spark-host>:<port>/v1"
+  # The endpoint address lives in the environment, not in this file. A hostname
+  # is an infrastructure fact rather than a project decision, and this file is
+  # tracked and hashed for approval. `api_base` remains available for a literal.
+  api_base_env: "ORCHESTRATOR_EXECUTOR_API_BASE"
   # No api_key_env. A local endpoint serves without auth, so there is no key to
   # name; the placeholder Aider's client insists on is supplied by the executor.
   # Set one only for an authenticating gateway in front of the endpoint.

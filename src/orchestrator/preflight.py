@@ -75,6 +75,7 @@ def run_preflight(
         return checks
 
     checks.extend(_plan_checks(cfg, git))
+    checks.extend(_endpoint_checks(cfg))
     checks.extend(_environment_checks(cfg, runner, run_tests=run_tests))
 
     if check_aider:
@@ -314,6 +315,39 @@ def check_aider_flags(runner: CommandRunner) -> list[Check]:
             "executor.extra_args",
         ),
     ]
+
+
+def _endpoint_checks(cfg: ProjectConfig) -> list[Check]:
+    """Every `api_base_env` names a variable that is actually exported.
+
+    Resolution is deliberately lazy so that reading a report does not require
+    the variable. This is where that laziness gets paid for: an unexported
+    hostname fails validation instead of stage 1.
+    """
+    checks = []
+    for role, endpoint in (
+        ("executor", cfg.executor),
+        ("planner", cfg.planner),
+        ("reviewer", cfg.reviewer),
+    ):
+        if not endpoint.api_base_env:
+            continue
+        try:
+            resolved = endpoint.resolve_api_base()
+        except KeyError:
+            checks.append(
+                Check(
+                    f"{role}.api_base_env {endpoint.api_base_env} is set",
+                    False,
+                    f"the {role} endpoint address lives in the environment, and "
+                    f"{endpoint.api_base_env} is not exported",
+                )
+            )
+            continue
+        checks.append(
+            Check(f"{role} endpoint resolves from {endpoint.api_base_env}", True, resolved)
+        )
+    return checks
 
 
 def _model_checks(cfg: ProjectConfig) -> list[Check]:

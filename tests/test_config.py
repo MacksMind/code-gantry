@@ -379,6 +379,68 @@ class TestStageResolution:
         assert a_stage().full_suite_required(cfg) is True
 
 
+class TestEndpointAddressing:
+    """`api_base_env` keeps a hostname out of a file that gets committed.
+
+    A hostname is an infrastructure fact, not a project decision, and
+    `projects/<slug>/config.yaml` is tracked.
+    """
+
+    def test_resolves_from_the_environment(self, monkeypatch):
+        monkeypatch.setenv("SPARK_API_BASE", "http://spark.internal:8080/v1")
+        cfg = parse_config(
+            minimal(executor={"model": "openai/local", "api_base_env": "SPARK_API_BASE"})
+        )
+        assert cfg.executor.resolve_api_base() == "http://spark.internal:8080/v1"
+
+    def test_a_literal_api_base_still_works(self):
+        cfg = parse_config(
+            minimal(executor={"model": "openai/local", "api_base": "http://h:1/v1"})
+        )
+        assert cfg.executor.resolve_api_base() == "http://h:1/v1"
+
+    def test_neither_resolves_to_none(self):
+        cfg = parse_config(minimal())
+        assert cfg.executor.resolve_api_base() is None
+
+    def test_setting_both_is_a_config_error(self):
+        # Ambiguous. Silently preferring one hides the operator's mistake.
+        with pytest.raises(ConfigError) as e:
+            parse_config(
+                minimal(
+                    executor={
+                        "model": "openai/local",
+                        "api_base": "http://literal/v1",
+                        "api_base_env": "SPARK_API_BASE",
+                    }
+                )
+            )
+        assert "api_base" in str(e.value)
+
+    def test_an_unset_variable_raises_at_use_not_at_load(self, monkeypatch):
+        # Loading must keep working with the variable absent, or `status` could
+        # not read a report on a machine that never exports it.
+        monkeypatch.delenv("SPARK_API_BASE", raising=False)
+        cfg = parse_config(
+            minimal(executor={"model": "openai/local", "api_base_env": "SPARK_API_BASE"})
+        )
+        with pytest.raises(KeyError) as e:
+            cfg.executor.resolve_api_base()
+        assert "SPARK_API_BASE" in str(e.value)
+
+    def test_available_on_every_endpoint(self, monkeypatch):
+        # A gateway in front of a paid model is an infrastructure value too.
+        monkeypatch.setenv("GW", "https://gateway.internal/v1")
+        cfg = parse_config(
+            minimal(
+                planner={"model": "claude-opus-5", "api_base_env": "GW"},
+                reviewer={"model": "gpt-5.5", "api_base_env": "GW"},
+            )
+        )
+        assert cfg.planner.resolve_api_base() == "https://gateway.internal/v1"
+        assert cfg.reviewer.resolve_api_base() == "https://gateway.internal/v1"
+
+
 class TestLoadFromFile:
     def test_loads_yaml(self, tmp_path):
         path = tmp_path / "config.yaml"

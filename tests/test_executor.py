@@ -186,6 +186,35 @@ class TestRunAgentStage:
         assert recorded["env"]["OPENAI_API_BASE"] == "http://spark:8080/v1"
         assert recorded["env"]["OPENAI_API_KEY"] == PLACEHOLDER_API_KEY
 
+    def test_api_base_env_reaches_aider(self, repo, fake_aider, monkeypatch):
+        monkeypatch.setenv("SPARK_API_BASE", "http://spark.internal:8080/v1")
+        cfg, stage = cfg_with(
+            target_repo=str(repo),
+            executor={"model": "openai/local", "api_base_env": "SPARK_API_BASE"},
+        )
+        result = Executor(cfg, CommandRunner(cwd=repo, timeout=60)).run_agent_stage(
+            stage, "p"
+        )
+        assert result.ok
+        recorded = json.loads(fake_aider.read_text())
+        assert recorded["env"]["OPENAI_API_BASE"] == "http://spark.internal:8080/v1"
+        argv = recorded["argv"]
+        assert argv[argv.index("--openai-api-base") + 1] == "http://spark.internal:8080/v1"
+        # Resolving an api_base is still not a reason to demand a key.
+        assert recorded["env"]["OPENAI_API_KEY"] == PLACEHOLDER_API_KEY
+
+    def test_an_unset_api_base_env_is_a_legible_failure(self, repo, fake_aider, monkeypatch):
+        monkeypatch.delenv("SPARK_API_BASE", raising=False)
+        cfg, stage = cfg_with(
+            target_repo=str(repo),
+            executor={"model": "openai/local", "api_base_env": "SPARK_API_BASE"},
+        )
+        result = Executor(cfg, CommandRunner(cwd=repo, timeout=60)).run_agent_stage(
+            stage, "p"
+        )
+        assert not result.ok
+        assert "SPARK_API_BASE" in result.log
+
     def test_a_configured_key_beats_the_placeholder(self, repo, fake_aider, monkeypatch):
         # An endpoint that does want auth must still get the real key.
         monkeypatch.setenv("GATEWAY_KEY", "sk-real")

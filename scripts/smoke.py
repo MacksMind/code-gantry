@@ -47,6 +47,11 @@ BRANCH = "feature/calculator"
 RUN_ID = "smoke"
 SLUG = "plan"
 
+# The variable `init` drafts for the executor's endpoint. A hostname is an
+# infrastructure fact, so the drafted config names a variable rather than
+# carrying an address.
+EXECUTOR_API_BASE_VAR = "ORCHESTRATOR_EXECUTOR_API_BASE"
+
 # The two stages the stand-in planner derives, in order. Each is exactly what a
 # real planner may return: declarative fields only, no command anywhere.
 STAGES = [
@@ -391,10 +396,15 @@ def patch_config(config: Path) -> None:
 
     swap("project_branch: refactor/CHANGE-ME", f"project_branch: {BRANCH}")
     swap('model: "openai/<model-id-from-/v1/models>"', 'model: "openai/local-model"')
-    swap(
-        'api_base: "http://<spark-host>:<port>/v1"',
-        f'api_base: "http://127.0.0.1:{PORT}/v1"',
-    )
+    # The executor's address is left exactly as drafted — `api_base_env`,
+    # resolved from the environment at run time. That is the form `init` emits,
+    # so it is the form worth covering.
+    if f'api_base_env: "{EXECUTOR_API_BASE_VAR}"' not in text:
+        fail(
+            f"`init` no longer drafts api_base_env: {EXECUTOR_API_BASE_VAR}; "
+            "scripts/smoke.py needs updating"
+        )
+
     # The planner's base has no /v1: the Anthropic SDK appends it.
     swap(
         'model: "claude-opus-5"',
@@ -551,6 +561,7 @@ def main() -> int:
             # auth, so this exercises the placeholder path.
             "ANTHROPIC_API_KEY": "smoke-planner-key",
             "OPENAI_API_KEY": "smoke-reviewer-key",
+            EXECUTOR_API_BASE_VAR: f"http://127.0.0.1:{PORT}/v1",
             "PYTHONPATH": str(Path(__file__).resolve().parent.parent / "src"),
         }
 
@@ -572,6 +583,11 @@ def main() -> int:
         checks = cli(work, env, "validate", SLUG)
         check("[FAIL]" not in checks, "no blocking problems", checks)
         check("aider still accepts the flags we build" in checks, "checked aider's flags")
+        check(
+            f"executor endpoint resolves from {EXECUTOR_API_BASE_VAR}" in checks,
+            "resolved the executor endpoint from the environment",
+            checks,
+        )
 
         print("\napprove")
         approved = cli(work, env, "approve", SLUG)

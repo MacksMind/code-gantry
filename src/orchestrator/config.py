@@ -19,6 +19,7 @@ flags, endpoint reachability — live in `preflight`.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Literal
@@ -114,9 +115,46 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class ExecutorConfig(_Strict):
-    model: str
+class _EndpointConfig(_Strict):
+    """Where a model role is reached, and how that address is supplied.
+
+    `api_base_env` exists because a hostname is an infrastructure fact rather
+    than a project decision. `projects/<slug>/config.yaml` is a tracked file
+    that gets hashed for approval; a Spark hostname, an internal gateway, or a
+    private port has no business in it.
+
+    Naming a variable rather than interpolating one into a string is
+    deliberate. General `${VAR}` substitution would reach command fields too,
+    and then `test_command: "${CMD}"` would let the denylist scan a harmless
+    literal while something else entirely ran. Restricting the mechanism to a
+    single non-command field keeps every command in an approved config exactly
+    what the operator read.
+    """
+
     api_base: str | None = None
+    api_base_env: str | None = None
+
+    def resolve_api_base(self) -> str | None:
+        """The address, reading the environment if that is where it lives.
+
+        Deliberately not resolved at load time: `status` and `resume` load a
+        config to read a report, and failing that on a machine that never
+        exports the variable would be gratuitous. Preflight checks it, so a
+        missing export fails `validate` rather than stage 1.
+        """
+        if self.api_base_env:
+            value = os.environ.get(self.api_base_env)
+            if not value:
+                raise KeyError(
+                    f"api_base_env names {self.api_base_env}, which is not set "
+                    "in the environment"
+                )
+            return value
+        return self.api_base
+
+
+class ExecutorConfig(_EndpointConfig):
+    model: str
     api_key_env: str | None = None
     lint_command: str | None = None
     # Repo map off by default: stages declare the files they need, and an
@@ -127,20 +165,18 @@ class ExecutorConfig(_Strict):
     extra_args: list[str] = []
 
 
-class PlannerConfig(_Strict):
+class PlannerConfig(_EndpointConfig):
     provider: Literal["anthropic"] = "anthropic"
     model: str
     api_key_env: str = "ANTHROPIC_API_KEY"
-    api_base: str | None = None
     request_timeout_seconds: float = 900.0
     max_retries: int = 2
 
 
-class ReviewerConfig(_Strict):
+class ReviewerConfig(_EndpointConfig):
     provider: Literal["openai"] = "openai"
     model: str
     api_key_env: str = "OPENAI_API_KEY"
-    api_base: str | None = None
     request_timeout_seconds: float = 600.0
     max_retries: int = 2
 
@@ -488,6 +524,18 @@ def _structural_problems(cfg: ProjectConfig) -> list[str]:
     for pattern in cfg.test_file_patterns:
         if not pattern:
             problems.append("test_file_patterns contains an empty pattern")
+
+    for role, endpoint in (
+        ("executor", cfg.executor),
+        ("planner", cfg.planner),
+        ("reviewer", cfg.reviewer),
+    ):
+        if endpoint.api_base and endpoint.api_base_env:
+            problems.append(
+                f"{role} sets both api_base and api_base_env. Pick one — "
+                "silently preferring either would hide the mistake, and which "
+                "endpoint gets called is not a detail to guess at"
+            )
 
     problems.extend(denylist_violations(cfg.all_commands()))
     return problems

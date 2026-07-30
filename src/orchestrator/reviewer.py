@@ -156,7 +156,7 @@ def _build_openai_client(cfg: ReviewerConfig):
 
     return OpenAI(
         api_key=os.environ[cfg.api_key_env],
-        base_url=cfg.api_base,
+        base_url=cfg.resolve_api_base(),
         timeout=cfg.request_timeout_seconds,
         max_retries=cfg.max_retries,
     )

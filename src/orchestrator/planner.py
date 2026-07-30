@@ -254,7 +254,7 @@ def _build_anthropic_client(cfg: PlannerConfig):
         )
     return anthropic.Anthropic(
         api_key=os.environ[cfg.api_key_env],
-        base_url=cfg.api_base,
+        base_url=cfg.resolve_api_base(),
         timeout=cfg.request_timeout_seconds,
         max_retries=cfg.max_retries,
     )
