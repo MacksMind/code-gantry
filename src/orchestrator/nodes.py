@@ -88,6 +88,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
         interventions_used=state.get("planner_interventions", 0),
         interventions_max=limits.max_planner_interventions,
         status_tail=_status_tail(rt),
+        layout=rt.layout(state.get("base_sha") or ""),
     )
 
     rt.log(f"[plan] {'revising ' + stage.id if stage else 'deriving next stage'}")

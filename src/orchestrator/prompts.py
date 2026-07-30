@@ -231,18 +231,25 @@ def build_planner_messages(
     interventions_used: int = 0,
     interventions_max: int = 0,
     status_tail: str | None = None,
+    layout: str | None = None,
 ) -> list[dict[str, str]]:
     """Chat messages for the planner.
 
     Same prefix as the reviewer for the same reason: the plan and the completed
     history lead, the situation-specific material follows.
+
+    The repository layout leads too, and belongs in the cached prefix: it is
+    read once at the run's base sha and does not change. Without it the planner
+    writes `edit_files` globs from imagination — the first live run guessed
+    `src/calculator.py` at a repository containing `src/calc.py`, took a scope
+    violation on stage one, and spent half its intervention budget recovering.
     """
-    messages = [
-        {
-            "role": "user",
-            "content": _plan_block(plan) + "\n\n" + _history_block(completed),
-        }
-    ]
+    leading = _plan_block(plan)
+    if layout:
+        leading += "\n\n## What the repository contains\n\n" + layout
+    leading += "\n\n" + _history_block(completed)
+
+    messages = [{"role": "user", "content": leading}]
 
     current: list[str] = []
 

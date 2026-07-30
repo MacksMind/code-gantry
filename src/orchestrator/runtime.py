@@ -15,7 +15,8 @@ from typing import Callable
 from orchestrator.commands import CommandRunner
 from orchestrator.config import ProjectConfig
 from orchestrator.executor import Executor
-from orchestrator.gitops import Git
+from orchestrator.gitops import Git, GitError
+from orchestrator.layout import summarize_layout
 from orchestrator.plandoc import PlanTree, load_snapshot
 from orchestrator.planner import PlannerClient
 from orchestrator.reviewer import ReviewerClient
@@ -113,6 +114,7 @@ class Runtime:
     reviewer: ReviewerClient
     log: Callable[[str], None] = field(default=lambda _msg: None)
     _plan: PlanTree | None = None
+    _layout: str | None = None
 
     @property
     def plan(self) -> PlanTree:
@@ -126,6 +128,25 @@ class Runtime:
         if self._plan is None:
             self._plan = load_snapshot(self.paths.project.plan_snapshot)
         return self._plan
+
+    def layout(self, base_sha: str) -> str:
+        """What the repository contains, read once and held.
+
+        The planner authors globs; without this it guesses at paths, and a
+        wrong guess costs a scope violation and an intervention per stage.
+        Held for the run so it stays a stable, cacheable prompt prefix rather
+        than shifting as stages add files.
+        """
+        if self._layout is None:
+            try:
+                paths = self.git.tracked_paths(base_sha)
+            except GitError:
+                # A layout we cannot read is not worth failing a run over; the
+                # planner simply goes back to having no picture of the repo.
+                self._layout = ""
+            else:
+                self._layout = summarize_layout(paths)
+        return self._layout
 
     def write_artifact(
         self,

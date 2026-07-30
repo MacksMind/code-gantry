@@ -52,6 +52,14 @@ SLUG = "plan"
 # carrying an address.
 EXECUTOR_API_BASE_VAR = "ORCHESTRATOR_EXECUTOR_API_BASE"
 
+# The models `init` drafts. Kept here so a change to the draft fails loudly in
+# patch_config rather than silently pointing a live run at nothing.
+PLANNER_MODEL = "claude-opus-5"
+REVIEWER_MODEL = "gpt-5.6-sol"
+# Live mode still uses the fake Aider, but names a real model so preflight's
+# endpoint check verifies against the real server.
+LIVE_EXECUTOR_MODEL = "qwen3-coder-next"
+
 # The two stages the stand-in planner derives, in order. Each is exactly what a
 # real planner may return: declarative fields only, no command anywhere.
 STAGES = [
@@ -98,30 +106,51 @@ message = sys.argv[sys.argv.index("--message") + 1] if "--message" in sys.argv e
 calc = pathlib.Path("src/calc.py")
 body = calc.read_text()
 
-if "multiply" in message.lower() and "def multiply" not in body:
-    calc.write_text(body + "\\n\\ndef multiply(a, b):\\n    return a * b\\n")
-    pathlib.Path("tests/test_multiply.py").write_text(
+IMPLEMENTATIONS = {
+    "multiply": (
+        "\\n\\ndef multiply(a, b):\\n    return a * b\\n",
+        "tests/test_multiply.py",
         "from src.calc import multiply\\n\\n\\n"
-        "def test_multiply():\\n    assert multiply(3, 4) == 12\\n"
-    )
-    print("aider: implemented multiply")
-elif "divide" in message.lower() and "def divide" not in body:
-    calc.write_text(
-        body
-        + "\\n\\ndef divide(a, b):\\n"
+        "def test_multiply():\\n    assert multiply(3, 4) == 12\\n",
+    ),
+    "divide": (
+        "\\n\\ndef divide(a, b):\\n"
         "    if b == 0:\\n"
         "        raise ValueError('divide by zero')\\n"
-        "    return a / b\\n"
-    )
-    pathlib.Path("tests/test_divide.py").write_text(
+        "    return a / b\\n",
+        "tests/test_divide.py",
         "import pytest\\n\\nfrom src.calc import divide\\n\\n\\n"
         "def test_divide():\\n    assert divide(8, 2) == 4\\n\\n\\n"
         "def test_divide_by_zero():\\n"
-        "    with pytest.raises(ValueError):\\n        divide(1, 0)\\n"
-    )
-    print("aider: implemented divide")
-else:
-    print("aider: nothing to do")
+        "    with pytest.raises(ValueError):\\n        divide(1, 0)\\n",
+    ),
+}
+
+# Only ever implement what the instruction actually names. An earlier version
+# fell back to "the first unimplemented operation" so that a live planner's
+# wording could not stall the run — which promptly made this write `divide`
+# during the `multiply` stage, tripping that stage's own forbidden_patterns and
+# burning four retries per revision. A fake executor that does the wrong thing
+# is worse than one that admits it cannot help.
+named = [
+    op for op in IMPLEMENTATIONS if op in message.lower() and f"def {op}" not in body
+]
+
+if named:
+    op = named[0]
+    source, test_path, test_source = IMPLEMENTATIONS[op]
+    calc.write_text(body + source)
+    pathlib.Path(test_path).write_text(test_source)
+    print(f"aider: implemented {op}")
+    sys.exit(0)
+
+already = [op for op in IMPLEMENTATIONS if op in message.lower()]
+if already:
+    print(f"aider: {already[0]} is already implemented; nothing to do")
+    sys.exit(0)
+
+print(f"aider: this stand-in only implements {sorted(IMPLEMENTATIONS)}", file=sys.stderr)
+sys.exit(1)
 '''
 
 PLAN_DOC = """# Calculator capability plan
@@ -392,12 +421,16 @@ def cli(work: Path, env: dict, *args: str, expect: int = 0) -> str:
     return output
 
 
-def patch_config(config: Path) -> None:
+def patch_config(config: Path, live: bool = False) -> None:
     """Do what an operator does after `init`: fill in what it could not infer.
 
     Each replacement asserts the placeholder was there. If `init`'s draft
     changes shape, this fails loudly rather than silently patching nothing and
     running against the wrong endpoint.
+
+    In live mode the two paid models are left pointing at their real APIs, and
+    the executor at the real endpoint — only Aider stays fake, so a live run
+    exercises planning and review without generating any code.
     """
     text = config.read_text()
 
@@ -408,7 +441,10 @@ def patch_config(config: Path) -> None:
         text = text.replace(old, new, 1)
 
     swap("project_branch: refactor/CHANGE-ME", f"project_branch: {BRANCH}")
-    swap('model: "openai/<model-id-from-/v1/models>"', 'model: "openai/local-model"')
+    swap(
+        'model: "openai/<model-id-from-/v1/models>"',
+        f'model: "openai/{LIVE_EXECUTOR_MODEL if live else "local-model"}"',
+    )
     # The executor's address is left exactly as drafted — `api_base_env`,
     # resolved from the environment at run time. That is the form `init` emits,
     # so it is the form worth covering.
@@ -418,15 +454,24 @@ def patch_config(config: Path) -> None:
             "scripts/smoke.py needs updating"
         )
 
-    # The planner's base has no /v1: the Anthropic SDK appends it.
-    swap(
-        'model: "claude-opus-5"',
-        f'model: "claude-opus-5"\n  api_base: "http://127.0.0.1:{PORT}"',
-    )
-    swap(
-        'model: "gpt-5.5"',
-        f'model: "gpt-5.5"\n  api_base: "http://127.0.0.1:{PORT}/v1"',
-    )
+    if not live:
+        # The planner's base has no /v1: the Anthropic SDK appends it.
+        swap(
+            f'model: "{PLANNER_MODEL}"',
+            f'model: "{PLANNER_MODEL}"\n  api_base: "http://127.0.0.1:{PORT}"',
+        )
+        swap(
+            f'model: "{REVIEWER_MODEL}"',
+            f'model: "{REVIEWER_MODEL}"\n  api_base: "http://127.0.0.1:{PORT}/v1"',
+        )
+    else:
+        for model in (PLANNER_MODEL, REVIEWER_MODEL):
+            if f'model: "{model}"' not in text:
+                fail(
+                    f"`init` no longer drafts {model!r}; scripts/smoke.py needs "
+                    "updating"
+                )
+
     swap("max_stages: 60", "max_stages: 6")
     config.write_text(text)
 
@@ -454,13 +499,20 @@ def fail(message: str) -> None:
     sys.exit(1)
 
 
-def verify_outcome(work: Path, repo: Path, report: str) -> None:
+def verify_outcome(work: Path, repo: Path, report: str, live: bool = False) -> None:
+    """Assert the promises the design makes about the finished repository.
+
+    Live mode asserts outcomes rather than counts. A real planner decides how
+    many stages the plan needs and what to call them, so pinning either would
+    be asserting the model's wording rather than the orchestrator's behaviour.
+    """
     project = work / "projects" / SLUG
     run_dir = project / "runs" / RUN_ID
 
     print("\nthe report")
-    for stage in STAGES:
-        check(stage["id"] in report, f"names stage {stage['id']}")
+    if not live:
+        for stage in STAGES:
+            check(stage["id"] in report, f"names stage {stage['id']}")
     check("approved" in report, "records the reviewer's verdict")
     check(
         "cache" not in report.lower() or "%" in report,
@@ -480,11 +532,19 @@ def verify_outcome(work: Path, repo: Path, report: str) -> None:
         "main is untouched",
         "the tool never merges the project branch; that is the operator's job",
     )
-    check(
-        git(repo, "rev-list", "--count", BRANCH) == str(1 + len(STAGES)),
-        f"{BRANCH} carries one squashed commit per stage",
-        git(repo, "log", "--oneline", BRANCH),
-    )
+    commits = int(git(repo, "rev-list", "--count", BRANCH))
+    if live:
+        check(
+            commits > 1,
+            f"{BRANCH} carries a squashed commit per landed stage",
+            git(repo, "log", "--oneline", BRANCH),
+        )
+    else:
+        check(
+            commits == 1 + len(STAGES),
+            f"{BRANCH} carries one squashed commit per stage",
+            git(repo, "log", "--oneline", BRANCH),
+        )
     landed = git(repo, "show", f"{BRANCH}:src/calc.py")
     for stage in STAGES:
         operation = stage["id"].removeprefix("add-")
@@ -510,7 +570,7 @@ def verify_outcome(work: Path, repo: Path, report: str) -> None:
     )
     status = (project / "status.md").read_text()
     check(
-        status.count("## ") >= len(STAGES) + 1,
+        status.count("## ") >= (2 if live else len(STAGES) + 1),
         "status.md has an append-only entry per planner call",
         f"{status.count('## ')} entries",
     )
@@ -525,7 +585,7 @@ def verify_outcome(work: Path, repo: Path, report: str) -> None:
     # plus the final one that declares the project complete.
     derivations = [name for name in attempts if "-plan-rev-" in name]
     check(
-        len(derivations) == len(STAGES) + 1,
+        len(derivations) >= 2 if live else len(derivations) == len(STAGES) + 1,
         "one planner directory per derivation, plus the completion call",
         f"derivations: {derivations}",
     )
@@ -536,7 +596,7 @@ def verify_outcome(work: Path, repo: Path, report: str) -> None:
 
     executions = [name for name in attempts if "-plan-rev-" not in name]
     check(
-        len(executions) == len(STAGES),
+        len(executions) >= 1 if live else len(executions) == len(STAGES),
         "one attempt directory per stage executed",
         f"attempts: {attempts}",
     )
@@ -552,7 +612,22 @@ def main() -> int:
     parser.add_argument(
         "--keep", action="store_true", help="Leave the sandbox in place for inspection."
     )
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Use the real planner, reviewer, and endpoint. Aider stays fake, so "
+        "this exercises planning and review without generating code. Costs money.",
+    )
     args = parser.parse_args()
+
+    if args.live:
+        missing = [
+            name
+            for name in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", EXECUTOR_API_BASE_VAR)
+            if not os.environ.get(name)
+        ]
+        if missing:
+            fail("live mode needs these exported: " + ", ".join(missing))
 
     root = Path(tempfile.mkdtemp(prefix="orchestrator-smoke-"))
     print(f"sandbox: {root}\n")
@@ -560,7 +635,9 @@ def main() -> int:
     try:
         repo = build_repo(root)
         write_fake_aider(root / "bin")
-        server = serve(repo)
+        # In live mode nothing talks to the stand-in: both paid models go to
+        # their real APIs and the executor endpoint check goes to the real one.
+        server = None if args.live else serve(repo)
 
         work = root / "work"
         work.mkdir()
@@ -568,21 +645,26 @@ def main() -> int:
         env = {
             **os.environ,
             "PATH": f"{root / 'bin'}{os.pathsep}{os.environ['PATH']}",
+            "PYTHONPATH": str(Path(__file__).resolve().parent.parent / "src"),
+        }
+        if not args.live:
             # The stand-in accepts anything; the two paid clients refuse to
             # build without a key, which is itself worth exercising. The
             # executor deliberately gets none — a local endpoint serves without
             # auth, so this exercises the placeholder path.
-            "ANTHROPIC_API_KEY": "smoke-planner-key",
-            "OPENAI_API_KEY": "smoke-reviewer-key",
-            EXECUTOR_API_BASE_VAR: f"http://127.0.0.1:{PORT}/v1",
-            "PYTHONPATH": str(Path(__file__).resolve().parent.parent / "src"),
-        }
+            env.update(
+                {
+                    "ANTHROPIC_API_KEY": "smoke-planner-key",
+                    "OPENAI_API_KEY": "smoke-reviewer-key",
+                    EXECUTOR_API_BASE_VAR: f"http://127.0.0.1:{PORT}/v1",
+                }
+            )
 
         print("init")
         cli(work, env, "init", str(repo / "docs" / "plan.md"), "--slug", SLUG)
         config = work / "projects" / SLUG / "config.yaml"
         check(config.is_file(), "drafted a config")
-        patch_config(config)
+        patch_config(config, live=args.live)
 
         print("\nrun, before approval")
         refused = cli(work, env, "run", SLUG, expect=1)
@@ -601,8 +683,9 @@ def main() -> int:
             "resolved the executor endpoint from the environment",
             checks,
         )
+        expected_model = LIVE_EXECUTOR_MODEL if args.live else "local-model"
         check(
-            "endpoint offers 'local-model'" in checks,
+            f"endpoint offers '{expected_model}'" in checks,
             "verified the model id against the endpoint's /v1/models",
             checks,
         )
@@ -615,10 +698,11 @@ def main() -> int:
         report = cli(work, env, "run", SLUG, "--run-id", RUN_ID)
         check("complete" in report.lower(), "the run completed", report[-2000:])
 
-        verify_outcome(work, repo, report)
+        verify_outcome(work, repo, report, live=args.live)
 
         print(f"\n{CHECKS} checks passed")
-        server.shutdown()
+        if server is not None:
+            server.shutdown()
         return 0
     finally:
         if args.keep:

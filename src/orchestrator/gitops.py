@@ -106,6 +106,16 @@ class Git:
             )
         return proc.stdout
 
+    def tracked_paths(self, sha: str) -> list[str]:
+        """Every tracked path at `sha`.
+
+        Read at the run's base sha for the same reason plan documents are: the
+        planner should be shown one stable picture of the repository for the
+        whole run, not one that shifts under it as stages land.
+        """
+        out = self._out("ls-tree", "-r", "--name-only", sha)
+        return [line for line in out.splitlines() if line.strip()]
+
     def file_exists_at(self, sha: str, path: str) -> bool:
         return self._run("cat-file", "-e", f"{sha}:{path}", check=False).returncode == 0
 

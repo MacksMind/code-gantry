@@ -129,7 +129,7 @@ def draft_config(repo: Path, plan_rel: str) -> tuple[str, list[str]]:
     lines.append('  api_key_env: "ANTHROPIC_API_KEY"')
     lines.append("")
     lines.append("reviewer:")
-    lines.append('  model: "gpt-5.5"')
+    lines.append('  model: "gpt-5.6-sol"')
     lines.append('  api_key_env: "OPENAI_API_KEY"')
     lines.append("")
 
