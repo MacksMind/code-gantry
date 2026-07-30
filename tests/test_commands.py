@@ -173,3 +173,44 @@ class TestLogging:
         runner = CommandRunner(cwd=tmp_path, timeout=1, log=lines.append)
         runner.run("sleep 30")
         assert any("timed out" in line for line in lines)
+
+
+class TestStdinIsClosed:
+    """Nothing the orchestrator runs may read from the terminal.
+
+    A command that waits on stdin in an unattended run does not fail — it
+    hangs, silently, until the timeout kills it an hour later. Worse, if the
+    operator happens to be at the terminal, it eats their keystrokes.
+
+    Found on the first real project: the target repo's test scripts branch on
+    whether stdin is a tty and read it when it is not.
+    """
+
+    def test_a_command_reading_stdin_gets_eof_not_a_hang(self, tmp_path):
+        runner = CommandRunner(cwd=tmp_path, timeout=10)
+        result = runner.run("read line; echo \"got:[$line]\"")
+        assert "got:[]" in result.output
+
+    def test_it_does_not_consume_the_parents_stdin(self, tmp_path):
+        # `cat` with an inherited stdin would block; with DEVNULL it is instant.
+        runner = CommandRunner(cwd=tmp_path, timeout=10)
+        result = runner.run("cat")
+        assert not result.timed_out
+        assert result.ok
+
+    def test_stdin_is_explicitly_closed(self, tmp_path, monkeypatch):
+        # The two tests above pass under pytest even without the fix, because
+        # pytest redirects stdin itself. This one cannot: it checks what is
+        # actually asked for, which is what matters under nohup or cron.
+        import subprocess as sp
+
+        seen = {}
+        real = sp.Popen
+
+        def spy(*args, **kwargs):
+            seen.update(kwargs)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(sp, "Popen", spy)
+        CommandRunner(cwd=tmp_path, timeout=10).run("true")
+        assert seen.get("stdin") is sp.DEVNULL

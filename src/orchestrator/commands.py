@@ -143,6 +143,12 @@ class CommandRunner:
             shell=shell,
             cwd=str(self.cwd),
             env=env,
+            # Nothing here may read from the terminal. A command that waits on
+            # stdin in an unattended run does not fail, it hangs — silently,
+            # until the timeout kills it an hour later — and if the operator
+            # happens to be at the terminal it eats their keystrokes instead.
+            # Closed rather than inherited, so a prompt gets EOF and fails fast.
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
