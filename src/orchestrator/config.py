@@ -1,11 +1,20 @@
-"""Run configuration: schema, loading, and structural validation.
+"""Project configuration: schema, loading, and structural validation.
 
-Structural validation is everything checkable without executing anything.
-The checks that shell out — clean working tree, test command actually passes,
-model endpoints reachable — live in `preflight` because they need a real
-target repo and a network.
+Two things make this file the centre of the design's safety story.
 
-Both run before any stage does. Failing fast beats failing on stage 6.
+**The declarative/executable partition.** The planner may author declarative
+fields — instruction text, globs, prose constraints, regexes. It may never
+author an executable one. That is enforced here, as an allowlist on what the
+planner's structured output is permitted to contain, not as a comment
+somewhere. A field the planner may not set should be impossible for it to
+return.
+
+**The denylist.** Some commands are refused regardless of operator approval,
+because a human skims a sixty-line YAML once, motivated to start a run.
+
+Structural validation is everything checkable from the file alone. The checks
+that execute something — clean tree, test command actually passes, Aider's
+flags, endpoint reachability — live in `preflight`.
 """
 
 from __future__ import annotations
@@ -17,16 +26,76 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-StageKind = Literal["agent", "script", "manual"]
+StageKind = Literal["agent", "script"]
 
-# Stage ids name directories under runs/<run_id>/stages/, so they must not
-# contain separators or traversal.
+# Stage ids name directories and git branches, so they must not contain
+# separators, traversal, or anything git rejects in a ref.
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+# Fields the planner is allowed to author. Everything else in Stage is
+# operator-only. `nodes` and `planner` both import this; it is the single
+# definition of the partition.
+PLANNER_WRITABLE_FIELDS = frozenset(
+    {
+        "id",
+        "kind",
+        "instruction",
+        "edit_files",
+        "read_files",
+        "constraints",
+        "acceptance",
+        "forbidden_patterns",
+        "test_paths",
+    }
+)
+
+# Refused regardless of operator approval. Each entry is (pattern, why).
+#
+# These are the moves that are catastrophic rather than merely wrong, and that
+# a tired operator would not notice in a config review. Deliberately narrow:
+# a denylist that fires on legitimate commands gets disabled.
+DENYLIST: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(r"\bgit\s+push\b"),
+        "the orchestrator must never push; the outer merge is the operator's",
+    ),
+    (
+        re.compile(r"\bgit\s+(checkout|switch)\b"),
+        "changing branches from inside a command would break the stage's "
+        "branch identity; the orchestrator manages checkout itself",
+    ),
+    (
+        re.compile(r"\bgit\s+merge\b"),
+        "merging from inside a command bypasses the review gate",
+    ),
+    (
+        re.compile(r"\bgit\s+(reset|clean)\b"),
+        "resetting from inside a command would destroy the stage baseline the "
+        "scope guard and the reviewer both measure against",
+    ),
+    (
+        re.compile(r"\bgem\s+install\b"),
+        "installing outside the bundle mutates the host's global gems; use "
+        "bundle install",
+    ),
+    (
+        re.compile(r"\b(cap|kubectl|terraform|serverless|fly|heroku)\b"),
+        "deployment is out of scope and must not happen unattended",
+    ),
+    (
+        re.compile(r"\bsudo\b"),
+        "nothing here needs elevated privileges",
+    ),
+    (
+        re.compile(r"\brm\s+-[a-zA-Z]*[rf]"),
+        "recursive or forced deletion is never needed in a declared command",
+    ),
+)
 
 
 class ConfigError(Exception):
-    """A config problem the operator must fix. Carries every problem found,
-    not just the first, so one run of `validate` is enough to fix the file."""
+    """Carries every problem found, not just the first, so one `validate` run
+    is enough to fix the file."""
 
     def __init__(self, problems: list[str]):
         self.problems = problems
@@ -54,9 +123,16 @@ class ExecutorConfig(_Strict):
     extra_args: list[str] = []
 
 
+class PlannerConfig(_Strict):
+    provider: Literal["anthropic"] = "anthropic"
+    model: str
+    api_key_env: str = "ANTHROPIC_API_KEY"
+    api_base: str | None = None
+    request_timeout_seconds: float = 900.0
+    max_retries: int = 2
+
+
 class ReviewerConfig(_Strict):
-    # One implementation exists. Typos like "antropic" must not silently pass
-    # through to a runtime failure on stage 1.
     provider: Literal["openai"] = "openai"
     model: str
     api_key_env: str = "OPENAI_API_KEY"
@@ -68,68 +144,101 @@ class ReviewerConfig(_Strict):
 class Limits(_Strict):
     max_test_retries: int = 3
     max_rework_retries: int = 2
+    # Global across the run, not per-stage: per-stage caps let a pathological
+    # project consume unbounded paid inference one stage at a time.
+    max_planner_interventions: int = 12
+    max_stages: int = 60
     aider_timeout_seconds: int = 1800
     command_timeout_seconds: int = 3600
+    wall_clock_hours: float = 14.0
 
 
 class Stage(_Strict):
+    """One unit of work — the shippable unit.
+
+    Declarative fields may be authored by the planner. Executable and policy
+    fields may not; they come from the config's stage defaults.
+    """
+
     id: str
     kind: StageKind = "agent"
 
-    instruction: str | None = None  # agent stages
-    command: str | None = None  # script stages
-    human_steps: str | None = None  # manual stages
+    # --- planner-writable (declarative) ---
+    instruction: str | None = None
+    edit_files: list[str] = []
+    read_files: list[str] = []
+    constraints: str | None = None
+    acceptance: str | None = None
+    forbidden_patterns: list[str] = []
+    # Extra spec paths the planner expects to be affected beyond those the diff
+    # reveals. Paths, never a command — see `scoped_test_command`.
+    test_paths: list[str] = []
 
+    # --- operator-only (executable) ---
+    command: str | None = None
     preconditions: list[str] = []
     context_commands: list[str] = []
     setup_command: str | None = None
-
-    edit_files: list[str] = []
-    read_files: list[str] = []
-
-    forbidden_patterns: list[str] = []
-    constraints: str | None = None
-    acceptance: str | None = None
-
     test_command: str | None = None
     checks: list[str] = []
+
+    # --- operator-only (policy) ---
     require_new_tests: bool = False
-    review: bool | None = None
+    review: bool = True
+    full_suite_on_approval: bool | None = None
 
-    @property
-    def reviews_enabled(self) -> bool:
-        """Manual stages default to unreviewed — a human already owns the
-        change — but may opt in."""
-        if self.review is not None:
-            return self.review
-        return self.kind != "manual"
+    def effective_test_command(self, cfg: ProjectConfig) -> str | None:
+        return self.test_command or cfg.test_command
 
-    @property
-    def scope_guarded(self) -> bool:
-        """Manual stages are exempt: a human bump legitimately touches
-        whatever the change requires."""
-        return self.kind != "manual"
+    def effective_setup_command(self, cfg: ProjectConfig) -> str | None:
+        return self.setup_command or cfg.setup_command
 
-    def effective_test_command(self, cfg: RunConfig) -> str | None:
-        return self.test_command if self.test_command else cfg.test_command
-
-    def effective_setup_command(self, cfg: RunConfig) -> str | None:
-        return self.setup_command if self.setup_command else cfg.setup_command
+    def full_suite_required(self, cfg: ProjectConfig) -> bool:
+        if self.full_suite_on_approval is not None:
+            return self.full_suite_on_approval
+        return cfg.full_suite_on_approval
 
 
-class RunConfig(_Strict):
+class StageDefaults(_Strict):
+    """Operator-authored executable and policy fields applied to every
+    planner-derived stage.
+
+    The planner invents *what* the work is; it cannot invent *how* to run
+    anything. Since there is no static stage list, this is where the executable
+    half of a stage comes from.
+    """
+
+    preconditions: list[str] = []
+    context_commands: list[str] = []
+    checks: list[str] = []
+    require_new_tests: bool = False
+    review: bool = True
+
+
+class ProjectConfig(_Strict):
+    # Documentation, not behaviour: these commands assume a particular
+    # machine's Docker, Ruby, and paths. Recording it stops a future reader
+    # running this config elsewhere and misreading the failures.
+    host: str | None = None
+
     target_repo: Path
     base_ref: str = "main"
-    branch: str
+    project_branch: str
+
+    # Repo-relative path to the plan document. A document, not a directory:
+    # pointing at `docs/` would sweep every runbook and ADR into every review
+    # prompt.
+    plan_root: str
 
     setup_command: str | None = None
     test_command: str | None = None
     full_test_command: str | None = None
+    # Optional. `{paths}` is filled by the orchestrator from the stage diff.
+    scoped_test_command: str | None = None
 
-    reference_docs: list[str] = []
+    full_suite_on_approval: bool = True
 
-    # What counts as a test file for `require_new_tests`. Defaults cover the
-    # common conventions; override for a project that names them otherwise.
+    # What counts as a test file for `require_new_tests`.
     test_file_patterns: list[str] = [
         "**/test_*.py",
         "**/*_test.py",
@@ -147,35 +256,100 @@ class RunConfig(_Strict):
     ]
 
     executor: ExecutorConfig
+    planner: PlannerConfig
     reviewer: ReviewerConfig
     limits: Limits = Limits()
+
+    stage_defaults: StageDefaults = StageDefaults()
 
     rework_strategy: Literal["fresh", "continue"] = "fresh"
     rework_reset: bool = True
 
-    stages: list[Stage]
+    @property
+    def plan_root_path(self) -> Path:
+        return self.target_repo / self.plan_root
 
-    def reference_doc_paths(self) -> list[Path]:
-        """Relative paths resolve against the target repo, since that is
-        usually where a project's plan documents live."""
-        out = []
-        for ref in self.reference_docs:
-            p = Path(ref)
-            out.append(p if p.is_absolute() else self.target_repo / p)
+    @property
+    def stage_branch_namespace(self) -> str:
+        """Child branches live in a namespace *beside* the project branch, not
+        under it.
+
+        Git refs are filesystem paths, so `refs/heads/upgrade/rails-5` (a file)
+        and `refs/heads/upgrade/rails-5/stage-001-x` (a directory) cannot
+        coexist — git refuses with "cannot lock ref". Appending `-stage` makes
+        it a sibling path component, which keeps the group greppable
+        (`git branch --list 'upgrade/rails-5-stage/*'`) and deletable together
+        while remaining a legal ref.
+        """
+        return f"{self.project_branch}-stage"
+
+    def stage_branch(self, index: int, stage_id: str) -> str:
+        return f"{self.stage_branch_namespace}/{index:03d}-{stage_id}"
+
+    def all_commands(self) -> list[tuple[str, str]]:
+        """Every executable string in the config, as (where, command).
+
+        Used by the denylist check and by preflight. If a new executable field
+        is added and not listed here, the denylist silently stops covering it —
+        so this is deliberately exhaustive rather than reflective.
+        """
+        out: list[tuple[str, str]] = []
+        for label, command in (
+            ("setup_command", self.setup_command),
+            ("test_command", self.test_command),
+            ("full_test_command", self.full_test_command),
+            ("scoped_test_command", self.scoped_test_command),
+            ("executor.lint_command", self.executor.lint_command),
+        ):
+            if command:
+                out.append((label, command))
+        for i, command in enumerate(self.stage_defaults.preconditions):
+            out.append((f"stage_defaults.preconditions[{i}]", command))
+        for i, command in enumerate(self.stage_defaults.context_commands):
+            out.append((f"stage_defaults.context_commands[{i}]", command))
+        for i, command in enumerate(self.stage_defaults.checks):
+            out.append((f"stage_defaults.checks[{i}]", command))
         return out
 
-    def stage_by_id(self, stage_id: str) -> Stage | None:
-        return next((s for s in self.stages if s.id == stage_id), None)
+    def stage_from_planner(self, fields: dict) -> Stage:
+        """Build a Stage from planner output, merging in operator-only fields.
+
+        The planner's fields are filtered against the allowlist rather than
+        trusted, so even a schema failure upstream cannot introduce an
+        executable field.
+        """
+        safe = {k: v for k, v in fields.items() if k in PLANNER_WRITABLE_FIELDS}
+        defaults = self.stage_defaults
+        return Stage(
+            **safe,
+            preconditions=list(defaults.preconditions),
+            context_commands=list(defaults.context_commands),
+            checks=list(defaults.checks),
+            require_new_tests=defaults.require_new_tests,
+            review=defaults.review,
+        )
 
 
-def parse_config(data: dict) -> RunConfig:
-    """Build a RunConfig from a plain dict, then apply the cross-field rules
-    pydantic cannot express."""
+def denylist_violations(commands: list[tuple[str, str]]) -> list[str]:
+    """Refused regardless of operator approval."""
+    problems = []
+    for where, command in commands:
+        for pattern, why in DENYLIST:
+            if pattern.search(command):
+                problems.append(
+                    f"{where}: command {command!r} matches the denylist "
+                    f"(/{pattern.pattern}/) — {why}. This is refused regardless "
+                    "of approval."
+                )
+    return problems
+
+
+def parse_config(data: dict) -> ProjectConfig:
     if not isinstance(data, dict):
         raise ConfigError(["config must be a YAML mapping"])
 
     try:
-        cfg = RunConfig.model_validate(data)
+        cfg = ProjectConfig.model_validate(data)
     except ValidationError as e:
         raise ConfigError(_format_pydantic_errors(e)) from e
 
@@ -185,7 +359,7 @@ def parse_config(data: dict) -> RunConfig:
     return cfg
 
 
-def load_config(path: Path | str) -> RunConfig:
+def load_config(path: Path | str) -> ProjectConfig:
     path = Path(path)
     try:
         raw = path.read_text()
@@ -203,104 +377,113 @@ def load_config(path: Path | str) -> RunConfig:
     return parse_config(data)
 
 
-def _format_pydantic_errors(e: ValidationError) -> list[str]:
-    problems = []
-    for err in e.errors():
-        loc = ".".join(str(p) for p in err["loc"]) or "(root)"
-        msg = err["msg"]
-        # Surface the offending key name for unknown-field errors, since
-        # pydantic puts it in loc rather than the message.
-        problems.append(f"{loc}: {msg}")
+def validate_stage(stage: Stage, cfg: ProjectConfig) -> list[str]:
+    """Well-formedness of a single stage, planner-derived or otherwise.
+
+    Runs before anything acts on a planner-produced spec: a bad stage should
+    fail here, cheaply, rather than as a confusing verify failure.
+    """
+    problems: list[str] = []
+    where = f"stage {stage.id!r}"
+
+    if not _SAFE_ID.match(stage.id):
+        problems.append(
+            f"stage id {stage.id!r} is not safe for a path or a git ref: use "
+            "letters, digits, dot, dash, underscore"
+        )
+
+    if stage.kind == "agent" and not stage.instruction:
+        problems.append(f"{where}: agent stages require an instruction")
+    if stage.kind == "script" and not stage.command:
+        problems.append(f"{where}: script stages require a command")
+    if stage.kind == "agent" and stage.command:
+        problems.append(
+            f"{where}: `command` belongs to script stages; this stage is an "
+            "agent stage"
+        )
+
+    if not stage.edit_files:
+        problems.append(
+            f"{where}: must declare edit_files — the scope guard is meaningless "
+            "without it, and a stage that cannot name its files is too broad "
+            "to be a stage"
+        )
+
+    if not stage.effective_test_command(cfg) and not stage.checks:
+        problems.append(
+            f"{where}: needs a test command (its own or the project's) or at "
+            "least one check — otherwise nothing verifies it"
+        )
+
+    for pattern in stage.forbidden_patterns:
+        try:
+            re.compile(pattern)
+        except re.error as e:
+            problems.append(
+                f"{where}: forbidden_patterns entry {pattern!r} is not a valid "
+                f"regex: {e}"
+            )
+
+    problems.extend(
+        denylist_violations(
+            [(f"{where}.command", stage.command)] if stage.command else []
+        )
+    )
+
     return problems
 
 
-def _structural_problems(cfg: RunConfig) -> list[str]:
+def _format_pydantic_errors(e: ValidationError) -> list[str]:
+    return [
+        f"{'.'.join(str(p) for p in err['loc']) or '(root)'}: {err['msg']}"
+        for err in e.errors()
+    ]
+
+
+def _structural_problems(cfg: ProjectConfig) -> list[str]:
     problems: list[str] = []
 
-    if cfg.branch == cfg.base_ref:
+    if cfg.project_branch == cfg.base_ref:
         problems.append(
-            f"branch {cfg.branch!r} must differ from base_ref {cfg.base_ref!r}: "
-            "the orchestrator must never commit to the branch it cuts from"
+            f"project_branch {cfg.project_branch!r} must differ from base_ref "
+            f"{cfg.base_ref!r}: the orchestrator must never commit to the "
+            "branch it cuts from"
         )
 
-    if not cfg.stages:
-        problems.append("stages: at least one stage is required")
-
-    seen: set[str] = set()
-    for stage in cfg.stages:
-        where = f"stage {stage.id!r}"
-
-        if stage.id in seen:
-            problems.append(
-                f"duplicate stage id {stage.id!r}: stage ids name log "
-                "directories and must be unique"
-            )
-        seen.add(stage.id)
-
-        if not _SAFE_ID.match(stage.id):
-            problems.append(
-                f"stage id {stage.id!r} is not path-safe: use letters, digits, "
-                "dot, dash, underscore"
-            )
-
-        problems.extend(_kind_problems(stage, where))
-
-        if stage.scope_guarded and not stage.edit_files:
-            problems.append(
-                f"{where}: {stage.kind} stages must declare edit_files — the "
-                "scope guard is meaningless without it, and a stage that "
-                "cannot name its files is too broad to be a stage"
-            )
-
-        if not stage.effective_test_command(cfg) and not stage.checks:
-            problems.append(
-                f"{where}: needs a test_command (its own or the global one) or "
-                "at least one entry in checks — otherwise nothing verifies it"
-            )
-
-        for pattern in stage.forbidden_patterns:
-            try:
-                re.compile(pattern)
-            except re.error as e:
-                problems.append(
-                    f"{where}: forbidden_patterns entry {pattern!r} is not a "
-                    f"valid regex: {e}"
-                )
-
-    for ref, path in zip(cfg.reference_docs, cfg.reference_doc_paths()):
-        if not path.is_file():
-            problems.append(f"reference_docs entry {ref!r} not found at {path}")
-
-    return problems
-
-
-# Fields that belong to exactly one stage kind. Presence on the wrong kind is
-# a misunderstanding worth failing on rather than ignoring.
-_KIND_FIELDS: dict[StageKind, str] = {
-    "agent": "instruction",
-    "script": "command",
-    "manual": "human_steps",
-}
-
-
-def _kind_problems(stage: Stage, where: str) -> list[str]:
-    problems = []
-    required = _KIND_FIELDS[stage.kind]
-
-    if not getattr(stage, required):
-        problems.append(f"{where}: {stage.kind} stages require {required}")
-
-    for kind, field in _KIND_FIELDS.items():
-        if kind != stage.kind and getattr(stage, field):
-            problems.append(
-                f"{where}: {field} belongs to {kind} stages, but this stage is "
-                f"kind {stage.kind!r}"
-            )
-
-    if stage.kind == "manual" and stage.context_commands:
+    if cfg.project_branch.endswith("/") or ".." in cfg.project_branch:
         problems.append(
-            f"{where}: context_commands feed an executor prompt; manual stages "
-            "have no executor"
+            f"project_branch {cfg.project_branch!r} is not a valid git ref"
         )
 
+    if not cfg.plan_root:
+        problems.append("plan_root is required: a project is defined by its plan")
+    elif Path(cfg.plan_root).is_absolute() or ".." in Path(cfg.plan_root).parts:
+        problems.append(
+            f"plan_root {cfg.plan_root!r} must be a repo-relative path that does "
+            "not escape the repo"
+        )
+    elif cfg.plan_root.endswith("/"):
+        problems.append(
+            f"plan_root {cfg.plan_root!r} looks like a directory. It must be a "
+            "single document — pointing at a directory sweeps every runbook and "
+            "ADR beside it into every review prompt"
+        )
+
+    if cfg.scoped_test_command and "{paths}" not in cfg.scoped_test_command:
+        problems.append(
+            "scoped_test_command must contain a {paths} placeholder — that is "
+            "the slot the orchestrator fills with the stage's changed files"
+        )
+
+    if not cfg.test_command and not cfg.stage_defaults.checks:
+        problems.append(
+            "a project needs test_command, or checks in stage_defaults, or "
+            "nothing will verify its stages"
+        )
+
+    for pattern in cfg.test_file_patterns:
+        if not pattern:
+            problems.append("test_file_patterns contains an empty pattern")
+
+    problems.extend(denylist_violations(cfg.all_commands()))
     return problems

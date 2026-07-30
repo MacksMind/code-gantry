@@ -321,15 +321,24 @@ stage explicitly names them.
 
 ```
 main
- └── <project_branch>                        # cut once; the tool never merges it
-      ├── <project_branch>/stage-001-<id>    # child branch; squash-merged, then deleted
-      ├── <project_branch>/stage-002-<id>
-      └── ...
+ └── <project_branch>                          # cut once; the tool never merges it
+
+<project_branch>-stage/001-<id>                # child branch; squash-merged, then deleted
+<project_branch>-stage/002-<id>
+...
 ```
+
+**Child branches sit beside the project branch, not under it.** Git refs are
+filesystem paths, so `refs/heads/upgrade/rails-5` is a file and
+`refs/heads/upgrade/rails-5/stage-001-x` would need it to be a directory. Git
+refuses with `cannot lock ref`. Appending `-stage` makes the namespace a
+sibling path component, which is a legal ref and still leaves the group
+greppable and deletable together:
+`git branch --list 'upgrade/rails-5-stage/*'`.
 
 - The project branch is cut from `base_ref` once, and the tool never merges it
   anywhere. The outer merge to `main` is the operator's.
-- Each stage gets a child branch under a namespace derived from the project
+- Each stage gets a child branch in a namespace derived from the project
   branch, so fifty of them stay greppable, deletable as a group, and unable to
   collide with real branches.
 - A stage is squash-merged to the project branch on approval, producing one
