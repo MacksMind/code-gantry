@@ -40,6 +40,11 @@ AIDER_FLAGS = [
     "--read",
 ]
 
+# Aider's client library requires *some* key for an `openai/`-prefixed model,
+# even when the endpoint it is pointed at serves without auth. The `sk-` prefix
+# satisfies any naive format check along the way.
+PLACEHOLDER_API_KEY = "sk-no-key-required"
+
 
 @dataclass
 class ExecutionResult:
@@ -141,11 +146,20 @@ class Executor:
         """Environment additions for the Aider subprocess.
 
         Aider talks to the local endpoint through the OpenAI-compatible
-        variables, so the configured key env var is mapped onto
-        OPENAI_API_KEY rather than passed as a flag.
+        variables, so a configured key env var is mapped onto OPENAI_API_KEY
+        rather than passed as a flag: a key in argv shows up in `ps` output and
+        in our own run log.
+
+        `api_key_env` is optional because a local endpoint — llama-swap,
+        llama.cpp, Ollama — serves without auth, so there is no key for an
+        operator to name. Aider's client still refuses to make the call with
+        none set at all, so a placeholder is supplied here. That is a
+        client-side requirement, not the server's.
         """
         env: dict[str, str] = {}
         name = self.cfg.executor.api_key_env
+        api_base = self.cfg.executor.api_base
+
         if name:
             if name not in os.environ:
                 raise KeyError(
@@ -153,6 +167,12 @@ class Executor:
                     "the environment"
                 )
             env["OPENAI_API_KEY"] = os.environ[name]
-        if self.cfg.executor.api_base:
-            env["OPENAI_API_BASE"] = self.cfg.executor.api_base
+        elif api_base:
+            # Only when an api_base redirects us somewhere local. With no
+            # api_base this is the real OpenAI endpoint, where a placeholder
+            # would turn a legible "you set no key" into a puzzling 401.
+            env["OPENAI_API_KEY"] = PLACEHOLDER_API_KEY
+
+        if api_base:
+            env["OPENAI_API_BASE"] = api_base
         return env

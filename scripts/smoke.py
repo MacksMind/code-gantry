@@ -545,11 +545,12 @@ def main() -> int:
         env = {
             **os.environ,
             "PATH": f"{root / 'bin'}{os.pathsep}{os.environ['PATH']}",
-            # The stand-in accepts anything; the clients refuse to build
-            # without them, which is itself worth exercising.
+            # The stand-in accepts anything; the two paid clients refuse to
+            # build without a key, which is itself worth exercising. The
+            # executor deliberately gets none — a local endpoint serves without
+            # auth, so this exercises the placeholder path.
             "ANTHROPIC_API_KEY": "smoke-planner-key",
             "OPENAI_API_KEY": "smoke-reviewer-key",
-            "LOCAL_API_KEY": "smoke-executor-key",
             "PYTHONPATH": str(Path(__file__).resolve().parent.parent / "src"),
         }
 

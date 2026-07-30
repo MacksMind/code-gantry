@@ -14,7 +14,7 @@ import pytest
 
 from orchestrator.commands import CommandRunner
 from orchestrator.config import Stage, parse_config
-from orchestrator.executor import Executor, build_aider_argv
+from orchestrator.executor import PLACEHOLDER_API_KEY, Executor, build_aider_argv
 
 
 BASE_STAGE = {"id": "s1", "instruction": "do it", "edit_files": ["app/**", "src/*.py"]}
@@ -168,6 +168,47 @@ class TestRunAgentStage:
         recorded = json.loads(fake_aider.read_text())
         assert "sk-secret-value" not in " ".join(recorded["argv"])
         assert recorded["env"]["OPENAI_API_KEY"] == "sk-secret-value"
+
+    def test_a_local_endpoint_needs_no_configured_key(self, repo, fake_aider):
+        # llama-swap and llama.cpp serve without auth, so there is nothing for
+        # an operator to put in a key env var. Aider's client still refuses to
+        # make the call with no key set at all, so the placeholder is supplied
+        # here rather than being one more thing to export.
+        cfg, stage = cfg_with(
+            target_repo=str(repo),
+            executor={"model": "openai/local", "api_base": "http://spark:8080/v1"},
+        )
+        result = Executor(cfg, CommandRunner(cwd=repo, timeout=60)).run_agent_stage(
+            stage, "p"
+        )
+        assert result.ok
+        recorded = json.loads(fake_aider.read_text())
+        assert recorded["env"]["OPENAI_API_BASE"] == "http://spark:8080/v1"
+        assert recorded["env"]["OPENAI_API_KEY"] == PLACEHOLDER_API_KEY
+
+    def test_a_configured_key_beats_the_placeholder(self, repo, fake_aider, monkeypatch):
+        # An endpoint that does want auth must still get the real key.
+        monkeypatch.setenv("GATEWAY_KEY", "sk-real")
+        cfg, stage = cfg_with(
+            target_repo=str(repo),
+            executor={
+                "model": "openai/m",
+                "api_base": "https://gateway.example/v1",
+                "api_key_env": "GATEWAY_KEY",
+            },
+        )
+        Executor(cfg, CommandRunner(cwd=repo, timeout=60)).run_agent_stage(stage, "p")
+        recorded = json.loads(fake_aider.read_text())
+        assert recorded["env"]["OPENAI_API_KEY"] == "sk-real"
+
+    def test_no_placeholder_without_an_api_base(self, repo, fake_aider):
+        # No api_base means the real OpenAI endpoint, which genuinely needs a
+        # key. Injecting a placeholder there would turn a legible "you set no
+        # key" into a puzzling 401 from a paid service.
+        cfg, stage = cfg_with(target_repo=str(repo), executor={"model": "gpt-4o"})
+        Executor(cfg, CommandRunner(cwd=repo, timeout=60)).run_agent_stage(stage, "p")
+        recorded = json.loads(fake_aider.read_text())
+        assert "OPENAI_API_KEY" not in recorded["env"]
 
     def test_missing_api_key_env_var_is_an_error(self, repo, fake_aider):
         cfg, stage = cfg_with(

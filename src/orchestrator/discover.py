@@ -104,9 +104,14 @@ def draft_config(repo: Path, plan_rel: str) -> tuple[str, list[str]]:
     lines.append("")
 
     lines.append("executor:")
-    lines.append('  model: "openai/<local-model-id>"      # llama.cpp on the Spark')
+    lines.append("  # The name after `openai/` is what goes in the request body's")
+    lines.append("  # `model` field, so it must match a key in llama-swap's config")
+    lines.append("  # exactly. `curl <api_base>/models` lists the names it accepts.")
+    lines.append('  model: "openai/<local-model-id>"')
     lines.append('  api_base: "http://<spark-host>:<port>/v1"')
-    lines.append('  api_key_env: "LOCAL_API_KEY"          # a dummy value is fine')
+    lines.append("  # No api_key_env: a local endpoint serves without auth, and the")
+    lines.append("  # placeholder Aider's client insists on is supplied for you.")
+    lines.append("  # Set one only if you put an authenticating gateway in front.")
     lint, lint_note = _discover_lint(repo)
     if lint:
         lines.append(f'  lint_command: "{lint}"')

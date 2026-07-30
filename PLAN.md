@@ -905,9 +905,14 @@ scoped_test_command: "docker compose run --rm test bundle exec rspec {paths}"
 full_suite_on_approval: true
 
 executor:
-  model: "openai/<local-model-id>"       # llama.cpp on the Spark
+  # llama-swap on the Spark. The name after `openai/` is a client-side routing
+  # prefix, stripped before the request; what reaches the endpoint in the body's
+  # `model` field is the remainder, so it must match a llama-swap config key.
+  model: "openai/<local-model-id>"
   api_base: "http://<spark-host>:<port>/v1"
-  api_key_env: "LOCAL_API_KEY"           # dummy value is fine for llama.cpp
+  # No api_key_env. A local endpoint serves without auth, so there is no key to
+  # name; the placeholder Aider's client insists on is supplied by the executor.
+  # Set one only for an authenticating gateway in front of the endpoint.
   lint_command: "docker compose run --rm test bundle exec rubocop -a"
   map_tokens: 0                          # repo map off; stages declare their files
 
