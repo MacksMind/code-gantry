@@ -120,3 +120,69 @@ class TestPlannerCacheBreakpoint:
             cfg=None, plan=a_plan(), completed=[], layout="L", status_tail="b"
         )
         assert first[0] == second[0]
+
+
+class TestPerProjectGuidance:
+    """Operator prose appended to the planner's system prompt.
+
+    It lives inline in config.yaml rather than in a file the config points at,
+    because approval hashes config.yaml's bytes. Guidance in a separate file
+    could be rewritten after approval and change how the planner behaves
+    without invalidating anything.
+
+    It cannot weaken the safety partition whatever it says: the planner's
+    schema has no field for a command and the allowlist filters the response
+    regardless. This is advice, not permission.
+    """
+
+    def test_guidance_reaches_the_system_prompt(self):
+        from orchestrator.planner import _system_blocks
+
+        blocks = _system_blocks(guidance="Prefer stages of one file each.")
+        assert "Prefer stages of one file each." in blocks[0]["text"]
+
+    def test_guidance_is_inside_the_cached_block(self):
+        # It is fixed for the run, so it belongs in the prefix rather than
+        # being re-sent uncached on every call.
+        from orchestrator.planner import _system_blocks
+
+        blocks = _system_blocks(guidance="G", cache_ttl="1h")
+        assert len(blocks) == 1
+        assert blocks[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+
+    def test_no_guidance_changes_nothing(self):
+        from orchestrator.planner import _system_blocks
+
+        assert _system_blocks()[0]["text"] == _system_blocks(guidance="")[0]["text"]
+
+    def test_guidance_is_attributed_to_the_operator(self):
+        # The planner should be able to tell project policy from the standing
+        # contract, and weigh a conflict knowingly rather than silently.
+        from orchestrator.planner import _system_blocks
+
+        text = _system_blocks(guidance="G")[0]["text"]
+        assert "project" in text.lower().split("## ")[-1]
+
+    def test_it_is_not_a_planner_writable_field(self):
+        from orchestrator.config import PLANNER_WRITABLE_FIELDS
+        from orchestrator.planner import PlannedStage
+
+        assert "guidance" not in PlannedStage.model_fields
+        assert "guidance" not in PLANNER_WRITABLE_FIELDS
+
+
+class TestDeployableIncrements:
+    def test_the_prompt_asks_for_independently_shippable_stages(self):
+        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+
+        lowered = PLANNER_SYSTEM_PROMPT.lower()
+        assert "deploy" in lowered
+
+    def test_the_prompt_permits_reordering_the_plan(self):
+        # A step needing access the run does not have should be deferred, not
+        # escalated — but only if the planner knows it is allowed to.
+        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+
+        lowered = PLANNER_SYSTEM_PROMPT.lower()
+        assert "reorder" in lowered or "out of order" in lowered
+        assert "defer" in lowered

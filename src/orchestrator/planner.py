@@ -260,7 +260,7 @@ class AnthropicPlanner:
                 # budget truncates the verdict rather than the reasoning.
                 max_tokens=16_000,
                 output_config={"effort": "high"},
-                system=_system_blocks(self.cfg.cache_ttl),
+                system=_system_blocks(self.cfg.cache_ttl, self.cfg.guidance),
                 messages=messages,
                 output_format=PlannerResponse,
             )
@@ -347,9 +347,18 @@ stage, an environment problem.
 
 ## What a good stage looks like
 
-- **One shippable unit.** It lands as a single squashed commit on the project
-  branch, must pass its tests and the full suite, and must make sense to a
-  human reading the log later.
+- **One deployable increment.** It lands as a single squashed commit on the
+  project branch, must pass its tests and the full suite, and must be
+  independently shippable to production on its own — not merely a tidy commit,
+  but a change the operator could deploy without waiting for the next stage.
+  It must also make sense to a human reading the log later.
+- **Small enough to land quickly.** If the same mechanical change applies to
+  seventy files and each file could deploy on its own, that is closer to
+  seventy stages than to one. Prefer many small stages over one large one
+  wherever the increments are genuinely independent: a stage that runs for
+  hours risks more, reverts worse, and tells you less when it fails. Group
+  files into one stage only when they must ship together to keep the tree
+  green.
 - **Narrow scope.** `edit_files` is enforced: a diff touching anything outside
   it fails the stage. Include the tests that must change. Do not pad the globs
   to be safe — an over-broad stage defeats the guard that protects the run.
@@ -361,6 +370,26 @@ stage, an environment problem.
   `constraints`. The reviewer enforces it. Where the condition can be written
   as a regex over added lines, put it in `forbidden_patterns` too; that is
   checked mechanically before anything is run and costs nothing.
+
+## The order of the plan
+
+The plan document is the authority on *what* must happen. It is not
+necessarily the authority on *when*. You may take steps out of order, or defer
+one and come back to it, when the plan's order is incidental rather than
+required — a step needing credentials or access this run does not have is the
+usual case, and deferring it is far better than stopping a run that could have
+completed forty other stages.
+
+Two obligations come with that latitude:
+
+- **Only when it is safe.** If a later step depends on an earlier one — a
+  migration before the code that reads the new column, a version bump before
+  the API it enables — the order is required and you must keep it. When in
+  doubt, keep the plan's order.
+- **Never silently.** Say in `status_entry` that you deferred it and why, and
+  repeat it in each subsequent entry until it is done or the run ends. When you
+  return `project_complete`, list anything still deferred in `reasoning`.
+  "Complete" must never quietly mean "complete except the parts I skipped".
 
 ## Mechanical work
 
@@ -412,16 +441,35 @@ def cache_control(ttl: str | None = None) -> dict:
     return marker
 
 
-def _system_blocks(cache_ttl: str | None = None) -> list[dict]:
+def _system_blocks(
+    cache_ttl: str | None = None, guidance: str | None = None
+) -> list[dict]:
     """The system prompt as a cacheable block.
 
     It never changes across a run, so it belongs in the cached prefix along
-    with the plan snapshot and completed history.
+    with the plan snapshot and completed history — and so does the operator's
+    per-project guidance, which is fixed for the run too.
+
+    Guidance is appended rather than interleaved, and labelled as the
+    operator's, so the planner can tell project policy from the standing
+    contract and weigh a conflict knowingly instead of silently. It cannot
+    weaken the safety partition whatever it says: there is no field in the
+    response schema for a command, and the allowlist filters the result
+    regardless.
     """
+    text = PLANNER_SYSTEM_PROMPT
+    if guidance and guidance.strip():
+        text += (
+            "\n\n## Guidance for this project\n\n"
+            "Written by the operator for this project specifically. It refines "
+            "everything above; where it genuinely conflicts, say so in "
+            "`reasoning` rather than choosing in silence.\n\n"
+            + guidance.strip()
+        )
     return [
         {
             "type": "text",
-            "text": PLANNER_SYSTEM_PROMPT,
+            "text": text,
             "cache_control": cache_control(cache_ttl),
         }
     ]

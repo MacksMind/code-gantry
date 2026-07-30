@@ -187,6 +187,11 @@ class PlannerConfig(_EndpointConfig):
     # buys a longer window at a higher write cost; leave unset to take the
     # provider default.
     cache_ttl: str | None = None
+    # Operator prose appended to the planner's system prompt, fixed for the
+    # run. Inline rather than a path to a file: approval hashes this file's
+    # bytes, and guidance living elsewhere could be rewritten after approval to
+    # change how the planner behaves without invalidating anything.
+    guidance: str | None = None
     request_timeout_seconds: float = 900.0
     max_retries: int = 2
 
