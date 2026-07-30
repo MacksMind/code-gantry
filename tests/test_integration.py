@@ -1,0 +1,449 @@
+"""End-to-end runs through the real graph.
+
+The real checkpointer, real git operations, real verify layers, real branch
+topology. Only the three model calls are stubbed: a fake `aider` on PATH that
+edits files, a scripted planner, and a scripted reviewer.
+"""
+
+import json
+import os
+import stat
+import time
+from dataclasses import dataclass, field
+
+import pytest
+
+from orchestrator.config import parse_config
+from orchestrator.gitops import Git
+from orchestrator.graph import build_graph, open_checkpointer, recursion_limit
+from orchestrator.plandoc import PlanDocument, PlanTree
+from orchestrator.planner import PlannerOutcome, PlannerUsage
+from orchestrator.report import build_report
+from orchestrator.reviewer import ReviewOutcome, TokenUsage
+from orchestrator.runtime import ProjectPaths, RunPaths, Runtime
+from orchestrator.state import new_state
+
+
+@dataclass
+class ScriptedPlanner:
+    outcomes: list = field(default_factory=list)
+    calls: int = 0
+
+    def plan(self, messages):
+        self.calls += 1
+        if self.outcomes:
+            return self.outcomes.pop(0)
+        return PlannerOutcome(
+            "project_complete", "plan executed", "e", usage=PlannerUsage(800, 700, 60)
+        )
+
+
+@dataclass
+class ScriptedReviewer:
+    outcomes: list = field(default_factory=list)
+    calls: int = 0
+
+    def review(self, messages):
+        self.calls += 1
+        if self.outcomes:
+            return self.outcomes.pop(0)
+        return ReviewOutcome(
+            verdict="approved", summary="fine", usage=TokenUsage(9000, 60, 8500)
+        )
+
+
+def stage_spec(**over):
+    fields = {
+        "id": "extract",
+        "instruction": "Extract the thing.",
+        "edit_files": ["app.py", "src/**"],
+    }
+    fields.update(over)
+    return fields
+
+
+@pytest.fixture
+def fake_aider(tmp_path, monkeypatch):
+    """An `aider` that applies the next scripted edit from a queue."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    queue = tmp_path / "edits.json"
+    queue.write_text("[]")
+    script = bindir / "aider"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, pathlib\n"
+        f"q = pathlib.Path({str(queue)!r})\n"
+        "edits = json.loads(q.read_text())\n"
+        "if edits:\n"
+        "    step = edits.pop(0)\n"
+        "    q.write_text(json.dumps(edits))\n"
+        "    for name, text in step.items():\n"
+        "        p = pathlib.Path(name)\n"
+        "        p.parent.mkdir(parents=True, exist_ok=True)\n"
+        "        p.write_text(text)\n"
+        "print('aider done')\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    return queue
+
+
+def drive(repo, tmp_path, planner=None, reviewer=None, state=None, run_id="r1", **cfg_over):
+    data = {
+        "target_repo": str(repo),
+        "base_ref": "main",
+        "project_branch": "proj",
+        "plan_root": "PLAN.md",
+        "test_command": "true",
+        "full_test_command": "true",
+        "executor": {"model": "openai/local"},
+        "planner": {"model": "claude-opus-5"},
+        "reviewer": {"model": "gpt-5.5"},
+    }
+    data.update(cfg_over)
+    cfg = parse_config(data)
+
+    project = ProjectPaths("proj-slug", root=tmp_path / "projects")
+    project.ensure()
+    paths = RunPaths(project, run_id)
+    paths.ensure()
+
+    from orchestrator.commands import CommandRunner
+    from orchestrator.executor import Executor
+
+    runner = CommandRunner(cwd=repo, timeout=60)
+    saver, conn = open_checkpointer(paths.state_db)
+    try:
+        rt = Runtime(
+            cfg=cfg,
+            project=project,
+            paths=paths,
+            git=Git(repo),
+            runner=runner,
+            executor=Executor(cfg, runner),
+            planner=planner or ScriptedPlanner(),
+            reviewer=reviewer or ScriptedReviewer(),
+        )
+        rt._plan = PlanTree(root=PlanDocument(path="PLAN.md", content="# The plan"))
+
+        base_sha = rt.git.ensure_project_branch("proj", "main")
+        if state is None:
+            state = new_state(
+                run_id=run_id,
+                project_slug="proj-slug",
+                config_hash="hash",
+                target_repo=str(repo),
+                base_ref="main",
+                base_sha=base_sha,
+                project_branch="proj",
+                started_at=time.time(),
+            )
+        graph = build_graph(rt, checkpointer=saver)
+        final = graph.invoke(
+            state,
+            {
+                "configurable": {"thread_id": run_id},
+                "recursion_limit": recursion_limit(60, 3, 2, 12),
+            },
+        )
+        return cfg, project, paths, final
+    finally:
+        conn.close()
+
+
+class TestTwoStageProject:
+    def test_completes_and_lands_one_commit_per_stage(self, repo, tmp_path, fake_aider):
+        fake_aider.write_text(
+            json.dumps([{"app.py": "first stage\n"}, {"src/two.py": "second stage\n"}])
+        )
+        planner = ScriptedPlanner([
+            PlannerOutcome("next_stage", "first", "e", stage_fields=stage_spec(id="one")),
+            PlannerOutcome("next_stage", "second", "e", stage_fields=stage_spec(id="two")),
+            PlannerOutcome("project_complete", "done", "e"),
+        ])
+        cfg, project, paths, final = drive(repo, tmp_path, planner=planner)
+
+        assert final["status"] == "complete"
+        assert [e["id"] for e in final["completed"]] == ["one", "two"]
+
+        g = Git(repo)
+        assert g.current_branch() == "proj"
+        log = g._out("log", "--pretty=%s", "-3")
+        assert "[one]" in log and "[two]" in log
+
+    def test_child_branches_are_deleted_after_landing(self, repo, tmp_path, fake_aider):
+        fake_aider.write_text(json.dumps([{"app.py": "a\n"}]))
+        planner = ScriptedPlanner([
+            PlannerOutcome("next_stage", "r", "e", stage_fields=stage_spec()),
+            PlannerOutcome("project_complete", "done", "e"),
+        ])
+        drive(repo, tmp_path, planner=planner)
+        assert Git(repo).branches_matching("proj-stage/") == []
+
+    def test_base_ref_is_never_touched(self, repo, tmp_path, fake_aider):
+        before = Git(repo).rev_parse("main")
+        fake_aider.write_text(json.dumps([{"app.py": "a\n"}]))
+        planner = ScriptedPlanner([
+            PlannerOutcome("next_stage", "r", "e", stage_fields=stage_spec()),
+            PlannerOutcome("project_complete", "done", "e"),
+        ])
+        drive(repo, tmp_path, planner=planner)
+        assert Git(repo).rev_parse("main") == before
+
+    def test_reviewer_is_called_once_per_landed_stage(self, repo, tmp_path, fake_aider):
+        fake_aider.write_text(json.dumps([{"app.py": "a\n"}, {"src/b.py": "b\n"}]))
+        reviewer = ScriptedReviewer()
+        planner = ScriptedPlanner([
+            PlannerOutcome("next_stage", "r", "e", stage_fields=stage_spec(id="one")),
+            PlannerOutcome("next_stage", "r", "e", stage_fields=stage_spec(id="two")),
+            PlannerOutcome("project_complete", "done", "e"),
+        ])
+        drive(repo, tmp_path, planner=planner, reviewer=reviewer)
+        assert reviewer.calls == 2
+
+    def test_writes_artifacts_per_revision_and_attempt(self, repo, tmp_path, fake_aider):
+        fake_aider.write_text(json.dumps([{"app.py": "a\n"}]))
+        planner = ScriptedPlanner([
+            PlannerOutcome("next_stage", "r", "e", stage_fields=stage_spec()),
+            PlannerOutcome("project_complete", "done", "e"),
+        ])
+        cfg, project, paths, final = drive(repo, tmp_path, planner=planner)
+        directory = paths.attempt_dir(0, "extract", 0, 0)
+        assert (directory / "prompt.md").exists()
+        assert (directory / "executor.log").exists()
+        assert (directory / "verify.log").exists()
+        assert json.loads((directory / "review.json").read_text())["verdict"] == "approved"
+
+    def test_status_log_accumulates_planner_decisions(self, repo, tmp_path, fake_aider):
+        fake_aider.write_text(json.dumps([{"app.py": "a\n"}]))
+        planner = ScriptedPlanner([
+            PlannerOutcome("next_stage", "deriving", "FIRST ENTRY", stage_fields=stage_spec()),
+            PlannerOutcome("project_complete", "done", "SECOND ENTRY"),
+        ])
+        cfg, project, paths, final = drive(repo, tmp_path, planner=planner)
+        body = project.status.read_text()
+        assert "FIRST ENTRY" in body and "SECOND ENTRY" in body
+        assert body.index("FIRST ENTRY") < body.index("SECOND ENTRY")
+
+
+class TestPlannerInterventionLoop:
+    def test_a_scope_violation_is_recovered_by_widening(self, repo, tmp_path, fake_aider):
+        # The executor touches a file outside its box; the planner widens the
+        # stage; the existing work stands and the stage lands.
+        fake_aider.write_text(
+            json.dumps([{"app.py": "in scope\n", "extra.py": "out of scope\n"}])
+        )
+        planner = ScriptedPlanner([
+            PlannerOutcome("next_stage", "r", "e", stage_fields=stage_spec()),
+            PlannerOutcome(
+                "revise", "those files belong here", "e",
+                stage_fields=stage_spec(edit_files=["app.py", "src/**", "extra.py"]),
+                revision_mode="extend",
+            ),
+            PlannerOutcome("project_complete", "done", "e"),
+        ])
+        cfg, project, paths, final = drive(repo, tmp_path, planner=planner)
+
+        assert final["status"] == "complete"
+        assert final["completed"][0]["revisions"] == 1
+        # The work survived rather than being redone.
+        assert (repo / "extra.py").exists()
+
+    def test_a_declined_path_is_reverted_but_the_stage_still_lands(
+        self, repo, tmp_path, fake_aider
+    ):
+        fake_aider.write_text(
+            json.dumps([
+                {"app.py": "hours of work\n", "extra.py": "wandered\n"},
+                {"app.py": "hours of work, still here\n"},
+            ])
+        )
+        planner = ScriptedPlanner([
+            PlannerOutcome("next_stage", "r", "e", stage_fields=stage_spec()),
+            PlannerOutcome(
+                "revise", "that file does not belong", "e",
+                stage_fields=stage_spec(), revision_mode="extend",
+            ),
+            PlannerOutcome("project_complete", "done", "e"),
+        ])
+        cfg, project, paths, final = drive(repo, tmp_path, planner=planner)
+        assert final["status"] == "complete"
+        assert not (repo / "extra.py").exists()
+
+    def test_a_blocked_review_routes_to_the_planner_not_a_human(
+        self, repo, tmp_path, fake_aider
+    ):
+        fake_aider.write_text(json.dumps([{"app.py": "a\n"}, {"app.py": "b\n"}]))
+        reviewer = ScriptedReviewer([
+            ReviewOutcome(verdict="blocked", summary="instruction is wrong"),
+            ReviewOutcome(verdict="approved", summary="better"),
+        ])
+        planner = ScriptedPlanner([
+            PlannerOutcome("next_stage", "r", "e", stage_fields=stage_spec()),
+            PlannerOutcome(
+                "revise", "rewriting the instruction", "e",
+                stage_fields=stage_spec(instruction="Extract it properly."),
+                revision_mode="restart",
+            ),
+            PlannerOutcome("project_complete", "done", "e"),
+        ])
+        cfg, project, paths, final = drive(
+            repo, tmp_path, planner=planner, reviewer=reviewer
+        )
+        assert final["status"] == "complete"
+        assert final["planner_interventions"] == 1
+
+    def test_restart_discards_the_branch_and_re_cuts(self, repo, tmp_path, fake_aider):
+        fake_aider.write_text(
+            json.dumps([{"app.py": "wrong approach\n"}, {"app.py": "right approach\n"}])
+        )
+        reviewer = ScriptedReviewer([
+            ReviewOutcome(verdict="blocked", summary="wrong approach"),
+            ReviewOutcome(verdict="approved", summary="ok"),
+        ])
+        planner = ScriptedPlanner([
+            PlannerOutcome("next_stage", "r", "e", stage_fields=stage_spec()),
+            PlannerOutcome(
+                "revise", "start over", "e",
+                stage_fields=stage_spec(), revision_mode="restart",
+            ),
+            PlannerOutcome("project_complete", "done", "e"),
+        ])
+        cfg, project, paths, final = drive(
+            repo, tmp_path, planner=planner, reviewer=reviewer
+        )
+        assert final["status"] == "complete"
+        assert (repo / "app.py").read_text() == "right approach\n"
+
+    def test_exhausted_test_retries_reach_the_planner(self, repo, tmp_path, fake_aider):
+        fake_aider.write_text(json.dumps([{"app.py": f"try {i}\n"} for i in range(8)]))
+        planner = ScriptedPlanner([
+            PlannerOutcome("next_stage", "r", "e", stage_fields=stage_spec()),
+            PlannerOutcome("blocked", "the tests cannot pass as specified", "e"),
+        ])
+        cfg, project, paths, final = drive(
+            repo, tmp_path, planner=planner, test_command="exit 1"
+        )
+        assert final["status"] == "escalated"
+        assert planner.calls == 2
+
+
+class TestEscalationPaths:
+    def test_a_planner_block_escalates(self, repo, tmp_path, fake_aider):
+        planner = ScriptedPlanner([PlannerOutcome("blocked", "the plan contradicts itself", "e")])
+        cfg, project, paths, final = drive(repo, tmp_path, planner=planner)
+        assert final["status"] == "escalated"
+        assert "contradicts" in final["escalation_reason"]
+
+    def test_setup_failure_escalates_to_a_human(self, repo, tmp_path, fake_aider):
+        planner = ScriptedPlanner([
+            PlannerOutcome("next_stage", "r", "e", stage_fields=stage_spec())
+        ])
+        cfg, project, paths, final = drive(
+            repo, tmp_path, planner=planner, setup_command="exit 1"
+        )
+        assert final["status"] == "escalated"
+        assert final["failure_layer"] == "setup"
+
+    def test_exhausted_planner_budget_escalates(self, repo, tmp_path, fake_aider):
+        fake_aider.write_text(json.dumps([{"app.py": f"try {i}\n"} for i in range(20)]))
+        # A planner that keeps revising without ever fixing anything.
+        planner = ScriptedPlanner(
+            [PlannerOutcome("next_stage", "r", "e", stage_fields=stage_spec())]
+            + [
+                PlannerOutcome(
+                    "revise", "again", "e", stage_fields=stage_spec(),
+                    revision_mode="restart",
+                )
+                for _ in range(10)
+            ]
+        )
+        cfg, project, paths, final = drive(
+            repo, tmp_path, planner=planner, test_command="exit 1",
+            limits={"max_planner_interventions": 2, "max_test_retries": 1},
+        )
+        assert final["status"] == "escalated"
+        assert "budget is exhausted" in final["escalation_reason"]
+
+    def test_a_red_full_suite_at_the_end_escalates(self, repo, tmp_path, fake_aider):
+        planner = ScriptedPlanner([PlannerOutcome("project_complete", "done", "e")])
+        cfg, project, paths, final = drive(
+            repo, tmp_path, planner=planner, full_test_command="exit 1"
+        )
+        assert final["status"] == "escalated"
+        assert "project branch tip" in final["escalation_reason"]
+
+
+class TestResume:
+    def test_a_repo_state_failure_resumes_at_verify(self, repo, tmp_path, fake_aider):
+        # The human fixes the repo; the run must check the fix rather than
+        # re-running the stage and discarding it.
+        fake_aider.write_text(json.dumps([{"app.py": "work\n"}]))
+        planner = ScriptedPlanner([
+            PlannerOutcome("next_stage", "r", "e", stage_fields=stage_spec()),
+            # The planner cannot fix a failing operator-authored check, so it
+            # correctly hands the run to a human.
+            PlannerOutcome("blocked", "the check needs a file only a human can make", "e"),
+        ])
+        cfg, project, paths, first = drive(
+            repo, tmp_path, planner=planner,
+            stage_defaults={"checks": ["test -f fixed.txt"]},
+            limits={"max_test_retries": 0},
+        )
+        assert first["status"] == "escalated"
+
+        # The human does the fix, leaving it uncommitted as they would.
+        (repo / "fixed.txt").write_text("done\n")
+        planner2 = ScriptedPlanner([PlannerOutcome("project_complete", "done", "e")])
+        cfg, project, paths, final = drive(
+            repo, tmp_path, planner=planner2,
+            stage_defaults={"checks": ["test -f fixed.txt"]},
+            limits={"max_test_retries": 0},
+            state={"resuming": True, "next_hop": ""},
+            run_id="r1",
+        )
+        assert final["status"] == "complete"
+
+    def test_state_is_readable_after_the_run(self, repo, tmp_path, fake_aider):
+        planner = ScriptedPlanner([PlannerOutcome("project_complete", "done", "e")])
+        cfg, project, paths, final = drive(repo, tmp_path, planner=planner)
+
+        saver, conn = open_checkpointer(paths.state_db)
+        try:
+            from orchestrator.commands import CommandRunner
+            from orchestrator.executor import Executor
+
+            runner = CommandRunner(cwd=repo, timeout=60)
+            rt = Runtime(
+                cfg=cfg, project=project, paths=paths, git=Git(repo), runner=runner,
+                executor=Executor(cfg, runner), planner=None, reviewer=None,
+            )
+            graph = build_graph(rt, checkpointer=saver)
+            snapshot = graph.get_state({"configurable": {"thread_id": "r1"}})
+            assert snapshot.values["status"] == "complete"
+        finally:
+            conn.close()
+
+
+class TestReportOnRealRun:
+    def test_describes_landed_stages_and_costs(self, repo, tmp_path, fake_aider):
+        fake_aider.write_text(json.dumps([{"app.py": "a\n"}]))
+        planner = ScriptedPlanner([
+            PlannerOutcome("next_stage", "r", "e", stage_fields=stage_spec()),
+            PlannerOutcome("project_complete", "done", "e", usage=PlannerUsage(900, 800, 70)),
+        ])
+        cfg, project, paths, final = drive(repo, tmp_path, planner=planner)
+        report = build_report(final, cfg)
+        assert "extract" in report
+        assert "Stage records" in report
+        assert "Reviewer" in report and "Planner" in report
+        # The economic check: cached proportion is visible.
+        assert "cached" in report
+
+    def test_describes_an_escalation_with_the_resume_hint(self, repo, tmp_path, fake_aider):
+        planner = ScriptedPlanner([PlannerOutcome("blocked", "cannot proceed", "e")])
+        cfg, project, paths, final = drive(repo, tmp_path, planner=planner)
+        report = build_report(final, cfg)
+        assert "Why it stopped" in report
+        assert "orchestrator resume" in report
