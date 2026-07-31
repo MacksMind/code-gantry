@@ -19,6 +19,7 @@ Two things worth knowing:
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -121,11 +122,40 @@ def _absolute(path: Path | str) -> str:
     return str(Path(path).expanduser().resolve())
 
 
+_TOKENS_SENT = re.compile(r"Tokens:\s*([\d,.]+)([km]?)\s+sent", re.IGNORECASE)
+
+
+def context_tokens_from_log(log: str) -> int:
+    """How much context the executor actually held, from Aider's own report.
+
+    Stage sizing is guesswork without this. Two stages that each edited "one
+    file" differed by 3.4x in what the executor loaded — 14k tokens for a small
+    leaf controller against 47k for a 1,935-line one — so a file count, which
+    is what a planner can see, does not describe the constraint that decides
+    whether a batch fits.
+
+    The largest report wins. Aider prints one per exchange and a reflection
+    produces several; what bounds the next stage is the high-water mark, not
+    the last thing it happened to say.
+    """
+    biggest = 0
+    for amount, scale in _TOKENS_SENT.findall(log or ""):
+        try:
+            value = float(amount.replace(",", ""))
+        except ValueError:  # pragma: no cover - defensive
+            continue
+        value *= {"k": 1_000, "m": 1_000_000}.get(scale.lower(), 1)
+        biggest = max(biggest, int(value))
+    return biggest
+
+
 @dataclass
 class ExecutionResult:
     ok: bool
     log: str = ""
     timed_out: bool = False
+    # Peak context Aider reported for this attempt, or 0 if it never said.
+    context_tokens: int = 0
     results: list[CommandResult] = field(default_factory=list)
     # Aider ran and exited cleanly, but produced no edit because it could not
     # parse the model's reply. A different failure from a crash, and one the
@@ -323,6 +353,7 @@ def _classify_execution(result) -> ExecutionResult:
         timed_out=result.timed_out,
         results=[result],
         unapplied_edit=unapplied,
+        context_tokens=context_tokens_from_log(result.output),
     )
 
 

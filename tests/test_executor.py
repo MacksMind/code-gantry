@@ -918,3 +918,39 @@ class TestAutoTestHasItsOwnCommand:
             test_paths=["spec/a_spec.rb"],
         )
         assert resolve_test_command(stage, cfg, g, sha) == "rspec spec/a_spec.rb"
+
+
+class TestTheExecutorsContextCostIsMeasured:
+    """How much the executor actually had to hold, per attempt.
+
+    Stage sizing is guesswork without it. Two stages that both edit "one file"
+    differed by 3.4x in what the executor loaded — 14k tokens for a small leaf
+    controller, 47k for a 1,935-line one — and nothing recorded the difference,
+    so a planner batching "up to ten files" was sizing by a number that does
+    not describe the constraint.
+
+    Aider prints the figure on every attempt and it was being discarded.
+    """
+
+    def test_tokens_sent_are_parsed_from_the_log(self):
+        from orchestrator.executor import context_tokens_from_log
+
+        assert context_tokens_from_log("> Tokens: 14k sent, 268 received.") == 14_000
+
+    def test_a_plain_count_is_read_exactly(self):
+        from orchestrator.executor import context_tokens_from_log
+
+        assert context_tokens_from_log("> Tokens: 8,192 sent, 41 received.") == 8_192
+
+    def test_the_last_report_wins(self):
+        # Aider prints one per exchange; a reflection produces several, and the
+        # largest context the attempt reached is the one that matters.
+        from orchestrator.executor import context_tokens_from_log
+
+        log = "> Tokens: 9k sent, 1 received.\n...\n> Tokens: 31k sent, 2 received.\n"
+        assert context_tokens_from_log(log) == 31_000
+
+    def test_a_log_without_the_line_reports_nothing(self):
+        from orchestrator.executor import context_tokens_from_log
+
+        assert context_tokens_from_log("no usage here") == 0

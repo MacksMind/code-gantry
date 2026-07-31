@@ -252,6 +252,16 @@ def _history_block(completed: list[StageResult], addendum_path: str | None = Non
         line += "\n\n" + (entry.get("instruction") or "").strip()
         if entry.get("merge_sha"):
             line += f"\n\nLanded as `{entry['merge_sha'][:12]}`."
+        # What the executor actually had to hold. The only honest basis for
+        # sizing the next stage: a file count says nothing, since two stages
+        # that each edited one file have differed here by more than threefold.
+        # Absent for script stages and for runs that predate the measurement,
+        # and omitted rather than rendered as a zero the planner might read as
+        # free.
+        if entry.get("executor_context_tokens"):
+            line += (
+                f"\nExecutor context: {entry['executor_context_tokens']:,} tokens."
+            )
         if entry.get("review_summary"):
             line += f"\nReviewer: {entry['review_summary']}"
         entries.append(line)

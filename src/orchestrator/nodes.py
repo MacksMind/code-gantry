@@ -442,8 +442,13 @@ def execute(state: RunState, rt: Runtime) -> dict:
         "executor.log", result.log,
     )
 
+    # Carried even on the failing paths below: an attempt that timed out with
+    # 60k of context loaded is exactly the datum that should shrink the next
+    # stage, and it is the one most likely to be discarded.
+    measured = {"executor_context_tokens": result.context_tokens} if result.context_tokens else {}
+
     if result.ok:
-        return {"next_hop": "verify"}
+        return {"next_hop": "verify", **measured}
 
     if result.timed_out:
         what = "timed out"
@@ -818,6 +823,7 @@ def advance(state: RunState, rt: Runtime) -> dict:
         "flake_reruns_iteration": state.get("flake_reruns", 0),
         "flake_reruns_review_gate": state.get("flake_reruns_review_gate", 0),
         "instruction": stage.instruction or "",
+        "executor_context_tokens": state.get("executor_context_tokens", 0),
         "base_sha": start_sha,
         "merge_sha": merge_sha or rt.git.head_sha(),
         "wall_seconds": max(time.time() - (state.get("stage_started_at") or 0), 0.0),

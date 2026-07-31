@@ -552,3 +552,35 @@ class TestThePlannerPrefixAlsoSurvivesALanding:
             for m in messages
         )
         assert "earlier" in text
+
+
+class TestTheHistoryShowsWhatStagesCostTheExecutor:
+    """So the planner can size the next stage from evidence, not a file count.
+
+    Batching guidance had to invent a number — "up to roughly ten files" —
+    because nothing told the planner what a stage actually costs. It is the
+    wrong unit: two stages that each edited one file differed 3.4x in context,
+    14k against 47k, and ten of the first is a different proposition from ten
+    of the second.
+
+    Aider reports the figure every attempt. Once it reaches the history, the
+    planner is calibrating against this executor on these files rather than
+    against a guess someone wrote down once.
+    """
+
+    def _history(self, completed):
+        text = all_text(build_planner_messages(_cfg(), a_plan(), completed))
+        return text.split("## Completed stages", 1)[1]
+
+    def test_the_context_cost_is_shown(self):
+        history = self._history(
+            [{"index": 0, "id": "s1", "instruction": "did it",
+              "executor_context_tokens": 47_000}]
+        )
+        assert "47" in history
+
+    def test_a_stage_without_a_figure_says_nothing_about_it(self):
+        # Script stages and older runs have none; an absent number must not
+        # render as a zero the planner could read as "free".
+        history = self._history([{"index": 0, "id": "s1", "instruction": "did it"}])
+        assert "context" not in history.lower()

@@ -58,6 +58,10 @@ class StageResult(TypedDict, total=False):
     flake_reruns_iteration: int
     flake_reruns_review_gate: int
     instruction: str
+    # Peak context the executor held for this stage, as Aider reported it.
+    # Surfaced to the planner so it sizes the next stage from what this
+    # executor actually carried rather than from a file count.
+    executor_context_tokens: int
     base_sha: str
     merge_sha: str
     wall_seconds: float
@@ -153,6 +157,7 @@ class RunState(TypedDict, total=False):
     # note about work that then fails review would record something that did
     # not happen.
     pending_plan_notes: list[dict]
+    executor_context_tokens: int
 
     planner_interventions: int
     # Reset every time a stage lands; see Limits.max_interventions_without_landing.
