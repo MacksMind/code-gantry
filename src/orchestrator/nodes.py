@@ -840,6 +840,10 @@ def advance(state: RunState, rt: Runtime) -> dict:
         **fresh_stage_fields(),
         "completed": completed,
         "current": None,
+        # Cleared here, by the only node that writes them, rather than by the
+        # per-stage reset — which `plan` also applies, over the notes it has
+        # just accumulated.
+        "pending_plan_notes": [],
         "stage_index": state["stage_index"] + 1,
         "revision": 0,
         # Something landed, so the run is making progress: the stuck counter

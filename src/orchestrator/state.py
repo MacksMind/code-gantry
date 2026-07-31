@@ -250,6 +250,14 @@ def fresh_stage_fields() -> dict:
 
     Not `revision`: that belongs to the stage being replaced, and `plan` sets it
     when it derives or revises.
+
+    Not `pending_plan_notes` either, and that one cost two stages to find. The
+    notes are written by `advance`, which then clears them explicitly — but
+    `plan` also spreads this reset over its own return value, *after* the notes
+    it just accumulated. So every note the planner produced while deriving a
+    stage was zeroed within the same function call, and `advance` never saw
+    one. A field cleared by whoever finishes with it, rather than by a
+    catch-all, cannot be swallowed that way.
     """
     return {
         "stage_branch": None,
@@ -263,7 +271,6 @@ def fresh_stage_fields() -> dict:
         "last_diff_digest": "",
         # A new stage has a new tree; nothing has been proven about it yet.
         "full_suite_digest": "",
-        "pending_plan_notes": [],
         "last_failure": None,
         "failure_layer": None,
         "failed_stage_id": None,

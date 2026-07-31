@@ -1091,6 +1091,68 @@ class TestPlannerArtifactRecordsWhatItLookedAtAndSaid:
         assert written["plan_notes"] == []
 
 
+class TestPlanNotesSurviveFromDerivationToLanding:
+    """The planner emits a note; the commit has to contain it.
+
+    Driven end to end, because the isolated halves both passed while the
+    feature did nothing. `plan` accumulated the notes into its returned state
+    and `advance` wrote whatever it was handed — but `plan`'s return spread
+    `fresh_stage_fields()` *after* that state, and the reset zeroes
+    `pending_plan_notes`. So every note the planner produced while deriving a
+    stage was discarded microseconds later, and `advance` had nothing to write.
+
+    Live for two stages before anyone noticed, because the only visible symptom
+    is a commit that quietly lacks a progress entry — and the artifact test
+    proves the planner *said* something, not that it survived.
+    """
+
+    A_NOTE = {
+        "plan_step": "item 17: render text: across 9 controllers",
+        "observation": "This sweep is complete; 0 sites remain in app/controllers.",
+        "supersedes": "checklist says 24 sites across 9 controllers",
+    }
+
+    def test_the_note_survives_stage_derivation(self, repo, tmp_path):
+        planner = StubPlanner(
+            [
+                PlannerOutcome(
+                    "next_stage", "next", "e",
+                    stage_fields=planned_stage(),
+                    plan_notes=[self.A_NOTE],
+                )
+            ]
+        )
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        out = nodes.plan(state, rt)
+        assert out["pending_plan_notes"] == [self.A_NOTE], (
+            "the per-stage reset must not discard notes the planner just wrote"
+        )
+
+    def test_the_note_lands_in_the_stage_commit(self, repo, tmp_path):
+        planner = StubPlanner(
+            [
+                PlannerOutcome(
+                    "next_stage", "next", "e",
+                    stage_fields=planned_stage(),
+                    plan_notes=[self.A_NOTE],
+                )
+            ]
+        )
+        cfg, rt, state = make(
+            repo, tmp_path, planner=planner, plan_addendum_path="docs/progress_log.md"
+        )
+        state = {**state, **nodes.plan(state, rt)}
+        state = with_stage(state, rt, **planned_stage())
+        (repo / "app.py").write_text("stage work\n")
+        nodes.advance(state, rt)
+
+        log = repo / "docs" / "progress_log.md"
+        assert log.exists(), "the stage landed without recording what it did"
+        assert "0 sites remain" in log.read_text()
+        # Inside the stage's own commit, not trailing after it.
+        assert "progress_log.md" in rt.git._out("show", "--stat", "HEAD")
+
+
 class TestExecutorFeedbackIsBounded:
     """A 98KB executor log must not become the next prompt.
 
