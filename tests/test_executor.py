@@ -715,6 +715,76 @@ class TestAutoTestHasItsOwnCommand:
         argv = build_aider_argv(stage, cfg, "p")
         assert argv[argv.index("--test-cmd") + 1] == "rspec spec/a_spec.rb"
 
+    def test_a_spec_the_stage_cannot_create_is_dropped(self, tmp_path):
+        # A plain path that does not exist is kept only when the stage could
+        # plausibly create it. Otherwise the inner loop runs a command that is
+        # guaranteed to fail, Aider reads the runner's "no such file" as a test
+        # failure, and it burns reflections repairing a file that will never
+        # exist. Observed live: the planner declared `spec/requests/godata_spec.rb`
+        # and `spec/controllers/godata_controller_spec.rb` for a repo with no
+        # godata specs at all, and the attempt hung on a 77k-token fix.
+        cfg, stage = cfg_with(
+            target_repo=str(tmp_path),
+            stage_overrides={
+                "test_paths": ["spec/imaginary_spec.rb"],
+                "edit_files": ["app/controllers/godata_controller.rb"],
+                "require_new_tests": False,
+            },
+            scoped_test_command="rspec {paths}",
+            executor={"model": "m", "auto_test": True},
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert "--test-cmd" not in argv, (
+            "no runnable spec means no inner loop, not a loop that cannot pass"
+        )
+
+    def test_a_spec_the_stage_will_write_is_kept(self, tmp_path):
+        # The original reasoning still holds where it applies: Aider runs this
+        # after its edits, so a spec the stage was told to create will be there
+        # by the time the command runs.
+        cfg, stage = cfg_with(
+            target_repo=str(tmp_path),
+            stage_overrides={
+                "test_paths": ["spec/new_spec.rb"],
+                "edit_files": ["spec/new_spec.rb", "app/thing.rb"],
+                "require_new_tests": False,
+            },
+            scoped_test_command="rspec {paths}",
+            executor={"model": "m", "auto_test": True},
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert argv[argv.index("--test-cmd") + 1] == "rspec spec/new_spec.rb"
+
+    def test_require_new_tests_also_keeps_a_missing_spec(self, tmp_path):
+        cfg, stage = cfg_with(
+            target_repo=str(tmp_path),
+            stage_overrides={
+                "test_paths": ["spec/new_spec.rb"],
+                "edit_files": ["app/thing.rb"],
+                "require_new_tests": True,
+            },
+            scoped_test_command="rspec {paths}",
+            executor={"model": "m", "auto_test": True},
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert argv[argv.index("--test-cmd") + 1] == "rspec spec/new_spec.rb"
+
+    def test_an_existing_spec_is_always_kept(self, tmp_path):
+        (tmp_path / "spec").mkdir()
+        (tmp_path / "spec" / "real_spec.rb").write_text("x\n")
+        cfg, stage = cfg_with(
+            target_repo=str(tmp_path),
+            stage_overrides={
+                "test_paths": ["spec/real_spec.rb"],
+                "edit_files": ["app/thing.rb"],
+                "require_new_tests": False,
+            },
+            scoped_test_command="rspec {paths}",
+            executor={"model": "m", "auto_test": True},
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert argv[argv.index("--test-cmd") + 1] == "rspec spec/real_spec.rb"
+
     def test_verify_is_unaffected_by_it(self, repo):
         # The parsing side must keep the verbose command whatever the inner
         # loop uses, or the flake gate stops finding failing files.

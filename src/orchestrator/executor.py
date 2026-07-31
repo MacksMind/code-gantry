@@ -24,6 +24,7 @@ from pathlib import Path
 
 from orchestrator.commands import CommandResult, CommandRunner
 from orchestrator.config import ProjectConfig, Stage
+from orchestrator.globs import matches_any
 
 # The flags we build. preflight checks each of these against `aider --help`
 # so a release that renamed one fails validation instead of stage 1.
@@ -306,6 +307,27 @@ def _classify_execution(result) -> ExecutionResult:
     )
 
 
+def _runnable(path: str, stage: Stage, cfg: ProjectConfig) -> bool:
+    """Is this declared path worth putting in front of the inner loop?
+
+    Dropped only on positive evidence that it is not: a readable repository
+    that does not contain it, and a stage that cannot create it. A stage can
+    create it if the path is inside what it is allowed to write, or if it is
+    obliged to add tests and so may write specs it was not handed by name.
+
+    The repository check is deliberately a precondition rather than an
+    assumption. If `target_repo` cannot be read there is no evidence either
+    way, and inventing some by treating every path as absent would silently
+    switch the inner loop off for a whole project on the strength of a check
+    that never ran.
+    """
+    if not cfg.target_repo.is_dir():
+        return True
+    if (cfg.target_repo / path).exists():
+        return True
+    return stage.require_new_tests or matches_any(path, stage.edit_files)
+
+
 def _auto_test_command(stage: Stage, cfg: ProjectConfig) -> str | None:
     """The command Aider runs itself, after applying its edits.
 
@@ -317,12 +339,22 @@ def _auto_test_command(stage: Stage, cfg: ProjectConfig) -> str | None:
 
     Resolution differs from the verify layer's on purpose. A glob is a question
     about files that exist, so an unmatched one is dropped — left in, it reaches
-    the runner as a literal and kills the loop. But a plain path that does not
-    exist yet is *kept*: Aider runs this after its edits, so a spec the stage
-    was told to create will be there. If it is not, the runner says so on the
-    spot, which is the fastest signal available for that mistake.
+    the runner as a literal and kills the loop. A plain path that does not exist
+    yet is kept *only when this stage could plausibly create it*: either it is
+    inside `edit_files`, or the stage is required to add tests. Aider runs this
+    after its edits, so a spec the stage was told to write will be there.
 
-    No declared paths means no inner loop, rather than a slow one.
+    Kept unconditionally, as it was, a path the stage cannot create is a command
+    that can never pass. Aider reads the runner's "no such file" as a failing
+    test and spends its reflections repairing a file that will never exist.
+    Observed live: a planner that cannot grep the spec tree declared
+    `spec/requests/godata_spec.rb` and `spec/controllers/godata_controller_spec.rb`
+    for a repository containing no godata specs at all, and the attempt hung on
+    a 77,000-token fix. Verify dropped the same two paths and ran the whole
+    suite, which passed — so the edit was right the entire time and only the
+    inner loop was chasing a phantom.
+
+    No runnable paths means no inner loop, rather than one that cannot pass.
     """
     template_base = cfg.auto_test_command or cfg.scoped_test_command
     if not template_base:
@@ -337,7 +369,7 @@ def _auto_test_command(stage: Stage, cfg: ProjectConfig) -> str | None:
             paths.extend(
                 sorted(str(m.relative_to(cfg.target_repo)) for m in cfg.target_repo.glob(path))
             )
-        else:
+        elif _runnable(path, stage, cfg):
             paths.append(path)
 
     if not paths:
