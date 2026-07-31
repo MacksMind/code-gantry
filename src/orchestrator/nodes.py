@@ -314,8 +314,12 @@ def precheck(state: RunState, rt: Runtime) -> dict:
     # Cut or resume the child branch. Anything on it is quarantined: nothing
     # reaches the project branch without passing the review gate.
     if not state.get("stage_branch"):
+        # No branch in state means a fresh start: either the first attempt at
+        # this stage, or a restart where the planner discarded the approach. In
+        # both cases any branch left under this name is the thing being
+        # discarded, so it must not be inherited.
         branch = rt.cfg.stage_branch(state.get("stage_index", 0), stage.id)
-        start = rt.git.cut_stage_branch(branch, rt.cfg.project_branch)
+        start = rt.git.cut_stage_branch(branch, rt.cfg.project_branch, fresh=True)
         update["stage_branch"] = branch
         update["stage_start_sha"] = start
         update["stage_started_at"] = time.time()
@@ -421,6 +425,7 @@ def verify(state: RunState, rt: Runtime) -> dict:
         base_ref=state.get("base_ref"),
         base_sha=state.get("base_sha"),
         previous_diff_digest=state.get("last_diff_digest") or None,
+        previous_failure_layer=state.get("failure_layer") or None,
     )
 
     rt.write_artifact(

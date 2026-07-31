@@ -96,6 +96,7 @@ def run_verify(
     base_ref: str | None = None,
     base_sha: str | None = None,
     previous_diff_digest: str | None = None,
+    previous_failure_layer: str | None = None,
 ) -> VerifyOutcome:
     outcome = VerifyOutcome(passed=True)
     context = _Context(
@@ -109,6 +110,7 @@ def run_verify(
         base_ref=base_ref,
         base_sha=base_sha,
         previous_diff_digest=previous_diff_digest,
+        previous_failure_layer=previous_failure_layer,
     )
 
     outcome.diff_digest = _diff_digest(git, stage_start_sha)
@@ -147,6 +149,7 @@ class _Context:
     base_ref: str | None
     base_sha: str | None
     previous_diff_digest: str | None = None
+    previous_failure_layer: str | None = None
 
 
 def _fail(
@@ -274,10 +277,19 @@ def _layer_progress(ctx: _Context, outcome: VerifyOutcome):
 
     Routed to the planner rather than the executor for the same reason: another
     identical attempt is not a fix. Only a redrawn stage is.
+
+    Exempt after a merge-gate failure. There the reviewer had already approved
+    the diff and only the full suite was red, so reproducing it is the correct
+    response rather than evidence of being stuck — and on a suite with
+    order-dependent specs it is the *expected* response. Observed live: one
+    flaky spec elsewhere in the suite cost a reset, a rework, and a planner
+    intervention that set about reshaping work which was already right.
     """
     if not ctx.previous_diff_digest or not outcome.diff_digest:
         return None
     if outcome.diff_digest != ctx.previous_diff_digest:
+        return None
+    if ctx.previous_failure_layer == "full_suite":
         return None
 
     return _fail(

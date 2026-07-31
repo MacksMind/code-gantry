@@ -369,3 +369,49 @@ class TestCommit:
 
     def test_returns_none_when_nothing_to_commit(self, repo):
         assert Git(repo).commit_all("nothing") is None
+
+
+class TestRestartingAStageBranch:
+    """A restart must not inherit the attempt it is restarting from.
+
+    `plan` signals a restart by clearing `stage_branch` in state, but the git
+    branch survives on disk and its name is deterministic — index plus stage id
+    — so `precheck` recomputed the same name and checked the old branch out.
+    Restart and extend were indistinguishable in git, which is to say restart
+    never happened.
+
+    Observed live: a stage whose first attempt was reviewer-approved and lost to
+    a suite flake was "restarted" onto its own abandoned commit. The reviewer
+    then sees only the delta and can approve work it never looked at.
+    """
+
+    def test_a_fresh_cut_discards_an_existing_branch(self, repo):
+        g = Git(repo)
+        g.ensure_project_branch("proj", "main")
+        project_tip = g.rev_parse("proj")
+
+        g.cut_stage_branch("proj-stage/001-s", "proj")
+        (repo / "app.py").write_text("abandoned attempt\n")
+        g.commit_all("abandoned")
+        assert g.rev_parse("proj-stage/001-s") != project_tip
+
+        start = g.cut_stage_branch("proj-stage/001-s", "proj", fresh=True)
+        assert start == project_tip
+        assert g.rev_parse("proj-stage/001-s") == project_tip
+
+    def test_extending_keeps_the_existing_work(self, repo):
+        # The other revision mode: scope was too narrow, so the work survives.
+        g = Git(repo)
+        g.ensure_project_branch("proj", "main")
+        g.cut_stage_branch("proj-stage/001-s", "proj")
+        (repo / "app.py").write_text("kept\n")
+        g.commit_all("earlier work")
+        tip = g.rev_parse("proj-stage/001-s")
+
+        assert g.cut_stage_branch("proj-stage/001-s", "proj", fresh=False) == tip
+
+    def test_a_fresh_cut_of_a_new_branch_is_unremarkable(self, repo):
+        g = Git(repo)
+        g.ensure_project_branch("proj", "main")
+        start = g.cut_stage_branch("proj-stage/002-t", "proj", fresh=True)
+        assert start == g.rev_parse("proj")

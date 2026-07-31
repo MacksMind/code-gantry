@@ -146,14 +146,28 @@ class Git:
             self.create_branch(name, base_ref)
         return base_sha
 
-    def cut_stage_branch(self, name: str, project_branch: str) -> str:
+    def cut_stage_branch(
+        self, name: str, project_branch: str, fresh: bool = False
+    ) -> str:
         """Start a stage from the project branch tip.
 
-        If the branch already exists — a revision that means to extend existing
-        work — it is checked out rather than recreated.
+        `fresh` distinguishes the planner's two revision modes, which are
+        otherwise indistinguishable in git. Stage branch names are deterministic
+        — index plus stage id — so a redrawn stage recomputes the same name, and
+        without this the existing branch was simply checked out. A restart then
+        inherited the very attempt it was restarting from, and the reviewer saw
+        only the delta against work it had never been shown.
+
+        `fresh=False` is the extend case: scope was too narrow, the approach was
+        sound, and the work survives.
         """
         if self.branch_exists(name):
-            self.checkout(name)
+            if fresh:
+                self.checkout(project_branch)
+                self._run("branch", "-D", name)
+                self.create_branch(name, project_branch)
+            else:
+                self.checkout(name)
         else:
             self.create_branch(name, project_branch)
         return self.head_sha()

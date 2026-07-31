@@ -704,3 +704,52 @@ class TestSignalledTestRuns:
         out = verify(repo, cfg, stage, sha)
         assert out.failed_layer is Layer.CHECKS
         assert out.route is Route.HUMAN
+
+
+class TestProgressAfterAFlakyMergeGate:
+    """Reproducing an approved diff is compliance, not stalling.
+
+    The guard's premise is that a byte-identical diff means the feedback
+    changed nothing, so the stage cannot be drawn as asked. That holds when the
+    rework followed a reviewer rejection or a failure the stage caused.
+
+    It does not hold after a merge-gate failure. There the reviewer had already
+    approved the diff and only the full suite was red — so the correct response
+    to "do it again" is the same diff. Observed live: one order-dependent spec
+    elsewhere in the suite cost a reset, a rework, and then a planner
+    intervention whose reasoning was "the executor is convinced its output is
+    correct and re-emits it" — which was true, and correct, and not a defect.
+    """
+
+    def test_an_identical_diff_after_a_full_suite_failure_is_allowed(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(repo)
+        digest = verify(repo, cfg, stage, sha).diff_digest
+        out = verify(
+            repo, cfg, stage, sha,
+            previous_diff_digest=digest,
+            previous_failure_layer="full_suite",
+        )
+        assert out.passed
+
+    def test_an_identical_diff_after_a_review_rejection_still_stalls(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(repo)
+        digest = verify(repo, cfg, stage, sha).diff_digest
+        out = verify(
+            repo, cfg, stage, sha,
+            previous_diff_digest=digest,
+            previous_failure_layer="review",
+        )
+        assert out.failed_layer is Layer.PROGRESS
+
+    def test_an_identical_diff_with_no_recorded_layer_still_stalls(self, repo):
+        # The original behaviour, unchanged, for every other path in.
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(repo)
+        digest = verify(repo, cfg, stage, sha).diff_digest
+        out = verify(repo, cfg, stage, sha, previous_diff_digest=digest)
+        assert out.failed_layer is Layer.PROGRESS
