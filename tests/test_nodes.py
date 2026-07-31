@@ -628,6 +628,18 @@ class TestReviewGate:
         assert out["next_hop"] == "advance"
         assert out["flaky_files"] == ["spec/app_spec.rb"]
 
+    def test_a_signalled_full_suite_stops_for_a_human(self, repo, tmp_path):
+        # At the merge gate the stage has already been approved and its diff is
+        # correct. Reading a killed suite as a rejection would send correct work
+        # back for rework, and the rework would run against the same dead
+        # environment.
+        cfg, rt, state = make(repo, tmp_path, full_test_command="kill -9 $$")
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("changed\n")
+        out = nodes.review(state, rt)
+        assert out["next_hop"] == "escalate"
+        assert "signal" in out["escalation_reason"].lower()
+
     def test_the_full_suite_can_be_switched_off_per_stage(self, repo, tmp_path):
         marker = tmp_path / "suite-ran-2"
         cfg, rt, state = make(repo, tmp_path, full_test_command=f"touch {marker}")

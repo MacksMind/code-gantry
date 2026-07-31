@@ -651,3 +651,56 @@ class TestRequireScopedTests:
         out = verify(repo, cfg, stage, sha)
         assert out.passed
         assert out.unscoped_tests is True
+
+
+class TestSignalledTestRuns:
+    """The environment died; that is not a stage failure.
+
+    Observed live: the operator stopped the container stack mid-run, thinking
+    the run had paused for review. The suite returned exit 137 and verify
+    charged it to the executor's retry budget — one of three attempts spent on
+    something no attempt could fix, and the next attempt would have run against
+    the same dead environment.
+
+    Routed to a human, like `setup`, and for the same reason: a broken
+    environment is not a planning defect and rework will not repair it.
+    """
+
+    def test_a_signalled_suite_goes_to_a_human(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(repo, test_command="kill -9 $$")
+        out = verify(repo, cfg, stage, sha)
+        assert out.failed_layer is Layer.TESTS
+        assert out.route is Route.HUMAN
+        assert "signal" in out.feedback.lower()
+
+    def test_it_does_not_spend_a_re_run(self, repo):
+        # Re-running a suite against an environment that just died learns
+        # nothing and costs whatever the suite costs.
+        counter = repo.parent / "signalled-runs.txt"
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(
+            repo, test_command=f"echo run >> {counter}; kill -9 $$"
+        )
+        out = verify(repo, cfg, stage, sha)
+        assert not out.passed
+        assert counter.read_text().count("run") == 1
+
+    def test_an_ordinary_failure_still_goes_to_the_executor(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(repo, test_command="exit 1")
+        out = verify(repo, cfg, stage, sha)
+        assert out.route is Route.EXECUTOR
+
+    def test_a_signalled_check_also_goes_to_a_human(self, repo):
+        # Same reasoning as the suite: `checks` are operator commands running in
+        # the same environment, and they die with it.
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(repo, {"checks": ["kill -9 $$"]})
+        out = verify(repo, cfg, stage, sha)
+        assert out.failed_layer is Layer.CHECKS
+        assert out.route is Route.HUMAN

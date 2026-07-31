@@ -59,6 +59,35 @@ class CommandResult:
         return self.exit_code == 0 and not self.timed_out
 
     @property
+    def signal(self) -> int | None:
+        """The signal that killed this command, if one did.
+
+        A shell reports a signalled child as 128+N. That is a convention rather
+        than a guarantee — a program may choose to exit 137 — but no test runner
+        does, and the cost of being wrong is asymmetric: treating a real failure
+        as an environment problem stops the run for a human, which is safe,
+        while treating a SIGKILL as a test failure spends a retry on something
+        no retry can fix.
+
+        Two encodings reach us. Python reports a *direct* child killed by a
+        signal as a negative return code, and we run through a shell, so that is
+        the shell itself dying. When the shell survives and its own child is
+        killed — the live case: the container stack went down under a running
+        suite — the shell exits 128+N instead.
+
+        Our own timeout kills the process group with SIGKILL, so that case is
+        excluded here: a timeout is the stage's problem and already has its own
+        flag, whereas a signal from outside is the environment's.
+        """
+        if self.timed_out:
+            return None
+        if self.exit_code < 0:
+            return -self.exit_code
+        if self.exit_code > 128:
+            return self.exit_code - 128
+        return None
+
+    @property
     def output(self) -> str:
         """Both streams, for logs and for executor feedback."""
         parts = [self.stdout.rstrip()]
@@ -69,6 +98,11 @@ class CommandResult:
     def summary(self) -> str:
         if self.timed_out:
             return f"$ {self.command}\ntimed out after {self.duration_seconds:.0f}s"
+        if self.signal is not None:
+            return (
+                f"$ {self.command}\nkilled by signal {self.signal} "
+                f"(exit {self.exit_code}) after {self.duration_seconds:.0f}s"
+            )
         return f"$ {self.command}\nexit {self.exit_code}"
 
 

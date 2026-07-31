@@ -359,6 +359,25 @@ def _layer_tests(ctx: _Context, outcome: VerifyOutcome):
     if result.ok:
         return None
 
+    if result.signal is not None:
+        # Something killed the suite from outside — the container stack going
+        # down, an OOM kill, a Ctrl-C. Not a stage failure, so it must not spend
+        # a retry, and re-running against the same dead environment would learn
+        # nothing at whatever the suite costs.
+        return _fail(
+            Layer.TESTS,
+            Route.HUMAN,
+            f"the test command was killed by signal {result.signal}",
+            f"The test command did not fail — it was killed by signal "
+            f"{result.signal}.\n\nThat is an environment problem rather than a "
+            "problem with this stage: the container stack going down, an "
+            "out-of-memory kill, or an interrupt. Nothing the executor or the "
+            "planner can do will fix it, so the run stops here rather than "
+            "spending attempts.\n\nPut the environment back and resume; the "
+            "gate re-runs from here.\n"
+            f"{result.summary()}\n{_clip(result.output)}",
+        )
+
     # One re-run before consuming a retry. Browser-driven and timing-sensitive
     # suites would otherwise spend the whole retry budget on noise.
     #
@@ -466,6 +485,18 @@ def _layer_checks(ctx: _Context, outcome: VerifyOutcome):
     failed = next((r for r in results if not r.ok), None)
     if failed is None:
         return None
+
+    if failed.signal is not None:
+        # Checks run in the same environment as the suite and die with it.
+        return _fail(
+            Layer.CHECKS,
+            Route.HUMAN,
+            f"a required check was killed by signal {failed.signal}",
+            f"A required check did not fail — it was killed by signal "
+            f"{failed.signal}, which is an environment problem rather than a "
+            "problem with this stage. Put the environment back and resume.\n"
+            f"{failed.summary()}\n{_clip(failed.output)}",
+        )
 
     return _fail(
         Layer.CHECKS,

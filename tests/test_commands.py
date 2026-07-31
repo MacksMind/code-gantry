@@ -214,3 +214,51 @@ class TestStdinIsClosed:
         monkeypatch.setattr(sp, "Popen", spy)
         CommandRunner(cwd=tmp_path, timeout=10).run("true")
         assert seen.get("stdin") is sp.DEVNULL
+
+
+class TestSignalledCommands:
+    """A killed process is not a failing test.
+
+    Observed live: the operator stopped the Docker containers mid-run, believing
+    the run had paused for review. The suite came back `exit 137` — 128+9,
+    SIGKILL — and verify read it as a test failure, routed it to the executor,
+    and spent one of three attempts on it. The same shape covers an OOM kill and
+    a Ctrl-C.
+
+    Exit codes above 128 can in principle be a program's own choice, so this is
+    a convention rather than a certainty. It is the right convention: no test
+    runner returns 137, and misreading a real failure as an environment problem
+    stops the run for a human, which is the safe direction.
+    """
+
+    def test_a_killed_command_reports_its_signal(self, repo):
+        runner = CommandRunner(cwd=repo, timeout=30)
+        result = runner.run("kill -9 $$")
+        assert result.signal == 9
+        assert not result.ok
+
+    def test_sigterm_is_recognised(self, repo):
+        runner = CommandRunner(cwd=repo, timeout=30)
+        result = runner.run("kill -15 $$")
+        assert result.signal == 15
+
+    def test_an_ordinary_failure_has_no_signal(self, repo):
+        runner = CommandRunner(cwd=repo, timeout=30)
+        assert runner.run("exit 1").signal is None
+
+    def test_a_clean_exit_has_no_signal(self, repo):
+        runner = CommandRunner(cwd=repo, timeout=30)
+        assert runner.run("true").signal is None
+
+    def test_our_own_timeout_is_not_reported_as_a_signal(self, repo):
+        # We kill the process group with SIGKILL on timeout, which would
+        # otherwise look identical to the environment dying underneath us.
+        # A timeout is the stage's problem; a stranger's SIGKILL is not.
+        runner = CommandRunner(cwd=repo, timeout=1)
+        result = runner.run("sleep 5")
+        assert result.timed_out
+        assert result.signal is None
+
+    def test_the_summary_names_the_signal(self, repo):
+        runner = CommandRunner(cwd=repo, timeout=30)
+        assert "signal 9" in runner.run("kill -9 $$").summary()

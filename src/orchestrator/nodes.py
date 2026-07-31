@@ -578,6 +578,23 @@ def review(state: RunState, rt: Runtime) -> dict:
     result = rt.runner.run(rt.cfg.full_test_command)
     seconds = result.duration_seconds
 
+    if result.signal is not None:
+        # The stage is already approved and its diff is already correct. Reading
+        # a killed suite as a rejection would send correct work back for rework,
+        # against the same dead environment.
+        return {
+            **base,
+            "test_seconds": state.get("test_seconds", 0.0) + seconds,
+            **_escalate(
+                "full_suite",
+                f"The full suite was killed by signal {result.signal} rather "
+                "than failing. The reviewer had already approved this stage, so "
+                "nothing is wrong with the work — the environment went away "
+                "underneath it.\n\nPut it back and resume; the gate re-runs "
+                f"from here.\n{result.summary()}",
+            ),
+        }
+
     if not result.ok:
         # Re-run what failed, not everything. It matters more here than during
         # iteration: the full suite has far more surface for ordering flakes,
