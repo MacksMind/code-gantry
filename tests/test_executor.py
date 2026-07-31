@@ -101,17 +101,24 @@ class TestAiderArgv:
 
     def test_auto_test_can_be_switched_on(self):
         cfg, stage = cfg_with(
-            stage_overrides={"test_command": "pytest tests/unit"},
+            stage_overrides={"test_paths": ["tests/unit/test_a.py"]},
+            scoped_test_command="pytest {paths}",
             executor={"model": "m", "auto_test": True},
         )
         argv = build_aider_argv(stage, cfg, "p")
-        assert argv[argv.index("--test-cmd") + 1] == "pytest tests/unit"
+        assert argv[argv.index("--test-cmd") + 1] == "pytest tests/unit/test_a.py"
         assert "--auto-test" in argv
 
-    def test_falls_back_to_the_global_test_command(self):
-        cfg, stage = cfg_with(executor={"model": "m", "auto_test": True})
+    def test_it_never_falls_back_to_the_global_test_command(self):
+        # It used to, and that is how a 90-second edit became a 609-second
+        # attempt: --test-cmd got `bin/parallel_rspec`, the whole suite, inside
+        # a loop that could run it three times.
+        cfg, stage = cfg_with(
+            scoped_test_command="pytest {paths}",
+            executor={"model": "m", "auto_test": True},
+        )
         argv = build_aider_argv(stage, cfg, "p")
-        assert argv[argv.index("--test-cmd") + 1] == "pytest -q"
+        assert "--test-cmd" not in argv
 
     def test_omits_auto_test_when_there_is_no_test_command(self):
         # Greenfield: nothing exists to run yet. Passing --auto-test with no
@@ -596,3 +603,78 @@ class TestPartiallyAppliedEdits:
         log = "Only 3 reflections allowed, stopping.\n"
         outcome = _classify_execution(self.result(log))
         assert not outcome.ok
+
+
+class TestScopedAutoTest:
+    """Aider runs the tests again — but the stage's, never the whole suite.
+
+    Turning --auto-test off was the right emergency fix and the wrong permanent
+    design. What was wrong was pointing it at `bin/parallel_rspec`: 3.5 minutes
+    per pass, inside a loop that could run three times, which is how a
+    90-second edit became a 609-second attempt.
+
+    The inner loop is the cheapest feedback available — the model already has
+    the files in context, so a failure it just caused costs one exchange to fix
+    rather than a fresh attempt re-sending 18k of context. What it must never
+    have is the full suite, because Aider knows nothing about the stage's scope
+    and will happily edit `spec/features` to make a red spec green.
+
+    So the auto-test command is built from the stage's declared test_paths and
+    from nothing else. No declared paths, no --auto-test.
+    """
+
+    def test_the_command_is_scoped_to_declared_paths(self, tmp_path):
+        cfg, stage = cfg_with(
+            stage_overrides={"test_paths": ["spec/a_spec.rb"]},
+            scoped_test_command="rspec {paths}",
+            executor={"model": "m", "auto_test": True},
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert argv[argv.index("--test-cmd") + 1] == "rspec spec/a_spec.rb"
+        assert "--auto-test" in argv
+
+    def test_the_full_suite_is_never_used(self):
+        # The whole point. A stage with nothing declared gets no inner loop
+        # rather than a 3.5-minute one.
+        cfg, stage = cfg_with(
+            scoped_test_command="rspec {paths}",
+            executor={"model": "m", "auto_test": True},
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert "--auto-test" not in argv
+        assert "--test-cmd" not in argv
+
+    def test_a_spec_the_stage_will_create_is_still_named(self, tmp_path):
+        """Test-first work: the planner says "write this spec", so run it.
+
+        The file does not exist when the command is built, but Aider runs
+        --test-cmd *after* applying edits, so it will by then. And if the stage
+        was supposed to create it and did not, rspec says so immediately —
+        which is the fastest possible signal for exactly that mistake.
+        """
+        cfg, stage = cfg_with(
+            stage_overrides={"test_paths": ["spec/models/brand_new_spec.rb"]},
+            scoped_test_command="rspec {paths}",
+            executor={"model": "m", "auto_test": True},
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert "spec/models/brand_new_spec.rb" in argv[argv.index("--test-cmd") + 1]
+
+    def test_a_glob_matching_nothing_is_dropped(self):
+        # A glob asks about files that exist; it cannot name one that does not
+        # yet. Left in, it reaches rspec as a literal and kills the inner loop.
+        cfg, stage = cfg_with(
+            stage_overrides={"test_paths": ["spec/**/*nothing*"]},
+            scoped_test_command="rspec {paths}",
+            executor={"model": "m", "auto_test": True},
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert "--auto-test" not in argv
+
+    def test_auto_test_off_means_no_test_command(self):
+        cfg, stage = cfg_with(
+            stage_overrides={"test_paths": ["spec/a_spec.rb"]},
+            scoped_test_command="rspec {paths}",
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert "--test-cmd" not in argv

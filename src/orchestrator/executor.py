@@ -186,7 +186,7 @@ def build_aider_argv(
     if api_base:
         argv += ["--openai-api-base", api_base]
 
-    test_command = stage.effective_test_command(cfg) if ex.auto_test else None
+    test_command = _auto_test_command(stage, cfg) if ex.auto_test else None
     if test_command:
         argv += ["--test-cmd", test_command, "--auto-test"]
 
@@ -304,3 +304,47 @@ def _classify_execution(result) -> ExecutionResult:
         results=[result],
         unapplied_edit=unapplied,
     )
+
+
+def _auto_test_command(stage: Stage, cfg: ProjectConfig) -> str | None:
+    """The command Aider runs itself, after applying its edits.
+
+    Built from the stage's declared `test_paths` and from nothing else. Never
+    the project's full suite: Aider has no notion of `edit_files`, so faced with
+    a red spec outside the stage it will edit that spec, and a full suite gives
+    it three and a half minutes per pass to do so. Scoped, the inner loop is
+    seconds and confined to the specs the stage claims to prove.
+
+    Resolution differs from the verify layer's on purpose. A glob is a question
+    about files that exist, so an unmatched one is dropped — left in, it reaches
+    the runner as a literal and kills the loop. But a plain path that does not
+    exist yet is *kept*: Aider runs this after its edits, so a spec the stage
+    was told to create will be there. If it is not, the runner says so on the
+    spot, which is the fastest signal available for that mistake.
+
+    No declared paths means no inner loop, rather than a slow one.
+    """
+    if not cfg.scoped_test_command:
+        return None
+
+    paths: list[str] = []
+    for raw in stage.test_paths:
+        path = (raw or "").strip()
+        if not path:
+            continue
+        if any(ch in path for ch in "*?["):
+            paths.extend(
+                sorted(str(m.relative_to(cfg.target_repo)) for m in cfg.target_repo.glob(path))
+            )
+        else:
+            paths.append(path)
+
+    if not paths:
+        return None
+
+    template = cfg.scoped_test_command
+    if cfg.directory_test_command and any(
+        (cfg.target_repo / p).is_dir() for p in paths
+    ):
+        template = cfg.directory_test_command
+    return template.format(paths=" ".join(paths))
