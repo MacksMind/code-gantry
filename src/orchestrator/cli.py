@@ -227,6 +227,7 @@ def _reconcile_prompt(cfg: ProjectConfig) -> list[dict]:
     before the log existed, or by a run whose planner did not write an entry.
     """
     log = cfg.plan_addendum_path or "the progress log"
+    plan_dir = cfg.plan_root.rsplit("/", 1)[0] if "/" in cfg.plan_root else "."
     return [
         {
             "role": "user",
@@ -246,6 +247,13 @@ def _reconcile_prompt(cfg: ProjectConfig) -> list[dict]:
                 "files' — against the code as it is now. A count in a document "
                 "is a claim about the moment someone wrote it; the code is the "
                 "fact.\n\n"
+                f"**Changes under `{plan_dir}/` are not progress and are not "
+                "work.** The branch range carries every edit the plan corpus "
+                "has ever had — documents renamed or relocated, cross-refs "
+                "rewritten, entries added to the log itself. All of it will "
+                "show up in the diff and none of it advances a plan step. "
+                "Report what changed in the *code*, and what that means for "
+                "the plan. Ignore what changed in the plan.\n\n"
                 "Return `project_complete`, and put every finding in "
                 "`plan_notes` — one entry per plan step whose state the log "
                 "does not yet reflect: work that has been done, a count that "

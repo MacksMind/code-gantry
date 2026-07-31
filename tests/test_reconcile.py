@@ -271,3 +271,33 @@ class TestAFailedCallIsNotAVerdict:
         result = CliRunner().invoke(cli.main, ["reconcile", "demo"])
         assert result.exit_code != 0
         assert "without reading anything" in result.output
+
+
+class TestThePlanDirectoryIsNotWork:
+    """Editing the plan is not progress against it.
+
+    Reconcile diffs base against the branch, and that range carries everything
+    the branch ever did — including a restructure of the plan corpus itself.
+    Asked what the branch accomplished, the planner dutifully reported the
+    document set being relocated, the cross-refs being rewritten, and the
+    citation lines in the log's own earlier entries going stale. Three of six
+    entries, all true, none of them work.
+
+    The log rides in the prompt prefix on every planning step now, so that is a
+    standing cost rather than a one-off tidy-up. Cheaper to say what does not
+    count than to move commits onto base so the diff stops showing them.
+    """
+
+    def _prompt_text(self):
+        from orchestrator.cli import _load, _reconcile_prompt
+        from orchestrator.runtime import ProjectPaths
+
+        cfg = _load(ProjectPaths("demo").config)
+        return _reconcile_prompt(cfg)[0]["content"]
+
+    def test_it_names_the_plan_directory(self, project):
+        assert "docs" in self._prompt_text()
+
+    def test_it_says_document_changes_are_not_progress(self, project):
+        text = self._prompt_text().lower()
+        assert "not progress" in text or "not work" in text
