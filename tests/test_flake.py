@@ -178,6 +178,34 @@ class TestOwnershipEndsTheArgument:
         )
         assert not out.flaked
 
+    def test_a_declared_directory_covers_the_specs_beneath_it(self, repo):
+        """`test_paths` are paths, and a planner will name directories.
+
+        The first real stage declared `test_paths: ["spec/controllers",
+        "spec/requests"]` and the merge gate then failed on
+        `spec/controllers/admin/orders_controller_spec.rb`. Exact matching made
+        that a flake: the stage had named the directory as the thing that
+        proves it, and would still have been excused a failure inside it.
+        """
+        out = judge(
+            repo,
+            "Failed examples:\n\nrspec ./spec/controllers/admin/orders_spec.rb:531 # x\n",
+            config(repo, scoped_test_command="true {paths}"),
+            owned=["spec/controllers"],
+        )
+        assert not out.flaked
+        assert "spec/controllers" in out.summary
+
+    def test_a_directory_does_not_own_a_merely_similar_sibling(self, repo):
+        # `spec/controllers` must not swallow `spec/controllers_helper`.
+        out = judge(
+            repo,
+            "Failed examples:\n\nrspec ./spec/controllers_helper/a_spec.rb:1 # x\n",
+            config(repo, scoped_test_command="true {paths}"),
+            owned=["spec/controllers"],
+        )
+        assert out.flaked
+
     def test_an_unrelated_owned_file_does_not_block_the_flake(self, repo):
         out = judge(
             repo,

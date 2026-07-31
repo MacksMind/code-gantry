@@ -96,6 +96,27 @@ def normalize(path: str) -> str:
     return path[2:] if path.startswith("./") else path
 
 
+def _owner(failing: str, owned: set[str]) -> str | None:
+    """Which owned path claims this failing file, if any.
+
+    A stage's `test_paths` are paths, and a planner naming coverage will often
+    name a directory: the first real stage declared `spec/controllers` and the
+    gate then failed inside it. Exact matching excused that as a flake, which
+    inverts the rule — the stage had just pointed at that directory as the
+    thing that proves it.
+
+    Compared segment-wise so `spec/controllers` claims
+    `spec/controllers/admin/orders_spec.rb` without also claiming
+    `spec/controllers_helper/a_spec.rb`.
+    """
+    if failing in owned:
+        return failing
+    for candidate in owned:
+        if candidate and failing.startswith(candidate.rstrip("/") + "/"):
+            return candidate
+    return None
+
+
 def adjudicate(
     *,
     output: str,
@@ -128,7 +149,7 @@ def adjudicate(
         )
 
     owned_here = {normalize(p) for p in owned_paths}
-    owned = sorted({f for f in map(locator_file, examples) if f in owned_here})
+    owned = sorted({o for e in examples for o in (_owner(locator_file(e), owned_here),) if o})
     if owned:
         return FlakeVerdict(
             flaked=False,
