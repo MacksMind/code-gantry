@@ -844,3 +844,47 @@ class TestOperatorPause:
         (repo / "app.py").write_text("changed\n")
         nodes.review(state, rt)
         assert not list(rt.paths.run_dir.glob("stages/*/full-suite.log"))
+
+
+class TestProgressGuardAfterAFlakyMergeGate:
+    """End to end: does `full_suite` actually reach the progress guard?
+
+    The exemption was added and unit-tested against `run_verify` directly,
+    which proves the guard honours the flag but not that anything ever sets it.
+    This drives the real sequence — approved, full suite red, rework, identical
+    diff — through the nodes, because that is where it silently would not work.
+    """
+
+    def test_a_merge_gate_failure_is_recorded_as_full_suite(self, repo, tmp_path):
+        cfg, rt, state = make(
+            repo, tmp_path,
+            full_test_command="exit 1",
+            scoped_test_command="false {paths}",
+        )
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("changed\n")
+        out = nodes.review(state, rt)
+        assert out["failure_layer"] == "full_suite"
+
+    def test_the_identical_redo_then_survives_verify(self, repo, tmp_path):
+        # The whole point: the reviewer approved this diff, the suite was red
+        # for reasons elsewhere, and doing it again is the correct answer.
+        cfg, rt, state = make(
+            repo, tmp_path,
+            full_test_command="exit 1",
+            scoped_test_command="false {paths}",
+        )
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("changed\n")
+
+        first = nodes.verify(state, rt)
+        state = {**state, **first}
+        rejected = nodes.review(state, rt)
+        state = {**state, **rejected}
+        assert state["failure_layer"] == "full_suite"
+
+        # rework_reset threw the work away; the executor reproduces it exactly.
+        (repo / "app.py").write_text("changed\n")
+        again = nodes.verify(state, rt)
+        assert again.get("failure_layer") != "progress"
+        assert again["next_hop"] in ("review", "advance")
