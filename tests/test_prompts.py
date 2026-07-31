@@ -27,6 +27,28 @@ def a_plan(text="do the thing"):
     )
 
 
+def _cfg(addendum="docs/proj/progress_log.md", cache_ttl="1h"):
+    return SimpleNamespace(cache_ttl=cache_ttl, plan_addendum_path=addendum)
+
+
+def all_text(messages):
+    """Every text block, in order — the prompt as the model receives it.
+
+    `leading_text` reads only the cached prefix, which is the right lens for a
+    breakpoint test and the wrong one for anything after it. The completed
+    history sits deliberately *after* the breakpoint, so asserting on it
+    through `leading_text` passes whatever it says.
+    """
+    out = []
+    for message in messages:
+        content = message["content"]
+        if isinstance(content, list):
+            out.extend(block.get("text", "") for block in content)
+        else:
+            out.append(content)
+    return "\n\n".join(out)
+
+
 def leading_text(messages):
     block = messages[0]["content"]
     return block[0]["text"] if isinstance(block, list) else block
@@ -145,6 +167,76 @@ class TestPlannerCacheBreakpoint:
             cfg=None, plan=a_plan(), completed=[], layout="L", status_tail="b"
         )
         assert first[0] == second[0]
+
+
+class TestARunsHistoryIsNotTheProjectsHistory:
+    """An empty completed list means this run is new, not the project.
+
+    The block used to render "None yet — this is the first stage of the
+    project", which is true exactly once and false every restart after. A month
+    of landed work looks identical to a greenfield start, and the planner was
+    being told the false one as a statement of fact.
+
+    What it must not do is invent a substitute claim in the other direction.
+    The run genuinely does not know what the project has done; it knows where
+    that is written down. So it says that, and points at the plan directory and
+    the progress log inside it.
+    """
+
+    def test_it_does_not_claim_the_project_is_starting(self):
+        text = all_text(build_planner_messages(_cfg(), a_plan(), []))
+        assert "first stage of the project" not in text
+
+    def test_it_says_the_runs_history_is_what_is_empty(self):
+        text = all_text(build_planner_messages(_cfg(), a_plan(), []))
+        assert "this run" in text.lower()
+
+    def test_it_points_at_the_written_record(self):
+        # The planner has read tools; what it needs is to be told where the
+        # record is, not to be handed a summary. Asserted inside the history
+        # block itself — the plan block names the log too, and this is about
+        # the empty history not leaving the planner to infer anything.
+        text = all_text(build_planner_messages(_cfg(), a_plan(), []))
+        history = text.split("## Completed stages", 1)[1]
+        assert "docs/proj/progress_log.md" in history
+
+    def test_a_populated_history_is_unchanged(self):
+        text = all_text(
+            build_planner_messages(
+                _cfg(), a_plan(), [{"index": 0, "id": "s1", "instruction": "did it"}]
+            )
+        )
+        assert "did it" in text
+
+
+class TestTheProgressLogIsNamedAsTheRecordOfWhatIsDone:
+    """The planner must know which plan document reports progress.
+
+    The log is a plan child like any other once PLAN.md links it, so it arrives
+    in the payload as one more document among eight. Which of them is the
+    record of what has landed is not inferable from the content, and it is the
+    one document whose role changes how the others should be read.
+
+    Driven by `plan_addendum_path`, so it stays a property of the project's
+    configuration rather than prose a human has to remember to write.
+    """
+
+    def test_the_configured_log_is_identified(self):
+        text = leading_text(
+            build_planner_messages(_cfg(addendum="docs/proj/progress_log.md"), a_plan(), [])
+        )
+        assert "docs/proj/progress_log.md" in text
+
+    def test_it_says_the_plan_alone_does_not_know_what_is_done(self):
+        text = leading_text(
+            build_planner_messages(_cfg(addendum="docs/proj/progress_log.md"), a_plan(), [])
+        )
+        lowered = text.lower()
+        assert "what has been done" in lowered or "what is done" in lowered
+
+    def test_a_project_without_one_says_nothing_about_it(self):
+        text = all_text(build_planner_messages(_cfg(addendum=None), a_plan(), []))
+        assert "progress_log" not in text
 
 
 class TestPerProjectGuidance:

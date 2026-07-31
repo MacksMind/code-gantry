@@ -132,13 +132,45 @@ def build_executor_prompt(
     return "\n\n".join(parts)
 
 
-def _plan_block(plan: PlanTree) -> str:
-    return (
+def _addendum(cfg: ProjectConfig | None) -> str | None:
+    """The configured progress log, if the project keeps one.
+
+    `cfg` is optional on these builders and several tests pass None, so this
+    must not be the thing that raises on a path every planner call takes.
+    """
+    return getattr(cfg, "plan_addendum_path", None) if cfg else None
+
+
+def _plan_block(plan: PlanTree, addendum_path: str | None = None) -> str:
+    """The plan documents, with the progress log identified among them.
+
+    Once the plan links its log, the log arrives as one more child among
+    several and nothing in the content marks it out. But its role is different
+    in kind: every other document says what the work *is*, and it alone says
+    what the work has *become*. Naming it is driven by `plan_addendum_path`, so
+    it stays a property of the project's configuration rather than prose an
+    operator has to remember to keep writing.
+    """
+    intro = (
         "## The plan\n\n"
         "This is the authority for the project. A stage instruction is a "
-        "pointer into it, not a substitute for it.\n\n"
-        + plan.as_prompt_payload()
+        "pointer into it, not a substitute for it."
     )
+    if addendum_path:
+        intro += (
+            "\n\nThese documents say what the work **is**. They do not say what "
+            "has been done — they were written before it, and nothing edits "
+            f"them as it happens. `{addendum_path}` is where that is recorded, "
+            "appended as each stage lands. When the two disagree about whether "
+            "something is outstanding, the log is later.\n\n"
+            "Every document here was read once, when this run started. The log "
+            "on disk is appended to as stages land, so by mid-run it is ahead "
+            "of the copy above; reading it with `read_file` gives you the "
+            "later version. And neither is a substitute for looking at the "
+            "code — a count in a document is a claim about when someone wrote "
+            "it down."
+        )
+    return intro + "\n\n" + plan.as_prompt_payload()
 
 
 def _deferred_block(deferred: list[dict] | None) -> str:
@@ -182,11 +214,34 @@ def _deferred_block(deferred: list[dict] | None) -> str:
     return "\n".join(lines)
 
 
-def _history_block(completed: list[StageResult]) -> str:
+def _history_block(completed: list[StageResult], addendum_path: str | None = None) -> str:
+    """What *this run* has landed — which is not what the project has landed.
+
+    The empty case used to read "this is the first stage of the project". True
+    once, and false on every restart after: a run begins with an empty list
+    however much work the branch already carries, so a month-old project was
+    told it was starting from nothing. That is the one thing the planner most
+    needs to be right about, stated as a fact and wrong by default.
+
+    It cannot be fixed by guessing in the other direction either. This run
+    genuinely does not know the project's history; it knows where the history
+    is written. So it says so, and names the file.
+    """
     if not completed:
+        record = (
+            f"`{addendum_path}` records what earlier runs landed, and is one of "
+            "the plan documents above."
+            if addendum_path
+            else "The plan documents above are the only record."
+        )
         return (
-            "## Completed stages\n\nNone yet — this is the first stage of the "
-            "project."
+            "## Completed stages\n\n"
+            "None **in this run**. That is a fact about this run, not about the "
+            "project: a run starts with an empty history however much work the "
+            "branch already carries, so this is equally what a restart half way "
+            "through a long project looks like.\n\n"
+            f"{record} Read it, and check the repository, before concluding that "
+            "anything in the plan is still outstanding."
         )
 
     entries = []
@@ -242,7 +297,7 @@ def build_review_messages(
                     # reviewer calls, three full-price writes, one of them only
                     # 13 minutes after its predecessor and well inside the
                     # retention window. History now follows the breakpoint.
-                    "text": _plan_block(plan),
+                    "text": _plan_block(plan, _addendum(cfg)),
                     "prompt_cache_breakpoint": {"mode": "explicit"},
                 }
             ],
@@ -250,7 +305,7 @@ def build_review_messages(
     )
 
     current: list[str] = [
-        _history_block(completed),
+        _history_block(completed, _addendum(cfg)),
         f"## The stage under review: {stage.id}\n\n{stage.instruction or ''}",
     ]
 
@@ -311,7 +366,7 @@ def build_planner_messages(
     """
     # Only what is fixed for the whole run. The plan is read once at base_ref
     # and the layout once at base_sha; neither changes while the run does.
-    leading = _plan_block(plan)
+    leading = _plan_block(plan, _addendum(cfg))
     if layout:
         leading += "\n\n## What the repository contains\n\n" + layout
 
@@ -322,7 +377,11 @@ def build_planner_messages(
     # which was the system block, the only part that had not changed. They now
     # follow the breakpoint, costing full price for their own few hundred
     # tokens rather than taking ninety thousand down with them.
-    situational = _history_block(completed) + "\n\n" + _deferred_block(deferred)
+    situational = (
+        _history_block(completed, _addendum(cfg))
+        + "\n\n"
+        + _deferred_block(deferred)
+    )
 
     # The breakpoint, and the reason the ordering above exists. Anthropic
     # caching is explicit: without this marker the plan snapshot and the

@@ -1,16 +1,21 @@
-"""The append-only record of what the work turned out to be.
+"""The progress log: how the plan learns what has been done.
 
-Plan documents are written before the work and go stale during it. A checklist
-says twenty-four call sites across nine controllers; eight of those controllers
-are now clean and the document has no way to know. On the first long run the
-operator hand-wrote a paragraph of `planner.guidance` describing three landed
-stages, because a new run starts with an empty history and would otherwise
-re-derive work already done.
+A plan document lists work. Nothing in it knows which of that work has already
+happened, and a run starts with an empty history however much the branch
+carries — so without a record, the next run reads the same plan and derives a
+stage that already landed. On the first long run the operator patched that by
+hand, writing a paragraph of `planner.guidance` describing three landed stages.
+This is that paragraph, written by the work itself.
 
-So the planner records what it observed, with a citation, and something else
-folds those observations into the documents later. That separation is the whole
-point: rewriting a plan is a judgement about what the work has become, and it
-should not happen unattended in the middle of doing the work.
+So the usual entry is progress: a stage landed, and here is where its plan step
+now stands. A correction — the plan was wrong when written — is the same
+mechanism pointed at a different cause and belongs here too. Both answer one
+question: what does the plan not yet know?
+
+The planner writes the entries and something else folds them into the
+documents later. That separation is the whole point: rewriting a plan is a
+judgement about what the work has become, and it should not happen unattended
+in the middle of doing the work.
 
 Two properties this file exists to guarantee.
 
@@ -62,11 +67,12 @@ def append_notes(
     *,
     stage_id: str,
 ) -> Path | None:
-    """Append observations to the addendum. Returns the file written, if any.
+    """Append entries to the progress log. Returns the file written, if any.
 
-    Silent no-op when the project has not configured a path or the planner had
-    nothing to say, which is most of the time — a note is for when the plan and
-    the repository disagree, not for narrating every stage.
+    Silent no-op when the project has not configured a path, or when the stage
+    mapped to nothing in the plan worth recording. A stage that advances a plan
+    step should carry an entry — that is what keeps the next run from deriving
+    it again — but not every stage does, and an empty note is worse than none.
     """
     if not addendum_path or not notes:
         return None

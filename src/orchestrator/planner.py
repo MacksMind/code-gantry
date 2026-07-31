@@ -177,42 +177,51 @@ class Deferral(BaseModel):
 
 
 class PlanNote(BaseModel):
-    """An observation about the plan, derived from what the repository shows.
+    """How the plan learns what is done.
 
-    The plan documents are written before the work and go stale as it happens:
-    a checklist says twenty-four call sites across nine controllers, eight of
-    those controllers are now clean, and nothing in the document knows. A later
-    pass — a human, or a tool outside this loop — folds these notes into the
-    documents properly. That is a judgement about what the work has become and
-    does not belong mid-run.
+    A plan document lists work. Nothing in it knows which of that work has
+    happened — and a run starts with an empty history, so without a record the
+    next one re-derives a stage that already landed. This is the record. Each
+    note says what a plan item looks like now that this stage has landed, and
+    is written into that stage's own commit.
 
-    Append-only. Nothing here rewrites a plan; it records what was observed so
-    the rewrite can be done later with evidence.
+    So the usual note is progress: this sweep is complete, this count is down
+    to seven, this item can be closed. A correction — the plan was wrong when
+    written — is the same mechanism pointed at a different cause, and belongs
+    here too. Both answer one question: what does the plan not yet know?
+
+    Append-only, and nothing here rewrites a plan. A later pass folds these
+    into the documents and closes the items they report, which is a judgement
+    about what the work has become and does not belong mid-run.
     """
 
     plan_step: str = Field(
-        description="What in the plan this concerns, quoted closely enough that "
-        "a human can find it."
+        description="Which part of the plan this is about, quoted closely "
+        "enough that a human — or a later pass folding this in — can find the "
+        "exact place to update."
     )
     observation: str = Field(
         description=(
-            "What the repository now shows, and how you know. Cite what you "
-            "read — a path and line range, or the search you ran and its "
-            "count. An unsourced claim is worth less than no note, because "
-            "someone will act on it.\n\n"
-            "State the current total, never a change since last time. Write "
-            "'25 sites across 15 controllers remain', not '11 sites "
-            "converted'. Notes accumulate and are folded into the plan in "
-            "batches, so a later note has to be able to override an earlier "
-            "one by simply being later. Deltas cannot do that: two of them "
-            "read as four sites converted rather than as one count restated, "
-            "and folding the same note twice would decrement the plan twice."
+            "A concise summary of what changed and where that leaves the plan "
+            "step. Two or three sentences. This is written into the stage's "
+            "own commit, so the diff is already there — do not re-describe the "
+            "edit line by line or cite what you read to find it. Say what it "
+            "means: 'the sweep is complete, no sites remain in app/controllers' "
+            "or 'seven of the twenty-four remain, all inline <script> renders "
+            "needing a different treatment'.\n\n"
+            "State the resulting total, never a change. Write '7 sites remain "
+            "in 1 controller', not '17 converted'. These accumulate and are "
+            "folded into the plan in batches, so a later note has to override "
+            "an earlier one by simply being later — and a total does that "
+            "while a delta compounds. Folding the same delta twice would "
+            "decrement the plan twice."
         )
     )
     supersedes: str = Field(
         default="",
-        description="What the plan currently says that this contradicts, if "
-        "anything. Leave empty when the plan is merely silent.",
+        description="What the plan currently says about this, if it says "
+        "anything — the text a later pass will be replacing. Leave empty when "
+        "the plan is merely silent.",
     )
 
 
@@ -254,14 +263,22 @@ class PlannerResponse(BaseModel):
     plan_notes: list[PlanNote] = Field(
         default_factory=list,
         description=(
-            "Observations about the plan being out of date, when you have "
-            "evidence from the repository. Appended to an addendum a later "
-            "pass folds into the documents; nothing you write here changes a "
-            "plan document.\n\n"
-            "Add one when what you read contradicts what the plan says — a "
-            "count that has moved, a step already done, a file that no longer "
-            "exists. Do not add one for work this run is about to do; that is "
-            "what the stage is. Most calls will have none."
+            "How the plan learns what has been done. Appended to the progress "
+            "log when this stage lands, inside its commit; nothing you write "
+            "here changes a plan document, and a later pass folds these in and "
+            "closes the items they report.\n\n"
+            "Normally you are recording progress: the stage you are deriving "
+            "will close or advance a plan step, so say where that step stands "
+            "once it lands. A run begins with no history — without this, the "
+            "next one reads the same plan, cannot tell this work happened, and "
+            "derives it again. Grepping only rescues it where doneness is "
+            "visible in the code; an audit, a verification, or a decision "
+            "leaves no trace to find.\n\n"
+            "The same field carries a correction — the plan was wrong when "
+            "written, a count has moved, a file no longer exists. Both answer "
+            "one question: what does the plan not yet know?\n\n"
+            "Skip it when the stage genuinely maps to no plan step, and do not "
+            "restate what an earlier note already recorded."
         ),
     )
 

@@ -35,8 +35,8 @@ class TestWritingIsOptional:
         assert not list(tmp_path.rglob("*.md"))
 
     def test_no_notes_writes_nothing(self, tmp_path):
-        # Most calls have none. A note is for when the plan and the repository
-        # disagree, not for narrating every stage.
+        # A stage that advances a plan step should carry an entry, but not
+        # every stage maps to one, and an empty note is worse than none.
         assert write(tmp_path, []) is None
         assert not list(tmp_path.rglob("*.md"))
 
