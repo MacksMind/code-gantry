@@ -559,6 +559,39 @@ class TestReviewGate:
         out = nodes.review(state, rt)
         assert out["next_hop"] == "execute"
 
+    def test_verify_hands_the_gate_what_it_needs_to_skip(self, repo, tmp_path):
+        # End to end, because the isolated version of this test passed while the
+        # feature did nothing: verify wrote `full_suite_digest`, the graph's
+        # state schema did not declare it, the key was dropped in transit, and
+        # the gate never saw it. Seeding the key by hand tests the gate's logic
+        # and not the wiring, so this drives the real node and asserts on what
+        # verify actually returns.
+        marker = tmp_path / "suite-ran"
+        cfg, rt, state = make(
+            repo, tmp_path,
+            test_command=f"touch {marker}",
+            full_test_command=f"touch {marker}",
+            scoped_test_command=None,
+        )
+        state = with_stage(state, rt, test_paths=[])
+        (repo / "app.py").write_text("changed\n")
+
+        out = nodes.verify(state, rt)
+        assert out["next_hop"] == "review"
+        assert out["full_suite_digest"], (
+            "verify ran the full suite and must fingerprint the tree it passed on"
+        )
+        from orchestrator.state import RunState
+
+        assert "full_suite_digest" in RunState.__annotations__, (
+            "the key must be declared in the state schema or the graph drops it"
+        )
+
+        marker.unlink()
+        out = nodes.review({**state, **out}, rt)
+        assert out["next_hop"] == "advance"
+        assert not marker.exists(), "the gate re-ran a suite verify had just run"
+
     def test_a_suite_already_green_at_verify_is_not_run_again(self, repo, tmp_path):
         # Nothing mutates the tree between verify and this gate — the reviewer
         # reads a diff, it does not edit — so re-running the identical suite on

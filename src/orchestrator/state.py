@@ -135,6 +135,13 @@ class RunState(TypedDict, total=False):
     # Fingerprint of the last attempt's diff. An attempt that reproduces it
     # exactly has made no progress, and retrying costs a review for nothing.
     last_diff_digest: str
+    # Fingerprint of the tree the full suite last passed on, set by verify when
+    # it ran `full_test_command` itself. The merge gate compares it against the
+    # tree in front of it and skips a second identical run. Declared here
+    # because the graph drops keys the schema does not know: without this line
+    # verify writes it, the schema discards it, and the gate silently never
+    # skips — which is exactly how it shipped the first time.
+    full_suite_digest: str
 
     planner_interventions: int
     # Reset every time a stage lands; see Limits.max_interventions_without_landing.
@@ -189,6 +196,7 @@ def new_state(
         started_at=started_at,
         session_started_at=started_at,
         last_diff_digest="",
+        full_suite_digest="",
         last_failure=None,
         failure_layer=None,
         failed_stage_id=None,
@@ -239,6 +247,8 @@ def fresh_stage_fields() -> dict:
         "flake_reruns_review_gate": 0,
         "test_seconds": 0.0,
         "last_diff_digest": "",
+        # A new stage has a new tree; nothing has been proven about it yet.
+        "full_suite_digest": "",
         "last_failure": None,
         "failure_layer": None,
         "failed_stage_id": None,
@@ -262,6 +272,7 @@ def fresh_revision_fields() -> dict:
         # A redrawn stage is a different instruction, so reproducing the old
         # diff under it is not evidence of being stuck.
         "last_diff_digest": "",
+        "full_suite_digest": "",
         "last_failure": None,
         "failure_layer": None,
         "review_feedback": [],
