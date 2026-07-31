@@ -365,6 +365,15 @@ class ProjectConfig(_Strict):
     setup_command: str | None = None
     test_command: str | None = None
     full_test_command: str | None = None
+    # Where the planner's append-only record of what git history shows was done
+    # is kept. Commonly a subdirectory of the plan directory, so a later pass —
+    # a human, or a tool outside this loop — can fold it into the plan
+    # documents properly.
+    #
+    # Written by the orchestrator from the planner's structured output, never
+    # by a stage. The scope guard treats it as a plan document precisely so an
+    # executor cannot edit the record of its own work.
+    plan_addendum_path: str | None = None
     # Optional. `{paths}` is filled by the orchestrator from the stage diff.
     scoped_test_command: str | None = None
     # Used instead of `scoped_test_command` when any of those paths is a

@@ -32,6 +32,7 @@ from orchestrator.config import ProjectConfig, Stage
 from orchestrator.flake import adjudicate
 from orchestrator.gitops import Git, GitError
 from orchestrator.globs import matches_any
+from orchestrator.plandoc import resolve_plan_tree
 
 # How much of a failing command's output to carry forward. Enough for a
 # traceback and a summary; not so much that it crowds out the instruction.
@@ -231,6 +232,40 @@ def _layer_branch(ctx: _Context, outcome: VerifyOutcome):
 # --- layer 2: scope guard ------------------------------------------------
 
 
+def _is_plan_document(path: str, ctx: _Context) -> bool:
+    """Is this one of the documents the planner is drawing from?
+
+    Exactly the resolved tree — root plus linked children — rather than a
+    directory glob, because a plan root commonly sits in `docs/` beside
+    unrelated files that stages may legitimately touch.
+
+    The addendum counts as one, even though a run does add to it. It is
+    written by the orchestrator from the planner's structured output, at
+    advance time, outside any stage's diff — so it never appears here legally.
+    An executor edit to it is the executor wandering into the record of its own
+    work, which is exactly the thing to catch.
+    """
+    addendum = ctx.cfg.plan_addendum_path
+    if addendum and (path == addendum or path.startswith(addendum.rstrip("/") + "/")):
+        return True
+
+    root = ctx.cfg.plan_root
+    if path == root:
+        return True
+
+    # Resolving the tree costs a `git show` per document, and verify runs on
+    # every attempt. Almost every stage touches only code, so skip the work
+    # unless a changed path is even in the right directory.
+    root_dir = root.rsplit("/", 1)[0] if "/" in root else ""
+    if root_dir and not path.startswith(root_dir + "/"):
+        return False
+    if not ctx.base_sha:
+        return False
+
+    tree = resolve_plan_tree(ctx.git, root, ctx.base_sha)
+    return any(child.path == path for child in tree.children)
+
+
 def _layer_scope(ctx: _Context, outcome: VerifyOutcome):
     changed = ctx.git.diff_names(ctx.stage_start_sha)
 
@@ -243,6 +278,30 @@ def _layer_scope(ctx: _Context, outcome: VerifyOutcome):
             "the attempt produced no changes",
             "The previous attempt produced no changes at all. Nothing was "
             "edited, so the stage has not been done.",
+        )
+
+    # Checked before the declared scope, because this one is not the planner's
+    # to widen. The planner reads the plan tree and also chooses `edit_files`,
+    # so without this it can put the plan in scope and have the executor amend
+    # the instructions it will be judged against next cycle — goalpost drift
+    # with a green suite behind it, in an unattended loop.
+    #
+    # Plan maintenance is a separate pass driven by git history: a human
+    # decision about what the work has become, not a side effect of doing it.
+    plan_edits = [p for p in changed if _is_plan_document(p, ctx)]
+    if plan_edits:
+        listed = "\n".join(f"  {p}" for p in sorted(plan_edits))
+        return _fail(
+            Layer.SCOPE,
+            Route.PLANNER,
+            "the stage edited the plan it is being drawn from",
+            f"These are plan documents and no stage may change them:\n{listed}\n\n"
+            "The plan states what the work is; a stage that rewrites it while "
+            "doing the work removes the only fixed thing it is measured "
+            "against. Redraw the stage without them. If the plan is genuinely "
+            "wrong, say so in `reasoning` and block — correcting it is a "
+            "human's decision, not this run's.",
+            out_of_scope_paths=sorted(plan_edits),
         )
 
     out_of_scope = [p for p in changed if not matches_any(p, ctx.stage.edit_files)]
