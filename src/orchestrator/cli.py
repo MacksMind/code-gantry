@@ -26,6 +26,7 @@ from pathlib import Path
 
 import click
 
+from orchestrator.addendum import append_notes
 from orchestrator.approval import approval_problem, config_hash, record_approval
 from orchestrator.config import ConfigError, ProjectConfig, load_config
 from orchestrator.discover import derive_target_repo, draft_config
@@ -119,6 +120,109 @@ def validate(slug: str, skip_tests: bool) -> None:
     click.echo(
         f"config works on this host ({len(warnings)} warning(s)). "
         f"Approve it with: orchestrator approve {slug}"
+    )
+
+
+@main.command()
+@click.argument("slug")
+@click.option(
+    "--dry-run", is_flag=True, help="Print the observations without writing them."
+)
+def reconcile(slug: str, dry_run: bool) -> None:
+    """Check the plan against what the branch actually did, and record the drift.
+
+    Plan documents are written before the work and go stale during it. After
+    thirteen landed stages on the first real project the 4.2 checklist still
+    claimed twenty-four `render text:` sites across nine controllers, when seven
+    remained in one; and three `alias_method_chain` sites, when none did.
+
+    A run's `plan_notes` catch drift as it happens. This is for drift that
+    already happened — work landed before the mechanism existed, or by hand, or
+    by someone else. The planner diffs the project branch against `base_ref`,
+    checks the plan against the repository, and reports what no longer holds.
+
+    Deliberately separate from `run`. Reconciling is a judgement about what the
+    work has become, and doing it mid-run would let a run rewrite its own
+    premises. This changes no plan document either: it appends observations for
+    a later pass to fold in.
+    """
+    project = ProjectPaths(slug)
+    cfg = _load(project.config)
+    git = Git(cfg.target_repo)
+
+    if not cfg.plan_addendum_path and not dry_run:
+        raise click.ClickException(
+            "no plan_addendum_path configured; nowhere to record observations"
+        )
+
+    planner = make_planner(cfg.planner, cfg.target_repo)
+    if planner.reader is None:
+        raise click.ClickException(
+            "planner.repo_access must be on: reconciling means checking the "
+            "plan against the repository, which needs the read tools"
+        )
+
+    landed = git.commits_between(cfg.base_ref, cfg.project_branch)
+    click.echo(
+        f"reconciling {cfg.plan_root} against {len(landed)} commit(s) on "
+        f"{cfg.project_branch}"
+    )
+
+    outcome = planner.plan(
+        [
+            {
+                "role": "user",
+                "content": (
+                    f"The branch {cfg.project_branch!r} carries work that "
+                    f"{cfg.base_ref!r} does not. Your job is to find where the "
+                    "plan no longer describes the repository.\n\n"
+                    f"Start with `git_diff` between {cfg.base_ref} and "
+                    f"{cfg.project_branch} to see what changed. Then check the "
+                    "plan's specific claims — counts, file lists, 'occurrences "
+                    "across N files' — against the code as it is now, using "
+                    "`search`. A count in a document is a claim about a moment; "
+                    "the code is the fact.\n\n"
+                    "Return `project_complete` with a `plan_note` for every "
+                    "claim that no longer holds. Cite the search or the lines "
+                    "that show it. Do not propose a stage — nothing is being "
+                    "built here.\n\n"
+                    "Report only what you verified. A note nobody can check is "
+                    "worse than none, because someone will act on it."
+                ),
+            }
+        ]
+    )
+
+    for line in outcome.tool_calls:
+        click.echo(f"  {line}")
+
+    if not outcome.plan_notes:
+        click.echo("\nno drift found; the plan still describes the repository")
+        return
+
+    click.echo(f"\n{len(outcome.plan_notes)} observation(s):")
+    for note in outcome.plan_notes:
+        click.echo(f"\n  {note.get('plan_step')}")
+        if note.get("supersedes"):
+            click.echo(f"    plan says: {note['supersedes']}")
+        click.echo(f"    observed:  {note.get('observation')}")
+
+    if dry_run:
+        click.echo("\n--dry-run: nothing written")
+        return
+
+    written = append_notes(
+        cfg.target_repo,
+        cfg.plan_addendum_path,
+        outcome.plan_notes,
+        stage_id="reconcile",
+        merge_sha=git.rev_parse(cfg.project_branch),
+        when=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+    )
+    click.echo(f"\nrecorded in {written}")
+    click.echo(
+        "Not committed: read it, then commit it yourself. Folding these into "
+        "the plan documents is a separate judgement."
     )
 
 

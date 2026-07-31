@@ -116,6 +116,18 @@ class Git:
         out = self._out("ls-tree", "-r", "--name-only", sha)
         return [line for line in out.splitlines() if line.strip()]
 
+    def commits_between(self, have: str, want: str) -> list[str]:
+        """Subjects of commits on `want` that `have` does not contain.
+
+        Used by `reconcile` to say how much work the plan is being checked
+        against. Deliberately not used at preflight: an earlier version warned
+        that the project branch was behind `base_ref`, which on any repository
+        with more than one engineer fires every time and teaches the operator
+        to skim the checks that matter.
+        """
+        out = self._out("log", "--oneline", "--no-decorate", f"{have}..{want}")
+        return [line for line in out.splitlines() if line.strip()]
+
     def file_exists_at(self, sha: str, path: str) -> bool:
         return self._run("cat-file", "-e", f"{sha}:{path}", check=False).returncode == 0
 

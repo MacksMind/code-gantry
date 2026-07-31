@@ -1,0 +1,174 @@
+"""`orchestrator reconcile` — checking the plan against what the branch did.
+
+This file exists because of how its subject was written. The command called
+`Git.commits_between`, which had been deleted an hour earlier when its only
+caller was removed. The full suite passed: the call sits inside a function
+body, so a missing method is a runtime `AttributeError`, and nothing exercised
+the command. It failed the first time a human ran it.
+
+The lesson is narrow and worth encoding: a CLI command with no test is
+untested however green the suite is. These drive the real `click` entry point
+so the code path actually executes.
+"""
+
+import subprocess
+
+import pytest
+from click.testing import CliRunner
+
+from orchestrator import cli
+from orchestrator.planner import PlannerOutcome
+
+
+@pytest.fixture
+def project(tmp_path, monkeypatch):
+    """A target repo with a plan, and a project config pointing at it."""
+    repo = tmp_path / "target"
+    (repo / "docs" / "addendum").mkdir(parents=True)
+    (repo / "app").mkdir()
+    (repo / "docs" / "plan.md").write_text("# Plan\n\n1. Convert 24 call sites.\n")
+    (repo / "app" / "thing.rb").write_text("render text: 'x'\n")
+    for args in (
+        ["init", "-q", "-b", "main"],
+        ["config", "user.email", "t@example.com"],
+        ["config", "user.name", "T"],
+        ["config", "commit.gpgsign", "false"],
+        ["add", "-A"],
+        ["commit", "-q", "-m", "initial"],
+    ):
+        subprocess.run(["git", *args], cwd=repo, check=True)
+    subprocess.run(["git", "checkout", "-q", "-b", "work"], cwd=repo, check=True)
+    (repo / "app" / "thing.rb").write_text("render plain: 'x'\n")
+    subprocess.run(["git", "commit", "-qam", "convert one site"], cwd=repo, check=True)
+
+    projects = tmp_path / "projects"
+    (projects / "demo").mkdir(parents=True)
+    (projects / "demo" / "config.yaml").write_text(
+        f"""
+target_repo: {repo}
+base_ref: main
+project_branch: work
+plan_root: docs/plan.md
+plan_addendum_path: docs/addendum
+test_command: "true"
+executor:
+  model: m
+planner:
+  model: claude-opus-5
+  repo_access: true
+reviewer:
+  model: gpt-5.5
+"""
+    )
+    # PROJECTS_ROOT is a relative path bound as a default argument at import
+    # time, so patching the module attribute does nothing. Chdir instead.
+    monkeypatch.chdir(tmp_path)
+    return repo, projects
+
+
+def stub_planner(monkeypatch, notes, *, reader=object()):
+    class Stub:
+        def __init__(self):
+            self.reader = reader
+            self.messages = None
+
+        def plan(self, messages):
+            self.messages = messages
+            return PlannerOutcome(
+                verdict="project_complete",
+                reasoning="checked",
+                status_entry="e",
+                plan_notes=notes,
+                tool_calls=["search(render text: in .) -> 1 line(s)"],
+            )
+
+    stub = Stub()
+    monkeypatch.setattr(cli, "make_planner", lambda *a, **k: stub)
+    return stub
+
+
+A_NOTE = {
+    "plan_step": "1. Convert 24 call sites",
+    "observation": "search finds 0 remaining in app/",
+    "supersedes": "the plan says 24",
+}
+
+
+class TestItActuallyRuns:
+    def test_the_command_executes_end_to_end(self, project, monkeypatch):
+        # The test that would have caught the deleted method: it calls through
+        # to real git rather than stubbing the repository.
+        stub_planner(monkeypatch, [A_NOTE])
+        result = CliRunner().invoke(cli.main, ["reconcile", "demo"])
+        assert result.exit_code == 0, result.output
+        assert "1 commit(s)" in result.output
+
+    def test_the_observation_is_written_to_the_addendum(self, project, monkeypatch):
+        repo, _ = project
+        stub_planner(monkeypatch, [A_NOTE])
+        CliRunner().invoke(cli.main, ["reconcile", "demo"])
+        written = (repo / "docs" / "addendum" / "plan-addendum.md").read_text()
+        assert "search finds 0 remaining" in written
+        assert "the plan says 24" in written
+
+    def test_dry_run_writes_nothing(self, project, monkeypatch):
+        repo, _ = project
+        stub_planner(monkeypatch, [A_NOTE])
+        result = CliRunner().invoke(cli.main, ["reconcile", "demo", "--dry-run"])
+        assert "search finds 0 remaining" in result.output
+        assert not (repo / "docs" / "addendum" / "plan-addendum.md").exists()
+
+    def test_no_drift_says_so_and_writes_nothing(self, project, monkeypatch):
+        repo, _ = project
+        stub_planner(monkeypatch, [])
+        result = CliRunner().invoke(cli.main, ["reconcile", "demo"])
+        assert "no drift" in result.output
+        assert not (repo / "docs" / "addendum" / "plan-addendum.md").exists()
+
+
+class TestItRefusesWhenItCannotWork:
+    def test_without_repo_access_it_explains_why(self, project, monkeypatch):
+        # Reconciling means checking the plan against the repository. Without
+        # the read tools it would be the planner guessing, which is the failure
+        # this whole mechanism exists to correct.
+        stub_planner(monkeypatch, [A_NOTE], reader=None)
+        result = CliRunner().invoke(cli.main, ["reconcile", "demo"])
+        assert result.exit_code != 0
+        assert "repo_access" in result.output
+
+
+class TestTheDiffIsAgainstBaseRef:
+    def test_the_prompt_names_the_configured_base_not_main(self, tmp_path, monkeypatch):
+        # `base_ref` is config. A project whose baseline is `develop` or a
+        # release branch must be reconciled against that, not against whatever
+        # this project happens to call it.
+        repo = tmp_path / "t"
+        (repo / "docs" / "addendum").mkdir(parents=True)
+        (repo / "docs" / "plan.md").write_text("# Plan\n")
+        for args in (
+            ["init", "-q", "-b", "develop"],
+            ["config", "user.email", "t@example.com"],
+            ["config", "user.name", "T"],
+            ["config", "commit.gpgsign", "false"],
+            ["add", "-A"],
+            ["commit", "-q", "-m", "initial"],
+        ):
+            subprocess.run(["git", *args], cwd=repo, check=True)
+        subprocess.run(["git", "checkout", "-q", "-b", "work"], cwd=repo, check=True)
+
+        projects = tmp_path / "projects"
+        (projects / "demo").mkdir(parents=True)
+        (projects / "demo" / "config.yaml").write_text(
+            f"target_repo: {repo}\nbase_ref: develop\nproject_branch: work\n"
+            "plan_root: docs/plan.md\nplan_addendum_path: docs/addendum\n"
+            'test_command: "true"\nexecutor:\n  model: m\n'
+            "planner:\n  model: claude-opus-5\n  repo_access: true\n"
+            "reviewer:\n  model: gpt-5.5\n"
+        )
+        monkeypatch.chdir(tmp_path)
+
+        stub = stub_planner(monkeypatch, [])
+        CliRunner().invoke(cli.main, ["reconcile", "demo"])
+        sent = stub.messages[0]["content"]
+        assert "develop" in sent
+        assert "main" not in sent
