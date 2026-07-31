@@ -530,3 +530,49 @@ class TestLoadFromFile:
         path.write_text("executor: [unclosed")
         with pytest.raises(ConfigError):
             load_config(path)
+
+
+class TestAStageMustBePossible:
+    """A stage that cannot pass by construction wastes a whole attempt cycle.
+
+    `require_new_tests` fails the stage unless its diff touches a test file.
+    The scope guard fails it if the diff touches anything outside `edit_files`.
+    Demand a test and forbid writing one and the executor cannot satisfy both:
+    it writes the spec, scope rejects it, and the loop spends a retry — or two,
+    then an intervention — discovering something checkable before it started.
+
+    Same shape as the contradiction that blocked a stage on the first long run:
+    an instruction demanding exactly three edits *and* zero remaining matches,
+    in a file with five.
+    """
+
+    def _stage(self, cfg, **over):
+        fields = {
+            "id": "add-coverage",
+            "instruction": "add a spec",
+            "edit_files": ["app/thing.rb"],
+            "require_new_tests": True,
+        }
+        fields.update(over)
+        return cfg.stage_from_planner(fields)
+
+    def test_requiring_tests_without_room_to_write_them_is_rejected(self):
+        cfg = parse_config(minimal(test_file_patterns=["spec/**/*_spec.rb"]))
+        problems = validate_stage(self._stage(cfg), cfg)
+        assert any("require_new_tests" in p for p in problems)
+
+    def test_naming_a_spec_in_edit_files_satisfies_it(self):
+        cfg = parse_config(minimal(test_file_patterns=["spec/**/*_spec.rb"]))
+        stage = self._stage(cfg, edit_files=["app/thing.rb", "spec/thing_spec.rb"])
+        assert not [p for p in validate_stage(stage, cfg) if "require_new_tests" in p]
+
+    def test_a_glob_covering_specs_satisfies_it(self):
+        # `spec/**` is how a planner usually says it.
+        cfg = parse_config(minimal(test_file_patterns=["spec/**/*_spec.rb"]))
+        stage = self._stage(cfg, edit_files=["app/thing.rb", "spec/**"])
+        assert not [p for p in validate_stage(stage, cfg) if "require_new_tests" in p]
+
+    def test_a_stage_not_requiring_tests_is_unaffected(self):
+        cfg = parse_config(minimal(test_file_patterns=["spec/**/*_spec.rb"]))
+        stage = self._stage(cfg, require_new_tests=False)
+        assert not [p for p in validate_stage(stage, cfg) if "require_new_tests" in p]

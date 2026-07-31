@@ -232,9 +232,29 @@ class RepoReader:
         if not (pattern or "").strip():
             raise ToolError("no search pattern given")
 
-        args = ["grep", "-n", "-I", "--no-color", "-e", pattern, "--"]
-        args.append(path_glob.strip() if path_glob else ".")
-        proc = self.git._run(*args, check=False)
+        target = path_glob.strip() if path_glob else "."
+
+        # `-P` because a model writes Perl-flavoured regex. Measured on the
+        # first live run of this tool: six of twenty-four searches returned
+        # nothing because `\s`, `\b` and `(:|=>)` mean nothing to git's default
+        # basic-regex engine, and every one of those was a wasted call against
+        # a budget of twenty-five. The pattern that found the real answer,
+        # `render[^_]*\btext:`, matches 7 sites with `-P` and 0 without.
+        #
+        # Not every git is built with PCRE, so fall back rather than fail: `-E`
+        # at least gives alternation and quantifiers.
+        for flavour in ("-P", "-E"):
+            proc = self.git._run(
+                "grep", "-n", "-I", "--no-color", flavour, "-e", pattern, "--", target,
+                check=False,
+            )
+            if proc.returncode in (0, 1):
+                break
+            if "-P" not in (proc.stderr or "") and flavour == "-P":
+                # A real error — a bad pattern, a bad path — not a missing
+                # engine. Retrying in another dialect would only confuse it.
+                break
+
         # git grep exits 1 for "no matches", which is an answer.
         if proc.returncode not in (0, 1):
             raise ToolError(

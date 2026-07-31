@@ -568,6 +568,31 @@ def load_config(path: Path | str) -> ProjectConfig:
     return parse_config(data)
 
 
+def _glob_could_match_a_test(glob: str, test_patterns: list[str]) -> bool:
+    """Could a file written under `glob` be recognised as a test?
+
+    Deliberately permissive. `spec/**` is how a planner usually grants room for
+    a spec, and demanding it name the exact file would reject the common,
+    correct form. The question is whether there is *anywhere* to put one, not
+    whether the planner predicted its name.
+    """
+    from orchestrator.globs import glob_to_regex, matches_any
+
+    if matches_any(glob, test_patterns):
+        return True
+    # A prefix like `spec/**` cannot be matched against a pattern directly, so
+    # ask whether a plausible file beneath it would be.
+    stem = glob.split("*")[0].rstrip("/")
+    if not stem:
+        return False
+    return any(
+        glob_to_regex(pattern).match(f"{stem}/x_spec.rb")
+        or glob_to_regex(pattern).match(f"{stem}/x/x_spec.rb")
+        or glob_to_regex(pattern).match(f"{stem}/test_x.py")
+        for pattern in test_patterns
+    )
+
+
 def validate_stage(stage: Stage, cfg: ProjectConfig) -> list[str]:
     """Well-formedness of a single stage, planner-derived or otherwise.
 
@@ -598,6 +623,21 @@ def validate_stage(stage: Stage, cfg: ProjectConfig) -> list[str]:
             f"{where}: must declare edit_files — the scope guard is meaningless "
             "without it, and a stage that cannot name its files is too broad "
             "to be a stage"
+        )
+    elif stage.require_new_tests and not any(
+        _glob_could_match_a_test(g, cfg.test_file_patterns) for g in stage.edit_files
+    ):
+        # A stage that cannot pass however well the executor performs.
+        # `require_new_tests` fails it unless the diff touches a test file; the
+        # scope guard fails it if the diff leaves `edit_files`. Demand a test
+        # and forbid writing one and the executor writes the spec, scope
+        # rejects it, and the loop spends retries — then an intervention —
+        # discovering something checkable before it started.
+        problems.append(
+            f"{where}: require_new_tests is set but edit_files has nowhere to "
+            f"put a test. Recognised test paths are "
+            f"{', '.join(cfg.test_file_patterns)}; add the spec you expect to "
+            "be written, or drop the requirement"
         )
 
     if not stage.effective_test_command(cfg) and not stage.checks:

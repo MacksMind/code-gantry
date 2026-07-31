@@ -233,3 +233,26 @@ class TestProvenance:
         assert [c.tool for c in r.calls] == ["read_file", "search"]
         assert r.calls[0].detail == "docs/plan.md"
         assert r.calls[0].lines > 0
+
+
+class TestSearchDialect:
+    """A model writes Perl-flavoured regex; git's default engine is not.
+
+    Measured on the first live run of these tools: six of twenty-four searches
+    returned nothing because `\\s`, `\\b` and `(:|=>)` mean nothing to basic
+    regex. Every one was a wasted call against a budget of twenty-five, and the
+    pattern that eventually found the answer matched 7 sites with `-P` and 0
+    without.
+    """
+
+    def test_word_boundaries_work(self, repo):
+        hits = reader(repo).search(r"render\s+text:")
+        assert len(hits) == 2
+
+    def test_alternation_works(self, repo):
+        hits = reader(repo).search(r"(render|def)\s+(text|index)")
+        assert hits
+
+    def test_a_genuinely_bad_pattern_still_reports(self, repo):
+        with pytest.raises(ToolError, match="search failed"):
+            reader(repo).search("(unclosed")
