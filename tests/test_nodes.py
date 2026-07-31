@@ -155,6 +155,13 @@ def with_stage(state, rt, **over):
     return state
 
 
+def _digest(rt, state):
+    """The fingerprint verify records when the full suite passes."""
+    from orchestrator.verify import diff_digest
+
+    return diff_digest(rt.git, state["stage_start_sha"])
+
+
 class TestPlanDerivation:
     def test_a_new_stage_goes_to_precheck(self, repo, tmp_path):
         planner = StubPlanner(
@@ -551,6 +558,46 @@ class TestReviewGate:
         (repo / "app.py").write_text("changed\n")
         out = nodes.review(state, rt)
         assert out["next_hop"] == "execute"
+
+    def test_a_suite_already_green_at_verify_is_not_run_again(self, repo, tmp_path):
+        # Nothing mutates the tree between verify and this gate — the reviewer
+        # reads a diff, it does not edit — so re-running the identical suite on
+        # an identical tree buys no information. Measured on the first real
+        # project: three stages, 584 seconds, and because the second run
+        # re-rolls every order-dependent example it also produced two of the
+        # night's flakes at the gate, where a flake is most expensive.
+        marker = tmp_path / "suite-ran"
+        cfg, rt, state = make(repo, tmp_path, full_test_command=f"touch {marker}")
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("changed\n")
+        state = {**state, "full_suite_digest": _digest(rt, state)}
+        out = nodes.review(state, rt)
+        assert out["next_hop"] == "advance"
+        assert not marker.exists()
+
+    def test_a_changed_tree_still_pays_for_the_suite(self, repo, tmp_path):
+        # The skip is keyed to what was actually tested. If anything moved, the
+        # recorded pass proves nothing about the tree being merged.
+        marker = tmp_path / "suite-ran"
+        cfg, rt, state = make(repo, tmp_path, full_test_command=f"touch {marker}")
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("changed\n")
+        state = {**state, "full_suite_digest": "stale" * 8}
+        out = nodes.review(state, rt)
+        assert out["next_hop"] == "advance"
+        assert marker.exists()
+
+    def test_a_scoped_verify_leaves_the_gate_to_do_its_job(self, repo, tmp_path):
+        # The common case. Verify ran only the stage's own specs, so the full
+        # suite has never been run on this tree and the gate is the only thing
+        # standing between a scoped pass and a merge.
+        marker = tmp_path / "suite-ran"
+        cfg, rt, state = make(repo, tmp_path, full_test_command=f"touch {marker}")
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("changed\n")
+        out = nodes.review(state, rt)
+        assert out["next_hop"] == "advance"
+        assert marker.exists()
 
     def test_a_flaky_full_suite_does_not_block_a_good_stage(self, repo, tmp_path):
         # The full suite has far more surface for ordering flakes, and a flake

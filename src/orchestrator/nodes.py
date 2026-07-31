@@ -40,7 +40,7 @@ from orchestrator.state import (
     merge_deferrals,
     outstanding_deferrals,
 )
-from orchestrator.verify import Layer, Route, run_verify
+from orchestrator.verify import Layer, Route, diff_digest, run_verify
 
 STATUS_TAIL_CHARS = 4_000
 
@@ -473,6 +473,7 @@ def verify(state: RunState, rt: Runtime) -> dict:
         "flaky_files": _merge_flaky(state, outcome.flaky_files),
         "test_seconds": state.get("test_seconds", 0.0) + outcome.test_seconds,
         "last_diff_digest": outcome.diff_digest,
+        "full_suite_digest": outcome.full_suite_digest,
     }
 
     if outcome.unscoped_tests:
@@ -611,6 +612,27 @@ def review(state: RunState, rt: Runtime) -> dict:
 
     # Approved. Now the expensive half.
     if not stage.full_suite_required(rt.cfg) or not rt.cfg.full_test_command:
+        return {**base, "next_hop": "advance"}
+
+    # Verify may already have run this exact command on this exact tree — that
+    # is what happens whenever a stage declares no `test_paths` and the tests
+    # layer falls back to the whole suite. Re-running it here tests the same
+    # bytes with the same command: the reviewer reads a diff, it does not edit.
+    #
+    # It is not merely wasted minutes. The second run re-rolls every
+    # order-dependent example in the suite, so on a legacy suite it is a fresh
+    # chance to trip over one — at the gate, where a flake costs a planner
+    # intervention rather than an executor attempt. Two of the first night's
+    # three gate flakes were on a suite that had just passed clean.
+    #
+    # Compared, never trusted: a digest that has moved for any reason falls
+    # through to running the suite, which is the old behaviour.
+    tested = state.get("full_suite_digest")
+    if tested and tested == diff_digest(rt.git, state["stage_start_sha"]):
+        rt.log(
+            f"[review] {stage.id}: approved; the full suite already passed at "
+            "verify on this tree, so the gate does not repeat it"
+        )
         return {**base, "next_hop": "advance"}
 
     rt.log(f"[review] {stage.id}: approved; running the full suite")

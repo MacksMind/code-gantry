@@ -84,6 +84,14 @@ class VerifyOutcome:
     # which specs this stage affects. Correct, but expensive enough on a real
     # project to be worth surfacing rather than looking like a slow scoped run.
     unscoped_tests: bool = False
+    # Set when this layer ran `full_test_command` itself and it came back green:
+    # a fingerprint of the tree that passed. The merge gate re-runs the full
+    # suite after review, and when verify has already run that exact command on
+    # this exact tree the second run is the same command against the same bytes
+    # — the reviewer reads a diff, it does not edit. Keyed to the tree rather
+    # than to a sha so uncommitted work counts, and compared rather than
+    # trusted, so any drift falls back to running it.
+    full_suite_digest: str = ""
 
 
 def run_verify(
@@ -116,7 +124,7 @@ def run_verify(
         resuming=resuming,
     )
 
-    outcome.diff_digest = _diff_digest(git, stage_start_sha)
+    outcome.diff_digest = diff_digest(git, stage_start_sha)
 
     for layer in (
         _layer_setup,
@@ -264,7 +272,7 @@ def _layer_scope(ctx: _Context, outcome: VerifyOutcome):
 # --- layer 3: no progress ------------------------------------------------
 
 
-def _diff_digest(git: Git, stage_start_sha: str) -> str:
+def diff_digest(git: Git, stage_start_sha: str) -> str:
     try:
         return hashlib.sha256(git.diff(stage_start_sha).encode()).hexdigest()
     except GitError:  # pragma: no cover - a broken repo fails louder elsewhere
@@ -379,6 +387,7 @@ def _layer_tests(ctx: _Context, outcome: VerifyOutcome):
     outcome.test_seconds += result.duration_seconds
 
     if result.ok:
+        _record_full_suite(ctx, outcome, command)
         return None
 
     if result.signal is not None:
@@ -433,6 +442,10 @@ def _layer_tests(ctx: _Context, outcome: VerifyOutcome):
 
     if flaked:
         outcome.flake_reruns += 1
+        # A file that passes whole and standalone is green, which is the same
+        # verdict the merge gate would reach — so this counts as the full suite
+        # having passed on this tree, exactly as a first-try pass does.
+        _record_full_suite(ctx, outcome, command)
         return None
 
     return _fail(
@@ -442,6 +455,21 @@ def _layer_tests(ctx: _Context, outcome: VerifyOutcome):
         f"The test command failed.\n{detail}\n{_clip(last_output)}",
         failing_paths=_path_hints(last_output),
     )
+
+
+def _record_full_suite(ctx: _Context, outcome: VerifyOutcome, command: str) -> None:
+    """Remember a green full suite so the merge gate need not repeat it.
+
+    Only when the command *is* `full_test_command`. `test_command` may be the
+    same string on some projects and a cheaper unscoped run on others, and the
+    gate's contract is about the full suite specifically — so this compares the
+    command rather than inferring from `unscoped_tests`.
+
+    The digest is taken after the suite ran, so anything the run itself left in
+    the tree is already part of the fingerprint the gate will compare against.
+    """
+    if command and command == ctx.cfg.full_test_command:
+        outcome.full_suite_digest = diff_digest(ctx.git, ctx.stage_start_sha)
 
 
 def resolve_test_command(
