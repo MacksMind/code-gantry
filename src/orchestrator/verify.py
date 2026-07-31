@@ -98,6 +98,7 @@ def run_verify(
     base_sha: str | None = None,
     previous_diff_digest: str | None = None,
     previous_failure_layer: str | None = None,
+    resuming: bool = False,
 ) -> VerifyOutcome:
     outcome = VerifyOutcome(passed=True)
     context = _Context(
@@ -112,6 +113,7 @@ def run_verify(
         base_sha=base_sha,
         previous_diff_digest=previous_diff_digest,
         previous_failure_layer=previous_failure_layer,
+        resuming=resuming,
     )
 
     outcome.diff_digest = _diff_digest(git, stage_start_sha)
@@ -151,6 +153,7 @@ class _Context:
     base_sha: str | None
     previous_diff_digest: str | None = None
     previous_failure_layer: str | None = None
+    resuming: bool = False
 
 
 def _fail(
@@ -291,6 +294,12 @@ def _layer_progress(ctx: _Context, outcome: VerifyOutcome):
     if outcome.diff_digest != ctx.previous_diff_digest:
         return None
     if ctx.previous_failure_layer == "full_suite":
+        return None
+    if ctx.resuming:
+        # Re-entering at verify is re-checking the tree, not repeating an
+        # attempt — a repository-state resume exists so a human's fix is
+        # checked rather than discarded, and the tree being unchanged since the
+        # last verify is the normal case, not evidence of a stalled executor.
         return None
 
     return _fail(

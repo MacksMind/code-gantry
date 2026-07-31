@@ -441,6 +441,7 @@ def verify(state: RunState, rt: Runtime) -> dict:
         base_sha=state.get("base_sha"),
         previous_diff_digest=state.get("last_diff_digest") or None,
         previous_failure_layer=state.get("failure_layer") or None,
+        resuming=bool(state.get("resuming")),
     )
 
     rt.write_artifact(

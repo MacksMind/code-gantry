@@ -853,3 +853,33 @@ class TestDeclaredTestPathsAreResolved:
         edit(repo, "spec/touched_spec.rb", "x\n")
         cfg, stage = build(repo, scoped_test_command="rspec {paths}")
         assert "spec/touched_spec.rb" in resolve_test_command(stage, cfg, Git(repo), sha)
+
+
+class TestResumeDoesNotLookLikeAStall:
+    """Re-entering at verify is re-checking, not repeating.
+
+    A repository-state failure resumes at verify precisely so a human's fix is
+    checked rather than discarded — which means the tree may legitimately be
+    byte-identical to what the last verify saw. The progress guard read that as
+    the executor failing to move and sent the stage to the planner, costing an
+    intervention for the act of resuming.
+
+    Observed live: a run stopped mid-attempt, resumed, and went straight to
+    "failed at progress" without an executor pass in between.
+    """
+
+    def test_a_resumed_verify_ignores_the_previous_digest(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(repo)
+        digest = verify(repo, cfg, stage, sha).diff_digest
+        out = verify(repo, cfg, stage, sha, previous_diff_digest=digest, resuming=True)
+        assert out.passed
+
+    def test_an_ordinary_verify_still_catches_a_stall(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(repo)
+        digest = verify(repo, cfg, stage, sha).diff_digest
+        out = verify(repo, cfg, stage, sha, previous_diff_digest=digest)
+        assert out.failed_layer is Layer.PROGRESS
