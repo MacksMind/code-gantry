@@ -196,8 +196,20 @@ def reconcile(slug: str, dry_run: bool) -> None:
     for line in outcome.tool_calls:
         click.echo(f"  {line}")
 
+    # An answer reached without looking is not an answer. Observed: the same
+    # command against the same repository produced six cited observations on
+    # one call and "no drift" on the next, the second having made zero tool
+    # calls. Recording that as "checked, nothing found" would be worse than
+    # recording nothing, because it reads as evidence.
+    if not outcome.tool_calls:
+        raise click.ClickException(
+            "the planner answered without reading anything, so its verdict is "
+            "worth nothing — whether it said drift or no drift. Run it again."
+        )
+
     if not outcome.plan_notes:
         click.echo("\nno drift found; the plan still describes the repository")
+        click.echo(f"(reached after {len(outcome.tool_calls)} read(s))")
         return
 
     click.echo(f"\n{len(outcome.plan_notes)} observation(s):")

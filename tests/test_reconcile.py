@@ -172,3 +172,58 @@ class TestTheDiffIsAgainstBaseRef:
         sent = stub.messages[0]["content"]
         assert "develop" in sent
         assert "main" not in sent
+
+
+class TestAnUnverifiedVerdictIsRefused:
+    """"No drift" from a planner that read nothing is not a finding.
+
+    Observed live: the same command against the same repository produced six
+    cited observations on one call and "no drift" on the next, the second
+    having made no tool calls at all. Recording that as "checked, nothing
+    found" would be worse than recording nothing, because it reads as evidence
+    and would stop anyone looking again.
+    """
+
+    def test_no_drift_without_reads_is_an_error(self, project, monkeypatch):
+        stub = stub_planner(monkeypatch, [])
+        monkeypatch.setattr(
+            type(stub),
+            "plan",
+            lambda self, messages: PlannerOutcome(
+                verdict="project_complete",
+                reasoning="looks fine",
+                status_entry="e",
+                plan_notes=[],
+                tool_calls=[],
+            ),
+        )
+        result = CliRunner().invoke(cli.main, ["reconcile", "demo"])
+        assert result.exit_code != 0
+        assert "without reading anything" in result.output
+
+    def test_notes_without_reads_are_refused_too(self, project, monkeypatch):
+        # Notes are the more dangerous direction: an unsourced claim about the
+        # plan gets written down and acted on.
+        stub = stub_planner(monkeypatch, [A_NOTE])
+        monkeypatch.setattr(
+            type(stub),
+            "plan",
+            lambda self, messages: PlannerOutcome(
+                verdict="project_complete",
+                reasoning="r",
+                status_entry="e",
+                plan_notes=[A_NOTE],
+                tool_calls=[],
+            ),
+        )
+        repo, _ = project
+        result = CliRunner().invoke(cli.main, ["reconcile", "demo"])
+        assert result.exit_code != 0
+        assert not (repo / "docs" / "addendum" / "plan-addendum.md").exists()
+
+    def test_a_verdict_backed_by_reads_is_accepted(self, project, monkeypatch):
+        stub_planner(monkeypatch, [])
+        result = CliRunner().invoke(cli.main, ["reconcile", "demo"])
+        assert result.exit_code == 0
+        assert "no drift" in result.output
+        assert "1 read(s)" in result.output

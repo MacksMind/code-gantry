@@ -677,6 +677,14 @@ stage, an environment problem.
   hours risks more, reverts worse, and tells you less when it fails. Group
   files into one stage only when they must ship together to keep the tree
   green.
+
+  This one is a default rather than a law, and it is a statement about the
+  executor rather than about the work. It is tuned to a local model with
+  modest headroom, where a multi-file sweep deadlocked twice and the same work
+  redrawn one file per stage landed first time. An operator whose executor has
+  far more room should say so in this project's guidance, which refines
+  everything here — under this default they would pay a planner call, a review
+  and a full-suite run per file for stages the executor could do whole.
 - **Narrow scope.** `edit_files` is enforced: a diff touching anything outside
   it fails the stage. Include the tests that must change. Do not pad the globs
   to be safe — an over-broad stage defeats the guard that protects the run.
