@@ -219,6 +219,11 @@ class PlannerOutcome:
     revision_mode: RevisionMode | None = None
     usage: PlannerUsage = field(default_factory=PlannerUsage)
     deferred: list[dict] = field(default_factory=list)
+    # What the planner looked at to reach this. Once it chooses its own inputs,
+    # this is the only way to explain a stage afterwards — half the debugging on
+    # the first long run was reconstructing what it had been told, and that was
+    # when the inputs were fixed.
+    tool_calls: list[str] = field(default_factory=list)
     # True when `blocked` is ours rather than the planner's, so the report does
     # not imply a judgement the model never made.
     failed: bool = False
@@ -262,6 +267,16 @@ class AnthropicPlanner:
         self.reader = reader
         self.semantic = semantic
 
+    def _tool_log(self) -> list[str]:
+        """What was looked at, for the run log.
+
+        Rendered here rather than in the node so the node never has to know
+        that two different objects record calls.
+        """
+        calls = list(getattr(self.reader, "calls", []))
+        calls += list(getattr(self.semantic, "calls", []))
+        return [f"{c.tool}({c.detail}) -> {c.lines} line(s)" for c in calls]
+
     def _max_tool_turns(self) -> int:
         """Backstop on the conversation length.
 
@@ -288,6 +303,13 @@ class AnthropicPlanner:
         """
         conversation = list(messages)
         billed = PlannerUsage()
+        # Reset per decision, not per run: the log line answers "what did it
+        # look at to draw *this* stage".
+        if self.reader is not None:
+            self.reader.calls.clear()
+            self.reader._lines_used = 0
+        if self.semantic is not None:
+            self.semantic.calls.clear()
 
         for remaining in (_MALFORMED_RETRIES, 0):
             terminal, parsed, usage = self._attempt(conversation)
@@ -295,6 +317,7 @@ class AnthropicPlanner:
 
             if terminal is not None:
                 terminal.usage = billed
+                terminal.tool_calls = self._tool_log()
                 return terminal
 
             problem = _semantic_problem(parsed)
@@ -307,12 +330,14 @@ class AnthropicPlanner:
                     revision_mode=parsed.revision_mode,
                     deferred=[d.model_dump() for d in parsed.deferred],
                     usage=billed,
+                    tool_calls=self._tool_log(),
                     failed=False,
                 )
 
             if not remaining:
                 outcome = _blocked(problem)
                 outcome.usage = billed
+                outcome.tool_calls = self._tool_log()
                 return outcome
 
             # Appended, never prepended: the plan and repository layout at the
@@ -498,10 +523,35 @@ def _semantic_problem(parsed: PlannerResponse) -> str | None:
     return None
 
 
-def make_planner(cfg: PlannerConfig) -> PlannerClient:
-    if cfg.provider == "anthropic":
-        return AnthropicPlanner(cfg)
-    raise RuntimeError(f"unsupported planner provider {cfg.provider!r}")
+def make_planner(cfg: PlannerConfig, target_repo=None) -> PlannerClient:
+    """Build the planner, with repository access when the project enables it.
+
+    `target_repo` is optional so preflight can build a client just to prove the
+    credentials work, without needing a repo on hand.
+    """
+    if cfg.provider != "anthropic":
+        raise RuntimeError(f"unsupported planner provider {cfg.provider!r}")
+
+    reader = semantic = None
+    if cfg.repo_access and target_repo is not None:
+        from orchestrator.gitops import Git
+        from orchestrator.repotools import ReadBudget, RepoReader
+        from orchestrator.semantic import SemanticSearch, SemanticSearchConfig
+
+        reader = RepoReader(
+            Git(target_repo),
+            target_repo,
+            ReadBudget(
+                max_lines_per_call=cfg.max_read_lines_per_call,
+                max_total_lines=cfg.max_read_lines_total,
+                max_calls=cfg.max_read_calls,
+            ),
+        )
+        search_cfg = SemanticSearchConfig.from_mapping(cfg.semantic_search)
+        if search_cfg is not None:
+            semantic = SemanticSearch(search_cfg)
+
+    return AnthropicPlanner(cfg, reader=reader, semantic=semantic)
 
 
 def _build_anthropic_client(cfg: PlannerConfig):

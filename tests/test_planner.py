@@ -518,3 +518,137 @@ class TestUsageNormalisation:
             output_tokens = 10
 
         assert _extract_usage(U()).prompt_tokens == 100
+
+
+class ToolBlock:
+    """A tool_use block as the SDK presents one."""
+
+    type = "tool_use"
+
+    def __init__(self, name, args, id="tu_1"):
+        self.name, self.input, self.id = name, args, id
+
+
+class TextBlock:
+    type = "text"
+
+    def __init__(self, text):
+        self.text = text
+
+
+class TestRepositoryToolLoop:
+    """The planner asks, gets an answer, and then decides.
+
+    Every expensive failure of the first long run came from it deciding
+    without asking, because it had nothing to ask with.
+    """
+
+    def _reader(self, tmp_path):
+        import subprocess
+
+        from orchestrator.gitops import Git
+        from orchestrator.repotools import ReadBudget, RepoReader
+
+        (tmp_path / "app").mkdir()
+        (tmp_path / "app" / "a.rb").write_text("render text: 'x'\n")
+        for args in (
+            ["init", "-q"],
+            ["config", "user.email", "t@example.com"],
+            ["config", "user.name", "T"],
+            ["config", "commit.gpgsign", "false"],
+            ["add", "-A"],
+            ["commit", "-q", "-m", "x"],
+        ):
+            subprocess.run(["git", *args], cwd=tmp_path, check=True)
+        return RepoReader(Git(tmp_path), tmp_path, ReadBudget(max_calls=4))
+
+    def test_a_tool_request_is_answered_and_the_conversation_continues(self, tmp_path):
+        asked = SimpleNamespace(
+            content=[ToolBlock("search", {"pattern": "render text:"})],
+            stop_reason="tool_use",
+            usage=None,
+            parsed_output=None,
+        )
+        answered = SimpleNamespace(
+            content=[TextBlock("done")],
+            stop_reason="end_turn",
+            usage=None,
+            parsed_output=PlannerResponse(
+                verdict="project_complete", reasoning="nothing left", status_entry="e"
+            ),
+        )
+        client = SequenceClient([asked, answered])
+        planner = AnthropicPlanner(
+            cfg(), client=client, reader=self._reader(tmp_path)
+        )
+        out = planner.plan(MESSAGES)
+
+        assert out.verdict == "project_complete"
+        assert len(client.calls) == 2, "the loop must call again after a tool result"
+        # The second call carries the assistant turn and the tool result, in
+        # that order — the API rejects a result that answers nothing.
+        second = client.calls[1]["messages"]
+        assert second[-2]["role"] == "assistant"
+        assert second[-1]["content"][0]["type"] == "tool_result"
+        assert "a.rb" in second[-1]["content"][0]["content"]
+
+    def test_tools_are_offered_only_when_a_reader_exists(self, tmp_path):
+        done = SimpleNamespace(
+            content=[TextBlock("x")],
+            stop_reason="end_turn",
+            usage=None,
+            parsed_output=PlannerResponse(verdict="project_complete", reasoning="r", status_entry="e"),
+        )
+        without = StubClient(done)
+        AnthropicPlanner(cfg(), client=without).plan(MESSAGES)
+        assert "tools" not in without.calls[0]
+
+        with_reader = StubClient(done)
+        AnthropicPlanner(
+            cfg(), client=with_reader, reader=self._reader(tmp_path)
+        ).plan(MESSAGES)
+        assert [t["name"] for t in with_reader.calls[0]["tools"]] == [
+            "read_file",
+            "list_files",
+            "search",
+            "git_show",
+            "git_diff",
+        ]
+
+    def test_a_refused_tool_call_is_returned_rather_than_raised(self, tmp_path):
+        # The planner must be able to recover from a bad path by answering with
+        # what it has. Raising would discard the reasoning already done.
+        asked = SimpleNamespace(
+            content=[ToolBlock("read_file", {"path": "../../etc/passwd"})],
+            stop_reason="tool_use",
+            usage=None,
+            parsed_output=None,
+        )
+        answered = SimpleNamespace(
+            content=[TextBlock("ok")],
+            stop_reason="end_turn",
+            usage=None,
+            parsed_output=PlannerResponse(verdict="project_complete", reasoning="r", status_entry="e"),
+        )
+        client = SequenceClient([asked, answered])
+        out = AnthropicPlanner(
+            cfg(), client=client, reader=self._reader(tmp_path)
+        ).plan(MESSAGES)
+        assert out.verdict == "project_complete"
+        result = client.calls[1]["messages"][-1]["content"][0]["content"]
+        assert "outside the repository" in result
+
+    def test_the_loop_is_bounded(self, tmp_path):
+        # A model that ignores an exhausted budget and keeps asking must not
+        # run until the request timeout.
+        forever = SimpleNamespace(
+            content=[ToolBlock("list_files", {})],
+            stop_reason="tool_use",
+            usage=None,
+            parsed_output=None,
+        )
+        client = SequenceClient([forever] * 50)
+        AnthropicPlanner(cfg(), client=client, reader=self._reader(tmp_path)).plan(
+            MESSAGES
+        )
+        assert len(client.calls) <= 8, "budget 4 + 2 turns, plus one malformed retry"

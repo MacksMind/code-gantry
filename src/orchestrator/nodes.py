@@ -141,6 +141,15 @@ def plan(state: RunState, rt: Runtime) -> dict:
     rt.log(f"[plan] {'revising ' + stage.id if stage else 'deriving next stage'}")
     outcome = rt.planner.plan(messages)
 
+    if outcome.tool_calls:
+        # What it looked at, before what it decided. A stage drawn from six
+        # reads and a search is a different artefact from one drawn from
+        # nothing, and only this line distinguishes them afterwards.
+        rt.log(
+            f"[plan] read {len(outcome.tool_calls)} thing(s): "
+            + "; ".join(outcome.tool_calls)
+        )
+
     usage = accumulate_usage(
         state.get("run_usage"),
         planner_prompt_tokens=outcome.usage.prompt_tokens,

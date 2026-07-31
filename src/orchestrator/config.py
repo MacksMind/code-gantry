@@ -225,6 +225,23 @@ class PlannerConfig(_EndpointConfig):
     guidance: str | None = None
     request_timeout_seconds: float = 900.0
     max_retries: int = 2
+    # What the planner may look at, and how much of it. Absent means no tools:
+    # the planner is handed the plan and a directory listing and asked to
+    # reason from them, which is how it invented spec paths and mis-counted
+    # call sites on the first real project.
+    #
+    # A ceiling is still needed with the tools present. Unbounded context
+    # degraded both latency and accuracy for the executor, and there is no
+    # reason the planner is immune.
+    repo_access: bool = False
+    max_read_lines_per_call: int = 400
+    max_read_lines_total: int = 3000
+    max_read_calls: int = 25
+    # Semantic search over a Qdrant index, when the project maintains one.
+    # Endpoints come from the environment because they carry a host name, which
+    # is an identifiable infrastructure value and does not belong in a tracked
+    # file.
+    semantic_search: dict | None = None
 
 
 class ReviewerConfig(_EndpointConfig):
