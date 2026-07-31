@@ -324,7 +324,8 @@ def _auto_test_command(stage: Stage, cfg: ProjectConfig) -> str | None:
 
     No declared paths means no inner loop, rather than a slow one.
     """
-    if not cfg.scoped_test_command:
+    template_base = cfg.auto_test_command or cfg.scoped_test_command
+    if not template_base:
         return None
 
     paths: list[str] = []
@@ -342,9 +343,11 @@ def _auto_test_command(stage: Stage, cfg: ProjectConfig) -> str | None:
     if not paths:
         return None
 
-    template = cfg.scoped_test_command
-    if cfg.directory_test_command and any(
-        (cfg.target_repo / p).is_dir() for p in paths
+    template = template_base
+    if (
+        cfg.auto_test_command is None
+        and cfg.directory_test_command
+        and any((cfg.target_repo / p).is_dir() for p in paths)
     ):
         template = cfg.directory_test_command
     return template.format(paths=" ".join(paths))

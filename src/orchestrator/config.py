@@ -319,6 +319,20 @@ class ProjectConfig(_Strict):
     # single file is not worth starting workers for. Both strings are yours —
     # this only chooses between them, on a fact about the filesystem.
     directory_test_command: str | None = None
+    # What Aider runs inside its own edit loop, when `executor.auto_test` is on.
+    # Separate from the above because the two have opposite needs from the same
+    # runner: verify *parses* the output to find which files failed, so it needs
+    # the full failed-examples block, while Aider's output lands in the model's
+    # context — a directory-scoped run put 138k-152k tokens into a single
+    # request, most of it passing-example lines, a profile and a deprecation
+    # tally. Quiet it here, not there.
+    #
+    # Keep the failure detail. Our parsers want only filenames, but the model
+    # cannot fix a failure it cannot see. Drop the noise around the traces, not
+    # the traces.
+    #
+    # Falls back to `scoped_test_command` when unset.
+    auto_test_command: str | None = None
 
     full_suite_on_approval: bool = True
 
@@ -400,6 +414,7 @@ class ProjectConfig(_Strict):
             ("full_test_command", self.full_test_command),
             ("scoped_test_command", self.scoped_test_command),
             ("directory_test_command", self.directory_test_command),
+            ("auto_test_command", self.auto_test_command),
             ("executor.lint_command", self.executor.lint_command),
         ):
             if command:
@@ -571,7 +586,11 @@ def _structural_problems(cfg: ProjectConfig) -> list[str]:
             "ADR beside it into every review prompt"
         )
 
-    for label in ("scoped_test_command", "directory_test_command"):
+    for label in (
+        "scoped_test_command",
+        "directory_test_command",
+        "auto_test_command",
+    ):
         command = getattr(cfg, label)
         if command and "{paths}" not in command:
             problems.append(

@@ -678,3 +678,73 @@ class TestScopedAutoTest:
         )
         argv = build_aider_argv(stage, cfg, "p")
         assert "--test-cmd" not in argv
+
+
+class TestAutoTestHasItsOwnCommand:
+    """The inner loop wants quiet; verify wants verbose. Same run, opposite needs.
+
+    Verify parses the runner's output to find which files failed — that is how
+    the flake gate works at all — so it needs the full `Failed examples:` block.
+    Aider's inner loop needs the opposite: its test output lands in the model's
+    context, and a directory-scoped run put 138,000 to 152,000 tokens into a
+    single request, at roughly 165 seconds of prefill each before a token was
+    generated.
+
+    So `auto_test_command` is separate, and falls back to the scoped command
+    when unset — quiet is an optimisation, not a requirement.
+    """
+
+    def test_the_auto_test_command_is_used_when_set(self):
+        cfg, stage = cfg_with(
+            stage_overrides={"test_paths": ["spec/a_spec.rb"]},
+            scoped_test_command="rspec {paths}",
+            auto_test_command="rspec --fail-fast -f progress {paths}",
+            executor={"model": "m", "auto_test": True},
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert argv[argv.index("--test-cmd") + 1] == (
+            "rspec --fail-fast -f progress spec/a_spec.rb"
+        )
+
+    def test_it_falls_back_to_the_scoped_command(self):
+        cfg, stage = cfg_with(
+            stage_overrides={"test_paths": ["spec/a_spec.rb"]},
+            scoped_test_command="rspec {paths}",
+            executor={"model": "m", "auto_test": True},
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert argv[argv.index("--test-cmd") + 1] == "rspec spec/a_spec.rb"
+
+    def test_verify_is_unaffected_by_it(self, repo):
+        # The parsing side must keep the verbose command whatever the inner
+        # loop uses, or the flake gate stops finding failing files.
+        from orchestrator.config import Stage, parse_config
+        from orchestrator.gitops import Git
+        from orchestrator.verify import resolve_test_command
+
+        (repo / "spec").mkdir(exist_ok=True)
+        (repo / "spec" / "a_spec.rb").write_text("x\n")
+        g = Git(repo)
+        g.commit_all("spec")
+        sha = g.head_sha()
+        (repo / "app.py").write_text("changed\n")
+
+        cfg = parse_config(
+            {
+                "target_repo": str(repo),
+                "base_ref": "main",
+                "project_branch": "proj",
+                "plan_root": "PLAN.md",
+                "test_command": "rspec-all",
+                "scoped_test_command": "rspec {paths}",
+                "auto_test_command": "rspec --fail-fast {paths}",
+                "executor": {"model": "m"},
+                "planner": {"model": "claude-opus-5"},
+                "reviewer": {"model": "gpt-5.6-sol"},
+            }
+        )
+        stage = Stage(
+            id="s", instruction="i", edit_files=["app.py"],
+            test_paths=["spec/a_spec.rb"],
+        )
+        assert resolve_test_command(stage, cfg, g, sha) == "rspec spec/a_spec.rb"
