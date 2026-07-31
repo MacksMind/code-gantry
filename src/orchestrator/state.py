@@ -99,6 +99,12 @@ class RunState(TypedDict, total=False):
 
     base_ref: str
     base_sha: str
+    # The commit plan documents and the repo layout are read from: the project
+    # branch at run start, not base_sha. Plan maintenance happens on the branch
+    # and reaches base_ref only when the project merges, which on a long
+    # migration is the end — so reading at the base shows a plan the run is not
+    # executing. base_sha stays what the run is measured against.
+    plan_sha: str
     project_branch: str
     stage_branch: str | None
 
@@ -180,6 +186,7 @@ def new_state(
     base_sha: str,
     project_branch: str,
     started_at: float,
+    plan_sha: str = "",
 ) -> RunState:
     return RunState(
         run_id=run_id,
@@ -188,6 +195,7 @@ def new_state(
         target_repo=target_repo,
         base_ref=base_ref,
         base_sha=base_sha,
+        plan_sha=plan_sha or base_sha,
         project_branch=project_branch,
         stage_branch=None,
         completed=[],

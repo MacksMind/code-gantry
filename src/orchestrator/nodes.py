@@ -135,7 +135,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
         interventions_used=state.get("planner_interventions", 0),
         interventions_max=limits.max_planner_interventions,
         status_tail=_status_tail(rt),
-        layout=rt.layout(state.get("base_sha") or ""),
+        layout=rt.layout(state.get("plan_sha") or state.get("base_sha") or ""),
         deferred=state.get("deferred") or [],
     )
 
@@ -483,6 +483,7 @@ def verify(state: RunState, rt: Runtime) -> dict:
         project_branch=state.get("project_branch"),
         base_ref=state.get("base_ref"),
         base_sha=state.get("base_sha"),
+        plan_sha=state.get("plan_sha") or state.get("base_sha"),
         previous_diff_digest=state.get("last_diff_digest") or None,
         previous_failure_layer=state.get("failure_layer") or None,
         resuming=bool(state.get("resuming")),

@@ -933,6 +933,61 @@ class TestThePlanIsNotEditable:
         assert out.passed or out.failed_layer is not Layer.SCOPE
 
 
+class TestThePlanIsReadFromTheBranchBeingWorkedOn:
+    """Plan documents are read at the project branch, not at `base_ref`.
+
+    `base_sha` answers "what has this run changed"; it was also answering
+    "which commit are the plan documents in", and those are not the same
+    question. On a long-lived project branch the plan is maintained alongside
+    the work — restructured, folded, corrected — and none of that reaches
+    `main` until the branch merges, which on a months-long migration is the
+    end. Anchoring reads to `base_ref` made every such edit invisible to the
+    run that motivated it, and made a document set that had moved on the branch
+    fail plan resolution outright.
+
+    So reads follow the branch and measurement stays on the base.
+    """
+
+    def _fixture(self, repo, run_git):
+        docs = repo / "docs"
+        docs.mkdir(exist_ok=True)
+        (docs / "plan.md").write_text("# Plan\n\nSee [the child](child.md).\n")
+        g = Git(repo)
+        g.commit_all("plan")
+        base_sha = g.head_sha()
+
+        run_git(repo, "checkout", "-qb", "proj")
+        (docs / "child.md").write_text("# Child\n\nstep one\n")
+        g.commit_all("a plan child that only exists on the project branch")
+
+        cfg, stage = build(
+            repo,
+            stage_overrides={"edit_files": ["docs/**"]},
+            plan_root="docs/plan.md",
+        )
+        return cfg, stage, base_sha, g.head_sha()
+
+    def test_a_child_added_on_the_project_branch_is_protected(self, repo, run_git):
+        cfg, stage, base_sha, plan_sha = self._fixture(repo, run_git)
+        (repo / "docs" / "child.md").write_text("# Child\n\nrewritten\n")
+        out = verify(
+            repo, cfg, stage, plan_sha, base_sha=base_sha, plan_sha=plan_sha
+        )
+        assert not out.passed
+        assert out.failed_layer is Layer.SCOPE
+
+    def test_reading_at_the_base_would_not_see_it(self, repo, run_git):
+        # The behaviour being replaced, kept because it is the whole argument
+        # for the second sha: resolve at the base and the child is not a plan
+        # document, so an executor may quietly rewrite it.
+        cfg, stage, base_sha, plan_sha = self._fixture(repo, run_git)
+        (repo / "docs" / "child.md").write_text("# Child\n\nrewritten\n")
+        out = verify(
+            repo, cfg, stage, plan_sha, base_sha=base_sha, plan_sha=base_sha
+        )
+        assert out.passed
+
+
 class TestTheAddendumIsNotTheExecutorsToWrite:
     """The addendum records what a run did. A stage must not edit it.
 

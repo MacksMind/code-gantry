@@ -302,11 +302,14 @@ def run(slug: str, run_id: str | None, skip_preflight_tests: bool) -> None:
     # for an attempt the operator later wants to inspect.
     previous_gc = git.disable_gc()
     base_sha = git.ensure_project_branch(cfg.project_branch, cfg.base_ref)
+    # Read the plan from the project branch, not the base. A long migration
+    # maintains its documents on the branch for months and merges once at the
+    # end; reading at base_ref shows the plan as it was before any of that.
+    plan_sha = git.rev_parse(cfg.project_branch)
 
-    # Snapshot the plan as it stands at the run's baseline. The reviewer and
-    # planner judge against this; the planner's own revisions land in the live
-    # documents and show up as divergence in status.md.
-    tree = resolve_plan_tree(git, cfg.plan_root, base_sha)
+    # Snapshot it as it stands at run start. The reviewer and planner judge
+    # against this snapshot, so nothing is substituted underneath them mid-run.
+    tree = resolve_plan_tree(git, cfg.plan_root, plan_sha)
     if not tree.ok:
         click.echo("plan could not be resolved:\n" + "\n".join(tree.problems), err=True)
         git.restore_gc(previous_gc)
@@ -320,6 +323,7 @@ def run(slug: str, run_id: str | None, skip_preflight_tests: bool) -> None:
         target_repo=str(cfg.target_repo),
         base_ref=cfg.base_ref,
         base_sha=base_sha,
+        plan_sha=plan_sha,
         project_branch=cfg.project_branch,
         started_at=time.time(),
     )

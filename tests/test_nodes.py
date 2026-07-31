@@ -138,6 +138,8 @@ def make(repo, tmp_path, planner=None, reviewer=None, executor=None, **cfg_over)
         target_repo=str(repo),
         base_ref="main",
         base_sha=base_sha,
+        # As `cli.run` does it: measured against the base, read from the branch.
+        plan_sha=rt.git.rev_parse("proj"),
         project_branch="proj",
         started_at=time.time(),
     )
@@ -591,6 +593,40 @@ class TestReviewGate:
         out = nodes.review({**state, **out}, rt)
         assert out["next_hop"] == "advance"
         assert not marker.exists(), "the gate re-ran a suite verify had just run"
+
+
+class TestPlanDocumentsFollowTheProjectBranch:
+    """Plan maintenance happens on the branch, and must not need a merge first.
+
+    A migration branch lives for months. Its plan documents get restructured,
+    folded and corrected on that branch the whole time, and `main` sees none of
+    it until the end. Reading plan documents at `base_ref` meant the run could
+    not see the plan it was executing.
+    """
+
+    def test_a_child_added_on_the_branch_is_still_protected(
+        self, repo, tmp_path, run_git
+    ):
+        (repo / "PLAN.md").write_text("# Plan\n\nSee [the child](docs/child.md).\n")
+        Git(repo).commit_all("plan, on main")
+
+        run_git(repo, "checkout", "-qb", "proj")
+        (repo / "docs").mkdir(exist_ok=True)
+        (repo / "docs" / "child.md").write_text("# Child\n\nstep one\n")
+        Git(repo).commit_all("a plan child, on the project branch only")
+
+        cfg, rt, state = make(repo, tmp_path)
+        state = with_stage(state, rt, edit_files=["docs/**"])
+        (repo / "docs" / "child.md").write_text("# Child\n\nrewritten\n")
+
+        out = nodes.verify(state, rt)
+        assert out["failure_layer"] == "scope"
+
+        from orchestrator.state import RunState
+
+        assert "plan_sha" in RunState.__annotations__, (
+            "the key must be declared in the state schema or the graph drops it"
+        )
 
     def test_a_suite_already_green_at_verify_is_not_run_again(self, repo, tmp_path):
         # Nothing mutates the tree between verify and this gate — the reviewer

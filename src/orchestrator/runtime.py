@@ -139,17 +139,22 @@ class Runtime:
             self._plan = load_snapshot(self.paths.project.plan_snapshot)
         return self._plan
 
-    def layout(self, base_sha: str) -> str:
+    def layout(self, plan_sha: str) -> str:
         """What the repository contains, read once and held.
 
         The planner authors globs; without this it guesses at paths, and a
         wrong guess costs a scope violation and an intervention per stage.
         Held for the run so it stays a stable, cacheable prompt prefix rather
         than shifting as stages add files.
+
+        Read at the project branch rather than the base: files the branch has
+        added or moved are the ones a stage is most likely to touch next, and a
+        layout describing the base would be wrong in exactly those places.
+        Stability comes from reading once, not from which commit is read.
         """
         if self._layout is None:
             try:
-                paths = self.git.tracked_paths(base_sha)
+                paths = self.git.tracked_paths(plan_sha)
             except GitError:
                 # A layout we cannot read is not worth failing a run over; the
                 # planner simply goes back to having no picture of the repo.

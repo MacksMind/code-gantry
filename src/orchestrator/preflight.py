@@ -174,13 +174,19 @@ def _repo_checks(cfg: ProjectConfig, git: Git, *, for_resume: bool) -> list[Chec
 
 
 def _plan_checks(cfg: ProjectConfig, git: Git) -> list[Check]:
-    """The plan tree resolves, and no child escapes the root's directory."""
+    """The plan tree resolves, and no child escapes the root's directory.
+
+    Resolved at the project branch when there is one — that is where the run
+    will read it, and checking the base instead would pass on a plan the run
+    is not going to use, or fail on a restructure the branch has already done.
+    """
+    ref = cfg.project_branch if git.branch_exists(cfg.project_branch) else cfg.base_ref
     try:
-        base_sha = git.rev_parse(cfg.base_ref)
+        plan_sha = git.rev_parse(ref)
     except GitError as e:  # pragma: no cover - caught upstream
         return [Check("plan resolves", False, str(e))]
 
-    tree = resolve_plan_tree(git, cfg.plan_root, base_sha)
+    tree = resolve_plan_tree(git, cfg.plan_root, plan_sha)
     checks = [
         Check(
             f"plan root {cfg.plan_root!r} resolves",

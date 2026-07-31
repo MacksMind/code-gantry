@@ -105,6 +105,7 @@ def run_verify(
     project_branch: str | None = None,
     base_ref: str | None = None,
     base_sha: str | None = None,
+    plan_sha: str | None = None,
     previous_diff_digest: str | None = None,
     previous_failure_layer: str | None = None,
     resuming: bool = False,
@@ -120,6 +121,7 @@ def run_verify(
         project_branch=project_branch,
         base_ref=base_ref,
         base_sha=base_sha,
+        plan_sha=plan_sha,
         previous_diff_digest=previous_diff_digest,
         previous_failure_layer=previous_failure_layer,
         resuming=resuming,
@@ -159,7 +161,12 @@ class _Context:
     stage_branch: str | None
     project_branch: str | None
     base_ref: str | None
+    # What the run is measured against. Only the branch-identity check uses it.
     base_sha: str | None
+    # Which commit the plan documents are read from: the project branch, where
+    # plan maintenance actually happens. Distinct from base_sha because a long
+    # migration branch carries months of plan edits that never reach base_ref.
+    plan_sha: str | None = None
     previous_diff_digest: str | None = None
     previous_failure_layer: str | None = None
     resuming: bool = False
@@ -259,10 +266,10 @@ def _is_plan_document(path: str, ctx: _Context) -> bool:
     root_dir = root.rsplit("/", 1)[0] if "/" in root else ""
     if root_dir and not path.startswith(root_dir + "/"):
         return False
-    if not ctx.base_sha:
+    if not ctx.plan_sha:
         return False
 
-    tree = resolve_plan_tree(ctx.git, root, ctx.base_sha)
+    tree = resolve_plan_tree(ctx.git, root, ctx.plan_sha)
     return any(child.path == path for child in tree.children)
 
 
