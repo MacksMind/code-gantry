@@ -72,6 +72,23 @@ def plan(state: RunState, rt: Runtime) -> dict:
     stage = current_stage(state, rt)
     limits = rt.cfg.limits
 
+    stuck = state.get("interventions_since_landing", 0)
+    if (
+        stage is not None
+        and limits.max_interventions_without_landing
+        and stuck >= limits.max_interventions_without_landing
+    ):
+        return _escalate(
+            "planner",
+            f"{stuck} planner intervention(s) without landing a stage "
+            f"(max_interventions_without_landing="
+            f"{limits.max_interventions_without_landing}). A run that keeps "
+            "landing work is not capped, so this is the signal that it has "
+            "stopped making progress rather than that it has done a lot.\n\n"
+            f"The last failure was: "
+            f"{(state.get('last_failure') or {}).get('summary')}",
+        )
+
     if stage is not None and state.get("planner_interventions", 0) >= limits.max_planner_interventions:
         return _escalate(
             "planner",
@@ -217,6 +234,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
             "current": new_stage.model_dump(),
             "revision": state.get("revision", 0) + 1,
             "planner_interventions": interventions,
+            "interventions_since_landing": stuck + 1,
             "next_hop": "precheck",
         }
 
@@ -740,6 +758,10 @@ def advance(state: RunState, rt: Runtime) -> dict:
         "current": None,
         "stage_index": state["stage_index"] + 1,
         "revision": 0,
+        # Something landed, so the run is making progress: the stuck counter
+        # starts again. A run that keeps landing work is bounded by the wall
+        # clock rather than by an intervention count picked in advance.
+        "interventions_since_landing": 0,
         "next_hop": "plan",
     }
 

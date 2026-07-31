@@ -122,19 +122,35 @@ def adjudicate(
         )
 
     paths = " ".join(shlex.quote(f) for f in files)
-    rerun = runner.run(cfg.scoped_test_command.format(paths=paths))
+    command_text = cfg.scoped_test_command.format(paths=paths)
     listed = ", ".join(files)
+
+    # Three strikes: the group run that got us here, then up to two alone. One
+    # isolated attempt proved too few — a spec failed in the suite, failed
+    # alone, then passed on the next full run, and the stage it condemned was
+    # innocent. Stop at the first pass; there is nothing to learn from
+    # confirming one.
+    results: list[CommandResult] = []
+    for _ in range(max(cfg.flake_rerun_attempts, 1)):
+        rerun = runner.run(command_text)
+        results.append(rerun)
+        if rerun.ok:
+            break
+
+    passed = results[-1].ok
+    attempts = len(results)
+    seconds = sum(r.duration_seconds for r in results)
     return FlakeVerdict(
-        flaked=rerun.ok,
-        seconds=rerun.duration_seconds,
-        results=[rerun],
+        flaked=passed,
+        seconds=seconds,
+        results=results,
         files=files,
         summary=(
             f"{len(files)} failing file(s) passed when re-run whole and alone "
             f"({listed}); recorded as a suite flake"
-            if rerun.ok
-            else f"{len(files)} failing file(s) failed again when re-run whole "
-            f"and alone ({listed}); the failure is real"
+            if passed
+            else f"{len(files)} failing file(s) failed {attempts} time(s) when "
+            f"re-run whole and alone ({listed}); the failure is real"
         ),
     )
 

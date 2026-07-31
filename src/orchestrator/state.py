@@ -137,6 +137,8 @@ class RunState(TypedDict, total=False):
     last_diff_digest: str
 
     planner_interventions: int
+    # Reset every time a stage lands; see Limits.max_interventions_without_landing.
+    interventions_since_landing: int
     # Plan steps the planner took out of order. Union-merged and never dropped
     # by omission: silent loss is the failure this exists to prevent.
     deferred: list[dict]
@@ -195,6 +197,7 @@ def new_state(
         flaky_files=[],
         test_seconds=0.0,
         planner_interventions=0,
+        interventions_since_landing=0,
         deferred=[],
         planner_notes=[],
         review_feedback=[],

@@ -956,3 +956,57 @@ class TestExecutorFeedbackIsBounded:
         nodes.execute(state, rt)
         logs = list(rt.paths.run_dir.glob("stages/*/executor.log"))
         assert logs and len(logs[0].read_text()) > 150_000
+
+
+class TestStuckWithoutLanding:
+    """Three planner passes with nothing landing, and the run stops.
+
+    A flat global cap needs a stage count nobody has: the orchestrator's stages
+    are not the plan document's stages, and the planner derives them as it
+    goes. An allowance that accrues per landed stage fixes that but builds a
+    reserve, which then gets spent all at once on the very stage it should have
+    caught.
+
+    Consecutive passes without a landing measures the thing directly. A run
+    that keeps landing work can continue indefinitely — bounded by the wall
+    clock, not by a number picked in advance. A run that has been round the
+    planner three times with nothing to show for it is stuck, and more
+    interventions will not unstick it.
+    """
+
+    def test_three_interventions_without_a_landing_stops_the_run(self, repo, tmp_path):
+        planner = StubPlanner(
+            [PlannerOutcome("revise", "again", "e", stage_fields=planned_stage())]
+        )
+        cfg, rt, state = make(repo, tmp_path, limits={"max_interventions_without_landing": 3})
+        state = with_stage(state, rt)
+        state["interventions_since_landing"] = 3
+        out = nodes.plan(state, rt)
+        assert out["next_hop"] == "escalate"
+        assert "without landing" in out["escalation_reason"].lower()
+
+    def test_a_landing_resets_the_counter(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        state = with_stage(state, rt)
+        state["interventions_since_landing"] = 2
+        (repo / "app.py").write_text("changed\n")
+        out = nodes.advance(state, rt)
+        assert out["interventions_since_landing"] == 0
+
+    def test_an_intervention_increments_it(self, repo, tmp_path):
+        planner = StubPlanner(
+            [PlannerOutcome("revise", "redraw", "e", stage_fields=planned_stage())]
+        )
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        state = with_stage(state, rt)
+        out = nodes.plan(state, rt)
+        assert out["interventions_since_landing"] == 1
+
+    def test_a_run_that_keeps_landing_is_not_stopped(self, repo, tmp_path):
+        # Two interventions, then a landing, then two more: never three in a row.
+        cfg, rt, state = make(repo, tmp_path, limits={"max_interventions_without_landing": 3})
+        state = with_stage(state, rt)
+        state["interventions_since_landing"] = 2
+        (repo / "app.py").write_text("changed\n")
+        landed = nodes.advance(state, rt)
+        assert landed["interventions_since_landing"] == 0

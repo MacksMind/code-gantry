@@ -221,8 +221,22 @@ class Limits(_Strict):
     max_test_retries: int = 3
     max_rework_retries: int = 2
     # Global across the run, not per-stage: per-stage caps let a pathological
-    # project consume unbounded paid inference one stage at a time.
+    # project consume unbounded paid inference one stage at a time. Kept as an
+    # absolute backstop; the rule below is what normally binds.
     max_planner_interventions: int = 12
+    # Consecutive planner passes with nothing landing in between.
+    #
+    # A flat global cap needs a stage count nobody has — the orchestrator's
+    # stages are not the plan document's stages, and the planner derives them
+    # as it goes. An allowance that accrues per landed stage answers that, but
+    # builds a reserve which is then spent all at once on the very stage it
+    # should have caught.
+    #
+    # This measures being stuck directly. A run that keeps landing work can
+    # continue as long as the wall clock allows; a run that has been round the
+    # planner three times with nothing to show for it will not be unstuck by a
+    # fourth.
+    max_interventions_without_landing: int = 3
     max_stages: int = 60
     aider_timeout_seconds: int = 1800
     command_timeout_seconds: int = 3600
@@ -351,6 +365,13 @@ class ProjectConfig(_Strict):
     # Above this many, a red suite is a broken stage rather than a flake, and
     # re-running to prove it is minutes spent on a foregone conclusion.
     flake_rerun_max_files: int = 5
+    # How many times to re-run the failing files alone before believing them.
+    # Two, making three strikes with the group run that started it: a spec on
+    # the first real target failed in the suite, failed again alone, and then
+    # passed on the next full run — so one isolated attempt called it real and
+    # cost a stage that was innocent. The isolated run is cheap next to the
+    # suite (49 seconds against four minutes), so the second costs little.
+    flake_rerun_attempts: int = 2
 
     # What counts as a test file for `require_new_tests`.
     test_file_patterns: list[str] = [

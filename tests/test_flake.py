@@ -310,3 +310,58 @@ class TestThroughTheRealRunner:
         )
         assert out.files == ["spec/requests/checkout_spec.rb"]
         assert out.flaked, "it passes when re-run alone, so the stage may land"
+
+
+class TestThreeStrikes:
+    """Once in the group, twice alone.
+
+    A single isolated re-run was not enough. `admin_order_edit_personalization`
+    failed in the full suite, failed again when re-run whole and alone, and
+    then passed on the next full run — so the gate called it real, the stage
+    was abandoned, and the work turned out to be innocent.
+
+    The isolated run is cheap (49 seconds for that file against a 4-minute
+    suite), so a second one costs little and turns a two-strike rule into a
+    three-strike one: fail in the group, fail alone, fail alone again.
+    """
+
+    def counting_command(self, repo, name, fail_times):
+        # Fails the first `fail_times` invocations, then passes.
+        counter = repo.parent / name
+        return (
+            f"n=$(cat {counter} 2>/dev/null || echo 0); n=$((n+1)); echo $n > {counter}; "
+            f"test $n -gt {fail_times}"
+        )
+
+    def test_a_file_that_passes_on_the_second_isolated_run_is_a_flake(self, repo):
+        cfg = config(
+            repo,
+            scoped_test_command=self.counting_command(repo, "c1", 1) + " # {paths}",
+        )
+        out = judge(repo, RSPEC_OUTPUT, cfg)
+        assert out.flaked
+        assert len(out.results) == 2, "it should have tried twice"
+
+    def test_a_file_failing_both_isolated_runs_is_real(self, repo):
+        cfg = config(repo, scoped_test_command="false {paths}")
+        out = judge(repo, RSPEC_OUTPUT, cfg)
+        assert not out.flaked
+        assert len(out.results) == 2
+
+    def test_passing_first_time_costs_only_one_run(self, repo):
+        # No point paying for a second run to confirm a pass.
+        log = repo.parent / "once.txt"
+        cfg = config(repo, scoped_test_command=f"echo x >> {log} # {{paths}}")
+        out = judge(repo, RSPEC_OUTPUT, cfg)
+        assert out.flaked
+        assert log.read_text().count("x") == 1
+
+    def test_the_attempt_count_is_configurable(self, repo):
+        cfg = config(
+            repo,
+            flake_rerun_attempts=1,
+            scoped_test_command=self.counting_command(repo, "c2", 1) + " # {paths}",
+        )
+        out = judge(repo, RSPEC_OUTPUT, cfg)
+        assert not out.flaked, "one attempt means one strike in isolation"
+        assert len(out.results) == 1
