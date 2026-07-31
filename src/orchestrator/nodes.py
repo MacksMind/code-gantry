@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timezone
 
 from orchestrator.addendum import append_notes
 from orchestrator.commands import truncate_middle
@@ -782,7 +781,6 @@ def advance(state: RunState, rt: Runtime) -> dict:
         rt.cfg.plan_addendum_path,
         state.get("pending_plan_notes") or [],
         stage_id=stage.id,
-        when=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
     )
     if written is not None:
         rt.log(

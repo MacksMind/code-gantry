@@ -30,14 +30,24 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def _entry(note: dict, stage_id: str, when: str) -> str:
-    # No commit sha: the entry travels inside the commit it describes, so
-    # citing that commit from within it would be both circular and impossible
-    # — the sha does not exist until the squash that includes this file.
+def _entry(note: dict, stage_id: str) -> str:
+    """One observation, carrying only what git cannot tell you.
+
+    No commit sha and no timestamp. Both belong to the commit this entry is
+    written into, and `git log` or `git blame` on the file answers either —
+    correctly after a rebase, where the same facts embedded in append-only
+    prose would become claims about history that history had invalidated.
+
+    The stage id stays, and is not the same kind of duplication. It is the
+    semantic thread back to the work that produced the insight, and this file
+    is meant to be read as a document by whoever folds it into the plan. Making
+    them blame forty lines to see which piece of work each came from would be a
+    poor trade for one line of redundancy.
+    """
     lines = [
         f"## {note.get('plan_step', '(unattributed)')}",
         "",
-        f"- **observed** while landing `{stage_id}` ({when})",
+        f"- **observed** while landing `{stage_id}`",
     ]
     if note.get("supersedes"):
         lines.append(f"- **supersedes** {note['supersedes']}")
@@ -51,7 +61,6 @@ def append_notes(
     notes: list[dict],
     *,
     stage_id: str,
-    when: str,
 ) -> Path | None:
     """Append observations to the addendum. Returns the file written, if any.
 
@@ -82,6 +91,6 @@ def append_notes(
 
     with target.open("a") as fh:
         for note in notes:
-            fh.write(_entry(note, stage_id, when))
+            fh.write(_entry(note, stage_id))
             fh.write("\n")
     return target
