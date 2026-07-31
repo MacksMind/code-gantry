@@ -262,3 +262,46 @@ class TestSignalledCommands:
     def test_the_summary_names_the_signal(self, repo):
         runner = CommandRunner(cwd=repo, timeout=30)
         assert "signal 9" in runner.run("kill -9 $$").summary()
+
+
+class TestOutputIsKeptWholeForParsing:
+    """One cap was serving two different needs, and the parse lost.
+
+    Output feeds two kinds of consumer: things that *parse* it — which need all
+    of it — and things that put it in a prompt or a log line, which must be
+    bounded. A single 20,000-character cap in the runner served the second and
+    silently broke the first.
+
+    Live consequence: the merge gate's suite emitted 334,143 characters with
+    the `Failed examples:` block 146,285 characters from the end, under
+    per-worker summaries, a coverage report and deprecation tallies.
+    truncate_middle keeps the head and tail, so the block landed squarely in
+    the dropped middle. The flake gate then found no failing files, fell back
+    to re-running everything, tripped a second order-dependent spec, and reset
+    a stage the reviewer had already approved.
+
+    Truncation now happens where text is *used*, not where it is captured.
+    """
+
+    def test_a_large_output_survives_capture(self, repo):
+        runner = CommandRunner(cwd=repo, timeout=60)
+        result = runner.run("for i in $(seq 1 40000); do echo 'padding line'; done")
+        assert len(result.output) > 400_000
+
+    def test_a_marker_after_the_middle_is_still_findable(self, repo):
+        # The shape that actually bit us: the interesting line is neither at the
+        # head nor at the very tail.
+        runner = CommandRunner(cwd=repo, timeout=60)
+        result = runner.run(
+            "for i in $(seq 1 20000); do echo head; done; "
+            "echo 'rspec ./spec/a_spec.rb:12'; "
+            "for i in $(seq 1 20000); do echo tail; done"
+        )
+        assert "rspec ./spec/a_spec.rb:12" in result.output
+
+    def test_there_is_still_a_ceiling(self, repo):
+        # A runaway command must not be held in memory without limit; the cap
+        # is a memory guard now rather than a display limit.
+        runner = CommandRunner(cwd=repo, timeout=60, max_output_chars=5_000)
+        result = runner.run("for i in $(seq 1 5000); do echo 'x'; done")
+        assert len(result.output) <= 5_200

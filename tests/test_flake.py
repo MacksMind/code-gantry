@@ -277,3 +277,36 @@ class TestConfigSurface:
     def test_an_uncompilable_pattern_is_rejected_at_parse_time(self, repo):
         with pytest.raises(ConfigError, match="not a valid regex"):
             config(repo, failed_file_pattern=r"^rspec (\S+$")
+
+
+class TestThroughTheRealRunner:
+    """The gate reading what the runner actually hands it.
+
+    Every earlier test fed `adjudicate` a string directly, which is why the
+    truncation bug survived a green suite: the pattern was always correct, and
+    the input it got in production was not the input the tests used.
+
+    This one runs a command that emits a realistic amount of noise around the
+    failure, through CommandRunner, and asserts the file is still found.
+    """
+
+    def test_a_locator_buried_in_a_third_of_a_megabyte_is_found(self, repo):
+        cfg = config(repo, scoped_test_command="true {paths}")
+        runner = CommandRunner(cwd=repo, timeout=120)
+        # Mirrors the real shape: the block is far from both ends, with the
+        # coverage report and deprecation tallies printing after it.
+        noisy = (
+            "for i in $(seq 1 8000); do echo 'an example passed'; done; "
+            "echo 'Failed examples:'; "
+            "echo \"rspec './spec/requests/checkout_spec.rb[1:1:1:1]' # Checkout\"; "
+            "for i in $(seq 1 8000); do echo 'DEPRECATION WARNING: something'; done; "
+            "echo 'Coverage report generated'; exit 1"
+        )
+        result = runner.run(noisy)
+        assert len(result.output) > 150_000, "the test must be big enough to matter"
+
+        out = adjudicate(
+            output=result.output, command=noisy, cfg=cfg, runner=runner
+        )
+        assert out.files == ["spec/requests/checkout_spec.rb"]
+        assert out.flaked, "it passes when re-run alone, so the stage may land"

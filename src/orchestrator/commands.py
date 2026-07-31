@@ -19,7 +19,19 @@ from typing import Callable, Sequence
 
 # Enough to see a test summary and a stack trace without carrying a whole
 # suite's chatter into graph state or a prompt.
-DEFAULT_MAX_OUTPUT_CHARS = 20_000
+# A memory guard, not a display limit. Output feeds two kinds of consumer:
+# things that parse it, which need all of it, and things that put it in a
+# prompt or a log line, which must be bounded — and those bound it themselves,
+# at the point of use.
+#
+# It used to be 20,000, which served the second need and silently broke the
+# first. A real suite emitted 334,143 characters with its `Failed examples:`
+# block 146,285 characters from the end, under per-worker summaries, a coverage
+# report and deprecation tallies. `truncate_middle` keeps the head and tail, so
+# the block fell in the dropped middle, the flake gate found nothing to re-run,
+# and a stage the reviewer had approved was reset over someone else's flaky
+# spec.
+DEFAULT_MAX_OUTPUT_CHARS = 5_000_000
 
 
 def truncate_middle(text: str, max_chars: int) -> str:

@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import time
 
+from orchestrator.commands import truncate_middle
 from orchestrator.config import Stage, validate_stage
 from orchestrator.flake import adjudicate
 from orchestrator.globs import matches_any
@@ -42,6 +43,16 @@ from orchestrator.state import (
 from orchestrator.verify import Layer, Route, run_verify
 
 STATUS_TAIL_CHARS = 4_000
+
+# Command output bound where it reaches a model or a log, rather than where it
+# is captured. The runner keeps everything so the parsers can see it; a prompt
+# cannot carry a third of a megabyte of rspec, and a planner intervention is
+# expensive enough without paying for a coverage report.
+FEEDBACK_OUTPUT_CHARS = 4_000
+
+
+def _clip(text: str) -> str:
+    return truncate_middle(text or "", FEEDBACK_OUTPUT_CHARS)
 
 
 def current_stage(state: RunState, rt: Runtime) -> Stage | None:
@@ -291,7 +302,7 @@ def precheck(state: RunState, rt: Runtime) -> dict:
                     state,
                     "precondition",
                     f"precondition never passed: {command}",
-                    f"{result.summary()}\n{result.output}",
+                    f"{result.summary()}\n{_clip(result.output)}",
                 ),
             }
 
@@ -307,7 +318,7 @@ def precheck(state: RunState, rt: Runtime) -> dict:
                     "setup",
                     f"Environment setup failed before stage {stage.id!r}. A "
                     "broken environment is not a planning defect.\n"
-                    f"{result.summary()}\n{result.output}",
+                    f"{result.summary()}\n{_clip(result.output)}",
                 ),
             }
 
@@ -349,7 +360,7 @@ def execute(state: RunState, rt: Runtime) -> dict:
                 "precondition",
                 "a context command failed, so the executor prompt would have "
                 "been built from missing information",
-                f"{failed[0].summary()}\n{failed[0].output}",
+                f"{failed[0].summary()}\n{_clip(failed[0].output)}",
             )
 
         prompt = build_executor_prompt(
@@ -643,7 +654,7 @@ def review(state: RunState, rt: Runtime) -> dict:
         feedback.append(
             "The reviewer approved this stage but the full suite failed, so it "
             f"cannot land ({verdict.summary}):\n"
-            f"{(verdict.output or result.output)}"
+            f"{_clip(verdict.output or result.output)}"
         )
         return {
             **base,
@@ -745,7 +756,7 @@ def finalize(state: RunState, rt: Runtime) -> dict:
         **_escalate(
             "full_suite",
             "Every stage passed on its own, but the full suite failed on the "
-            f"project branch tip:\n{result.summary()}\n{result.output}",
+            f"project branch tip:\n{result.summary()}\n{_clip(result.output)}",
         )
     }
 
@@ -790,7 +801,7 @@ def _verify_log(outcome) -> str:
             parts.append(outcome.feedback)
 
     for result in outcome.results:
-        parts.append(f"{result.summary()}\n{result.output}")
+        parts.append(f"{result.summary()}\n{_clip(result.output)}")
 
     return "\n\n".join(p for p in parts if p)
 
