@@ -92,7 +92,9 @@ class PlannedStage(BaseModel):
         description=(
             "Regexes barred from the diff's added lines, checked mechanically "
             "before any test runs. Use for later-stage syntax that must not "
-            "appear yet."
+            "appear yet — and for verifying the stage's own goal, since the "
+            "executor cannot run a command to check its work. If the stage "
+            "means 'no occurrence of X should remain', that belongs here."
         ),
     )
     test_paths: list[str] = Field(
@@ -433,6 +435,19 @@ stage, an environment problem.
 - **Self-contained instruction.** The executor cannot see the plan document,
   the other stages, or this conversation. Everything it needs goes in
   `instruction`.
+- **The executor cannot run commands.** It reads the files you name and edits
+  the files you allow. It cannot run `grep`, or a test, or anything else, and
+  it cannot see the result of one. Do not write "find the sites with
+  `grep -n ...`", or "when done, re-run the grep and confirm" — it cannot, and
+  asking is worse than useless: it will invent the output and argue with itself
+  about a file it is already looking at. One such instruction cost ten minutes
+  of a model looping over hallucinated grep results.
+
+  Anything you want checked mechanically goes in `forbidden_patterns`, which is
+  a regex over the diff's added lines, run by the orchestrator, deterministic
+  and free. If the goal of a stage is "no occurrence of X should remain", that
+  is a forbidden pattern, not a sentence in the instruction. Describe the
+  *change* to the executor; declare the *check* to the orchestrator.
 - **Name the specs that cover it.** `test_paths` is how a stage's tests get
   scoped to the specs it affects. Files the stage edits are picked up
   automatically; this is for the ones that exercise the changed code *without*

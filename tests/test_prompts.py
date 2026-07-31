@@ -263,3 +263,51 @@ class TestReviewerCacheBreakpoint:
         first = self.a_review(diff="one")
         second = self.a_review(diff="two")
         assert first[:2] == second[:2]
+
+
+class TestTheExecutorCannotRunCommands:
+    """A stage that asks for the impossible gets an infinite argument.
+
+    Observed live. The planner wrote, into `instruction`:
+
+        Find the sites by content instead:
+            grep -n 'nothing:' app/controllers/fckeditor_controller.rb
+        ...
+        When done, re-run the grep above and confirm
+
+    Aider's executor cannot run commands — its own prompt only lets it
+    *suggest* them. So the model hallucinated grep output and argued with
+    itself about the file's contents twenty times over, decoding 24,120 tokens
+    before the client cancelled it at ten minutes. Three times in one evening.
+
+    Capping output bounds what that costs. It does not stop it. The fix is not
+    to ask: mechanical verification belongs in `forbidden_patterns`, which the
+    orchestrator checks against the diff deterministically and for free, and
+    which this very stage already used for unrelated patterns while omitting
+    the one that was its actual goal.
+    """
+
+    def test_the_prompt_says_the_executor_cannot_run_commands(self):
+        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+
+        lowered = PLANNER_SYSTEM_PROMPT.lower()
+        assert "cannot run" in lowered or "cannot execute" in lowered
+        assert "grep" in lowered
+
+    def test_it_points_at_forbidden_patterns_as_the_alternative(self):
+        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+
+        section = PLANNER_SYSTEM_PROMPT.lower()
+        assert "forbidden_patterns" in section
+        # The guidance has to connect the two: do not ask the executor to
+        # check; declare the check instead.
+        idx = section.find("cannot run")
+        assert idx != -1
+        assert "forbidden_patterns" in section[idx : idx + 900]
+
+    def test_the_field_description_says_it_too(self):
+        # The planner sees field descriptions even when it skims the prose.
+        from orchestrator.planner import PlannedStage
+
+        description = PlannedStage.model_fields["forbidden_patterns"].description
+        assert "verif" in description.lower() or "check" in description.lower()
