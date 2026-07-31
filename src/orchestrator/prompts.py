@@ -234,7 +234,14 @@ def build_review_messages(
             "content": [
                 {
                     "type": "text",
-                    "text": _plan_block(plan) + "\n\n" + _history_block(completed),
+                    # The plan alone. The completed-stage history used to live
+                    # here too, and every landing changed it — taking ~50,000
+                    # tokens of unchanged plan documents out of cache with a few
+                    # hundred tokens of history. Measured on one run: three
+                    # reviewer calls, three full-price writes, one of them only
+                    # 13 minutes after its predecessor and well inside the
+                    # retention window. History now follows the breakpoint.
+                    "text": _plan_block(plan),
                     "prompt_cache_breakpoint": {"mode": "explicit"},
                 }
             ],
@@ -242,7 +249,8 @@ def build_review_messages(
     )
 
     current: list[str] = [
-        f"## The stage under review: {stage.id}\n\n{stage.instruction or ''}"
+        _history_block(completed),
+        f"## The stage under review: {stage.id}\n\n{stage.instruction or ''}",
     ]
 
     if stage.constraints:

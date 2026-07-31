@@ -311,3 +311,60 @@ class TestTheExecutorCannotRunCommands:
 
         description = PlannedStage.model_fields["forbidden_patterns"].description
         assert "verif" in description.lower() or "check" in description.lower()
+
+
+class TestTheCachedPrefixSurvivesALandedStage:
+    """History inside the breakpoint invalidates the plan with it.
+
+    The reviewer's marked block held the plan documents *and* the completed-
+    stage history. The plan never changes; the history changes every time a
+    stage lands. So each landing invalidated ~56,000 tokens of prefix,
+    including the ~50,000 that were identical.
+
+    Measured across one run: three reviewer calls, all `cached=0`, all writing
+    the full prefix at 1.25x. Two of those misses were retention expiry — the
+    stages were 43 minutes apart — but the third came 13 minutes after its
+    predecessor, well inside the window, and missed because a stage had landed
+    between them.
+
+    The plan block leads and is marked; the history follows the breakpoint,
+    where it costs full price for a few hundred tokens instead of taking fifty
+    thousand down with it.
+    """
+
+    def a_review(self, completed=None, diff="d"):
+        from orchestrator.config import Stage
+        from orchestrator.prompts import build_review_messages
+
+        return build_review_messages(
+            stage=Stage(id="s", instruction="i", edit_files=["a.py"]),
+            cfg=None,
+            diff=diff,
+            plan=a_plan("PLAN_TEXT"),
+            completed=completed or [],
+        )
+
+    def test_the_marked_block_holds_the_plan(self):
+        blocks = self.a_review()[1]["content"]
+        assert "PLAN_TEXT" in blocks[-1]["text"]
+        assert blocks[-1]["prompt_cache_breakpoint"] == {"mode": "explicit"}
+
+    def test_the_marked_block_does_not_hold_the_history(self):
+        landed = [{"id": "earlier", "index": 0, "merge_sha": "abc123"}]
+        marked = self.a_review(completed=landed)[1]["content"][-1]["text"]
+        assert "earlier" not in marked
+
+    def test_the_prefix_is_identical_before_and_after_a_stage_lands(self):
+        # The property that matters: landing a stage must not cost the plan.
+        before = self.a_review(completed=[])
+        after = self.a_review(completed=[{"id": "earlier", "index": 0}])
+        assert before[:2] == after[:2]
+
+    def test_the_history_still_reaches_the_reviewer(self):
+        landed = [{"id": "earlier", "index": 0, "merge_sha": "abc123"}]
+        text = "".join(
+            m["content"] if isinstance(m["content"], str)
+            else "".join(b["text"] for b in m["content"])
+            for m in self.a_review(completed=landed)
+        )
+        assert "earlier" in text
