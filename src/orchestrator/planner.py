@@ -324,7 +324,6 @@ class AnthropicPlanner:
         that two different objects record calls.
         """
         calls = list(getattr(self.reader, "calls", []))
-        calls += list(getattr(self.semantic, "calls", []))
         return [f"{c.tool}({c.detail}) -> {c.lines} line(s)" for c in calls]
 
     def _max_tool_turns(self) -> int:
@@ -600,7 +599,12 @@ def make_planner(cfg: PlannerConfig, target_repo=None) -> PlannerClient:
         )
         search_cfg = SemanticSearchConfig.from_mapping(cfg.semantic_search)
         if search_cfg is not None:
-            semantic = SemanticSearch(search_cfg)
+            # One list, shared, so the log is chronological. Two lists
+            # concatenated said what was looked at but not in what order, and
+            # the order is most of how a conclusion was reached — a read that
+            # confirmed a semantic hit is a different act from one that
+            # preceded it.
+            semantic = SemanticSearch(search_cfg, calls=reader.calls)
 
     return AnthropicPlanner(cfg, reader=reader, semantic=semantic)
 

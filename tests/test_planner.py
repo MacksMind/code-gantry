@@ -652,3 +652,57 @@ class TestRepositoryToolLoop:
             MESSAGES
         )
         assert len(client.calls) <= 8, "budget 4 + 2 turns, plus one malformed retry"
+
+
+class TestTheReadLogIsChronological:
+    """Order is most of how a conclusion was reached.
+
+    A read that confirms a semantic hit is a different act from one that
+    preceded it. Two lists concatenated said what was looked at and lied about
+    when — the first live run reported four reads before two searches, having
+    done the searches first.
+    """
+
+    def test_reads_and_searches_interleave_in_real_order(self, tmp_path):
+        import subprocess
+
+        from orchestrator.gitops import Git
+        from orchestrator.repotools import ReadBudget, RepoReader
+        from orchestrator.semantic import SemanticSearch, SemanticSearchConfig
+
+        (tmp_path / "a.rb").write_text("x\n")
+        for args in (
+            ["init", "-q"],
+            ["config", "user.email", "t@example.com"],
+            ["config", "user.name", "T"],
+            ["config", "commit.gpgsign", "false"],
+            ["add", "-A"],
+            ["commit", "-q", "-m", "x"],
+        ):
+            subprocess.run(["git", *args], cwd=tmp_path, check=True)
+
+        reader = RepoReader(Git(tmp_path), tmp_path, ReadBudget())
+        semantic = SemanticSearch(
+            SemanticSearchConfig(
+                api_base="http://x/v1", qdrant_url="http://y",
+                embedding_model="m", collection="c",
+            ),
+            http=lambda url, payload, timeout: (_ for _ in ()).throw(OSError("down")),
+            calls=reader.calls,
+        )
+        planner = AnthropicPlanner(cfg(), client=StubClient(None), reader=reader, semantic=semantic)
+
+        semantic.query("where is postage decided")
+        reader.read_file("a.rb")
+        semantic.query("and the rate table")
+
+        assert [c.tool for c in reader.calls] == [
+            "semantic_search",
+            "read_file",
+            "semantic_search",
+        ]
+        assert [line.split("(")[0] for line in planner._tool_log()] == [
+            "semantic_search",
+            "read_file",
+            "semantic_search",
+        ]
