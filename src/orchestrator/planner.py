@@ -181,7 +181,14 @@ class PlanNote(BaseModel):
             "What the repository now shows, and how you know. Cite what you "
             "read — a path and line range, or the search you ran and its "
             "count. An unsourced claim is worth less than no note, because "
-            "someone will act on it."
+            "someone will act on it.\n\n"
+            "State the current total, never a change since last time. Write "
+            "'25 sites across 15 controllers remain', not '11 sites "
+            "converted'. Notes accumulate and are folded into the plan in "
+            "batches, so a later note has to be able to override an earlier "
+            "one by simply being later. Deltas cannot do that: two of them "
+            "read as four sites converted rather than as one count restated, "
+            "and folding the same note twice would decrement the plan twice."
         )
     )
     supersedes: str = Field(
