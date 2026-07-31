@@ -20,6 +20,9 @@ from orchestrator.reviewer import Issue, ReviewOutcome, TokenUsage
 from orchestrator.runtime import ProjectPaths, RunPaths, Runtime
 from orchestrator.state import new_state
 
+# The operator's pattern, as a real project would configure it.
+RSPEC_PATTERN = r"^\s*rspec\s+'?\.?/?([^'\s\[:]+_spec\.rb)"
+
 
 @dataclass
 class StubPlanner:
@@ -561,7 +564,7 @@ class TestReviewGate:
         assert out["next_hop"] == "advance"
         assert out["flake_reruns_review_gate"] == 1
 
-    def test_only_the_failed_examples_are_re_run_at_the_gate(self, repo, tmp_path):
+    def test_only_the_failing_files_are_re_run_at_the_gate(self, repo, tmp_path):
         # The whole point: on a 2,335-example suite the re-run was as likely to
         # trip over a different order-dependent example as to clear the first
         # one, so the stage was blamed for a property of the repository.
@@ -573,16 +576,17 @@ class TestReviewGate:
                 "echo \"rspec './spec/requests/checkout_spec.rb[1:1]' # c\"; exit 1"
             ),
             scoped_test_command=f"echo {{paths}} >> {log}",
+            failed_file_pattern=RSPEC_PATTERN,
         )
         state = with_stage(state, rt)
         (repo / "app.py").write_text("changed\n")
         out = nodes.review(state, rt)
         assert out["next_hop"] == "advance"
         assert out["flake_reruns_review_gate"] == 1
-        assert log.read_text().strip() == "./spec/requests/checkout_spec.rb[1:1]"
+        assert log.read_text().strip() == "spec/requests/checkout_spec.rb"
 
-    def test_the_flaky_examples_are_named_for_the_report(self, repo, tmp_path):
-        # Excusing a flake and not saying which one leaves the operator with a
+    def test_the_flaky_files_are_named_for_the_report(self, repo, tmp_path):
+        # Excusing a flake and not saying which file leaves the operator with a
         # count and nothing to fix. The list is the whole path back to a suite
         # that does not need this machinery.
         cfg, rt, state = make(
@@ -592,14 +596,21 @@ class TestReviewGate:
                 "echo \"rspec './spec/requests/checkout_spec.rb[1:1]' # c\"; exit 1"
             ),
             scoped_test_command="true {paths}",
+            failed_file_pattern=RSPEC_PATTERN,
         )
         state = with_stage(state, rt)
         (repo / "app.py").write_text("changed\n")
         out = nodes.review(state, rt)
-        assert out["flaky_examples"] == ["./spec/requests/checkout_spec.rb[1:1]"]
+        assert out["flaky_files"] == ["spec/requests/checkout_spec.rb"]
 
-    def test_a_spec_the_stage_touched_still_blocks_it(self, repo, tmp_path):
-        # Passing alone does not excuse a spec the stage was working on.
+    def test_a_spec_the_stage_edited_can_still_be_excused(self, repo, tmp_path):
+        """Ownership is deliberately not a factor.
+
+        An earlier design refused to excuse a spec the stage had touched. But a
+        file that passes whole and standalone has been proven green *including*
+        the stage's edits to it, so what makes it fail in the group is a
+        property of the suite — separate work, not this stage's to answer for.
+        """
         cfg, rt, state = make(
             repo, tmp_path,
             full_test_command=(
@@ -607,14 +618,15 @@ class TestReviewGate:
                 "echo \"rspec './spec/app_spec.rb[1:1]' # c\"; exit 1"
             ),
             scoped_test_command="true {paths}",
+            failed_file_pattern=RSPEC_PATTERN,
         )
         state = with_stage(state, rt, edit_files=["app.py", "spec/**"])
         (repo / "app.py").write_text("changed\n")
         (repo / "spec").mkdir(exist_ok=True)
         (repo / "spec" / "app_spec.rb").write_text("describe\n")
         out = nodes.review(state, rt)
-        assert out["next_hop"] != "advance"
-        assert not out.get("flake_reruns_review_gate")
+        assert out["next_hop"] == "advance"
+        assert out["flaky_files"] == ["spec/app_spec.rb"]
 
     def test_the_full_suite_can_be_switched_off_per_stage(self, repo, tmp_path):
         marker = tmp_path / "suite-ran-2"

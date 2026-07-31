@@ -68,8 +68,8 @@ class VerifyOutcome:
     feedback: str = ""
     results: list[CommandResult] = field(default_factory=list)
     flake_reruns: int = 0
-    # Locators excused as suite flakes, for the run-level list in the report.
-    flaky_examples: list[str] = field(default_factory=list)
+    # Files excused as suite flakes, for the run-level list in the report.
+    flaky_files: list[str] = field(default_factory=list)
     test_seconds: float = 0.0
     # Populated on a scope violation. The planner decides whether to adopt these
     # paths into the stage or have them reverted; the stage's other work is
@@ -374,7 +374,6 @@ def _layer_tests(ctx: _Context, outcome: VerifyOutcome):
             command=command,
             cfg=ctx.cfg,
             runner=ctx.runner,
-            owned_paths=_owned_paths(ctx),
         )
         outcome.results.extend(verdict.results)
         outcome.test_seconds += verdict.seconds
@@ -382,7 +381,7 @@ def _layer_tests(ctx: _Context, outcome: VerifyOutcome):
         last_output = verdict.output or result.output
         flaked = verdict.flaked
         if flaked:
-            outcome.flaky_examples.extend(verdict.examples)
+            outcome.flaky_files.extend(verdict.files)
     else:
         rerun = ctx.runner.run(command)
         outcome.results.append(rerun)
@@ -404,13 +403,6 @@ def _layer_tests(ctx: _Context, outcome: VerifyOutcome):
     )
 
 
-def _owned_paths(ctx: _Context) -> set[str]:
-    """Files whose failure this stage may not blame on the suite."""
-    owned = set(ctx.git.diff_names(ctx.stage_start_sha))
-    owned.update(p for p in ctx.stage.test_paths if p)
-    return owned
-
-
 def resolve_test_command(
     stage: Stage, cfg: ProjectConfig, git: Git, stage_start_sha: str
 ) -> str | None:
@@ -428,7 +420,12 @@ def resolve_test_command(
     if cfg.scoped_test_command:
         paths = _scoped_test_paths(stage, cfg, git, stage_start_sha)
         if paths:
-            return cfg.scoped_test_command.format(paths=" ".join(paths))
+            command = cfg.scoped_test_command
+            if cfg.directory_test_command and any(
+                (cfg.target_repo / p).is_dir() for p in paths
+            ):
+                command = cfg.directory_test_command
+            return command.format(paths=" ".join(paths))
         # Nothing identifiable to scope to: fall through to the full command
         # rather than running an empty selection and calling it green.
 
@@ -449,6 +446,11 @@ def _scoped_test_paths(
             seen.add(path)
             out.append(path)
     return out
+
+
+ # --- layer 5: checks -----------------------------------------------------
+
+
 
 
 # --- layer 5: checks -----------------------------------------------------

@@ -177,7 +177,7 @@ def build_aider_argv(
     if api_base:
         argv += ["--openai-api-base", api_base]
 
-    test_command = stage.effective_test_command(cfg)
+    test_command = stage.effective_test_command(cfg) if ex.auto_test else None
     if test_command:
         argv += ["--test-cmd", test_command, "--auto-test"]
 

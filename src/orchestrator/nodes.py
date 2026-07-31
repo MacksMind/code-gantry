@@ -431,7 +431,7 @@ def verify(state: RunState, rt: Runtime) -> dict:
 
     accumulated = {
         "flake_reruns": state.get("flake_reruns", 0) + outcome.flake_reruns,
-        "flaky_examples": _merge_flaky(state, outcome.flaky_examples),
+        "flaky_files": _merge_flaky(state, outcome.flaky_files),
         "test_seconds": state.get("test_seconds", 0.0) + outcome.test_seconds,
         "last_diff_digest": outcome.diff_digest,
     }
@@ -589,7 +589,6 @@ def review(state: RunState, rt: Runtime) -> dict:
             command=rt.cfg.full_test_command,
             cfg=rt.cfg,
             runner=rt.runner,
-            owned_paths=_stage_owned_paths(state, rt, stage),
         )
         seconds += verdict.seconds
         if verdict.flaked:
@@ -598,7 +597,7 @@ def review(state: RunState, rt: Runtime) -> dict:
                 **base,
                 "test_seconds": state.get("test_seconds", 0.0) + seconds,
                 "flake_reruns_review_gate": state.get("flake_reruns_review_gate", 0) + 1,
-                "flaky_examples": _merge_flaky(state, verdict.examples),
+                "flaky_files": _merge_flaky(state, verdict.files),
                 "next_hop": "advance",
             }
 
@@ -624,25 +623,13 @@ def review(state: RunState, rt: Runtime) -> dict:
     }
 
 
-def _merge_flaky(state: RunState, examples: list[str]) -> list[str]:
-    """Union, order-preserving. The same example flakes across stages."""
-    out = list(state.get("flaky_examples") or [])
-    for e in examples:
+def _merge_flaky(state: RunState, files: list[str]) -> list[str]:
+    """Union, order-preserving. The same file flakes across stages."""
+    out = list(state.get("flaky_files") or [])
+    for e in files:
         if e not in out:
             out.append(e)
     return out
-
-
-def _stage_owned_paths(state: RunState, rt: Runtime, stage: Stage) -> set[str]:
-    """Files whose failure this stage may not blame on the suite.
-
-    What it edited, plus the specs it declared cover it. Those are exactly the
-    places where "it passed when run alone" is as consistent with a regression
-    the stage introduced as with a pre-existing order dependence.
-    """
-    owned = set(rt.git.diff_names(state["stage_start_sha"]))
-    owned.update(p for p in stage.test_paths if p)
-    return owned
 
 
 # --- advance -------------------------------------------------------------

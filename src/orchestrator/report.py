@@ -59,27 +59,26 @@ def build_report(state: RunState, cfg: ProjectConfig) -> str:
 
 
 def _flaky_section(state: RunState) -> list[str]:
-    """Examples excused as suite flakes, named.
+    """Files excused as suite flakes, named.
 
     Each one is a stage that nearly failed to land for a reason it did not
     cause. They are listed together because the fix is not per-stage: it is a
     property of the suite, and this is the work list for removing the need for
     the excuse in the first place.
     """
-    examples = state.get("flaky_examples") or []
-    if not examples:
+    files = state.get("flaky_files") or []
+    if not files:
         return []
 
-    lines = ["## Examples excused as suite flakes", ""]
+    lines = ["## Files excused as suite flakes", ""]
     lines.append(
-        "These failed as part of a broader run and passed when re-run on their "
-        "own, in a file no stage had touched. Each is order- or "
-        "parallelism-dependent, and each one blocked a stage that had done "
-        "nothing wrong."
+        "Each of these failed as part of a broader run and passed when re-run "
+        "whole, on its own. That makes them order- or parallelism-dependent, "
+        "and each one blocked a stage that had done nothing wrong."
     )
     lines.append("")
-    for example in examples:
-        lines.append(f"- `{example}`")
+    for path in files:
+        lines.append(f"- `{path}`")
     lines.append("")
     return lines
 

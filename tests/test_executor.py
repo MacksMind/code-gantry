@@ -80,14 +80,36 @@ class TestAiderArgv:
         assert argv[argv.index("--model") + 1] == "openai/local-model"
         assert argv[argv.index("--openai-api-base") + 1] == "http://spark:8080/v1"
 
-    def test_passes_the_stage_test_command_for_auto_test(self):
+    def test_aider_does_not_run_the_tests_by_default(self):
+        """`--auto-test` is off unless the operator asks for it.
+
+        Measured on the first real stage: a correct two-line edit took ~90
+        seconds, and the attempt took 609. The rest was Aider running the
+        project's full suite, ingesting 7,167 lines of output, and — because
+        `--yes-always` answers "yes" to "Attempt to fix test errors?" — trying
+        to repair two order-dependent specs it had no business touching, on a
+        stage whose declared scope was two controllers.
+
+        The orchestrator runs the tests itself, at the layer that knows about
+        scope and flakes. Doing it twice buys nothing and hands the executor a
+        mandate to edit outside its box.
+        """
         cfg, stage = cfg_with(stage_overrides={"test_command": "pytest tests/unit"})
+        argv = build_aider_argv(stage, cfg, "p")
+        assert "--auto-test" not in argv
+        assert "--test-cmd" not in argv
+
+    def test_auto_test_can_be_switched_on(self):
+        cfg, stage = cfg_with(
+            stage_overrides={"test_command": "pytest tests/unit"},
+            executor={"model": "m", "auto_test": True},
+        )
         argv = build_aider_argv(stage, cfg, "p")
         assert argv[argv.index("--test-cmd") + 1] == "pytest tests/unit"
         assert "--auto-test" in argv
 
     def test_falls_back_to_the_global_test_command(self):
-        cfg, stage = cfg_with()
+        cfg, stage = cfg_with(executor={"model": "m", "auto_test": True})
         argv = build_aider_argv(stage, cfg, "p")
         assert argv[argv.index("--test-cmd") + 1] == "pytest -q"
 
@@ -98,6 +120,7 @@ class TestAiderArgv:
             stage_overrides={"checks": ["true"]},
             test_command=None,
             stage_defaults={"checks": ["true"]},
+            executor={"model": "m", "auto_test": True},
         )
         argv = build_aider_argv(stage, cfg, "p")
         assert "--auto-test" not in argv

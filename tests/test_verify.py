@@ -11,6 +11,8 @@ from orchestrator.config import parse_config
 from orchestrator.gitops import Git
 from orchestrator.verify import Layer, Route, resolve_test_command, run_verify
 
+RSPEC_PATTERN = r"^\s*rspec\s+'?\.?/?([^'\s\[:]+_spec\.rb)"
+
 
 def build(repo, stage_overrides=None, **cfg_overrides):
     data = {
@@ -275,10 +277,10 @@ class TestFlakeRerun:
         assert not out.passed
         assert out.flake_reruns == 0
 
-    def test_a_broad_suite_re_runs_only_what_failed(self, repo):
+    def test_a_broad_suite_re_runs_only_the_failing_files(self, repo):
         # Iteration falls back to the whole suite when a stage cannot be scoped.
-        # Re-running all of it to test one example's order dependence is the
-        # same waste as at the merge gate, and here it repeats every attempt.
+        # Re-running all of it to test one file's order dependence is the same
+        # waste as at the merge gate, and here it repeats every attempt.
         log = repo.parent / "iteration-reran.txt"
         sha = Git(repo).head_sha()
         edit(repo)
@@ -289,11 +291,12 @@ class TestFlakeRerun:
                 "echo \"rspec './spec/other_spec.rb[1:1]' # x\"; exit 1"
             ),
             scoped_test_command=f"echo {{paths}} >> {log}",
+            failed_file_pattern=RSPEC_PATTERN,
         )
         out = verify(repo, cfg, stage, sha)
         assert out.passed
         assert out.flake_reruns == 1
-        assert log.read_text().strip() == "./spec/other_spec.rb[1:1]"
+        assert log.read_text().strip() == "spec/other_spec.rb"
 
     def test_a_scoped_run_keeps_the_plain_re_run(self, repo):
         # When the command is already narrowed to the stage's own specs there is
@@ -427,6 +430,82 @@ class TestScopedTestCommand:
             repo, {"test_command": "rspec spec/only"}, scoped_test_command="rspec {paths}"
         )
         assert resolve_test_command(stage, cfg, Git(repo), sha) == "rspec spec/only"
+
+
+class TestDirectoryScopedRunsGoParallel:
+    """A directory is not a file, and should not be run like one.
+
+    The first real stage declared `test_paths: ["spec/controllers",
+    "spec/requests"]`. Serially that is `bin/rspec spec/controllers
+    spec/requests` — 449 seconds, repeated on every attempt and again on every
+    re-run. The same selection under the project's parallel runner is a
+    fraction of that.
+
+    Which command that is stays the operator's: this only picks between two
+    strings they wrote, on a fact about the filesystem.
+    """
+
+    def test_a_declared_directory_uses_the_parallel_command(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo, "app.py")
+        (repo / "spec" / "controllers").mkdir(parents=True, exist_ok=True)
+        cfg, stage = build(
+            repo,
+            {"test_paths": ["spec/controllers"]},
+            scoped_test_command="rspec {paths}",
+            directory_test_command="parallel_rspec {paths}",
+        )
+        command = resolve_test_command(stage, cfg, Git(repo), sha)
+        assert command == "parallel_rspec spec/controllers"
+
+    def test_individual_files_stay_serial(self, repo):
+        # Starting N workers to run one file is slower than running it.
+        sha = Git(repo).head_sha()
+        edit(repo, "spec/thing_spec.rb", "describe\n")
+        cfg, stage = build(
+            repo,
+            scoped_test_command="rspec {paths}",
+            directory_test_command="parallel_rspec {paths}",
+        )
+        command = resolve_test_command(stage, cfg, Git(repo), sha)
+        assert command == "rspec spec/thing_spec.rb"
+
+    def test_one_directory_among_files_is_enough(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo, "spec/thing_spec.rb", "describe\n")
+        (repo / "spec" / "requests").mkdir(parents=True, exist_ok=True)
+        cfg, stage = build(
+            repo,
+            {"test_paths": ["spec/requests"]},
+            scoped_test_command="rspec {paths}",
+            directory_test_command="parallel_rspec {paths}",
+        )
+        assert resolve_test_command(stage, cfg, Git(repo), sha).startswith("parallel_rspec")
+
+    def test_without_the_parallel_command_nothing_changes(self, repo):
+        # Unconfigured, a directory runs under the serial command as before.
+        sha = Git(repo).head_sha()
+        edit(repo, "app.py")
+        (repo / "spec" / "controllers").mkdir(parents=True, exist_ok=True)
+        cfg, stage = build(
+            repo,
+            {"test_paths": ["spec/controllers"]},
+            scoped_test_command="rspec {paths}",
+        )
+        assert resolve_test_command(stage, cfg, Git(repo), sha) == "rspec spec/controllers"
+
+    def test_a_declared_path_that_does_not_exist_is_not_a_directory(self, repo):
+        # The planner can name a path that is not there; that is the scoped
+        # command's problem to report, not a reason to fan out workers.
+        sha = Git(repo).head_sha()
+        edit(repo, "app.py")
+        cfg, stage = build(
+            repo,
+            {"test_paths": ["spec/nope"]},
+            scoped_test_command="rspec {paths}",
+            directory_test_command="parallel_rspec {paths}",
+        )
+        assert resolve_test_command(stage, cfg, Git(repo), sha) == "rspec spec/nope"
 
 
 class TestChecks:

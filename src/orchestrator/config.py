@@ -27,7 +27,6 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from orchestrator.flake import DEFAULT_FAILED_EXAMPLE_PATTERN
 
 StageKind = Literal["agent", "script"]
 
@@ -173,6 +172,13 @@ class ExecutorConfig(_EndpointConfig):
     # Repo map off by default: stages declare the files they need, and an
     # unscoped map swamps a local model's context before the task is stated.
     map_tokens: int = 0
+    # Let Aider run the project's tests inside its own edit loop, and try to
+    # repair what fails. Off by default, and the default is load-bearing: the
+    # orchestrator already runs the tests at a layer that knows about the
+    # stage's scope and about suite flakes, and Aider's loop knows neither. On
+    # the first real stage it turned a 90-second edit into a 609-second attempt
+    # spent trying to fix two order-dependent specs outside the stage's box.
+    auto_test: bool = False
     # Aider's flag surface changes between releases. This is the escape hatch
     # for correcting it without waiting on a code change.
     extra_args: list[str] = []
@@ -306,19 +312,30 @@ class ProjectConfig(_Strict):
     full_test_command: str | None = None
     # Optional. `{paths}` is filled by the orchestrator from the stage diff.
     scoped_test_command: str | None = None
+    # Used instead of `scoped_test_command` when any of those paths is a
+    # directory rather than a file. A directory can hold hundreds of files, and
+    # running it serially costs minutes on every attempt and every re-run; a
+    # single file is not worth starting workers for. Both strings are yours —
+    # this only chooses between them, on a fact about the filesystem.
+    directory_test_command: str | None = None
 
     full_suite_on_approval: bool = True
 
-    # When a suite goes red, re-run only the examples that failed rather than
-    # the whole suite. Needs `scoped_test_command` to have somewhere to put
-    # them, and a pattern that can find them in the runner's output.
-    flake_rerun_examples: bool = True
-    # Regex, applied per line; group 1 must be a locator the scoped command
-    # accepts. The shipped default reads RSpec's "Failed examples:" block.
-    failed_example_pattern: str | None = DEFAULT_FAILED_EXAMPLE_PATTERN
+    # When a suite goes red, re-run only the files that failed rather than the
+    # whole suite; a file that passes whole and standalone counts as green.
+    # Needs `scoped_test_command` to have somewhere to put the paths, and a
+    # pattern that can find them in this runner's output.
+    flake_rerun_failed_files: bool = True
+    # Regex, applied per line against the test command's output; group 1 must
+    # capture a repo-relative file path. There is deliberately no default:
+    # which lines of which runner name a failing file is a property of the
+    # project, not of this tool, and a Ruby-shaped default in the code would be
+    # exactly the kind of project knowledge that does not belong here. Unset,
+    # the re-run falls back to running the whole suite again.
+    failed_file_pattern: str | None = None
     # Above this many, a red suite is a broken stage rather than a flake, and
     # re-running to prove it is minutes spent on a foregone conclusion.
-    flake_rerun_max_examples: int = 5
+    flake_rerun_max_files: int = 5
 
     # What counts as a test file for `require_new_tests`.
     test_file_patterns: list[str] = [
@@ -381,6 +398,7 @@ class ProjectConfig(_Strict):
             ("test_command", self.test_command),
             ("full_test_command", self.full_test_command),
             ("scoped_test_command", self.scoped_test_command),
+            ("directory_test_command", self.directory_test_command),
             ("executor.lint_command", self.executor.lint_command),
         ):
             if command:
@@ -552,24 +570,33 @@ def _structural_problems(cfg: ProjectConfig) -> list[str]:
             "ADR beside it into every review prompt"
         )
 
-    if cfg.scoped_test_command and "{paths}" not in cfg.scoped_test_command:
+    for label in ("scoped_test_command", "directory_test_command"):
+        command = getattr(cfg, label)
+        if command and "{paths}" not in command:
+            problems.append(
+                f"{label} must contain a {{paths}} placeholder — that is the "
+                "slot the orchestrator fills with the stage's changed files"
+            )
+
+    if cfg.directory_test_command and not cfg.scoped_test_command:
         problems.append(
-            "scoped_test_command must contain a {paths} placeholder — that is "
-            "the slot the orchestrator fills with the stage's changed files"
+            "directory_test_command needs scoped_test_command: it is the "
+            "variant used when the selection contains a directory, not a "
+            "scoping mechanism on its own"
         )
 
-    if cfg.failed_example_pattern:
+    if cfg.failed_file_pattern:
         try:
-            compiled = re.compile(cfg.failed_example_pattern, re.MULTILINE)
+            compiled = re.compile(cfg.failed_file_pattern, re.MULTILINE)
         except re.error as e:
-            problems.append(f"failed_example_pattern is not a valid regex: {e}")
+            problems.append(f"failed_file_pattern is not a valid regex: {e}")
         else:
             if compiled.groups != 1:
                 problems.append(
-                    "failed_example_pattern must have exactly one capture group, "
-                    "around the locator to re-run. With none it would match and "
-                    "yield nothing, which looks identical to a test runner we "
-                    "cannot read"
+                    "failed_file_pattern must have exactly one capture group, "
+                    "around the file path to re-run. With none it would match "
+                    "and yield nothing, which looks identical to a test runner "
+                    "we cannot read"
                 )
 
     if not cfg.test_command and not cfg.stage_defaults.checks:
