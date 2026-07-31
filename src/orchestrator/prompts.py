@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from orchestrator.config import ProjectConfig, Stage
 from orchestrator.plandoc import PlanTree
+from orchestrator.planner import cache_control
 from orchestrator.state import FailureDetail, StageResult
 
 REVIEW_SYSTEM_PROMPT = """\
@@ -332,6 +333,14 @@ def build_planner_messages(
     # It goes here and nowhere else. A breakpoint after content that changes
     # between calls would invalidate the cache every time, which costs more than
     # not caching at all.
+    #
+    # The TTL is not decoration. Anthropic's default ephemeral window is about
+    # five minutes; between two planner calls sits a whole stage — an executor
+    # attempt, a suite, a review, a merge-gate suite — which on a real project
+    # is comfortably longer. This block shipped with a bare marker and so
+    # expired every time, while the system block one file over carried the
+    # configured lifetime and survived. That is precisely what the reports
+    # showed across two runs: 3% cached, the 3% being the system block.
     messages = [
         {
             "role": "user",
@@ -339,7 +348,9 @@ def build_planner_messages(
                 {
                     "type": "text",
                     "text": leading,
-                    "cache_control": {"type": "ephemeral"},
+                    "cache_control": cache_control(
+                        getattr(cfg, "cache_ttl", None)
+                    ),
                 }
             ],
         }

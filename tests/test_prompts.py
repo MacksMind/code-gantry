@@ -12,6 +12,8 @@ checkpoints against a mostly-cached prefix. If that silently stops being true,
 it shows up here rather than on an invoice.
 """
 
+from types import SimpleNamespace
+
 from orchestrator.plandoc import PlanDocument, PlanTree
 from orchestrator.prompts import build_planner_messages
 
@@ -50,6 +52,29 @@ class TestCacheLifetime:
         from orchestrator.planner import _system_blocks
 
         assert _system_blocks()[0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_the_configured_ttl_reaches_the_plan_and_layout_marker(self):
+        # The block above is the small one. This is the ninety-thousand-token
+        # one, and it shipped without a TTL — so it expired between every pair
+        # of planner calls while the system block, the only marker that carried
+        # the configured lifetime, survived. Live over two runs: 3% cached,
+        # where the 3% was the system block and nothing else.
+        cfg = SimpleNamespace(cache_ttl="1h")
+        messages = build_planner_messages(
+            cfg=cfg, plan=a_plan(), completed=[], layout="- `src/` (1)"
+        )
+        assert messages[0]["content"][-1]["cache_control"] == {
+            "type": "ephemeral",
+            "ttl": "1h",
+        }
+
+    def test_a_project_without_a_ttl_still_builds(self):
+        # cache_ttl is optional, and a missing one must not raise on a path
+        # every planner call takes.
+        messages = build_planner_messages(
+            cfg=SimpleNamespace(cache_ttl=None), plan=a_plan(), completed=[]
+        )
+        assert messages[0]["content"][-1]["cache_control"] == {"type": "ephemeral"}
 
 
 class TestPlannerCacheBreakpoint:
