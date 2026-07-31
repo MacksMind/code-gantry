@@ -220,10 +220,24 @@ def build_review_messages(
     run — that is what makes prefix caching hit, and why the diff is last.
     """
     messages = [{"role": "system", "content": REVIEW_SYSTEM_PROMPT}]
+    # A content-block list rather than a string, so it can carry the cache
+    # breakpoint. GPT-5.6 caches at an explicit breakpoint and does not fall
+    # back to the longest matching prefix; its default `implicit` mode puts one
+    # on the *latest* message, which here is the diff. Marking the end of the
+    # stable payload is what lets the diff vary without invalidating everything
+    # before it — measured as read=0/write=55,498 before, read=55,489/write=0
+    # after. Ordering the stable payload first was necessary and, on this model
+    # family, not sufficient.
     messages.append(
         {
             "role": "user",
-            "content": _plan_block(plan) + "\n\n" + _history_block(completed),
+            "content": [
+                {
+                    "type": "text",
+                    "text": _plan_block(plan) + "\n\n" + _history_block(completed),
+                    "prompt_cache_breakpoint": {"mode": "explicit"},
+                }
+            ],
         }
     )
 

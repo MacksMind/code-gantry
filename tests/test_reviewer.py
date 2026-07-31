@@ -310,3 +310,34 @@ class TestCacheWriteAccounting:
             prompt_tokens_details = Details()
 
         assert _extract_usage(Usage()).cache_write_tokens == 0
+
+
+class TestExplicitCacheMode:
+    """The breakpoint in the prompt only counts if the request opts in.
+
+    GPT-5.6's default is `implicit`, which places a breakpoint on the latest
+    message and ignores ours. Both halves are needed: the marked block, and
+    mode="explicit" on the request.
+    """
+
+    def call(self, **over):
+        verdict = ReviewVerdict(verdict="approved", summary="ok", issues=[])
+        client = StubClient(response(parsed=verdict))
+        OpenAIReviewer(cfg_with(**over.pop("cfg", {})).reviewer, client=client).review(
+            MESSAGES, **over
+        )
+        return client.calls[0]
+
+    def test_explicit_mode_is_requested(self):
+        assert self.call(cache_key="k")["prompt_cache_options"] == {"mode": "explicit"}
+
+    def test_the_cache_key_is_still_sent(self):
+        # GPT-5.6 needs it for reliable matching, not merely as a hint.
+        sent = self.call(cache_key="orchestrator:proj")
+        assert sent["prompt_cache_key"] == "orchestrator:proj"
+
+    def test_retention_is_not_sent_by_default(self):
+        # Deprecated on GPT-5.6 in favour of prompt_cache_options.ttl, and
+        # sending a deprecated parameter alongside its replacement invites the
+        # kind of silent misbehaviour this whole area just cost us.
+        assert "prompt_cache_retention" not in self.call()

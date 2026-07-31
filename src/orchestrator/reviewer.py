@@ -100,11 +100,18 @@ class OpenAIReviewer:
         """One review.
 
         `cache_key` groups a run's reviews so they route to the same cache
-        rather than competing for one. OpenAI caches on prefix automatically,
-        but the key materially improves the hit rate when many similar requests
-        share a long stable prefix — which is exactly this workload.
+        rather than competing for one. On GPT-5.6 it is required for reliable
+        matching rather than merely helpful.
+
+        `mode: explicit` is the other half of the caching fix. GPT-5.6 caches at
+        breakpoints and does not fall back to the longest matching prefix; its
+        default `implicit` mode puts a breakpoint on the latest message, which
+        here is the diff. Left at the default, every review wrote its whole
+        prefix to cache — billed above the uncached rate — and read none of it
+        back. The breakpoint itself is placed in `prompts.build_review_messages`;
+        this is the request-side opt-in that makes it count.
         """
-        extra: dict = {}
+        extra: dict = {"prompt_cache_options": {"mode": "explicit"}}
         if cache_key:
             extra["prompt_cache_key"] = cache_key
         if self.cfg.prompt_cache_retention:

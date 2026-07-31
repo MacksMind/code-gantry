@@ -200,3 +200,66 @@ class TestScopedTestGuidance:
         lowered = PLANNER_SYSTEM_PROMPT.lower()
         assert "test_paths" in lowered
         assert "whole suite" in lowered or "full suite" in lowered
+
+
+class TestReviewerCacheBreakpoint:
+    """GPT-5.6 caches at an explicit breakpoint, not at the longest prefix.
+
+    Its default `implicit` mode puts the breakpoint on the *latest* message.
+    The reviewer's latest message is the diff, which differs every call, so the
+    prefix at the breakpoint was never the same twice. Measured against the live
+    API: two calls sharing 55,489 identical prefix tokens, both reporting
+    `read=0, write=55,498`. Every review paid a cache write — billed at 1.25x
+    uncached on GPT-5.6 — and read nothing back. That is worse than not caching.
+
+    With the breakpoint moved before the diff: `read=55,489, write=0`.
+
+    The stable payload is already ordered first for exactly this reason; the
+    ordering was necessary and, on this model family, not sufficient.
+    """
+
+    def a_review(self, **over):
+        from orchestrator.config import Stage
+        from orchestrator.prompts import build_review_messages
+
+        args = dict(
+            stage=Stage(id="s", instruction="do it", edit_files=["a.py"]),
+            cfg=None,
+            diff="--- a\n+++ b\n",
+            plan=a_plan("PLAN"),
+            completed=[],
+        )
+        args.update(over)
+        return build_review_messages(**args)
+
+    def test_the_stable_message_carries_a_breakpoint(self):
+        messages = self.a_review()
+        stable = messages[1]["content"]
+        assert isinstance(stable, list), "a string cannot carry a breakpoint"
+        assert stable[-1]["prompt_cache_breakpoint"] == {"mode": "explicit"}
+
+    def test_the_breakpoint_is_before_the_diff(self):
+        # The whole point: the diff must be free to change without moving it.
+        messages = self.a_review(diff="DIFF_MARKER")
+        marked = [
+            i for i, m in enumerate(messages)
+            if isinstance(m["content"], list)
+            and any("prompt_cache_breakpoint" in b for b in m["content"])
+        ]
+        last = messages[-1]["content"]
+        text = last if isinstance(last, str) else last[0]["text"]
+        assert "DIFF_MARKER" in text
+        assert marked and max(marked) < len(messages) - 1
+
+    def test_exactly_one_breakpoint(self):
+        messages = self.a_review()
+        marked = [
+            b for m in messages if isinstance(m["content"], list)
+            for b in m["content"] if "prompt_cache_breakpoint" in b
+        ]
+        assert len(marked) == 1
+
+    def test_the_prefix_is_byte_identical_across_diffs(self):
+        first = self.a_review(diff="one")
+        second = self.a_review(diff="two")
+        assert first[:2] == second[:2]

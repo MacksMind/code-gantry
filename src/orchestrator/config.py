@@ -208,9 +208,10 @@ class ReviewerConfig(_EndpointConfig):
     provider: Literal["openai"] = "openai"
     model: str
     api_key_env: str = "OPENAI_API_KEY"
-    # OpenAI caches automatically on prefix, with a short default lifetime.
-    # "24h" extends it, at the cost of the prefix being stored for that long —
-    # a data-retention decision for the operator, so there is no default.
+    # Deprecated by OpenAI for GPT-5.6 and later, which use
+    # `prompt_cache_options.ttl` instead. Kept for older model families, unset
+    # by default: measured against gpt-5.6-sol it changed nothing, and what
+    # actually mattered was the explicit breakpoint (see `reviewer.review`).
     prompt_cache_retention: str | None = None
     request_timeout_seconds: float = 600.0
     max_retries: int = 2
