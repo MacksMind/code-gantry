@@ -212,7 +212,6 @@ def reconcile(slug: str, dry_run: bool) -> None:
         cfg.plan_addendum_path,
         outcome.plan_notes,
         stage_id="reconcile",
-        merge_sha=git.rev_parse(cfg.project_branch),
         when=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
     )
     click.echo(f"\nrecorded in {written}")

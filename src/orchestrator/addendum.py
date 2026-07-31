@@ -30,11 +30,14 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def _entry(note: dict, stage_id: str, sha: str, when: str) -> str:
+def _entry(note: dict, stage_id: str, when: str) -> str:
+    # No commit sha: the entry travels inside the commit it describes, so
+    # citing that commit from within it would be both circular and impossible
+    # — the sha does not exist until the squash that includes this file.
     lines = [
         f"## {note.get('plan_step', '(unattributed)')}",
         "",
-        f"- **observed** after `{stage_id}` landed as `{sha[:12]}` ({when})",
+        f"- **observed** while landing `{stage_id}` ({when})",
     ]
     if note.get("supersedes"):
         lines.append(f"- **supersedes** {note['supersedes']}")
@@ -48,7 +51,6 @@ def append_notes(
     notes: list[dict],
     *,
     stage_id: str,
-    merge_sha: str,
     when: str,
 ) -> Path | None:
     """Append observations to the addendum. Returns the file written, if any.
@@ -80,6 +82,6 @@ def append_notes(
 
     with target.open("a") as fh:
         for note in notes:
-            fh.write(_entry(note, stage_id, merge_sha, when))
+            fh.write(_entry(note, stage_id, when))
             fh.write("\n")
     return target

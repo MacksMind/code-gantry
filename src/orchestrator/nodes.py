@@ -766,30 +766,40 @@ def advance(state: RunState, rt: Runtime) -> dict:
     # commits — some of them red, since it commits before testing — are
     # discarded by the squash. That is why "every commit on the project branch
     # is green" and "Aider commits before testing" are both true.
-    rt.git.commit_all(f"[{stage.id}] wip")
-    merge_sha = rt.git.squash_merge(
-        branch, rt.cfg.project_branch, f"[{stage.id}] {_first_line(stage)}"
-    )
-    rt.git.delete_branch(branch)
-
-    # After the squash, so it is never part of the diff the scope guard, the
-    # reviewer or the suite saw. The stage is judged on what it changed; this
-    # is the record of what that turned out to mean.
+    # Written on the stage branch, before the squash picks it up, so the
+    # observations land inside the commit they are about. One commit per stage
+    # holds, and a reader of that commit sees both what changed and what it
+    # revealed about the plan.
+    #
+    # After every gate has run, not before: the scope guard would see a plan
+    # document modified by a stage that never touched it. That ordering means
+    # the content is unexamined by the gates, which is acceptable here in a way
+    # it would not be for code — this is markdown at a configured path, written
+    # by the orchestrator from structured planner output, not a model editing
+    # the repository. The guards exist to catch the executor wandering.
     written = append_notes(
         rt.cfg.target_repo,
         rt.cfg.plan_addendum_path,
         state.get("pending_plan_notes") or [],
         stage_id=stage.id,
-        merge_sha=merge_sha or "",
         when=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
     )
     if written is not None:
-        note_count = len(state.get("pending_plan_notes") or [])
         rt.log(
-            f"[advance] recorded {note_count} plan observation(s) in "
-            f"{written.relative_to(rt.cfg.target_repo)}"
+            f"[advance] recorded {len(state.get('pending_plan_notes') or [])} "
+            f"plan observation(s) in {written.relative_to(rt.cfg.target_repo)}"
         )
-        rt.git.commit_all(f"[{stage.id}] record plan observations")
+
+    # Commit anything the executor left uncommitted, then squash the whole
+    # child branch onto the project branch as one commit. Aider's intermediate
+    # commits — some of them red, since it commits before testing — are
+    # discarded by the squash. That is why "every commit on the project branch
+    # is green" and "Aider commits before testing" are both true.
+    rt.git.commit_all(f"[{stage.id}] wip")
+    merge_sha = rt.git.squash_merge(
+        branch, rt.cfg.project_branch, f"[{stage.id}] {_first_line(stage)}"
+    )
+    rt.git.delete_branch(branch)
 
     usage = state.get("stage_usage") or {}
     result = {

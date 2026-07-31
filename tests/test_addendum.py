@@ -24,7 +24,7 @@ def note(step="item 17", observation="8 of 9 controllers are clean", **over):
 
 
 def write(tmp_path, notes, path="docs/addendum", **over):
-    kw = {"stage_id": "plain-order-render-text", "merge_sha": "a1b2c3d4e5f6", "when": "2026-07-31 12:00 UTC"}
+    kw = {"stage_id": "plain-order-render-text", "when": "2026-07-31 12:00 UTC"}
     kw.update(over)
     return append_notes(tmp_path, path, notes, **kw)
 
@@ -47,10 +47,14 @@ class TestContent:
         body = written.read_text()
         assert "item 17" in body
         assert "`search` found 0 remaining" in body
-        # Attribution: which stage, which commit, when. Without it a reader
-        # cannot tell an observation from an assertion.
+        # Attribution: which stage, and when. Without it a reader cannot tell
+        # an observation from an assertion.
+        #
+        # No commit sha, deliberately: the entry is written on the stage branch
+        # before the squash, so it lands *inside* the commit it describes. That
+        # commit's sha does not exist yet, and citing it from within itself
+        # would be circular anyway.
         assert "plain-order-render-text" in body
-        assert "a1b2c3d4e5f6" in body
         assert "2026-07-31 12:00 UTC" in body
 
     def test_records_what_the_plan_currently_claims(self, tmp_path):
