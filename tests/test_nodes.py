@@ -888,3 +888,38 @@ class TestProgressGuardAfterAFlakyMergeGate:
         again = nodes.verify(state, rt)
         assert again.get("failure_layer") != "progress"
         assert again["next_hop"] in ("review", "advance")
+
+
+class TestPlannerArtifactRecordsCacheWrites:
+    """The write premium has to be visible per call, not just collected.
+
+    `PlannerUsage` gained `cache_write_tokens` when Anthropic's disjoint counts
+    were normalised, but `planner.json` still recorded only prompt, cached and
+    completion. Anthropic bills a cache write above base rate, so a run that
+    writes the prefix every call and never reads it is more expensive than not
+    caching — and per-call is the only place that is diagnosable, since the
+    run totals average it away.
+    """
+
+    def test_the_artifact_carries_the_write_count(self, repo, tmp_path):
+        planner = StubPlanner(
+            [
+                PlannerOutcome(
+                    "project_complete", "done", "e",
+                    usage=PlannerUsage(
+                        prompt_tokens=5_000,
+                        cached_tokens=1_000,
+                        completion_tokens=400,
+                        cache_write_tokens=3_600,
+                    ),
+                )
+            ]
+        )
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        nodes.plan(state, rt)
+        import json
+
+        written = json.loads(
+            next(rt.paths.run_dir.glob("stages/*/planner.json")).read_text()
+        )
+        assert written["usage"]["cache_write_tokens"] == 3_600

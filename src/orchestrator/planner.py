@@ -180,10 +180,12 @@ class PlannerUsage:
     # `_extract_usage`; the providers do not agree on what these words mean.
     prompt_tokens: int = 0
     cached_tokens: int = 0
-    # Billed above base rate, and worth seeing on its own: a run that writes the
-    # prefix and never reads it back is more expensive than not caching at all.
-    cache_write_tokens: int = 0
     completion_tokens: int = 0
+    # Last, so positional construction keeps working — the same ordering as the
+    # reviewer's TokenUsage. Billed above base rate, and worth seeing on its
+    # own: a prefix written every call and never read back costs more than no
+    # caching at all.
+    cache_write_tokens: int = 0
 
 
 @dataclass

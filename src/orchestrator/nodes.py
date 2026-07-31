@@ -155,6 +155,10 @@ def plan(state: RunState, rt: Runtime) -> dict:
                 "usage": {
                     "prompt_tokens": outcome.usage.prompt_tokens,
                     "cached_tokens": outcome.usage.cached_tokens,
+                    # Billed above base rate. A prefix written on every call and
+                    # never read back costs more than no caching at all, and the
+                    # run totals average that away — per call is where it shows.
+                    "cache_write_tokens": outcome.usage.cache_write_tokens,
                     "completion_tokens": outcome.usage.completion_tokens,
                 },
                 "client_failure": outcome.failed,
