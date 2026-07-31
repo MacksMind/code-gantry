@@ -158,6 +158,39 @@ class Deferral(BaseModel):
     )
 
 
+class PlanNote(BaseModel):
+    """An observation about the plan, derived from what the repository shows.
+
+    The plan documents are written before the work and go stale as it happens:
+    a checklist says twenty-four call sites across nine controllers, eight of
+    those controllers are now clean, and nothing in the document knows. A later
+    pass — a human, or a tool outside this loop — folds these notes into the
+    documents properly. That is a judgement about what the work has become and
+    does not belong mid-run.
+
+    Append-only. Nothing here rewrites a plan; it records what was observed so
+    the rewrite can be done later with evidence.
+    """
+
+    plan_step: str = Field(
+        description="What in the plan this concerns, quoted closely enough that "
+        "a human can find it."
+    )
+    observation: str = Field(
+        description=(
+            "What the repository now shows, and how you know. Cite what you "
+            "read — a path and line range, or the search you ran and its "
+            "count. An unsourced claim is worth less than no note, because "
+            "someone will act on it."
+        )
+    )
+    supersedes: str = Field(
+        default="",
+        description="What the plan currently says that this contradicts, if "
+        "anything. Leave empty when the plan is merely silent.",
+    )
+
+
 class PlannerResponse(BaseModel):
     verdict: Verdict = Field(
         description=(
@@ -193,6 +226,19 @@ class PlannerResponse(BaseModel):
             "clear it."
         ),
     )
+    plan_notes: list[PlanNote] = Field(
+        default_factory=list,
+        description=(
+            "Observations about the plan being out of date, when you have "
+            "evidence from the repository. Appended to an addendum a later "
+            "pass folds into the documents; nothing you write here changes a "
+            "plan document.\n\n"
+            "Add one when what you read contradicts what the plan says — a "
+            "count that has moved, a step already done, a file that no longer "
+            "exists. Do not add one for work this run is about to do; that is "
+            "what the stage is. Most calls will have none."
+        ),
+    )
 
 
 @dataclass
@@ -224,6 +270,10 @@ class PlannerOutcome:
     # the first long run was reconstructing what it had been told, and that was
     # when the inputs were fixed.
     tool_calls: list[str] = field(default_factory=list)
+    # Observations about the plan going stale, appended to the addendum when
+    # the stage lands. Carried rather than written here: a note about work that
+    # then fails review would be a record of something that did not happen.
+    plan_notes: list[dict] = field(default_factory=list)
     # True when `blocked` is ours rather than the planner's, so the report does
     # not imply a judgement the model never made.
     failed: bool = False
@@ -329,6 +379,7 @@ class AnthropicPlanner:
                     stage_fields=parsed.stage.model_dump() if parsed.stage else None,
                     revision_mode=parsed.revision_mode,
                     deferred=[d.model_dump() for d in parsed.deferred],
+                    plan_notes=[n.model_dump() for n in parsed.plan_notes],
                     usage=billed,
                     tool_calls=self._tool_log(),
                     failed=False,

@@ -142,6 +142,11 @@ class RunState(TypedDict, total=False):
     # verify writes it, the schema discards it, and the gate silently never
     # skips — which is exactly how it shipped the first time.
     full_suite_digest: str
+    # Observations the planner made about the plan going stale, held until the
+    # stage lands. Written on advance rather than when the planner speaks: a
+    # note about work that then fails review would record something that did
+    # not happen.
+    pending_plan_notes: list[dict]
 
     planner_interventions: int
     # Reset every time a stage lands; see Limits.max_interventions_without_landing.
@@ -197,6 +202,7 @@ def new_state(
         session_started_at=started_at,
         last_diff_digest="",
         full_suite_digest="",
+        pending_plan_notes=[],
         last_failure=None,
         failure_layer=None,
         failed_stage_id=None,
@@ -249,6 +255,7 @@ def fresh_stage_fields() -> dict:
         "last_diff_digest": "",
         # A new stage has a new tree; nothing has been proven about it yet.
         "full_suite_digest": "",
+        "pending_plan_notes": [],
         "last_failure": None,
         "failure_layer": None,
         "failed_stage_id": None,

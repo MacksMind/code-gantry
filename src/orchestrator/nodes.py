@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timezone
 
+from orchestrator.addendum import append_notes
 from orchestrator.commands import truncate_middle
 from orchestrator.config import Stage, validate_stage
 from orchestrator.flake import adjudicate
@@ -196,7 +198,16 @@ def plan(state: RunState, rt: Runtime) -> dict:
     notes = list(state.get("planner_notes") or [])
     notes.append(f"{outcome.verdict}: {outcome.reasoning}")
     deferred = merge_deferrals(state.get("deferred") or [], outcome.deferred)
-    base = {"run_usage": usage, "planner_notes": notes, "deferred": deferred}
+    base = {
+        "run_usage": usage,
+        "planner_notes": notes,
+        "deferred": deferred,
+        # Held until the stage lands. Accumulated across revisions, because a
+        # redrawn stage is the same piece of work and its observations about
+        # the plan are still true.
+        "pending_plan_notes": (state.get("pending_plan_notes") or [])
+        + list(outcome.plan_notes),
+    }
 
     if outcome.verdict == "project_complete":
         still_open = outstanding_deferrals(deferred)
@@ -760,6 +771,25 @@ def advance(state: RunState, rt: Runtime) -> dict:
         branch, rt.cfg.project_branch, f"[{stage.id}] {_first_line(stage)}"
     )
     rt.git.delete_branch(branch)
+
+    # After the squash, so it is never part of the diff the scope guard, the
+    # reviewer or the suite saw. The stage is judged on what it changed; this
+    # is the record of what that turned out to mean.
+    written = append_notes(
+        rt.cfg.target_repo,
+        rt.cfg.plan_addendum_path,
+        state.get("pending_plan_notes") or [],
+        stage_id=stage.id,
+        merge_sha=merge_sha or "",
+        when=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+    )
+    if written is not None:
+        note_count = len(state.get("pending_plan_notes") or [])
+        rt.log(
+            f"[advance] recorded {note_count} plan observation(s) in "
+            f"{written.relative_to(rt.cfg.target_repo)}"
+        )
+        rt.git.commit_all(f"[{stage.id}] record plan observations")
 
     usage = state.get("stage_usage") or {}
     result = {
