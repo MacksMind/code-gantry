@@ -1043,6 +1043,54 @@ class TestPlannerArtifactRecordsCacheWrites:
         assert written["usage"]["cache_write_tokens"] == 3_600
 
 
+class TestPlannerArtifactRecordsWhatItLookedAtAndSaid:
+    """Silence has to be distinguishable from absence.
+
+    `planner.json` recorded the verdict and the stage but neither the reads nor
+    the plan notes, so a stage that produced no observations looked exactly
+    like a feature that never ran — the key was simply missing either way.
+    That matters most for the case worth auditing: the planner read the
+    repository, compared it to the plan, and found nothing to correct. That is
+    the plan being accurate, and it is evidence, not an empty field.
+    """
+
+    def _artifact(self, rt):
+        import json
+
+        return json.loads(
+            next(rt.paths.run_dir.glob("stages/*/planner.json")).read_text()
+        )
+
+    def test_reads_and_notes_are_recorded(self, repo, tmp_path):
+        planner = StubPlanner(
+            [
+                PlannerOutcome(
+                    "project_complete", "done", "e",
+                    tool_calls=["search(render text: in app) -> 7 line(s)"],
+                    plan_notes=[
+                        {
+                            "plan_step": "item 17",
+                            "observation": "7 sites remain, not 24",
+                            "supersedes": "checklist says 24",
+                        }
+                    ],
+                )
+            ]
+        )
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        nodes.plan(state, rt)
+        written = self._artifact(rt)
+        assert written["tool_calls"] == ["search(render text: in app) -> 7 line(s)"]
+        assert written["plan_notes"][0]["observation"] == "7 sites remain, not 24"
+
+    def test_both_keys_exist_when_there_was_nothing_to_say(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        nodes.plan(state, rt)
+        written = self._artifact(rt)
+        assert written["tool_calls"] == []
+        assert written["plan_notes"] == []
+
+
 class TestExecutorFeedbackIsBounded:
     """A 98KB executor log must not become the next prompt.
 

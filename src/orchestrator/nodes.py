@@ -188,6 +188,13 @@ def plan(state: RunState, rt: Runtime) -> dict:
                     "cache_write_tokens": outcome.usage.cache_write_tokens,
                     "completion_tokens": outcome.usage.completion_tokens,
                 },
+                # Both recorded even when empty, and that is the point. An
+                # absent key cannot be told apart from a feature that never
+                # ran, and "the planner looked and had nothing to say" is a
+                # different fact from "the planner did not look" — one is the
+                # plan being accurate, the other is a bug.
+                "tool_calls": list(outcome.tool_calls),
+                "plan_notes": list(outcome.plan_notes),
                 "client_failure": outcome.failed,
             },
             indent=2,
