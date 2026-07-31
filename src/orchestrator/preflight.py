@@ -20,6 +20,7 @@ import os
 import urllib.request
 from dataclasses import dataclass
 
+from orchestrator.apistatus import classify
 from orchestrator.approval import approval_problem
 from orchestrator.commands import CommandResult, CommandRunner, truncate_middle
 from orchestrator.config import ProjectConfig
@@ -510,11 +511,67 @@ def _model_checks(cfg: ProjectConfig) -> list[Check]:
             )
             continue
         try:
-            builder(cfg)
-            checks.append(Check(f"{label} client builds", True))
+            client = builder(cfg)
         except Exception as e:  # noqa: BLE001
             checks.append(Check(f"{label} client builds", False, str(e)))
+            continue
+        checks.append(Check(f"{label} client builds", True))
+        checks.append(_credential_check(label, client))
     return checks
+
+
+def _credential_check(label: str, client) -> Check:
+    """Prove the key is live, by any answer at all.
+
+    Building a client proves a variable is set and well-formed. It does not
+    prove the key works, and an expired one looks identical until something
+    calls it. That happened: a key with a short expiry died mid-session, every
+    planner call returned 401 as a generic blocked verdict, and the failure was
+    mistaken for the planner declining to use its tools. The local executor
+    endpoint had always been called for real here; the two paid, credentialed
+    services — the ones with an expiry and a billing state — were taken on
+    trust.
+
+    What is being tested is authentication, not a useful completion. So any
+    response that is not an auth failure passes: a 400 complaining about a
+    token budget means the request was accepted, parsed, and answered, which is
+    everything this needs to know. Chasing a clean 200 across providers means
+    tracking each one's parameter spellings, and a check that breaks when a
+    vendor renames a field is a check that gets skipped.
+    """
+    try:
+        _ping(client)
+        return Check(f"{label} credentials work", True)
+    except Exception as e:  # noqa: BLE001
+        failure = classify(e)
+        if failure.is_auth:
+            return Check(f"{label} credentials work", False, failure.describe())
+        return Check(
+            f"{label} credentials work",
+            True,
+            f"the service answered ({failure.status or 'no status'}), so the "
+            "key is live",
+        )
+
+
+def _ping(client) -> None:
+    """The cheapest call each provider accepts.
+
+    A small budget rather than one token: a reasoning model spends its budget
+    thinking and cannot finish inside one, which produces a 400 that is
+    perfectly informative but noisy to read.
+    """
+    inner = getattr(client, "_client", client)
+    model = getattr(getattr(client, "cfg", None), "model", None)
+    if hasattr(inner, "messages") and hasattr(inner.messages, "create"):
+        inner.messages.create(
+            model=model, max_tokens=1, messages=[{"role": "user", "content": "."}]
+        )
+        return
+    inner.chat.completions.create(
+        model=model, max_completion_tokens=16,
+        messages=[{"role": "user", "content": "."}],
+    )
 
 
 def _build_planner(cfg: ProjectConfig):

@@ -357,3 +357,59 @@ class TestSuitesAreNotRunTwice:
         assert twin, "the deduplicated twin should still be reported"
         assert not twin[0].ok, "a red suite cannot pass under a second label"
         assert "9 examples, 3 failures" in twin[0].detail
+
+
+class TestCredentialsAreActuallyTested:
+    """Building a client proves a variable is set. It proves nothing else.
+
+    A key with a short expiry died mid-session. Preflight had said "planner
+    client builds" and passed; every planner call then returned 401 as a
+    generic blocked verdict, and the failure was mistaken for the planner
+    declining to use its tools. The local executor endpoint had always been
+    called for real; the two paid credentialed services were taken on trust.
+    """
+
+    def _client(self, exc=None):
+        class Inner:
+            class messages:
+                @staticmethod
+                def create(**kw):
+                    if exc:
+                        raise exc
+
+        return type("C", (), {"_client": Inner, "cfg": type("X", (), {"model": "m"})})()
+
+    def test_a_live_key_passes(self):
+        from orchestrator.preflight import _credential_check
+
+        assert _credential_check("planner", self._client()).ok
+
+    def test_an_expired_key_fails_fatally(self):
+        from orchestrator.preflight import _credential_check
+
+        exc = type("E", (Exception,), {"status_code": 401})("API key is invalid.")
+        check = _credential_check("planner", self._client(exc))
+        assert not check.ok
+        assert check.fatal, "a dead key must stop the run before stage one"
+        assert "credentials problem" in check.detail
+
+    def test_any_other_answer_counts_as_authenticated(self):
+        # What is being tested is authentication, not a useful completion. A
+        # 400 about a token budget means the request was accepted, parsed and
+        # answered — which is everything this needs to know. Chasing a clean
+        # 200 across providers means tracking each one's parameter spellings,
+        # and a check that breaks when a vendor renames a field gets skipped.
+        from orchestrator.preflight import _credential_check
+
+        exc = type("E", (Exception,), {"status_code": 400})(
+            "Could not finish the message because max_completion_tokens"
+        )
+        check = _credential_check("reviewer", self._client(exc))
+        assert check.ok
+        assert "the key is live" in check.detail
+
+    def test_a_rate_limit_does_not_block_a_run(self):
+        from orchestrator.preflight import _credential_check
+
+        exc = type("E", (Exception,), {"status_code": 429})("slow down")
+        assert _credential_check("planner", self._client(exc)).ok

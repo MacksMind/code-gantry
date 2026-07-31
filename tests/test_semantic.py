@@ -185,3 +185,29 @@ class TestProvenance:
         s.query("second")
         assert [c.detail for c in s.calls] == ["first", "second"]
         assert all(c.tool == "semantic_search" for c in s.calls)
+
+
+class TestAMisconfiguredIndexSaysSo:
+    """A wrong collection name is not an outage.
+
+    Qdrant answers 404 for a collection that does not exist. Reported as
+    "unavailable" that reads as a service being down, and it would read that
+    way for every call of a fourteen-hour run while the actual fix is one line
+    of config. Retrying it is pure waste — the collection will not appear.
+    """
+
+    def test_a_missing_collection_is_called_misconfigured(self):
+        class NotFound(FakeHttp):
+            def __call__(self, url, payload, timeout):
+                if url.endswith("/embeddings"):
+                    return {"data": [{"embedding": [0.1] * 8}]}
+                raise type("E", (Exception,), {"status_code": 404})("collection not found")
+
+        out = search(NotFound()).query("x")
+        assert "misconfigured" in out[0]
+        assert "Do not retry" in out[0]
+
+    def test_a_service_that_is_down_is_still_called_unavailable(self):
+        out = search(FakeHttp(fail=OSError("Connection refused"))).query("x")
+        assert "unavailable" in out[0]
+        assert "misconfigured" not in out[0]

@@ -40,6 +40,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Callable
 
+from orchestrator.apistatus import classify
 from orchestrator.repotools import ToolCall
 
 
@@ -132,12 +133,25 @@ class SemanticSearch:
                 self.cfg.timeout_seconds,
             )
             hits = found["result"]
-        except Exception as e:  # noqa: BLE001 - any failure degrades identically
+        except Exception as e:  # noqa: BLE001 - classified rather than guessed
+            failure = classify(e)
             self.calls.append(ToolCall("semantic_search", question, 0))
+            if failure.retry_worthwhile:
+                # The index is down or busy. Genuinely transient, and the run
+                # can proceed on the exact-search tools.
+                return [
+                    f"semantic search is unavailable ({failure.describe()}). "
+                    "Use search and list_files instead; do not treat this as "
+                    "evidence that nothing matches."
+                ]
+            # Permanent, and almost always a misconfigured collection name
+            # returning 404. Left as "unavailable" it would read as an outage
+            # for the whole run, and nobody would look at the config.
             return [
-                f"semantic search is unavailable ({type(e).__name__}). "
-                "Use search and list_files instead; do not treat this as "
-                "evidence that nothing matches."
+                f"semantic search is misconfigured and will not work for this "
+                f"run ({failure.describe()}). Do not retry it. Use search and "
+                "list_files, and note this in your reasoning so the operator "
+                "sees it."
             ]
 
         lines: list[str] = []
