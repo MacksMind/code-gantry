@@ -116,6 +116,17 @@ class Git:
         out = self._out("ls-tree", "-r", "--name-only", sha)
         return [line for line in out.splitlines() if line.strip()]
 
+    def tracked_paths_now(self) -> list[str]:
+        """Every tracked path in the working tree, as it stands.
+
+        Distinct from `tracked_paths(sha)`, which answers a question about a
+        commit. The residue check needs the files as the attempt left them,
+        including ones it added, and excluding scratch files it never staged —
+        git's idea of the repository, at this instant.
+        """
+        out = self._out("ls-files", "-z")
+        return [line for line in out.split("\0") if line.strip()]
+
     def commits_between(self, have: str, want: str) -> list[str]:
         """Subjects of commits on `want` that `have` does not contain.
 

@@ -91,11 +91,29 @@ class PlannedStage(BaseModel):
     forbidden_patterns: list[str] = Field(
         default_factory=list,
         description=(
-            "Regexes barred from the diff's added lines, checked mechanically "
-            "before any test runs. Use for later-stage syntax that must not "
-            "appear yet — and for verifying the stage's own goal, since the "
-            "executor cannot run a command to check its work. If the stage "
-            "means 'no occurrence of X should remain', that belongs here."
+            "Regexes barred from the diff's **added lines**, checked "
+            "mechanically before any test runs. Use for what must not be "
+            "*introduced*: later-stage syntax, an API that does not exist yet, "
+            "a shortcut this stage is meant to avoid.\n\n"
+            "This cannot tell you that something is gone. A line the executor "
+            "never touched is not an added line, so an occurrence it simply "
+            "missed matches nothing here. For 'none may remain', use "
+            "must_not_remain — the two read almost identically in prose and "
+            "are opposites in a diff."
+        ),
+    )
+    must_not_remain: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Regexes that must not survive anywhere in edit_files once the "
+            "stage is done, checked by reading the files rather than the diff. "
+            "This is how a sweep states its own goal: converting every "
+            "`render text:` in a file means declaring `render\\s+text:` here, "
+            "and the stage cannot pass while one is left.\n\n"
+            "Free, deterministic, and it runs before the tests — so an "
+            "incomplete conversion costs nothing to find instead of a review "
+            "turn. Scoped to edit_files, so declare the ground you mean to "
+            "leave clean. Leave empty when the stage is not removing anything."
         ),
     )
     test_paths: list[str] = Field(
@@ -706,11 +724,18 @@ stage, an environment problem.
   about a file it is already looking at. One such instruction cost ten minutes
   of a model looping over hallucinated grep results.
 
-  Anything you want checked mechanically goes in `forbidden_patterns`, which is
-  a regex over the diff's added lines, run by the orchestrator, deterministic
-  and free. If the goal of a stage is "no occurrence of X should remain", that
-  is a forbidden pattern, not a sentence in the instruction. Describe the
-  *change* to the executor; declare the *check* to the orchestrator.
+  Anything you want checked mechanically goes to the orchestrator as a regex,
+  deterministic and free, and there are two of them because they answer
+  opposite questions. `forbidden_patterns` reads the diff's added lines and
+  catches what must not be *introduced*. `must_not_remain` reads the files in
+  `edit_files` and catches what must not be *left*. A sweep — "convert every X"
+  — needs the second: the sites the executor misses are untouched, so they
+  never appear as added lines and the first is blind to them. Getting this
+  backwards means an incomplete conversion passes every mechanical gate and is
+  caught, if at all, by a paid review turn.
+
+  Describe the *change* to the executor; declare the *check* to the
+  orchestrator.
 - **Name the specs that cover it.** `test_paths` is how a stage's tests get
   scoped to the specs it affects. Files the stage edits are picked up
   automatically; this is for the ones that exercise the changed code *without*

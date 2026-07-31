@@ -228,6 +228,12 @@ class TestPlannerPartition:
     """The planner may write declarative fields and only declarative fields."""
 
     def test_allowlist_contains_only_declarative_fields(self):
+        # Pinned deliberately: adding a field here has to be an edit someone
+        # made on purpose, having asked whether it is declarative.
+        # `must_not_remain` is — a regex the orchestrator runs over files it
+        # already reads, with no command anywhere in it. It is the mirror of
+        # `forbidden_patterns`, which was always in the allowlist for the same
+        # reason.
         assert PLANNER_WRITABLE_FIELDS == {
             "id",
             "instruction",
@@ -236,6 +242,7 @@ class TestPlannerPartition:
             "constraints",
             "acceptance",
             "forbidden_patterns",
+            "must_not_remain",
             "test_paths",
             "require_new_tests",
         }

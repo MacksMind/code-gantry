@@ -50,6 +50,7 @@ class Layer(str, Enum):
     SCOPE = "scope"
     PROGRESS = "progress"
     PATTERNS = "patterns"
+    RESIDUE = "residue"
     TESTS = "tests"
     CHECKS = "checks"
     NEW_TESTS = "new_tests"
@@ -135,6 +136,7 @@ def run_verify(
         _layer_scope,
         _layer_progress,
         _layer_patterns,
+        _layer_residue,
         _layer_tests,
         _layer_checks,
         _layer_new_tests,
@@ -418,7 +420,64 @@ def _layer_patterns(ctx: _Context, outcome: VerifyOutcome):
     )
 
 
-# --- layer 4: tests ------------------------------------------------------
+# --- layer 4: residue ----------------------------------------------------
+
+
+def _layer_residue(ctx: _Context, outcome: VerifyOutcome):
+    """Nothing the stage promised to remove is still there.
+
+    `forbidden_patterns` reads the diff's added lines, so it sees a construct
+    arriving and is blind to one left behind — and "no occurrence of X should
+    remain" is the shape of most migration work. An occurrence the executor
+    simply missed produces no added line, so the diff cannot be asked about it.
+    This reads the files instead.
+
+    Scoped to `edit_files`, with the same globs the scope guard uses. That is
+    the ground the stage claimed; a residue outside it belongs to work nobody
+    authorised this stage to do, and failing on it would be unactionable.
+    """
+    if not ctx.stage.must_not_remain:
+        return None
+
+    compiled = [(p, re.compile(p)) for p in ctx.stage.must_not_remain]
+    hits: list[str] = []
+
+    for path in ctx.git.tracked_paths_now():
+        if not matches_any(path, ctx.stage.edit_files):
+            continue
+        full = ctx.cfg.target_repo / path
+        try:
+            text = full.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            # Binary, unreadable, or deleted in this attempt. A regex over
+            # source has nothing to say about any of those.
+            continue
+        for number, line in enumerate(text.splitlines(), start=1):
+            for pattern, rx in compiled:
+                if rx.search(line):
+                    hits.append(
+                        f"  {path}:{number}: {line.strip()}   [matches /{pattern}/]"
+                    )
+
+    if not hits:
+        return None
+
+    return _fail(
+        Layer.RESIDUE,
+        Route.EXECUTOR,
+        "the stage left behind what it was meant to remove",
+        "This stage declared that no occurrence of these patterns may remain "
+        "in the files it owns, and these are still there:\n"
+        + "\n".join(hits[:40])
+        + (f"\n… and {len(hits) - 40} more" if len(hits) > 40 else "")
+        + "\n\nThese are occurrences that were never edited, not ones you "
+        "introduced — the work is incomplete rather than wrong. Convert the "
+        "remaining sites the same way you converted the others, and change "
+        "nothing else.",
+    )
+
+
+# --- layer 5: tests ------------------------------------------------------
 
 
 def _layer_tests(ctx: _Context, outcome: VerifyOutcome):

@@ -222,6 +222,115 @@ class TestForbiddenPatterns:
         assert verify(repo, cfg, stage, sha).failed_layer is Layer.PATTERNS
 
 
+class TestResidue:
+    """"No occurrence of X should remain" — a check the diff cannot make.
+
+    `forbidden_patterns` matches added lines, so it catches a construct being
+    *introduced* and is blind to one being *left behind*. Those look identical
+    in prose and are opposites in a diff: an occurrence the executor never
+    touched produces no added line at all.
+
+    That gap is not hypothetical. A stage to convert seven `render text:` calls
+    declared `render[^\\n]*\\btext:` as a forbidden pattern, meaning "none may
+    remain". Five were converted, two were missed, every mechanical gate passed,
+    and the reviewer had to find it — a paid turn spent on something a regex
+    settles for free. Most stages of a migration are this shape.
+
+    Scanned over the stage's own `edit_files`, using the same globs as the scope
+    guard: that is the ground the stage claimed, so it is the ground it must
+    leave clean, whether or not it happened to touch every file in it.
+    """
+
+    def build_stage(self, repo, must_not_remain, edit_files=None, **cfg_over):
+        return build(
+            repo,
+            {
+                "must_not_remain": must_not_remain,
+                "edit_files": edit_files or ["app/**"],
+            },
+            **cfg_over,
+        )
+
+    def seed(self, repo, files):
+        for name, text in files.items():
+            path = repo / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+        Git(repo).commit_all("seed")
+        return Git(repo).head_sha()
+
+    def test_an_untouched_occurrence_fails(self, repo):
+        sha = self.seed(
+            repo,
+            {
+                "app/a.rb": "render text: 'x'\n",
+                "app/b.rb": "render text: 'y'\n",
+            },
+        )
+        # Convert one, miss the other — exactly the live failure.
+        (repo / "app" / "a.rb").write_text("render html: 'x'.html_safe\n")
+        cfg, stage = self.build_stage(repo, [r"render\s+text:"])
+        out = verify(repo, cfg, stage, sha)
+        assert not out.passed
+        assert out.failed_layer is Layer.RESIDUE
+        assert out.route is Route.EXECUTOR
+
+    def test_the_feedback_names_the_file_and_line(self, repo):
+        sha = self.seed(repo, {"app/b.rb": "keep\nrender text: 'y'\n"})
+        (repo / "app" / "b.rb").write_text("keep\nrender text: 'y'\nnote\n")
+        cfg, stage = self.build_stage(repo, [r"render\s+text:"])
+        feedback = verify(repo, cfg, stage, sha).feedback
+        assert "app/b.rb" in feedback
+        assert "2" in feedback  # the line number, so it can be gone to directly
+        assert "render text:" in feedback
+
+    def test_a_fully_converted_scope_passes(self, repo):
+        sha = self.seed(repo, {"app/a.rb": "render text: 'x'\n"})
+        (repo / "app" / "a.rb").write_text("render html: 'x'.html_safe\n")
+        cfg, stage = self.build_stage(repo, [r"render\s+text:"])
+        assert verify(repo, cfg, stage, sha).passed
+
+    def test_an_occurrence_outside_the_declared_scope_is_ignored(self, repo):
+        # The stage promised its own ground, not the whole repository. Failing
+        # on a file it was never allowed to edit would be unactionable.
+        sha = self.seed(
+            repo,
+            {"app/a.rb": "clean\n", "lib/other.rb": "render text: 'y'\n"},
+        )
+        (repo / "app" / "a.rb").write_text("still clean\n")
+        cfg, stage = self.build_stage(repo, [r"render\s+text:"], edit_files=["app/**"])
+        assert verify(repo, cfg, stage, sha).passed
+
+    def test_it_runs_before_the_tests(self, repo):
+        # Free and deterministic, so it must not wait behind a suite — the
+        # whole point is spending nothing to find this.
+        sha = self.seed(repo, {"app/a.rb": "render text: 'x'\n"})
+        (repo / "app" / "a.rb").write_text("render text: 'x'\nedited\n")
+        cfg, stage = self.build_stage(
+            repo, [r"render\s+text:"], test_command="exit 1"
+        )
+        assert verify(repo, cfg, stage, sha).failed_layer is Layer.RESIDUE
+
+    def test_declaring_nothing_disables_it(self, repo):
+        sha = self.seed(repo, {"app/a.rb": "render text: 'x'\n"})
+        (repo / "app" / "a.rb").write_text("render text: 'x'\nedited\n")
+        cfg, stage = self.build_stage(repo, [])
+        assert verify(repo, cfg, stage, sha).passed
+
+    def test_a_new_file_in_scope_counts_even_before_it_is_staged(self, repo):
+        # The scope guard marks untracked files intent-to-add so an executor
+        # cannot escape it by not staging. Residue inherits that, and should:
+        # a fresh occurrence inside the stage's own ground is the plainest
+        # possible case of the promise not being kept.
+        sha = self.seed(repo, {"app/a.rb": "clean\n"})
+        (repo / "app" / "a.rb").write_text("still clean\n")
+        (repo / "app" / "new.rb").write_text("render text: 'y'\n")
+        cfg, stage = self.build_stage(repo, [r"render\s+text:"])
+        out = verify(repo, cfg, stage, sha)
+        assert out.failed_layer is Layer.RESIDUE
+        assert "app/new.rb" in out.feedback
+
+
 class TestTests:
     def test_failure_goes_back_to_the_executor(self, repo):
         sha = Git(repo).head_sha()

@@ -51,6 +51,7 @@ PLANNER_WRITABLE_FIELDS = frozenset(
         "constraints",
         "acceptance",
         "forbidden_patterns",
+        "must_not_remain",
         "test_paths",
         # Declarative, and one-way: it can raise the requirement, never waive
         # the operator's. What counts as a test file stays in operator config,
@@ -300,6 +301,10 @@ class Stage(_Strict):
     constraints: str | None = None
     acceptance: str | None = None
     forbidden_patterns: list[str] = []
+    # Regexes that must not survive anywhere in `edit_files` once the stage is
+    # done. The complement of `forbidden_patterns`, which reads added lines and
+    # so can only see a construct arriving, never one left behind.
+    must_not_remain: list[str] = []
     # Extra spec paths the planner expects to be affected beyond those the diff
     # reveals. Paths, never a command — see `scoped_test_command`.
     test_paths: list[str] = []
