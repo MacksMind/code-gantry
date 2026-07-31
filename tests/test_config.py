@@ -237,6 +237,7 @@ class TestPlannerPartition:
             "acceptance",
             "forbidden_patterns",
             "test_paths",
+            "require_new_tests",
         }
 
     def test_executable_fields_are_not_writable(self):
@@ -250,8 +251,14 @@ class TestPlannerPartition:
         ):
             assert field not in PLANNER_WRITABLE_FIELDS
 
-    def test_policy_fields_are_not_writable(self):
-        for field in ("require_new_tests", "review", "full_suite_on_approval"):
+    def test_gate_removing_policy_is_not_writable(self):
+        # The line is direction, not category. These two switch gates *off* —
+        # skip the reviewer, skip the full suite — so a model that talked
+        # itself into either would be dismantling the thing that checks it.
+        # `require_new_tests` is also policy but only ever adds a gate, and is
+        # merged with OR so it cannot waive the operator's, which is why it
+        # lives in the allowlist and these do not.
+        for field in ("review", "full_suite_on_approval"):
             assert field not in PLANNER_WRITABLE_FIELDS
 
     def test_kind_is_not_planner_writable(self):
@@ -293,6 +300,58 @@ class TestPlannerPartition:
         assert stage.checks == ["bin/route-snapshot"]
         assert stage.preconditions == ["true"]
         assert stage.require_new_tests is True
+
+    def test_the_planner_may_demand_tests_for_a_stage(self):
+        # It could always *permit* a spec by naming it in edit_files. It could
+        # not require one, so nothing checked that the executor wrote it.
+        #
+        # The case that motivated this: a content-type regression shipped past
+        # both gates because no spec asserted a response content type. The
+        # reviewer approved the diff and the full suite was green, because
+        # neither had anything to check against. The planner spotted it several
+        # stages later and could describe the fix but not demand coverage for
+        # it — so the same class of regression could ship again the same way.
+        cfg = parse_config(minimal())
+        stage = cfg.stage_from_planner(
+            {
+                "id": "s1",
+                "instruction": "fix the regression",
+                "edit_files": ["app/x.rb", "spec/x_spec.rb"],
+                "require_new_tests": True,
+            }
+        )
+        assert stage.require_new_tests is True
+
+    def test_the_planner_may_not_waive_the_operator_default(self):
+        # It raises the bar, never lowers it. An operator who requires tests on
+        # every stage does not get that quietly undone by a model that judged
+        # this one exempt.
+        cfg = parse_config(minimal(stage_defaults={"require_new_tests": True}))
+        stage = cfg.stage_from_planner(
+            {
+                "id": "s1",
+                "instruction": "x",
+                "edit_files": ["a"],
+                "require_new_tests": False,
+            }
+        )
+        assert stage.require_new_tests is True
+
+    def test_requiring_tests_is_not_a_way_to_run_something(self):
+        # The partition holds: this is a boolean policy, and what counts as a
+        # test file stays in operator config where the planner cannot reach it.
+        cfg = parse_config(minimal())
+        stage = cfg.stage_from_planner(
+            {
+                "id": "s1",
+                "instruction": "x",
+                "edit_files": ["a"],
+                "require_new_tests": True,
+                "test_file_patterns": ["**/*"],
+            }
+        )
+        assert stage.require_new_tests is True
+        assert cfg.test_file_patterns != ["**/*"]
 
     def test_declarative_fields_pass_through(self):
         cfg = parse_config(minimal())

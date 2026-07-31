@@ -105,6 +105,25 @@ class PlannedStage(BaseModel):
             "themselves. Paths only; the operator owns the test command."
         ),
     )
+    require_new_tests: bool = Field(
+        default=False,
+        description=(
+            "Set true to make this stage fail unless its diff adds or changes "
+            "a test file. Naming a spec in `edit_files` only permits one; this "
+            "is what requires it.\n\n"
+            "Use it when you are fixing something the suite did not catch. A "
+            "regression that reached the branch proves no test asserts the "
+            "behaviour, so a fix without one leaves the same gap open and the "
+            "same mistake shippable. Use it too when a stage adds behaviour "
+            "rather than preserving it.\n\n"
+            "Do not set it for a pure mechanical sweep whose existing specs "
+            "already cover the behaviour — there the requirement only invites "
+            "a spec written to be written.\n\n"
+            "You can raise this requirement but never waive it: if the "
+            "operator requires tests on every stage, false here changes "
+            "nothing."
+        ),
+    )
 
 
 class Deferral(BaseModel):

@@ -95,8 +95,11 @@ class TestSchemaExcludesExecutableFields:
         ):
             assert field not in PlannedStage.model_fields, field
 
-    def test_no_policy_fields(self):
-        for field in ("require_new_tests", "review", "full_suite_on_approval"):
+    def test_no_gate_removing_policy_fields(self):
+        # `require_new_tests` is representable — it can only add a gate, and
+        # merges with OR so it cannot waive the operator's. These two switch
+        # gates off, so the schema keeps them out of reach.
+        for field in ("review", "full_suite_on_approval"):
             assert field not in PlannedStage.model_fields, field
 
     def test_no_kind_field(self):

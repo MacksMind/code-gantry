@@ -52,6 +52,10 @@ PLANNER_WRITABLE_FIELDS = frozenset(
         "acceptance",
         "forbidden_patterns",
         "test_paths",
+        # Declarative, and one-way: it can raise the requirement, never waive
+        # the operator's. What counts as a test file stays in operator config,
+        # so this asks for coverage without reaching anything executable.
+        "require_new_tests",
     }
 )
 
@@ -476,12 +480,16 @@ class ProjectConfig(_Strict):
         """
         safe = {k: v for k, v in fields.items() if k in PLANNER_WRITABLE_FIELDS}
         defaults = self.stage_defaults
+        # OR rather than override, so the planner can only tighten this. An
+        # operator who requires tests everywhere must not have that waived by a
+        # model that judged one stage exempt.
+        wants_tests = bool(safe.pop("require_new_tests", False))
         return Stage(
             **safe,
             preconditions=list(defaults.preconditions),
             context_commands=list(defaults.context_commands),
             checks=list(defaults.checks),
-            require_new_tests=defaults.require_new_tests,
+            require_new_tests=defaults.require_new_tests or wants_tests,
             require_scoped_tests=defaults.require_scoped_tests,
             review=defaults.review,
         )
