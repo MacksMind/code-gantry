@@ -73,6 +73,9 @@ class SemanticSearchConfig:
     # repository has no answer to comes back with the least-bad chunk in it,
     # presented with the same confidence as a real hit.
     min_score: float = 0.4
+    # Lines of each chunk shown alongside its citation. Enough to triage a
+    # lead, far short of enough to act on one.
+    snippet_lines: int = 2
     timeout_seconds: float = 30.0
 
     @classmethod
@@ -92,6 +95,7 @@ class SemanticSearchConfig:
             embedding_model=data["embedding_model"],
             collection=data["collection"],
             max_results=int(data.get("max_results", 8)),
+            snippet_lines=int(data.get("snippet_lines", 2)),
             min_score=float(data.get("min_score", 0.4)),
             timeout_seconds=float(data.get("timeout_seconds", 30.0)),
         )
@@ -137,18 +141,31 @@ class SemanticSearch:
             ]
 
         lines: list[str] = []
+        kept = 0
         for h in hits:
             if h.get("score", 0) < self.cfg.min_score:
                 continue
+            # Counted in results, not in lines. Each result contributes a
+            # citation plus its snippet, so counting lines would silently cap
+            # at a third of what was asked for.
+            if kept >= self.cfg.max_results:
+                break
+            kept += 1
             p = h.get("payload", {})
             source = p.get("source") or f"{p.get('path')}:{p.get('start_line')}-{p.get('end_line')}"
             symbol = " ".join(x for x in (p.get("symbol_type"), p.get("symbol")) if x)
             lines.append(f"{h.get('score', 0):.3f}  {source}  {symbol}".rstrip())
-            # Capped here as well as in the request. `limit` is a request to a
-            # service we do not own, and the cost of it being ignored is paid in
-            # the planner's context window.
-            if len(lines) >= self.cfg.max_results:
-                break
+            # A couple of lines of the chunk, so an irrelevant lead can be
+            # discarded without spending a `read_file` on it. Deliberately not
+            # the whole chunk: eight full chunks is several hundred lines of
+            # context, and a chunk that looks complete invites being treated as
+            # the file rather than as a pointer into it.
+            snippet = [
+                ln.strip()
+                for ln in (p.get("content") or "").splitlines()
+                if ln.strip()
+            ][: self.cfg.snippet_lines]
+            lines.extend(f"       | {ln}" for ln in snippet)
 
         self.calls.append(ToolCall("semantic_search", question, len(lines)))
         return lines

@@ -95,15 +95,29 @@ class TestQuerying:
         assert "app/controllers/godata_controller.rb:4-65" in line
 
     def test_results_are_capped(self):
+        # Counted in results rather than output lines: each hit contributes a
+        # citation plus a short snippet, so counting lines would cap at a
+        # third of what was asked for.
         http = FakeHttp(hits=[hit(f"a/{i}.rb", i, i + 5) for i in range(20)])
-        assert len(search(http, max_results=3).query("x")) == 3
+        out = search(http, max_results=3).query("x")
+        citations = [ln for ln in out if not ln.strip().startswith("|")]
+        assert len(citations) == 3
+
+    def test_each_result_carries_a_short_snippet(self):
+        # Enough to discard an irrelevant lead without spending a read on it,
+        # and far short of enough to act on one.
+        http = FakeHttp(hits=[hit("a.rb", 1, 3)])
+        out = search(http, snippet_lines=2).query("x")
+        assert sum(1 for ln in out if ln.strip().startswith("|")) == 2
 
     def test_a_weak_match_is_dropped(self):
         # A nearest neighbour is always *something*. Without a floor the planner
         # is handed the least-bad chunk in the repository and told it is a lead.
         http = FakeHttp(hits=[hit("a.rb", 1, 2, score=0.9), hit("b.rb", 3, 4, score=0.11)])
         out = search(http, min_score=0.5).query("x")
-        assert len(out) == 1 and "a.rb" in out[0]
+        citations = [ln for ln in out if not ln.strip().startswith("|")]
+        assert len(citations) == 1 and "a.rb" in citations[0]
+        assert not any("b.rb" in ln for ln in out)
 
     def test_no_matches_is_an_answer(self):
         assert search(FakeHttp(hits=[])).query("nothing like this exists") == []
