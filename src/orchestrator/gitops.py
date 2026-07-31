@@ -116,6 +116,15 @@ class Git:
         out = self._out("ls-tree", "-r", "--name-only", sha)
         return [line for line in out.splitlines() if line.strip()]
 
+    def commits_between(self, have: str, want: str) -> list[str]:
+        """Subjects of commits on `want` that `have` does not contain.
+
+        Answers "what would merging bring in", which is the question preflight
+        asks about a project branch cut before the base moved on.
+        """
+        out = self._out("log", "--oneline", "--no-decorate", f"{have}..{want}")
+        return [line for line in out.splitlines() if line.strip()]
+
     def file_exists_at(self, sha: str, path: str) -> bool:
         return self._run("cat-file", "-e", f"{sha}:{path}", check=False).returncode == 0
 

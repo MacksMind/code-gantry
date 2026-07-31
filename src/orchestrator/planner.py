@@ -32,6 +32,7 @@ from typing import Literal, Protocol
 from pydantic import BaseModel, Field
 
 from orchestrator.config import PlannerConfig
+from orchestrator.plannertools import dispatch, tool_schemas
 
 Verdict = Literal["next_stage", "revise", "project_complete", "blocked"]
 RevisionMode = Literal["extend", "restart"]
@@ -252,9 +253,26 @@ def _blocked(reason: str) -> PlannerOutcome:
 
 
 class AnthropicPlanner:
-    def __init__(self, cfg: PlannerConfig, client=None):
+    def __init__(self, cfg: PlannerConfig, client=None, reader=None, semantic=None):
         self.cfg = cfg
         self._client = client if client is not None else _build_anthropic_client(cfg)
+        # Absent on a project with no repository access configured, in which
+        # case no tools are offered and this is the single-call planner it has
+        # always been.
+        self.reader = reader
+        self.semantic = semantic
+
+    def _max_tool_turns(self) -> int:
+        """Backstop on the conversation length.
+
+        The reader's own call budget is the real limit — it refuses past that
+        and the planner reads the refusal. This catches a model that ignores
+        the refusal and keeps asking, which would otherwise loop until the
+        request timeout.
+        """
+        if self.reader is None:
+            return 0
+        return self.reader.budget.max_calls + 2
 
     def plan(self, messages: list[dict]) -> PlannerOutcome:
         """One planner decision, with a single corrective retry.
@@ -324,22 +342,61 @@ class AnthropicPlanner:
         or the answer was truncated. Otherwise `parsed` is what came back, still
         to be checked for contradictions the schema cannot express.
         """
-        try:
-            response = self._client.messages.parse(
-                model=self.cfg.model,
-                # Generous: thinking is on by default on current models and
-                # counts against max_tokens along with the response, so a tight
-                # budget truncates the verdict rather than the reasoning.
-                max_tokens=16_000,
-                output_config={"effort": "high"},
-                system=_system_blocks(self.cfg.cache_ttl, self.cfg.guidance),
-                messages=messages,
-                output_format=PlannerResponse,
-            )
-        except Exception as e:  # noqa: BLE001 - any failure means "no plan"
-            return _blocked(f"the planner call failed: {e}"), None, PlannerUsage()
+        tools = tool_schemas(self.semantic) if self.reader else []
+        conversation = list(messages)
+        usage = PlannerUsage()
+        response = None
 
-        usage = _extract_usage(getattr(response, "usage", None))
+        # One turn per tool round trip, plus one for the answer. The ceiling is
+        # the reader's own call budget: it refuses past that, the planner reads
+        # the refusal and answers. This bound is the backstop for a model that
+        # ignores the refusal and keeps asking.
+        for _ in range(self._max_tool_turns() + 1):
+            try:
+                response = self._client.messages.parse(
+                    model=self.cfg.model,
+                    # Generous: thinking is on by default on current models and
+                    # counts against max_tokens along with the response, so a
+                    # tight budget truncates the verdict rather than the
+                    # reasoning.
+                    max_tokens=16_000,
+                    output_config={"effort": "high"},
+                    system=_system_blocks(self.cfg.cache_ttl, self.cfg.guidance),
+                    messages=conversation,
+                    output_format=PlannerResponse,
+                    **({"tools": tools} if tools else {}),
+                )
+            except Exception as e:  # noqa: BLE001 - any failure means "no plan"
+                return _blocked(f"the planner call failed: {e}"), None, usage
+
+            usage = _merge_usage(usage, _extract_usage(getattr(response, "usage", None)))
+
+            requests = _tool_requests(response)
+            if not requests:
+                break
+
+            # Assistant turn verbatim, then one result block per request. The
+            # API requires every tool_use to be answered in the next message, in
+            # order, or the conversation is malformed.
+            conversation = conversation + [
+                {"role": "assistant", "content": _content_blocks(response)},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": req["id"],
+                            "content": dispatch(
+                                req["name"], req["input"], self.reader, self.semantic
+                            ),
+                        }
+                        for req in requests
+                    ],
+                },
+            ]
+
+        if response is None:  # pragma: no cover - loop always runs once
+            return _blocked("the planner produced no response"), None, usage
 
         # A refusal or a truncation is not a plan. Check before reading output.
         stop_reason = getattr(response, "stop_reason", None)
@@ -360,6 +417,73 @@ class AnthropicPlanner:
             return _blocked("the planner returned no parsable verdict"), None, usage
 
         return None, parsed, usage
+
+
+def _tool_requests(response) -> list[dict]:
+    """The tool_use blocks in a response, normalised.
+
+    Tolerant of shape because this reads an SDK object in one place and a stub
+    in another; anything that is not a well-formed tool_use is ignored rather
+    than crashing a fourteen-hour run on an attribute error.
+    """
+    out = []
+    for block in getattr(response, "content", None) or []:
+        if getattr(block, "type", None) != "tool_use":
+            continue
+        out.append(
+            {
+                "id": getattr(block, "id", ""),
+                "name": getattr(block, "name", ""),
+                "input": getattr(block, "input", None) or {},
+            }
+        )
+    return out
+
+
+def _content_blocks(response) -> list[dict]:
+    """The assistant turn, as blocks the API will accept back.
+
+    Replayed verbatim: a tool_use must be echoed in the conversation for its
+    result to be attachable to it.
+    """
+    blocks = []
+    for block in getattr(response, "content", None) or []:
+        kind = getattr(block, "type", None)
+        if kind == "text":
+            blocks.append({"type": "text", "text": getattr(block, "text", "")})
+        elif kind == "tool_use":
+            blocks.append(
+                {
+                    "type": "tool_use",
+                    "id": getattr(block, "id", ""),
+                    "name": getattr(block, "name", ""),
+                    "input": getattr(block, "input", None) or {},
+                }
+            )
+        elif kind == "thinking":
+            # Carried so the model keeps its own reasoning across turns.
+            blocks.append(
+                {
+                    "type": "thinking",
+                    "thinking": getattr(block, "thinking", ""),
+                    "signature": getattr(block, "signature", ""),
+                }
+            )
+    return blocks
+
+
+def _merge_usage(a: PlannerUsage, b: PlannerUsage) -> PlannerUsage:
+    """Add up the turns of one planning step.
+
+    A tool loop bills per turn. Reporting only the last one would make a
+    conversation that read six files look like a single cheap call.
+    """
+    return PlannerUsage(
+        prompt_tokens=a.prompt_tokens + b.prompt_tokens,
+        completion_tokens=a.completion_tokens + b.completion_tokens,
+        cached_tokens=a.cached_tokens + b.cached_tokens,
+        cache_write_tokens=a.cache_write_tokens + b.cache_write_tokens,
+    )
 
 
 def _semantic_problem(parsed: PlannerResponse) -> str | None:
