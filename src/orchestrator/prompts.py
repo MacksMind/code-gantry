@@ -214,6 +214,33 @@ def _deferred_block(deferred: list[dict] | None) -> str:
     return "\n".join(lines)
 
 
+def _costs_block(costs: list[dict] | None) -> str:
+    """What stages have cost the executor, across every run of this project.
+
+    The per-stage figures in the history above cover this run only, and a run
+    begins with none — so the very first derivation, which is where batch size
+    gets decided, would have nothing to calibrate against. These persist.
+
+    Keyed by merge sha because that is what survives the squash: the stage
+    branch is deleted and the executor's commits are folded away, so `git show`
+    on this sha is the only way back to what those files actually were.
+    """
+    if not costs:
+        return ""
+    lines = "\n".join(
+        f"- `{c['merge_sha'][:12]}` {c['stage_id']} — {c['files']} file(s), "
+        f"{c['context_tokens']:,} tokens"
+        for c in costs
+    )
+    return (
+        "\n\n## What stages have cost the executor\n\n"
+        "Measured, across every run of this project. Size a batch against "
+        "these rather than against a file count — the figure is dominated by "
+        "fixed overhead, so a stage's cost tracks the size of the files far "
+        "more than their number.\n\n" + lines
+    )
+
+
 def _history_block(completed: list[StageResult], addendum_path: str | None = None) -> str:
     """What *this run* has landed — which is not what the project has landed.
 
@@ -362,6 +389,7 @@ def build_planner_messages(
     status_tail: str | None = None,
     layout: str | None = None,
     deferred: list[dict] | None = None,
+    stage_costs: list[dict] | None = None,
 ) -> list[dict[str, str]]:
     """Chat messages for the planner.
 
@@ -389,6 +417,7 @@ def build_planner_messages(
     # tokens rather than taking ninety thousand down with them.
     situational = (
         _history_block(completed, _addendum(cfg))
+        + _costs_block(stage_costs)
         + "\n\n"
         + _deferred_block(deferred)
     )

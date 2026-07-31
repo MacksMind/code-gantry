@@ -1236,3 +1236,39 @@ class TestStuckWithoutLanding:
         (repo / "app.py").write_text("changed\n")
         landed = nodes.advance(state, rt)
         assert landed["interventions_since_landing"] == 0
+
+
+class TestStageCostOutlivesTheRun:
+    """Driven through advance, because the halves passing proves nothing.
+
+    Twice today a value was computed correctly, written correctly, and lost in
+    transit — `full_suite_digest` to an undeclared schema key, `plan_notes` to
+    a reset applied after them. The cost figure takes the same journey, so it
+    gets the same end-to-end test rather than a unit test of the writer.
+    """
+
+    def test_a_landed_stage_records_what_it_cost(self, repo, tmp_path):
+        from orchestrator.planner import recent_stage_costs
+
+        cfg, rt, state = make(repo, tmp_path)
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("stage work\n")
+        state = {**state, "executor_context_tokens": 13_000}
+
+        nodes.advance(state, rt)
+
+        costs = recent_stage_costs(rt.project.project_dir)
+        assert len(costs) == 1
+        assert costs[0]["context_tokens"] == 13_000
+        # Keyed by something that still resolves once the branch is gone.
+        assert rt.git.commit_subject().startswith("[extract]")
+        assert costs[0]["merge_sha"]
+
+    def test_a_stage_with_no_measurement_records_nothing(self, repo, tmp_path):
+        from orchestrator.planner import recent_stage_costs
+
+        cfg, rt, state = make(repo, tmp_path)
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("stage work\n")
+        nodes.advance(state, rt)
+        assert recent_stage_costs(rt.project.project_dir) == []

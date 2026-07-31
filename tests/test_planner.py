@@ -706,3 +706,57 @@ class TestTheReadLogIsChronological:
             "read_file",
             "semantic_search",
         ]
+
+
+class TestStageCostsSurviveTheRun:
+    """Calibration data has to outlive the run that measured it.
+
+    Executor context is recorded on `StageResult`, which lives in the run's
+    state database. A fresh run starts with an empty completed list, so every
+    figure vanishes and the planner sizes its first batch — the decision that
+    matters most — with nothing to go on. The same defect as telling a restart
+    it is the first stage of the project, in a different field.
+
+    Written to `status.md`, which is project-level and append-only, and keyed by
+    the **merge sha**: the stage branch and every executor commit are squashed
+    away, so that is the only identifier still resolving afterwards. A cost you
+    cannot tie back to a diff is a number, not evidence.
+    """
+
+    def test_the_line_is_keyed_by_the_merge_sha(self, tmp_path):
+        from orchestrator.planner import append_stage_cost
+
+        append_stage_cost(tmp_path, "batch-1", "0285803b159a", 10, 13_000)
+        text = (tmp_path / "stage-costs.md").read_text()
+        assert "0285803b159a" in text
+        assert "10" in text and "13,000" in text
+
+    def test_costs_are_read_back_in_order(self, tmp_path):
+        # Its own file rather than a section of status.md, which is a
+        # hundreds-of-kilobytes narrative the planner sees only the tail of.
+        # Here every line is a cost line, so the whole file stays readable
+        # however long the project runs.
+        from orchestrator.planner import append_stage_cost, recent_stage_costs
+
+        append_stage_cost(tmp_path, "old", "aaaaaaaaaaaa", 1, 14_000)
+        append_stage_cost(tmp_path, "new", "bbbbbbbbbbbb", 10, 13_000)
+        assert not (tmp_path / "status.md").exists(), "must not touch status.md"
+
+        costs = recent_stage_costs(tmp_path)
+        assert [c["merge_sha"] for c in costs] == ["aaaaaaaaaaaa", "bbbbbbbbbbbb"]
+        assert costs[-1]["files"] == 10
+        assert costs[-1]["context_tokens"] == 13_000
+
+    def test_only_the_most_recent_are_kept(self, tmp_path):
+        from orchestrator.planner import append_stage_cost, recent_stage_costs
+
+        for i in range(30):
+            append_stage_cost(tmp_path, f"s{i}", f"{i:012d}", 1, 1_000 + i)
+        costs = recent_stage_costs(tmp_path, limit=5)
+        assert len(costs) == 5
+        assert costs[-1]["context_tokens"] == 1_029
+
+    def test_a_project_with_no_status_file_reads_empty(self, tmp_path):
+        from orchestrator.planner import recent_stage_costs
+
+        assert recent_stage_costs(tmp_path) == []

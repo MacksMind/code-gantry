@@ -25,7 +25,7 @@ from orchestrator.commands import truncate_middle
 from orchestrator.config import Stage, validate_stage
 from orchestrator.flake import adjudicate
 from orchestrator.globs import matches_any
-from orchestrator.planner import append_status
+from orchestrator.planner import append_stage_cost, append_status, recent_stage_costs
 from orchestrator.prompts import (
     build_executor_prompt,
     build_planner_messages,
@@ -137,6 +137,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
         status_tail=_status_tail(rt),
         layout=rt.layout(state.get("plan_sha") or state.get("base_sha") or ""),
         deferred=state.get("deferred") or [],
+        stage_costs=recent_stage_costs(rt.project.project_dir),
     )
 
     rt.log(f"[plan] {'revising ' + stage.id if stage else 'deriving next stage'}")
@@ -840,6 +841,17 @@ def advance(state: RunState, rt: Runtime) -> dict:
 
     completed = list(state.get("completed") or [])
     completed.append(result)
+    # Recorded after the squash, keyed by the sha that survives it. The run's
+    # own state carries this too, but only until the run ends; this is the copy
+    # a later run can calibrate against.
+    if result.get("executor_context_tokens"):
+        append_stage_cost(
+            rt.project.project_dir,
+            stage_id=stage.id,
+            merge_sha=result["merge_sha"],
+            files=len(stage.edit_files),
+            context_tokens=result["executor_context_tokens"],
+        )
     rt.log(f"[advance] {stage.id} landed as {result['merge_sha'][:12]}")
 
     return {

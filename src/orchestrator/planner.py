@@ -24,6 +24,7 @@ model-authored shell itself.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -917,3 +918,68 @@ def append_status(
     with path.open("a", encoding="utf-8") as handle:
         handle.write(block)
     return path
+
+
+# Its own file, not a section of status.md. status.md is a narrative log of
+# expected-versus-actual that runs to hundreds of kilobytes, and the planner
+# sees only a tail of it — a cost line appended there scrolls out of view
+# within a stage or two, and scanning the whole thing to find one is work that
+# grows with the project. This file holds one line per landed stage and nothing
+# else, so it stays small enough to read whole however long the project runs.
+STAGE_COSTS_FILENAME = "stage-costs.md"
+STAGE_COST_PREFIX = "- cost "
+_STAGE_COST = re.compile(
+    r"^- cost `([0-9a-f]+)` `([^`]*)` — (\d+) file\(s\), ([\d,]+) executor tokens",
+    re.MULTILINE,
+)
+
+
+def append_stage_cost(
+    project_dir: Path | str,
+    stage_id: str,
+    merge_sha: str,
+    files: int,
+    context_tokens: int,
+) -> Path:
+    """Record what a landed stage cost the executor, durably.
+
+    The figure itself lives on `StageResult`, which lives in the run's state
+    database — so a fresh run starts with none of it and sizes its first batch,
+    the decision that matters most, from nothing. This is the copy that
+    outlives the run.
+
+    Keyed by the merge sha because that is the only identifier that survives:
+    the stage branch is deleted and the executor's own commits are squashed
+    away, so a cost recorded against either would point at nothing an hour
+    later. Against the merge sha, `git show` answers what those files actually
+    were, which is the difference between evidence and a number.
+    """
+    project_dir = Path(project_dir)
+    project_dir.mkdir(parents=True, exist_ok=True)
+    path = project_dir / STAGE_COSTS_FILENAME
+    line = (
+        f"{STAGE_COST_PREFIX}`{merge_sha}` `{stage_id}` — "
+        f"{files} file(s), {context_tokens:,} executor tokens\n"
+    )
+    with path.open("a") as fh:
+        fh.write(line)
+    return path
+
+
+def recent_stage_costs(
+    project_dir: Path | str, limit: int = 12
+) -> list[dict]:
+    """The last few stage costs, oldest first, across every run."""
+    path = Path(project_dir) / STAGE_COSTS_FILENAME
+    if not path.is_file():
+        return []
+    found = [
+        {
+            "merge_sha": sha,
+            "stage_id": stage_id,
+            "files": int(files),
+            "context_tokens": int(tokens.replace(",", "")),
+        }
+        for sha, stage_id, files, tokens in _STAGE_COST.findall(path.read_text())
+    ]
+    return found[-limit:] if limit else found
