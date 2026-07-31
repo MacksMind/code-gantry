@@ -260,6 +260,22 @@ class TestExtraArgs:
         cfg, stage = cfg_with(executor={"model": "m"})
         assert "--no-show-model-warnings" in build_aider_argv(stage, cfg, "p")
 
+    def test_urls_are_never_fetched(self):
+        # Aider offers to add URLs it sees to the chat, and --yes-always
+        # accepts. The URL it sees is usually its own: on a repo this size the
+        # startup banner prints a large-mono-repo warning citing
+        # aider.chat/docs/faq.html, so it offers to scrape its own
+        # documentation. Two of the nine attempt timeouts across all runs so
+        # far end on the line "Scraping https://aider.chat/docs/faq.html…" with
+        # nothing after it — a network fetch, in an unattended run, with a
+        # fifteen-minute timeout as its only bound.
+        #
+        # --no-show-model-warnings already covers the same hazard for model
+        # warnings. This closes the general case rather than the next specific
+        # one.
+        cfg, stage = cfg_with(executor={"model": "m"})
+        assert "--no-detect-urls" in build_aider_argv(stage, cfg, "p")
+
     def test_edit_format_is_passed_when_configured(self):
         # Local models frequently cannot produce Aider's default diff format.
         cfg, stage = cfg_with(executor={"model": "m", "edit_format": "whole"})

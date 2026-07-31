@@ -42,6 +42,7 @@ AIDER_FLAGS = [
     "--read",
     "--no-gitignore",
     "--no-show-model-warnings",
+    "--no-detect-urls",
     "--edit-format",
     "--model-metadata-file",
     "--chat-history-file",
@@ -173,6 +174,16 @@ def build_aider_argv(
         # A model warning becomes "Open documentation url for more info?",
         # which --yes-always answers for us.
         "--no-show-model-warnings",
+        # And so does any other URL Aider happens to see. The one it sees most
+        # is its own: this repository is large enough that the startup banner
+        # prints a mono-repo warning citing aider.chat/docs/faq.html, Aider
+        # offers to add that URL to the chat, and --yes-always accepts — so it
+        # scrapes its own documentation over the network, unattended, bounded
+        # only by the attempt timeout. Two of the nine attempt timeouts so far
+        # end on "Scraping https://aider.chat/docs/faq.html…" and nothing else.
+        #
+        # NO_BROWSER does not help: that stops a browser opening, not a fetch.
+        "--no-detect-urls",
     ]
 
     if ex.edit_format:
