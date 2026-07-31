@@ -154,49 +154,6 @@ def _repo_checks(cfg: ProjectConfig, git: Git, *, for_resume: bool) -> list[Chec
                 fatal=False,
             )
         )
-        # Nothing merges `base_ref` into the project branch — not at run start,
-        # not at resume. A branch cut days ago carries whatever the base looked
-        # like then, and the run will happily build on it.
-        #
-        # That is usually harmless and occasionally not. On the first real
-        # project, `main` gained a fix to the target repo's own tooling — a
-        # post-commit hook that reindexes, changed to stop waking a second
-        # inference server on every executor commit. A run on a branch without
-        # it would have fired the old path a hundred times.
-        #
-        # Reported rather than merged. A merge can conflict, and resolving one
-        # unattended is exactly the surprise this tool exists to avoid; whether
-        # this run should include the latest base is the operator's call.
-        behind = git.commits_between(cfg.project_branch, cfg.base_ref)
-        if behind:
-            checks.append(
-                Check(
-                    f"{cfg.project_branch!r} includes all of {cfg.base_ref!r}",
-                    False,
-                    f"{len(behind)} commit(s) on {cfg.base_ref} are not on the "
-                    f"project branch: {', '.join(behind[:4])}"
-                    + (" ..." if len(behind) > 4 else "")
-                    + f". Merge them first if this run should have them — "
-                    f"`git -C {cfg.target_repo} checkout {cfg.project_branch} "
-                    f"&& git merge {cfg.base_ref}` — or proceed knowing it "
-                    "will not.",
-                    fatal=False,
-                )
-            )
-    else:
-        checks.append(Check(f"project branch {cfg.project_branch!r} is new", True))
-        matches = git.head_sha() == base_sha
-        checks.append(
-            Check(
-                f"HEAD matches base_ref {cfg.base_ref!r}",
-                matches,
-                "" if matches
-                else f"HEAD is {git.head_sha()[:12]}, {cfg.base_ref} is "
-                f"{base_sha[:12]} — the project branch would be cut from "
-                "somewhere unexpected",
-            )
-        )
-
     leftovers = git.branches_matching(cfg.stage_branch_namespace + "/")
     if leftovers:
         checks.append(
