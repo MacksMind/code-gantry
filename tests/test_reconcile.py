@@ -118,11 +118,11 @@ class TestItActuallyRuns:
         assert "search finds 0 remaining" in result.output
         assert not (repo / "docs" / "addendum" / "plan-addendum.md").exists()
 
-    def test_no_drift_says_so_and_writes_nothing(self, project, monkeypatch):
+    def test_nothing_to_add_says_so_and_writes_nothing(self, project, monkeypatch):
         repo, _ = project
         stub_planner(monkeypatch, [])
         result = CliRunner().invoke(cli.main, ["reconcile", "demo"])
-        assert "no drift" in result.output
+        assert "nothing to add" in result.output
         assert not (repo / "docs" / "addendum" / "plan-addendum.md").exists()
 
 
@@ -175,16 +175,16 @@ class TestTheDiffIsAgainstBaseRef:
 
 
 class TestAnUnverifiedVerdictIsRefused:
-    """"No drift" from a planner that read nothing is not a finding.
+    """"Nothing to add" from a planner that read nothing is not a finding.
 
     Observed live: the same command against the same repository produced six
-    cited observations on one call and "no drift" on the next, the second
+    cited observations on one call and "nothing to add" on the next, the second
     having made no tool calls at all. Recording that as "checked, nothing
     found" would be worse than recording nothing, because it reads as evidence
     and would stop anyone looking again.
     """
 
-    def test_no_drift_without_reads_is_an_error(self, project, monkeypatch):
+    def test_an_empty_verdict_without_reads_is_an_error(self, project, monkeypatch):
         stub = stub_planner(monkeypatch, [])
         monkeypatch.setattr(
             type(stub),
@@ -225,7 +225,7 @@ class TestAnUnverifiedVerdictIsRefused:
         stub_planner(monkeypatch, [])
         result = CliRunner().invoke(cli.main, ["reconcile", "demo"])
         assert result.exit_code == 0
-        assert "no drift" in result.output
+        assert "nothing to add" in result.output
         assert "1 read(s)" in result.output
 
 

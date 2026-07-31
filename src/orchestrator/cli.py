@@ -191,8 +191,8 @@ def reconcile(slug: str, dry_run: bool) -> None:
 
     if not outcome.plan_notes:
         click.echo(
-            f"\nno drift found, after {len(outcome.tool_calls)} read(s); "
-            "the plan still describes the repository"
+            f"\nnothing to add, after {len(outcome.tool_calls)} read(s); "
+            "the log already reflects what the branch has done"
         )
         return
 
@@ -221,25 +221,38 @@ def reconcile(slug: str, dry_run: bool) -> None:
 
 
 def _reconcile_prompt(cfg: ProjectConfig) -> list[dict]:
-    """The reconcile instruction."""
+    """The reconcile instruction — catch the progress log up with the branch.
+
+    Runs outside a stage, so it is the one place that can record work landed
+    before the log existed, or by a run whose planner did not write an entry.
+    """
+    log = cfg.plan_addendum_path or "the progress log"
     return [
         {
             "role": "user",
             "content": (
                 f"The branch {cfg.project_branch!r} carries work that "
-                f"{cfg.base_ref!r} does not. Find where the plan no longer "
-                "describes the repository.\n\n"
-                f"Use `git_diff` between {cfg.base_ref} and "
-                f"{cfg.project_branch} to see what changed. Then check the "
-                "plan's specific claims — counts, file lists, 'occurrences "
-                "across N files' — against the code as it is now, with "
-                "`search`. A count in a document is a claim about a moment; "
-                "the code is the fact.\n\n"
-                "Return `project_complete` with a `plan_note` for every claim "
-                "that no longer holds. Cite the search or the lines that show "
-                "it. Do not propose a stage — nothing is being built here.\n\n"
-                "Report only what you verified. A note nobody can check is "
-                "worse than none, because someone will act on it."
+                f"{cfg.base_ref!r} does not, and the progress log may not "
+                "record all of it. Catch the log up.\n\n"
+                f"**Read `{log}` first.** It is the record of what has already "
+                "been reported, and re-reporting something it covers is the "
+                "one way this pass does damage — a reader cannot tell a "
+                "duplicate from a second, independent confirmation.\n\n"
+                f"Then read the plan, starting at `{cfg.plan_root}` and the "
+                "documents it links. Use `git_diff` between "
+                f"{cfg.base_ref} and {cfg.project_branch} to see what the "
+                "branch actually did, and `search` to check the plan's "
+                "specific claims — counts, file lists, 'occurrences across N "
+                "files' — against the code as it is now. A count in a document "
+                "is a claim about the moment someone wrote it; the code is the "
+                "fact.\n\n"
+                "Return `project_complete` with a `plan_note` for each plan "
+                "step whose state the log does not yet reflect — work that has "
+                "been done, a count that has moved, a claim that was wrong "
+                "when written. State where the step stands now, as a total. Do "
+                "not propose a stage; nothing is being built here.\n\n"
+                "Report only what you verified against the code. A note nobody "
+                "can check is worse than none, because someone will act on it."
             ),
         }
     ]
