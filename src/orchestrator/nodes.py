@@ -404,6 +404,13 @@ def execute(state: RunState, rt: Runtime) -> dict:
         history_dir.mkdir(parents=True, exist_ok=True)
         result = rt.executor.run_agent_stage(stage, prompt, history_dir=history_dir)
 
+    if result.dropped_reads:
+        rt.log(
+            f"[execute] {stage.id}: withheld {len(result.dropped_reads)} "
+            f"reference file(s) to stay inside the read budget "
+            f"({', '.join(result.dropped_reads)})"
+        )
+
     rt.write_artifact(
         state["stage_index"], stage.id, state.get("revision", 0), attempt,
         "executor.log", result.log,

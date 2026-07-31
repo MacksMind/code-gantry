@@ -156,6 +156,90 @@ class TestAiderArgv:
         argv = build_aider_argv(stage, cfg, "p")
         assert argv[argv.index("--read") + 1] == "config/routes.rb"
 
+class TestReadContextBudget:
+    """Reference files are useful until they are the majority of the prompt.
+
+    The planner passes previously-converted files as worked examples, which is
+    sound and grows without bound: by the twelfth stage of one run it was
+    sending 4,636 lines of context to change six lines, 69,000 tokens a call.
+    Two costs, both measured on that run. Latency — attempts took 561s and 584s
+    against Aider's un-overridable 600s request timeout, so whether a stage
+    landed or appeared to hang turned on the generation rate that minute. And
+    accuracy — the same stage converted four of six sites, then three of six,
+    losing the task inside the reference material.
+
+    The controlled comparison is stage 10. Revision 0 carried 2,818 lines of
+    `--read` and stalled six times across three hours; the planner's redraw
+    passed one file, 39k tokens, and it landed in 120 seconds.
+    """
+
+    def _repo(self, tmp_path, sizes):
+        for name, lines in sizes.items():
+            p = tmp_path / name
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("x\n" * lines)
+        return tmp_path
+
+    def test_unset_budget_keeps_every_read_file(self, tmp_path):
+        # The default must not change behaviour for projects that are fine.
+        self._repo(tmp_path, {"a.rb": 100, "b.rb": 5000})
+        cfg, stage = cfg_with(
+            target_repo=str(tmp_path),
+            stage_overrides={"read_files": ["a.rb", "b.rb"]},
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert [argv[i + 1] for i, a in enumerate(argv) if a == "--read"] == ["a.rb", "b.rb"]
+
+    def test_the_largest_reference_goes_first(self, tmp_path):
+        # Dropping the biggest recovers the most context per file dropped, and
+        # the small ones are likelier to be the base class or the routes file
+        # that the stage genuinely needs.
+        self._repo(tmp_path, {"small.rb": 50, "mid.rb": 300, "huge.rb": 2000})
+        cfg, stage = cfg_with(
+            target_repo=str(tmp_path),
+            stage_overrides={"read_files": ["small.rb", "mid.rb", "huge.rb"]},
+            executor={"model": "m", "max_read_lines": 400},
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        kept = [argv[i + 1] for i, a in enumerate(argv) if a == "--read"]
+        assert kept == ["small.rb", "mid.rb"]
+
+    def test_a_budget_smaller_than_everything_drops_everything(self, tmp_path):
+        self._repo(tmp_path, {"a.rb": 900, "b.rb": 900})
+        cfg, stage = cfg_with(
+            target_repo=str(tmp_path),
+            stage_overrides={"read_files": ["a.rb", "b.rb"]},
+            executor={"model": "m", "max_read_lines": 10},
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert "--read" not in argv
+
+    def test_the_edited_file_is_never_budgeted_away(self, tmp_path):
+        # `edit_files` is the task. Only reference material is discretionary.
+        self._repo(tmp_path, {"target.rb": 5000, "ref.rb": 5000})
+        cfg, stage = cfg_with(
+            target_repo=str(tmp_path),
+            stage_overrides={"edit_files": ["target.rb"], "read_files": ["ref.rb"]},
+            executor={"model": "m", "max_read_lines": 10},
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert argv[argv.index("--file") + 1] == "target.rb"
+        assert "--read" not in argv
+
+    def test_an_unreadable_reference_is_kept(self, tmp_path):
+        # Same rule as the auto-test paths: act on evidence, not on its absence.
+        # A glob or a not-yet-created file has no line count, and guessing zero
+        # would let it through while guessing huge would drop it silently.
+        cfg, stage = cfg_with(
+            target_repo=str(tmp_path),
+            stage_overrides={"read_files": ["app/**/*.rb"]},
+            executor={"model": "m", "max_read_lines": 10},
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert argv[argv.index("--read") + 1] == "app/**/*.rb"
+
+
+class TestExtraArgs:
     def test_extra_args_are_appended(self):
         # Escape hatch: aider's flags change between releases, and an
         # operator must be able to correct them without a code change.

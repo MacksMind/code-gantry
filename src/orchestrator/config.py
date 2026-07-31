@@ -172,6 +172,25 @@ class ExecutorConfig(_EndpointConfig):
     # Repo map off by default: stages declare the files they need, and an
     # unscoped map swamps a local model's context before the task is stated.
     map_tokens: int = 0
+    # Ceiling on the total size of a stage's `read_files`, in lines. Unset means
+    # no ceiling, which is the old behaviour.
+    #
+    # `read_files` is reference material the planner chooses, and its natural
+    # instinct is to pass every already-converted file as a worked example. That
+    # set grows with every landed stage. Measured on the first real project: by
+    # the twelfth stage it was sending 4,636 lines to change six, 69,000 tokens
+    # a call, and the same stage converted four of six sites and then three of
+    # six — the task lost inside the reference material. Attempts took 561s and
+    # 584s against Aider's hardcoded, unreachable 600s request timeout, so
+    # whether a stage landed or looked like it hung came down to the generation
+    # rate that minute.
+    #
+    # The controlled comparison, from the same run: stage 10 revision 0 carried
+    # 2,818 lines of reads and stalled six times over three hours. The planner's
+    # redraw passed a single read file, 39k tokens, and it landed in 120s.
+    #
+    # `edit_files` is never trimmed — that is the task, not context.
+    max_read_lines: int | None = None
     # Let Aider run the project's tests inside its own edit loop, and try to
     # repair what fails. Off by default, and the default is load-bearing: the
     # orchestrator already runs the tests at a layer that knows about the

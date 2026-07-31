@@ -130,6 +130,11 @@ class ExecutionResult:
     # parse the model's reply. A different failure from a crash, and one the
     # retry should be told about precisely.
     unapplied_edit: bool = False
+    # Reference files withheld to keep inside `max_read_lines`. Reported rather
+    # than dropped quietly: a stage that behaves differently because it was
+    # shown less than it declared must say so, or the next person debugging it
+    # is reading a prompt the executor never received.
+    dropped_reads: list[str] = field(default_factory=list)
 
 
 def build_aider_argv(
@@ -198,7 +203,7 @@ def build_aider_argv(
 
     for glob in stage.edit_files:
         argv += ["--file", glob]
-    for glob in stage.read_files:
+    for glob in _within_read_budget(stage.read_files, cfg):
         argv += ["--read", glob]
 
     argv += list(ex.extra_args)
@@ -236,12 +241,15 @@ class Executor:
             # A missing key or endpoint variable. Failing here beats letting
             # Aider fail opaquely on auth, or calling the wrong endpoint.
             return ExecutionResult(ok=False, log=str(e.args[0]))
+        kept = set(_within_read_budget(stage.read_files, self.cfg))
         result = self.runner.run_argv(
             argv,
             timeout=self.cfg.limits.aider_timeout_seconds,
             env=env,
         )
-        return _classify_execution(result)
+        outcome = _classify_execution(result)
+        outcome.dropped_reads = [p for p in stage.read_files if p not in kept]
+        return outcome
 
     def run_script_stage(self, stage: Stage) -> ExecutionResult:
         result = self.runner.run(stage.command or "")
@@ -305,6 +313,61 @@ def _classify_execution(result) -> ExecutionResult:
         results=[result],
         unapplied_edit=unapplied,
     )
+
+
+def _read_lines(path: str, cfg: ProjectConfig) -> int | None:
+    """Lines in a reference file, or None when it cannot be counted.
+
+    None covers a glob, a path outside the repo, a binary blob — anything whose
+    size is not a plain fact. Callers must not substitute a number for it.
+    """
+    if any(ch in path for ch in "*?["):
+        return None
+    try:
+        target = cfg.target_repo / path
+        if not target.is_file():
+            return None
+        return sum(1 for _ in target.open("rb"))
+    except OSError:  # pragma: no cover - unreadable file behaves as uncountable
+        return None
+
+
+def _within_read_budget(read_files: list[str], cfg: ProjectConfig) -> list[str]:
+    """Trim reference files to `max_read_lines`, largest first.
+
+    Largest first because dropping the biggest recovers the most context per
+    file lost, and because the small ones are likelier to be the base class or
+    the routes file the stage actually needs — the big ones are the worked
+    examples that accumulate as a run proceeds.
+
+    Order is preserved among the survivors; only membership changes.
+
+    A file whose size cannot be established is kept. The alternative is to
+    invent a number for it, and inventing zero admits anything while inventing
+    a large one drops the routes file that was declared as a glob. This is the
+    same rule the auto-test paths follow: act on evidence, not on its absence.
+    """
+    budget = cfg.executor.max_read_lines
+    if budget is None or not read_files:
+        return list(read_files)
+
+    sizes = {p: _read_lines(p, cfg) for p in read_files}
+    total = sum(n for n in sizes.values() if n is not None)
+    if total <= budget:
+        return list(read_files)
+
+    # Drop measurable files, biggest first, until the rest fit.
+    dropped: set[str] = set()
+    for path, _ in sorted(
+        ((p, n) for p, n in sizes.items() if n is not None),
+        key=lambda item: item[1],
+        reverse=True,
+    ):
+        if total <= budget:
+            break
+        dropped.add(path)
+        total -= sizes[path] or 0
+    return [p for p in read_files if p not in dropped]
 
 
 def _runnable(path: str, stage: Stage, cfg: ProjectConfig) -> bool:
