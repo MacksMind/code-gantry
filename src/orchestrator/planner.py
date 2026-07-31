@@ -175,8 +175,14 @@ class PlannerResponse(BaseModel):
 
 @dataclass
 class PlannerUsage:
+    # Total input tokens, cached ones included — normalised to match the
+    # reviewer's OpenAI shape so one arithmetic works for both. See
+    # `_extract_usage`; the providers do not agree on what these words mean.
     prompt_tokens: int = 0
     cached_tokens: int = 0
+    # Billed above base rate, and worth seeing on its own: a run that writes the
+    # prefix and never reads it back is more expensive than not caching at all.
+    cache_write_tokens: int = 0
     completion_tokens: int = 0
 
 
@@ -208,6 +214,7 @@ def _add_usage(a: PlannerUsage, b: PlannerUsage) -> PlannerUsage:
     return PlannerUsage(
         prompt_tokens=a.prompt_tokens + b.prompt_tokens,
         cached_tokens=a.cached_tokens + b.cached_tokens,
+        cache_write_tokens=a.cache_write_tokens + b.cache_write_tokens,
         completion_tokens=a.completion_tokens + b.completion_tokens,
     )
 
@@ -367,11 +374,28 @@ def _build_anthropic_client(cfg: PlannerConfig):
 
 
 def _extract_usage(usage) -> PlannerUsage:
+    """Normalise Anthropic's counts to the shape the report assumes.
+
+    The two providers use the same words for different quantities. OpenAI's
+    `prompt_tokens` is the total and its cached count is a subset of it.
+    Anthropic reports three *disjoint* numbers: `input_tokens` is only what was
+    neither read from nor written to the cache, with reads and writes counted
+    separately.
+
+    Read as OpenAI's shape, that produced `Uncached prompt tokens: -2,438` and
+    a cache hit rate of 251% in a real report. So `prompt_tokens` here means
+    total input, and `cached_tokens` is the part of it that was a cache read —
+    which makes `prompt - cached` the uncached remainder for either provider.
+    """
     if usage is None:
         return PlannerUsage()
+    uncached = getattr(usage, "input_tokens", 0) or 0
+    read = getattr(usage, "cache_read_input_tokens", 0) or 0
+    written = getattr(usage, "cache_creation_input_tokens", 0) or 0
     return PlannerUsage(
-        prompt_tokens=getattr(usage, "input_tokens", 0) or 0,
-        cached_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
+        prompt_tokens=uncached + read + written,
+        cached_tokens=read,
+        cache_write_tokens=written,
         completion_tokens=getattr(usage, "output_tokens", 0) or 0,
     )
 

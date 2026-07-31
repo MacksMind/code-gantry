@@ -257,7 +257,11 @@ class TestMalformedResponseIsRetried:
         )
         client = SequenceClient([response(parsed=bad), response(parsed=good)])
         outcome = AnthropicPlanner(cfg(), client=client).plan(MESSAGES)
-        assert outcome.usage.prompt_tokens == 18_000
+        # 2 x (9,000 uncached + 8,500 cache read). prompt_tokens is total
+        # input, normalised to the reviewer's shape — Anthropic reports the
+        # cached read as a separate, disjoint count.
+        assert outcome.usage.prompt_tokens == 35_000
+        assert outcome.usage.cached_tokens == 17_000
         assert outcome.usage.completion_tokens == 800
 
     def test_a_good_response_costs_only_one_call(self):
@@ -304,7 +308,7 @@ class TestDefensiveHandling:
     def test_usage_survives_a_failure_path(self):
         # The report should still account for what the call cost.
         outcome, _ = plan_with(response(parsed=None, stop_reason="refusal"))
-        assert outcome.usage.prompt_tokens == 9000
+        assert outcome.usage.prompt_tokens == 17_500  # 9,000 uncached + 8,500 read
 
 
 class TestRequestShape:
@@ -447,3 +451,67 @@ class TestDeferrals:
 
         assert "deferred" not in PlannedStage.model_fields
         assert "deferred" not in PLANNER_WRITABLE_FIELDS
+
+
+class TestUsageNormalisation:
+    """Anthropic and OpenAI use the same words for different quantities.
+
+    OpenAI's `prompt_tokens` is the total and its cached count is a subset of
+    it. Anthropic's `input_tokens` is the *uncached* remainder, with cache reads
+    and cache writes reported as two further disjoint counts. Treating them the
+    same way printed `Uncached prompt tokens: -2,438` and `251%` in a real
+    report — on the one metric the whole economic argument rests on.
+
+    So `prompt_tokens` is normalised here to mean total input, for both.
+    """
+
+    def test_total_input_includes_the_cached_read(self):
+        from orchestrator.planner import _extract_usage
+
+        class U:
+            input_tokens = 1613
+            cache_read_input_tokens = 4051
+            cache_creation_input_tokens = 0
+            output_tokens = 300
+
+        usage = _extract_usage(U())
+        assert usage.prompt_tokens == 5664
+        assert usage.cached_tokens == 4051
+
+    def test_uncached_is_never_negative(self):
+        from orchestrator.planner import _extract_usage
+
+        class U:
+            input_tokens = 1613
+            cache_read_input_tokens = 4051
+            cache_creation_input_tokens = 0
+            output_tokens = 300
+
+        usage = _extract_usage(U())
+        assert usage.prompt_tokens - usage.cached_tokens == 1613
+
+    def test_cache_writes_are_counted_and_kept_separate(self):
+        # Anthropic bills a cache write above base rate, so a run that writes
+        # the prefix and never reads it is worse than not caching at all. That
+        # has to be visible rather than absent.
+        from orchestrator.planner import _extract_usage
+
+        class U:
+            input_tokens = 1632
+            cache_read_input_tokens = 0
+            cache_creation_input_tokens = 4051
+            output_tokens = 300
+
+        usage = _extract_usage(U())
+        assert usage.cache_write_tokens == 4051
+        assert usage.prompt_tokens == 5683
+        assert usage.cached_tokens == 0
+
+    def test_a_missing_field_is_zero_not_an_error(self):
+        from orchestrator.planner import _extract_usage
+
+        class U:
+            input_tokens = 100
+            output_tokens = 10
+
+        assert _extract_usage(U()).prompt_tokens == 100
