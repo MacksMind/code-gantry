@@ -174,6 +174,13 @@ class TestTwoStageProject:
         log = g._out("log", "--pretty=%s", "-3")
         assert "[one]" in log and "[two]" in log
 
+        # One commit per stage, counted rather than sampled. A project with
+        # `plan_addendum_path` set adds a second commit per stage that produced
+        # observations — deliberately separate, so the commit the reviewer
+        # approved and the suite went green on stays exactly what landed. This
+        # config has no addendum, so the count here is the bare invariant.
+        assert len(g._out("log", "--oneline", "main..proj").splitlines()) == 2
+
     def test_child_branches_are_deleted_after_landing(self, repo, tmp_path, fake_aider):
         fake_aider.write_text(json.dumps([{"app.py": "a\n"}]))
         planner = ScriptedPlanner([

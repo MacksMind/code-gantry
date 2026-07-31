@@ -962,3 +962,37 @@ class TestTheAddendumIsNotTheExecutorsToWrite:
         out = verify(repo, cfg, stage, sha)
         assert not out.passed
         assert out.failed_layer is Layer.SCOPE
+
+
+class TestAnUncommittedAddendumWouldPoisonTheNextStage:
+    """Why the addendum is committed at once rather than at the end of a run.
+
+    Batching the commits would be tidier — one commit per landed stage is a
+    stated property, and a note-heavy run doubles the commit count. But the
+    file is written into the working tree, and the next stage's scope guard
+    diffs the working tree against its start sha. An uncommitted addendum
+    therefore shows up as a plan document modified by a stage that never
+    touched it, and the stage fails for something the orchestrator did.
+    """
+
+    def test_an_uncommitted_addendum_fails_the_next_stage(self, repo):
+        (repo / "docs" / "addendum").mkdir(parents=True, exist_ok=True)
+        (repo / "docs" / "plan.md").write_text("# Plan\n")
+        g = Git(repo)
+        g.commit_all("plan")
+        sha = g.head_sha()
+
+        cfg, stage = build(
+            repo,
+            stage_overrides={"edit_files": ["app.py"]},
+            plan_root="docs/plan.md",
+            plan_addendum_path="docs/addendum",
+        )
+        # The stage does its own work...
+        edit(repo)
+        # ...and the orchestrator left an addendum behind, uncommitted.
+        (repo / "docs" / "addendum" / "plan-addendum.md").write_text("# Notes\n")
+
+        out = verify(repo, cfg, stage, sha)
+        assert not out.passed
+        assert out.failed_layer is Layer.SCOPE
