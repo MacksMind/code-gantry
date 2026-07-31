@@ -596,5 +596,14 @@ class TestDeferredPlanSteps:
             completed=[],
             deferred=[{"plan_step": "Audit CloudWatch logs", "reason": "no creds"}],
         )
+        # Not in the cached prefix: the deferred list changes as the run
+        # proceeds, and holding it there evicted the plan and the layout with
+        # it on every change. It must still reach the planner, just later.
         leading = messages[0]["content"][0]["text"]
-        assert "Audit CloudWatch logs" in leading
+        assert "Audit CloudWatch logs" not in leading
+        rest = "".join(
+            m["content"] if isinstance(m["content"], str)
+            else "".join(b["text"] for b in m["content"])
+            for m in messages[1:]
+        )
+        assert "Audit CloudWatch logs" in rest

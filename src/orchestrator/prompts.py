@@ -308,17 +308,26 @@ def build_planner_messages(
     `src/calculator.py` at a repository containing `src/calc.py`, took a scope
     violation on stage one, and spent half its intervention budget recovering.
     """
+    # Only what is fixed for the whole run. The plan is read once at base_ref
+    # and the layout once at base_sha; neither changes while the run does.
     leading = _plan_block(plan)
     if layout:
         leading += "\n\n## What the repository contains\n\n" + layout
-    leading += "\n\n" + _history_block(completed)
-    leading += "\n\n" + _deferred_block(deferred)
+
+    # The completed history and the deferred list used to live in here too, and
+    # both change as the run proceeds — so every landed stage and every deferral
+    # re-billed the plan and the layout along with them. Measured: two planner
+    # calls a minute apart, each writing ~91,000 tokens and reading back 4,051,
+    # which was the system block, the only part that had not changed. They now
+    # follow the breakpoint, costing full price for their own few hundred
+    # tokens rather than taking ninety thousand down with them.
+    situational = _history_block(completed) + "\n\n" + _deferred_block(deferred)
 
     # The breakpoint, and the reason the ordering above exists. Anthropic
-    # caching is explicit: without this marker the plan snapshot, the repository
-    # layout and the completed history are re-billed in full on every planner
-    # call, which is most of the prompt and the entire economic argument for
-    # calling a paid model at checkpoints.
+    # caching is explicit: without this marker the plan snapshot and the
+    # repository layout are re-billed in full on every planner call, which is
+    # most of the prompt and the entire economic argument for calling a paid
+    # model at checkpoints.
     #
     # It goes here and nowhere else. A breakpoint after content that changes
     # between calls would invalidate the cache every time, which costs more than
@@ -336,7 +345,9 @@ def build_planner_messages(
         }
     ]
 
-    current: list[str] = []
+    # History and deferrals lead the situational half: they are the run's state
+    # rather than its instructions, and the planner reads them before deciding.
+    current: list[str] = [situational]
 
     if status_tail:
         current.append(

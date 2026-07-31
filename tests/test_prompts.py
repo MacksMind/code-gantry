@@ -368,3 +368,70 @@ class TestTheCachedPrefixSurvivesALandedStage:
             for m in self.a_review(completed=landed)
         )
         assert "earlier" in text
+
+
+class TestThePlannerPrefixAlsoSurvivesALanding:
+    """Same defect as the reviewer's, one file over.
+
+    `leading` held the plan, the repository layout, the completed history and
+    the deferred list, all under one breakpoint. The first two are fixed for a
+    run; the last two change every time a stage lands or a step is deferred —
+    so each landing re-billed the plan and the layout with them.
+
+    Measured: two consecutive planner calls a minute apart, each writing ~91,000
+    tokens to cache and reading back 4,051 — the small system block, which is
+    the only thing that had not changed.
+    """
+
+    def test_the_plan_and_layout_are_marked(self):
+        from orchestrator.prompts import build_planner_messages
+
+        messages = build_planner_messages(
+            cfg=None, plan=a_plan("PLAN_TEXT"), completed=[], layout="LAYOUT_TEXT"
+        )
+        marked = messages[0]["content"][-1]
+        assert "PLAN_TEXT" in marked["text"]
+        assert "LAYOUT_TEXT" in marked["text"]
+        assert "cache_control" in marked
+
+    def test_the_history_is_outside_the_marked_block(self):
+        from orchestrator.prompts import build_planner_messages
+
+        landed = [{"id": "earlier", "index": 0, "merge_sha": "abc123"}]
+        messages = build_planner_messages(
+            cfg=None, plan=a_plan(), completed=landed, layout="L"
+        )
+        assert "earlier" not in leading_text(messages)
+
+    def test_the_prefix_is_identical_before_and_after_a_landing(self):
+        from orchestrator.prompts import build_planner_messages
+
+        before = build_planner_messages(cfg=None, plan=a_plan(), completed=[], layout="L")
+        after = build_planner_messages(
+            cfg=None, plan=a_plan(), completed=[{"id": "x", "index": 0}], layout="L"
+        )
+        assert before[0] == after[0]
+
+    def test_a_deferral_does_not_evict_the_plan_either(self):
+        from orchestrator.prompts import build_planner_messages
+
+        before = build_planner_messages(cfg=None, plan=a_plan(), completed=[], layout="L")
+        after = build_planner_messages(
+            cfg=None, plan=a_plan(), completed=[], layout="L",
+            deferred=[{"plan_step": "aws", "reason": "no access"}],
+        )
+        assert before[0] == after[0]
+
+    def test_the_history_still_reaches_the_planner(self):
+        from orchestrator.prompts import build_planner_messages
+
+        landed = [{"id": "earlier", "index": 0, "merge_sha": "abc123"}]
+        messages = build_planner_messages(
+            cfg=None, plan=a_plan(), completed=landed, layout="L"
+        )
+        text = "".join(
+            m["content"] if isinstance(m["content"], str)
+            else "".join(b["text"] for b in m["content"])
+            for m in messages
+        )
+        assert "earlier" in text
