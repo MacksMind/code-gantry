@@ -138,13 +138,12 @@ def reconcile(slug: str, dry_run: bool) -> None:
 
     A run's `plan_notes` catch drift as it happens. This is for drift that
     already happened — work landed before the mechanism existed, or by hand, or
-    by someone else. The planner diffs the project branch against `base_ref`,
-    checks the plan against the repository, and reports what no longer holds.
+    by someone else.
 
     Deliberately separate from `run`. Reconciling is a judgement about what the
     work has become, and doing it mid-run would let a run rewrite its own
-    premises. This changes no plan document either: it appends observations for
-    a later pass to fold in.
+    premises. It changes no plan document either: it appends observations for a
+    later pass to fold in.
     """
     project = ProjectPaths(slug)
     cfg = _load(project.config)
@@ -168,48 +167,33 @@ def reconcile(slug: str, dry_run: bool) -> None:
         f"{cfg.project_branch}"
     )
 
-    outcome = planner.plan(
-        [
-            {
-                "role": "user",
-                "content": (
-                    f"The branch {cfg.project_branch!r} carries work that "
-                    f"{cfg.base_ref!r} does not. Your job is to find where the "
-                    "plan no longer describes the repository.\n\n"
-                    f"Start with `git_diff` between {cfg.base_ref} and "
-                    f"{cfg.project_branch} to see what changed. Then check the "
-                    "plan's specific claims — counts, file lists, 'occurrences "
-                    "across N files' — against the code as it is now, using "
-                    "`search`. A count in a document is a claim about a moment; "
-                    "the code is the fact.\n\n"
-                    "Return `project_complete` with a `plan_note` for every "
-                    "claim that no longer holds. Cite the search or the lines "
-                    "that show it. Do not propose a stage — nothing is being "
-                    "built here.\n\n"
-                    "Report only what you verified. A note nobody can check is "
-                    "worse than none, because someone will act on it."
-                ),
-            }
-        ]
-    )
+    outcome = planner.plan(_reconcile_prompt(cfg))
+
+    # A failed call is not a verdict. This was learned the hard way: an expired
+    # API key produced `blocked` with an empty tool log, which the first
+    # version of this code read as "the planner chose not to look" — and I
+    # wrote a retry, and a commit message calling the planner stochastic, on
+    # three data points that were all 401s.
+    if outcome.failed:
+        raise click.ClickException(f"the planner could not be reached: {outcome.reasoning}")
 
     for line in outcome.tool_calls:
         click.echo(f"  {line}")
 
-    # An answer reached without looking is not an answer. Observed: the same
-    # command against the same repository produced six cited observations on
-    # one call and "no drift" on the next, the second having made zero tool
-    # calls. Recording that as "checked, nothing found" would be worse than
-    # recording nothing, because it reads as evidence.
+    # An answer reached without looking is not an answer, whichever way it
+    # went. Recording "checked, nothing found" would be worse than recording
+    # nothing: it reads as evidence and stops anyone looking again.
     if not outcome.tool_calls:
         raise click.ClickException(
             "the planner answered without reading anything, so its verdict is "
-            "worth nothing — whether it said drift or no drift. Run it again."
+            "worth nothing either way. Nothing was written."
         )
 
     if not outcome.plan_notes:
-        click.echo("\nno drift found; the plan still describes the repository")
-        click.echo(f"(reached after {len(outcome.tool_calls)} read(s))")
+        click.echo(
+            f"\nno drift found, after {len(outcome.tool_calls)} read(s); "
+            "the plan still describes the repository"
+        )
         return
 
     click.echo(f"\n{len(outcome.plan_notes)} observation(s):")
@@ -236,6 +220,31 @@ def reconcile(slug: str, dry_run: bool) -> None:
         "Not committed: read it, then commit it yourself. Folding these into "
         "the plan documents is a separate judgement."
     )
+
+
+def _reconcile_prompt(cfg: ProjectConfig) -> list[dict]:
+    """The reconcile instruction."""
+    return [
+        {
+            "role": "user",
+            "content": (
+                f"The branch {cfg.project_branch!r} carries work that "
+                f"{cfg.base_ref!r} does not. Find where the plan no longer "
+                "describes the repository.\n\n"
+                f"Use `git_diff` between {cfg.base_ref} and "
+                f"{cfg.project_branch} to see what changed. Then check the "
+                "plan's specific claims — counts, file lists, 'occurrences "
+                "across N files' — against the code as it is now, with "
+                "`search`. A count in a document is a claim about a moment; "
+                "the code is the fact.\n\n"
+                "Return `project_complete` with a `plan_note` for every claim "
+                "that no longer holds. Cite the search or the lines that show "
+                "it. Do not propose a stage — nothing is being built here.\n\n"
+                "Report only what you verified. A note nobody can check is "
+                "worse than none, because someone will act on it."
+            ),
+        }
+    ]
 
 
 @main.command()

@@ -227,3 +227,47 @@ class TestAnUnverifiedVerdictIsRefused:
         assert result.exit_code == 0
         assert "no drift" in result.output
         assert "1 read(s)" in result.output
+
+
+class TestAFailedCallIsNotAVerdict:
+    """An unreachable planner is not a planner with nothing to say.
+
+    An expired API key produced `blocked` with an empty tool log. The first
+    version of this command read that as "the planner chose not to look", and
+    a retry and a confident commit message were built on three data points
+    that were all 401s. The two states must be distinguishable here or the
+    same mistake is available to anyone reading the output.
+    """
+
+    def test_a_transport_failure_says_so(self, project, monkeypatch):
+        stub = stub_planner(monkeypatch, [])
+        monkeypatch.setattr(
+            type(stub), "plan",
+            lambda self, m: PlannerOutcome(
+                verdict="blocked",
+                reasoning="the planner call failed: Error code: 401",
+                status_entry="e",
+                plan_notes=[],
+                tool_calls=[],
+                failed=True,
+            ),
+        )
+        result = CliRunner().invoke(cli.main, ["reconcile", "demo"])
+        assert result.exit_code != 0
+        assert "could not be reached" in result.output
+        assert "401" in result.output
+        # And emphatically not the other message.
+        assert "without reading anything" not in result.output
+
+    def test_a_real_toolless_answer_still_reports_as_one(self, project, monkeypatch):
+        stub = stub_planner(monkeypatch, [])
+        monkeypatch.setattr(
+            type(stub), "plan",
+            lambda self, m: PlannerOutcome(
+                verdict="project_complete", reasoning="looks fine",
+                status_entry="e", plan_notes=[], tool_calls=[], failed=False,
+            ),
+        )
+        result = CliRunner().invoke(cli.main, ["reconcile", "demo"])
+        assert result.exit_code != 0
+        assert "without reading anything" in result.output
