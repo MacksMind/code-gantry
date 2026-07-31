@@ -271,3 +271,42 @@ class TestReviewerCacheControls:
         client = StubClient(response(parsed=ReviewVerdict(verdict="approved", summary="ok", issues=[])))
         OpenAIReviewer(cfg_with().reviewer, client=client).review(MESSAGES)
         assert "prompt_cache_retention" not in client.calls[0]
+
+
+class TestCacheWriteAccounting:
+    """Writes are billed above base rate and were not being counted.
+
+    Measured on gpt-5.6-sol: six calls with an identical ~55k-token prefix,
+    every one reporting cache_write_tokens ~55,500 and cached_tokens 0. The
+    report showed "0 cached, 0%", which reads as "caching is not helping" when
+    the truth is "caching is actively costing extra".
+    """
+
+    def test_the_write_count_is_read_from_the_details(self):
+        from orchestrator.reviewer import _extract_usage
+
+        class Details:
+            cached_tokens = 0
+            cache_write_tokens = 55_500
+
+        class Usage:
+            prompt_tokens = 55_503
+            completion_tokens = 200
+            prompt_tokens_details = Details()
+
+        usage = _extract_usage(Usage())
+        assert usage.cache_write_tokens == 55_500
+        assert usage.cached_tokens == 0
+
+    def test_a_provider_that_omits_it_is_zero(self):
+        from orchestrator.reviewer import _extract_usage
+
+        class Details:
+            cached_tokens = 100
+
+        class Usage:
+            prompt_tokens = 1000
+            completion_tokens = 10
+            prompt_tokens_details = Details()
+
+        assert _extract_usage(Usage()).cache_write_tokens == 0

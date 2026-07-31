@@ -119,6 +119,39 @@ class TestParsingWhatFailed:
         compiled = re.compile(RSPEC_PATTERN, re.MULTILINE)
         assert compiled.groups == 1
 
+    def test_ansi_colour_does_not_hide_the_path(self):
+        """Test output reaching us is not always plain text.
+
+        The real project's runner ends with:
+
+            grep $'^\033\\[31m' log/failing_specs.log || true
+
+        so every locator on our stdout arrives wrapped in a red SGR sequence.
+        A pattern anchored at `^rspec` then matches nothing, the gate silently
+        falls back to re-running the whole suite, and on this project that cost
+        a reviewer-approved stage: the fallback tripped over a different
+        order-dependent spec and the work was reset.
+
+        Stripping escapes belongs here rather than in each project's regex —
+        terminal colour is a property of terminals, not of a codebase.
+        """
+        coloured = (
+            "Failed examples:\n\n"
+            "\x1b[31mrspec './spec/requests/checkout_spec.rb[1:1:1:1]'\x1b[0m # Checkout\n"
+        )
+        assert failed_files(coloured, RSPEC_PATTERN) == [
+            "spec/requests/checkout_spec.rb"
+        ]
+
+    def test_a_coloured_and_a_plain_line_are_the_same_file(self):
+        # Both forms appear in one run: the runner echoes coloured lines at the
+        # end and rspec prints plain ones per worker.
+        text = (
+            "\x1b[31mrspec './spec/a_spec.rb[1:1]'\x1b[0m # x\n"
+            "rspec ./spec/a_spec.rb:12 # x\n"
+        )
+        assert failed_files(text, RSPEC_PATTERN) == ["spec/a_spec.rb"]
+
     def test_no_pattern_configured_yields_nothing(self):
         # There is no shipped default: an unconfigured project falls back to
         # re-running the whole suite rather than guessing at a runner.

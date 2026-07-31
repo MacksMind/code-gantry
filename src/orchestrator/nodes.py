@@ -578,6 +578,22 @@ def review(state: RunState, rt: Runtime) -> dict:
     result = rt.runner.run(rt.cfg.full_test_command)
     seconds = result.duration_seconds
 
+    if not result.ok:
+        # Persisted before anything acts on it. This is the most expensive
+        # failure in the loop — the stage is already approved and a rejection
+        # here resets the work — and it was the one output nobody kept. Its
+        # absence cost an afternoon: the flake gate silently stopped matching,
+        # and the only copy of the evidence was a file the very next run
+        # truncated.
+        rt.write_artifact(
+            state.get("stage_index", 0),
+            stage.id,
+            state.get("revision", 0),
+            _attempt(state),
+            "full-suite.log",
+            f"{result.summary()}\n\n{result.output}",
+        )
+
     if result.signal is not None:
         # The stage is already approved and its diff is already correct. Reading
         # a killed suite as a rejection would send correct work back for rework,

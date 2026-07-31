@@ -59,6 +59,17 @@ class FlakeVerdict:
         return self.results[-1].output if self.results else ""
 
 
+# CSI sequences: colour, cursor moves, anything a runner emits for a terminal.
+# Stripped before matching because a pattern anchored at the start of a line
+# cannot see past them, and the failure is silent — the gate just stops finding
+# anything and falls back to re-running everything.
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+def strip_ansi(text: str) -> str:
+    return _ANSI.sub("", text)
+
+
 def failed_files(output: str, pattern: str | None) -> list[str]:
     """The distinct files that failed, in order, deduplicated.
 
@@ -71,7 +82,7 @@ def failed_files(output: str, pattern: str | None) -> list[str]:
         return []
     seen: set[str] = set()
     out: list[str] = []
-    for match in re.findall(pattern, output, re.MULTILINE):
+    for match in re.findall(pattern, strip_ansi(output), re.MULTILINE):
         path = normalize(match if isinstance(match, str) else match[0])
         if path and path not in seen:
             seen.add(path)

@@ -815,3 +815,32 @@ class TestOperatorPause:
         rt.paths.pause_flag.write_text("")
         nodes.plan(state, rt)
         assert planner.calls == []
+
+    def test_a_red_full_suite_is_kept_on_disk(self, repo, tmp_path):
+        """The most expensive failure in the loop, and nobody kept its output.
+
+        A rejection here resets reviewer-approved work, so it is the one
+        failure that most needs explaining afterwards. It was also the only
+        command whose output went nowhere — when the flake gate silently
+        stopped matching, the sole copy of the evidence was a file the next run
+        truncated.
+        """
+        cfg, rt, state = make(
+            repo, tmp_path,
+            full_test_command="echo 'DIAGNOSTIC MARKER'; exit 1",
+            scoped_test_command="true {paths}",
+        )
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("changed\n")
+        nodes.review(state, rt)
+        logs = list(rt.paths.run_dir.glob("stages/*/full-suite.log"))
+        assert logs, "the failing full suite should leave an artifact"
+        assert "DIAGNOSTIC MARKER" in logs[0].read_text()
+
+    def test_a_green_full_suite_writes_nothing(self, repo, tmp_path):
+        # Nothing to diagnose, and the output is megabytes.
+        cfg, rt, state = make(repo, tmp_path, full_test_command="echo fine")
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("changed\n")
+        nodes.review(state, rt)
+        assert not list(rt.paths.run_dir.glob("stages/*/full-suite.log"))

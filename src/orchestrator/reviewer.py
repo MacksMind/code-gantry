@@ -43,6 +43,11 @@ class TokenUsage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cached_tokens: int = 0
+    # Last, so positional construction keeps working. Written to cache but not
+    # read back: billed above base rate, so a run that writes on every call and
+    # reads on none is paying a premium for nothing — which is exactly what
+    # gpt-5.6-sol was measured doing, six calls, ~55k written each, zero read.
+    cache_write_tokens: int = 0
 
     @property
     def uncached_prompt_tokens(self) -> int:
@@ -67,6 +72,7 @@ class ReviewOutcome:
             "usage": {
                 "prompt_tokens": self.usage.prompt_tokens,
                 "cached_tokens": self.usage.cached_tokens,
+                "cache_write_tokens": self.usage.cache_write_tokens,
                 "completion_tokens": self.usage.completion_tokens,
             },
             "client_failure": self.failed,
@@ -194,6 +200,9 @@ def _extract_usage(usage) -> TokenUsage:
         prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
         completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
         cached_tokens=(getattr(details, "cached_tokens", 0) or 0) if details else 0,
+        cache_write_tokens=(
+            (getattr(details, "cache_write_tokens", 0) or 0) if details else 0
+        ),
     )
 
 
