@@ -417,8 +417,8 @@ def execute(state: RunState, rt: Runtime) -> dict:
         rt,
         layer="tests",
         summary=f"the executor {what}",
-        feedback=f"The previous attempt's executor {what}:\n{result.log}{advice}",
-        detail=result.log,
+        feedback=f"The previous attempt's executor {what}:\n{_clip(result.log)}{advice}",
+        detail=_clip(result.log),
     )
 
 

@@ -394,7 +394,11 @@ class TestScopedTestCommand:
     def test_includes_planner_declared_paths(self, repo):
         # Changing a model should run specs that exercise it without touching
         # them, and the planner knows which those are.
-        sha = Git(repo).head_sha()
+        g = Git(repo)
+        (repo / "spec" / "models").mkdir(parents=True, exist_ok=True)
+        (repo / "spec" / "models" / "order_spec.rb").write_text("x\n")
+        g.commit_all("spec")
+        sha = g.head_sha()
         edit(repo, "app.py")
         cfg, stage = build(
             repo,
@@ -494,9 +498,9 @@ class TestDirectoryScopedRunsGoParallel:
         )
         assert resolve_test_command(stage, cfg, Git(repo), sha) == "rspec spec/controllers"
 
-    def test_a_declared_path_that_does_not_exist_is_not_a_directory(self, repo):
-        # The planner can name a path that is not there; that is the scoped
-        # command's problem to report, not a reason to fan out workers.
+    def test_a_declared_path_that_does_not_exist_never_reaches_a_command(self, repo):
+        # It is dropped before the directory question is asked, so neither
+        # command runs against a path that is not there.
         sha = Git(repo).head_sha()
         edit(repo, "app.py")
         cfg, stage = build(
@@ -504,8 +508,9 @@ class TestDirectoryScopedRunsGoParallel:
             {"test_paths": ["spec/nope"]},
             scoped_test_command="rspec {paths}",
             directory_test_command="parallel_rspec {paths}",
+            test_command="rspec-all",
         )
-        assert resolve_test_command(stage, cfg, Git(repo), sha) == "rspec spec/nope"
+        assert resolve_test_command(stage, cfg, Git(repo), sha) == "rspec-all"
 
 
 class TestChecks:
@@ -624,7 +629,11 @@ class TestRequireScopedTests:
         assert "test_paths" in out.feedback
 
     def test_declared_test_paths_satisfy_it(self, repo):
-        sha = Git(repo).head_sha()
+        g = Git(repo)
+        (repo / "spec").mkdir(exist_ok=True)
+        (repo / "spec" / "thing_spec.rb").write_text("x\n")
+        g.commit_all("spec")  # it has to exist to be declarable
+        sha = g.head_sha()
         edit(repo)
         cfg, stage = build(
             repo,
@@ -632,6 +641,20 @@ class TestRequireScopedTests:
             scoped_test_command="true {paths}",
         )
         assert verify(repo, cfg, stage, sha).passed
+
+    def test_a_declared_path_that_does_not_exist_does_not_satisfy_it(self, repo):
+        # Naming a spec that is not there is not identifying the specs that
+        # prove the stage; it is the unscoped case wearing a disguise.
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(
+            repo,
+            {"require_scoped_tests": True, "test_paths": ["spec/imagined_spec.rb"]},
+            scoped_test_command="true {paths}",
+        )
+        out = verify(repo, cfg, stage, sha)
+        assert not out.passed
+        assert out.route is Route.PLANNER
 
     def test_editing_a_spec_satisfies_it(self, repo):
         sha = Git(repo).head_sha()
@@ -753,3 +776,80 @@ class TestProgressAfterAFlakyMergeGate:
         digest = verify(repo, cfg, stage, sha).diff_digest
         out = verify(repo, cfg, stage, sha, previous_diff_digest=digest)
         assert out.failed_layer is Layer.PROGRESS
+
+
+class TestDeclaredTestPathsAreResolved:
+    """The planner writes globs, and an unmatched glob is not a test failure.
+
+    Live: the planner declared
+
+        spec/controllers/**/*schedule*  spec/controllers/**/*billing*  ...
+
+    which we substituted verbatim. The shell passed the unmatched literals to
+    rspec, which died in 3.1 seconds — and verify read that as the stage's
+    tests failing and charged it to the executor's retry budget. Three seconds
+    is not a test run on a 2,335-example suite, and nothing noticed.
+
+    Globs are legitimate declarative input; the planner cannot know which paths
+    exist. Resolving them against the filesystem is our job.
+    """
+
+    def test_a_glob_is_expanded_to_real_files(self, repo):
+        g = Git(repo)
+        (repo / "spec").mkdir(exist_ok=True)
+        (repo / "spec" / "a_schedule_spec.rb").write_text("x\n")
+        (repo / "spec" / "b_billing_spec.rb").write_text("x\n")
+        g.commit_all("specs")  # committed, so they arrive by declaration only
+        sha = g.head_sha()
+        edit(repo, "app.py")
+        cfg, stage = build(
+            repo,
+            {"test_paths": ["spec/**/*schedule*"]},
+            scoped_test_command="rspec {paths}",
+        )
+        command = resolve_test_command(stage, cfg, Git(repo), sha)
+        assert "spec/a_schedule_spec.rb" in command
+        assert "b_billing_spec" not in command
+
+    def test_a_glob_matching_nothing_is_dropped(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo, "app.py")
+        cfg, stage = build(
+            repo,
+            {"test_paths": ["spec/**/*nothing_here*"]},
+            scoped_test_command="rspec {paths}",
+            test_command="rspec-all",
+        )
+        # Nothing identifiable to scope to, so the full command rather than a
+        # command that will die on a literal asterisk.
+        assert resolve_test_command(stage, cfg, Git(repo), sha) == "rspec-all"
+
+    def test_a_plain_path_that_does_not_exist_is_dropped(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo, "app.py")
+        cfg, stage = build(
+            repo,
+            {"test_paths": ["spec/imagined_spec.rb"]},
+            scoped_test_command="rspec {paths}",
+            test_command="rspec-all",
+        )
+        assert resolve_test_command(stage, cfg, Git(repo), sha) == "rspec-all"
+
+    def test_a_real_directory_survives(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo, "app.py")
+        (repo / "spec" / "controllers").mkdir(parents=True, exist_ok=True)
+        cfg, stage = build(
+            repo,
+            {"test_paths": ["spec/controllers"]},
+            scoped_test_command="rspec {paths}",
+        )
+        assert "spec/controllers" in resolve_test_command(stage, cfg, Git(repo), sha)
+
+    def test_paths_from_the_diff_are_trusted_unchanged(self, repo):
+        # git named them, so they exist; a deleted spec is the scope guard's
+        # business rather than something to silently drop here.
+        sha = Git(repo).head_sha()
+        edit(repo, "spec/touched_spec.rb", "x\n")
+        cfg, stage = build(repo, scoped_test_command="rspec {paths}")
+        assert "spec/touched_spec.rb" in resolve_test_command(stage, cfg, Git(repo), sha)

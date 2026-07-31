@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from pathlib import Path
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -463,12 +464,41 @@ def resolve_test_command(
     return cfg.test_command
 
 
+def _resolve_declared(paths: list[str], repo: Path) -> list[str]:
+    """Turn the planner's declared paths into ones that exist.
+
+    The planner writes globs, and it should: it cannot know the repository's
+    file list, so `spec/controllers/**/*billing*` is a reasonable way to say
+    "the billing controller specs". But an unmatched glob substituted into a
+    command reaches the test runner as a literal asterisk, and rspec dies on it
+    in three seconds — which verify then reads as the stage's tests failing and
+    charges to the executor's retry budget. Three seconds is not a test run,
+    and nothing noticed.
+
+    So globs are expanded here and anything that does not exist is dropped.
+    Dropping everything is fine: `resolve_test_command` falls back to the full
+    command, which is slow but true.
+    """
+    out: list[str] = []
+    for raw in paths:
+        path = (raw or "").strip()
+        if not path:
+            continue
+        if any(ch in path for ch in "*?["):
+            out.extend(
+                sorted(str(m.relative_to(repo)) for m in repo.glob(path))
+            )
+        elif (repo / path).exists():
+            out.append(path)
+    return out
+
+
 def _scoped_test_paths(
     stage: Stage, cfg: ProjectConfig, git: Git, stage_start_sha: str
 ) -> list[str]:
     changed = git.diff_names(stage_start_sha)
     from_diff = [p for p in changed if matches_any(p, cfg.test_file_patterns)]
-    declared = [p for p in stage.test_paths if p]
+    declared = _resolve_declared(stage.test_paths, cfg.target_repo)
     # Deduplicate while preserving order, diff first: those definitely exist.
     seen: set[str] = set()
     out: list[str] = []

@@ -91,6 +91,15 @@ UNAPPLIED_EDIT_MARKERS = (
     "reflections allowed, stopping",
 )
 
+# ...but Aider prints those markers when *any* block fails, including when
+# others applied and were committed. An 18-site sweep applied 11 of them,
+# committed three files, and was recorded as a failed attempt — sending the run
+# round execute -> execute -> execute without ever reaching verify, landing more
+# edits each pass and never testing them. Whether the attempt did *enough* is
+# the scope guard's, the suite's and the reviewer's question; the wrapper's job
+# is only to say whether it did anything.
+APPLIED_EDIT_MARKER = "Applied edit to"
+
 # Aider's client library requires *some* key for an `openai/`-prefixed model,
 # even when the endpoint it is pointed at serves without auth. The `sk-` prefix
 # satisfies any naive format check along the way.
@@ -231,16 +240,7 @@ class Executor:
             timeout=self.cfg.limits.aider_timeout_seconds,
             env=env,
         )
-        unapplied = result.ok and any(
-            marker in result.output for marker in UNAPPLIED_EDIT_MARKERS
-        )
-        return ExecutionResult(
-            ok=result.ok and not unapplied,
-            log=result.output,
-            timed_out=result.timed_out,
-            results=[result],
-            unapplied_edit=unapplied,
-        )
+        return _classify_execution(result)
 
     def run_script_stage(self, stage: Stage) -> ExecutionResult:
         result = self.runner.run(stage.command or "")
@@ -285,3 +285,22 @@ class Executor:
         if api_base:
             env["OPENAI_API_BASE"] = api_base
         return env
+
+
+def _classify_execution(result) -> ExecutionResult:
+    """Did the attempt apply anything, and did the editor complain?
+
+    Both can be true at once, and that case is the common one on a multi-site
+    stage: some blocks match, some do not. Only "complained and applied
+    nothing" is a failed attempt.
+    """
+    complained = any(marker in result.output for marker in UNAPPLIED_EDIT_MARKERS)
+    applied = APPLIED_EDIT_MARKER in result.output
+    unapplied = result.ok and complained and not applied
+    return ExecutionResult(
+        ok=result.ok and not unapplied,
+        log=result.output,
+        timed_out=result.timed_out,
+        results=[result],
+        unapplied_edit=unapplied,
+    )

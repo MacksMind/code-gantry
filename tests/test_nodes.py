@@ -73,11 +73,13 @@ class StubExecutor:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text)
 
+    log: str = "executor log"
+
     def run_agent_stage(self, stage, prompt, history_dir=None):
         self.prompts.append(prompt)
         self.history_dirs.append(history_dir)
         self._apply()
-        return ExecutionResult(ok=self.ok, log="executor log", timed_out=self.timed_out)
+        return ExecutionResult(ok=self.ok, log=self.log, timed_out=self.timed_out)
 
     def run_script_stage(self, stage):
         self._apply()
@@ -923,3 +925,34 @@ class TestPlannerArtifactRecordsCacheWrites:
             next(rt.paths.run_dir.glob("stages/*/planner.json")).read_text()
         )
         assert written["usage"]["cache_write_tokens"] == 3_600
+
+
+class TestExecutorFeedbackIsBounded:
+    """A 98KB executor log must not become the next prompt.
+
+    CommandRunner used to cap output at 20,000 characters, which bounded
+    `result.log` incidentally. Raising that cap so the flake gate could see a
+    whole test run removed the bound, and a real attempt produced 97,883
+    characters of Aider transcript that went verbatim into the next executor
+    prompt and into planner feedback.
+    """
+
+    def test_a_huge_executor_log_is_clipped_into_feedback(self, repo, tmp_path):
+        executor = StubExecutor(repo=repo, ok=False)
+        executor.log = "X" * 200_000
+        cfg, rt, state = make(repo, tmp_path, executor=executor)
+        state = with_stage(state, rt)
+        out = nodes.execute(state, rt)
+        joined = "".join(out.get("review_feedback") or [])
+        assert len(joined) < 20_000, "feedback must be bounded"
+        assert "truncated" in joined
+
+    def test_the_artifact_keeps_the_whole_log(self, repo, tmp_path):
+        # Bounded where it is used, whole where it is read afterwards.
+        executor = StubExecutor(repo=repo, ok=False)
+        executor.log = "Y" * 200_000
+        cfg, rt, state = make(repo, tmp_path, executor=executor)
+        state = with_stage(state, rt)
+        nodes.execute(state, rt)
+        logs = list(rt.paths.run_dir.glob("stages/*/executor.log"))
+        assert logs and len(logs[0].read_text()) > 150_000

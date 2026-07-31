@@ -533,3 +533,66 @@ class TestAiderCommitsAreNotSigned:
             capture_output=True, text=True,
         ).stdout
         assert before == after
+
+
+class TestPartiallyAppliedEdits:
+    """Some blocks failing is not the same as nothing applying.
+
+    Aider prints "The LLM did not conform to the edit format" when *any*
+    SEARCH/REPLACE block fails to match, even when others applied and were
+    committed. Treating that as a failed attempt sent the run round
+    execute -> execute -> execute without ever reaching verify, while each pass
+    landed more edits.
+
+    Observed live on an 18-site sweep: attempt 0 applied 11 sites across three
+    files, committed them, and was recorded as having produced nothing.
+
+    Applied edits mean the attempt did something, so it goes to verify — where
+    the scope guard, the tests and the reviewer are equipped to judge whether
+    it did *enough*. That judgement was never the executor wrapper's to make.
+    """
+
+    def result(self, log):
+        from orchestrator.commands import CommandResult
+
+        return CommandResult(
+            command="aider", exit_code=0, stdout=log, stderr="", duration_seconds=1.0
+        )
+
+    def test_applied_edits_alongside_failures_are_not_a_failed_attempt(self):
+        from orchestrator.executor import _classify_execution
+
+        log = (
+            "Applied edit to app/controllers/a.rb\n"
+            "Commit bcf7276 refactor: ...\n"
+            "The LLM did not conform to the edit format.\n"
+            "# 7 SEARCH/REPLACE blocks failed to match!\n"
+        )
+        outcome = _classify_execution(self.result(log))
+        assert outcome.ok
+        assert not outcome.unapplied_edit
+
+    def test_nothing_applied_is_still_a_failed_attempt(self):
+        from orchestrator.executor import _classify_execution
+
+        log = (
+            "The LLM did not conform to the edit format.\n"
+            "# 2 SEARCH/REPLACE blocks failed to match!\n"
+        )
+        outcome = _classify_execution(self.result(log))
+        assert not outcome.ok
+        assert outcome.unapplied_edit
+
+    def test_a_clean_run_is_unremarkable(self):
+        from orchestrator.executor import _classify_execution
+
+        outcome = _classify_execution(self.result("Applied edit to a.rb\n"))
+        assert outcome.ok
+        assert not outcome.unapplied_edit
+
+    def test_exhausted_reflections_with_no_edits_still_fails(self):
+        from orchestrator.executor import _classify_execution
+
+        log = "Only 3 reflections allowed, stopping.\n"
+        outcome = _classify_execution(self.result(log))
+        assert not outcome.ok
