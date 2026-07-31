@@ -151,6 +151,9 @@ class RunState(TypedDict, total=False):
     status: Status
     escalation_reason: str | None
     resuming: bool
+    # Set by `resume` from the stage branch: does the interrupted stage already
+    # have commits? Decides whether an interrupted attempt is re-run or checked.
+    stage_has_work: bool
     next_hop: str
 
 
@@ -325,6 +328,13 @@ def resume_entry_point(state: RunState) -> str:
         # came, and precheck would re-run it unrevised and discard the
         # diagnosis. Hand it back to the planner.
         return "plan"
-    # Interrupted mid-run with no recorded failure: nothing to verify, so pick
-    # up where the stage was.
-    return "precheck" if state.get("current") else "plan"
+    # Interrupted mid-run with no recorded failure. Whether there is anything
+    # to verify depends on whether the executor got far enough to commit: the
+    # caller sets `stage_has_work` from the stage branch. With work on the
+    # branch, verify it — running the executor again over a finished stage is
+    # how a completed stage spent ten minutes looping, with nothing left to do
+    # and no way for the model to say so. Without work, pick up where the
+    # stage was.
+    if state.get("current"):
+        return "verify" if state.get("stage_has_work") else "precheck"
+    return "plan"

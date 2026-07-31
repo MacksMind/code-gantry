@@ -235,3 +235,52 @@ class TestDeferralMerge:
         existing = [{"plan_step": "a"}, {"plan_step": "b"}]
         out = merge_deferrals(existing, [{"plan_step": "a", "reason": "again"}])
         assert [d["plan_step"] for d in out] == ["a", "b"]
+
+
+class TestResumingAnInterruptedStage:
+    """An interrupted run may still have landed work.
+
+    `resume_entry_point` sent a resume with no recorded failure to precheck, on
+    the reasoning that an interruption leaves "nothing to verify". That holds
+    when the kill landed before the executor applied anything. It does not hold
+    when the stage branch already carries commits — and then precheck runs the
+    executor again over work that is already done.
+
+    Observed live: a stage whose edits were complete and committed was killed
+    mid-attempt, resumed, and sent straight back to the executor — which spent
+    ten minutes looping because there was nothing left for it to do and Aider's
+    prompt gives it no way to say so.
+    """
+
+    def test_an_interrupted_stage_with_work_goes_to_verify(self):
+        from orchestrator.state import resume_entry_point
+
+        assert resume_entry_point(
+            {"resuming": True, "current": {"id": "s"}, "stage_has_work": True}
+        ) == "verify"
+
+    def test_an_interrupted_stage_without_work_still_goes_to_precheck(self):
+        from orchestrator.state import resume_entry_point
+
+        assert resume_entry_point(
+            {"resuming": True, "current": {"id": "s"}, "stage_has_work": False}
+        ) == "precheck"
+
+    def test_a_recorded_failure_still_wins(self):
+        # An escalation says where to re-enter; that is more specific than
+        # "there are commits on the branch".
+        from orchestrator.state import resume_entry_point
+
+        assert resume_entry_point(
+            {
+                "resuming": True,
+                "current": {"id": "s"},
+                "stage_has_work": True,
+                "failure_layer": "planner",
+            }
+        ) == "plan"
+
+    def test_no_stage_in_flight_goes_to_the_planner(self):
+        from orchestrator.state import resume_entry_point
+
+        assert resume_entry_point({"resuming": True, "stage_has_work": False}) == "plan"

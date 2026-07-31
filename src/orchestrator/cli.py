@@ -29,7 +29,7 @@ import click
 from orchestrator.approval import approval_problem, config_hash, record_approval
 from orchestrator.config import ConfigError, ProjectConfig, load_config
 from orchestrator.discover import derive_target_repo, draft_config
-from orchestrator.gitops import Git
+from orchestrator.gitops import Git, GitError
 from orchestrator.graph import build_graph, open_checkpointer, recursion_limit
 from orchestrator.plandoc import resolve_plan_tree, snapshot_tree
 from orchestrator.planner import make_planner
@@ -286,6 +286,11 @@ def resume(run_id: str) -> None:
                 "resuming": True,
                 "next_hop": "",
                 "session_started_at": time.time(),
+                # Did the interrupted stage get far enough to commit? If so the
+                # resume verifies that work rather than asking the executor to
+                # redo it — asked to redo a finished stage, it has nothing to
+                # produce and no way to say so.
+                "stage_has_work": _stage_has_work(git, saved),
             },
         )
     finally:
@@ -363,6 +368,18 @@ def _load(config_path: Path) -> ProjectConfig:
     except ConfigError as e:
         click.echo(f"config problems in {config_path}:\n{e}", err=True)
         sys.exit(EXIT_FAILED)
+
+
+def _stage_has_work(git: Git, saved: dict) -> bool:
+    """Does the interrupted stage branch carry commits beyond its baseline?"""
+    start = saved.get("stage_start_sha")
+    branch = saved.get("stage_branch")
+    if not start or not branch:
+        return False
+    try:
+        return bool(git.diff_names(start))
+    except GitError:
+        return False
 
 
 def _load_state(cfg, project, paths, run_id) -> dict | None:
