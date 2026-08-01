@@ -584,3 +584,36 @@ class TestTheHistoryShowsWhatStagesCostTheExecutor:
         # render as a zero the planner could read as "free".
         history = self._history([{"index": 0, "id": "s1", "instruction": "did it"}])
         assert "context" not in history.lower()
+
+
+class TestTheReviewerIsToldWhatTheEditorDoes:
+    """One exemption, stated by the tool rather than by each project.
+
+    Aider normalises the final newline of every file it writes. On a file
+    committed without one that produces a diff hunk no model chose and no
+    instruction can suppress — so a reviewer enforcing scope to the letter
+    rejects correct work, the executor reproduces it, and the stage burns its
+    whole rework budget before reaching the planner. Observed exactly once,
+    costing three attempts at fifteen correct edits.
+
+    A per-project override was considered and rejected: it would not stop the
+    change, only guarantee the rejection, permanently. And the real guard is
+    already in place and made of evidence rather than prose — if a final
+    newline broke something, the full suite is red at the merge gate and the
+    stage does not land.
+    """
+
+    def test_the_exemption_is_stated(self):
+        from orchestrator.prompts import REVIEW_SYSTEM_PROMPT
+
+        text = REVIEW_SYSTEM_PROMPT.lower()
+        assert "final newline" in text
+        assert "no newline at end of file" in text
+
+    def test_it_is_narrow(self):
+        # Not a licence on whitespace generally. Everything else about it stays
+        # the reviewer's to judge, which is the difference between an exemption
+        # and a hole.
+        from orchestrator.prompts import REVIEW_SYSTEM_PROMPT
+
+        assert "anything else about whitespace" in REVIEW_SYSTEM_PROMPT

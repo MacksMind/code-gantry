@@ -47,6 +47,15 @@ Return one of three verdicts:
   freely when the problem is upstream of the executor rather than grinding
   through rework attempts on an instruction that cannot be satisfied.
 
+One change is never a scope violation: a file gaining a missing final newline.
+The executor's editor normalises every file it writes, so this appears on any
+file that was committed without one, no model chose it, and no instruction can
+prevent it. Rejecting it does not stop it happening — it only sends correct
+work back to an executor that will produce the same diff again. Ignore the
+hunk and judge the rest. This covers exactly a `\\ No newline at end of file`
+marker disappearing, in a file the stage was already permitted to edit;
+anything else about whitespace is yours to judge as usual.
+
 Judge only the diff you are shown, against the stage you are given.\
 """
 
