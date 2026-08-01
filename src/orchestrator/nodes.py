@@ -481,6 +481,30 @@ def execute(state: RunState, rt: Runtime) -> dict:
     if result.ok:
         return {"next_hop": "verify", **measured}
 
+    # An unapplied edit on a tree that has changed is not a failed attempt.
+    # The editor reports every block it could not apply, including ones it
+    # could not apply *because the work was already there* — verbatim, "the
+    # REPLACE lines are already in Gemfile!". A model that emits one good block
+    # and two redundant ones therefore lands the change and is recorded as
+    # having produced nothing.
+    #
+    # Observed twice on the same stage. The gem removal committed the edit,
+    # was retried, committed it again, and burned ten to fifteen minutes an
+    # attempt re-doing finished work — the first time costing the stage its
+    # whole budget and an escalation whose stated cause was wrong.
+    #
+    # So ask the tree. If the diff since the stage started is non-empty, hand
+    # it to verify: the gates exist to judge a tree, and they are better at it
+    # than a report from the editor about its own blocks. If the tree really is
+    # untouched, nothing below changes.
+    if result.unapplied_edit and not result.timed_out:
+        if rt.git.diff_names(state["stage_start_sha"]):
+            rt.log(
+                f"[execute] {stage.id}: the editor could not apply part of its "
+                "reply, but the tree has changed — verifying what is there"
+            )
+            return {"next_hop": "verify", **measured}
+
     if result.timed_out:
         what = "timed out"
         advice = ""

@@ -1689,3 +1689,70 @@ class TestResumingIsConsumedNotRemembered:
             "with the flag consumed, an identical redo is caught again"
         )
         assert again["next_hop"] == "plan"
+
+
+class TestAnUnappliedEditOnAChangedTree:
+    """The editor reports blocks it could not apply — including redundant ones.
+
+    Aider names every SEARCH block that did not match, and one reason a block
+    does not match is that the work is already there: verbatim, "the REPLACE
+    lines are already in Gemfile!". A model that emits one good block and two
+    redundant ones lands the change and is recorded as having produced nothing.
+
+    Observed twice on one stage. The gem removal committed its edit, was
+    retried, committed it again, and spent ten to fifteen minutes an attempt
+    redoing finished work — the first time costing the stage its entire budget
+    and producing an escalation whose stated cause was wrong.
+
+    So the tree is asked, not the editor's account of itself.
+    """
+
+    def _executor(self, repo, edits):
+        ex = StubExecutor(repo=repo, edits=edits)
+        ex.ok = False
+        return ex
+
+    def test_a_changed_tree_goes_to_verify(self, repo, tmp_path):
+        executor = self._executor(repo, [("app.py", "the edit landed\n")])
+        cfg, rt, state = make(repo, tmp_path, executor=executor)
+        state = with_stage(state, rt)
+
+        def unapplied(stage, prompt, history_dir=None):
+            executor._apply()
+            return ExecutionResult(ok=False, log="already in Gemfile", unapplied_edit=True)
+
+        executor.run_agent_stage = unapplied
+        out = nodes.execute(state, rt)
+        assert out["next_hop"] == "verify", (
+            "the gates judge a tree better than the editor judges its own blocks"
+        )
+
+    def test_an_untouched_tree_still_fails(self, repo, tmp_path):
+        # The genuine case: nothing applied, nothing to verify. Unchanged.
+        executor = StubExecutor(repo=repo, edits=[])
+        executor.run_agent_stage = lambda *a, **k: ExecutionResult(
+            ok=False, log="no blocks matched", unapplied_edit=True
+        )
+        cfg, rt, state = make(repo, tmp_path, executor=executor)
+        state = with_stage(state, rt)
+        out = nodes.execute(state, rt)
+        assert out["next_hop"] == "execute"
+        assert "could not apply" in " ".join(out["review_feedback"])
+
+    def test_a_timeout_is_never_reinterpreted(self, repo, tmp_path):
+        # A stage killed mid-write may have a changed tree and half an edit.
+        # Only a completed reply earns the benefit of the doubt.
+        executor = StubExecutor(repo=repo, edits=[("app.py", "half\n")])
+
+        def timed_out(stage, prompt, history_dir=None):
+            executor._apply()
+            return ExecutionResult(
+                ok=False, log="killed", timed_out=True, unapplied_edit=True
+            )
+
+        executor.run_agent_stage = timed_out
+        cfg, rt, state = make(repo, tmp_path, executor=executor)
+        state = with_stage(state, rt)
+        out = nodes.execute(state, rt)
+        assert out["next_hop"] == "execute"
+        assert "timed out" in " ".join(out["review_feedback"])
