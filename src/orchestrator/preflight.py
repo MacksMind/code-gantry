@@ -90,6 +90,7 @@ def run_preflight(
         return checks
 
     checks.extend(_plan_checks(cfg, git))
+    checks.append(_read_budget_check(cfg, git))
     checks.extend(_endpoint_checks(cfg))
     if check_endpoint:
         checks.extend(check_executor_endpoint(cfg))
@@ -171,6 +172,76 @@ def _repo_checks(cfg: ProjectConfig, git: Git, *, for_resume: bool) -> list[Chec
         )
 
     return checks
+
+
+def _read_budget_check(cfg: ProjectConfig, git: Git) -> Check:
+    """Which files can never be supplied to the executor as reference.
+
+    `read_files` is capped in total by `executor.max_read_lines`. A file longer
+    than that cap on its own cannot be delivered in any stage, by any planner,
+    in any combination — it is not a tail that got trimmed to fit, it is a
+    structural impossibility that the loop rediscovers on every attempt.
+
+    Observed: a 1,443-line model was declared as reference against a 1,200-line
+    budget, withheld identically on six consecutive stages, and logged each
+    time as though it were a sizing decision. Nothing could learn from it,
+    because nothing was variable.
+
+    A warning rather than a failure. The operator may well be content for large
+    files to be unreachable — the budget exists because unbounded context
+    degraded this executor — and the right response is a decision made once,
+    not a run that refuses to start.
+    """
+    cap = cfg.executor.max_read_lines
+    if not cap:
+        return Check("read budget", True, "no ceiling on read_files")
+
+    ref = cfg.project_branch if git.branch_exists(cfg.project_branch) else cfg.base_ref
+    try:
+        paths = git.tracked_paths(git.rev_parse(ref))
+    except GitError as e:  # pragma: no cover - the repo checks caught this already
+        return Check("read budget", True, f"could not enumerate tracked files: {e}")
+
+    oversized: list[tuple[str, int]] = []
+    for path in paths:
+        full = cfg.target_repo / path
+        try:
+            with full.open("rb") as fh:
+                head = fh.read(8192)
+                # git's own heuristic. Without it this reports .psd and .eps
+                # fixtures at the top, which nobody would pass as reference,
+                # and the warning reads as noise rather than as the two large
+                # source files it is actually about.
+                if b"\0" in head:
+                    continue
+                lines = head.count(b"\n") + sum(
+                    chunk.count(b"\n") for chunk in iter(lambda: fh.read(65536), b"")
+                )
+        except OSError:
+            continue
+        if lines > cap:
+            oversized.append((path, lines))
+
+    if not oversized:
+        return Check("read budget", True, f"every tracked file fits in {cap} lines")
+
+    # Smallest first, not largest. The biggest file over the line is usually a
+    # fixture nobody would cite; the ones just over it are the plausible
+    # references, and they are what a new ceiling would actually recover.
+    oversized.sort(key=lambda item: item[1])
+    listed = ", ".join(f"{path} ({lines})" for path, lines in oversized[:3])
+    return Check(
+        "read budget",
+        False,
+        f"max_read_lines is {cap}; {len(oversized)} tracked file(s) exceed it "
+        f"on their own and can never be supplied as read_files, however the "
+        f"planner combines them. Closest to the line: {listed}"
+        + (", …" if len(oversized) > 3 else "")
+        + f". Raising the ceiling past {oversized[0][1]} would recover the "
+        "first of them; leaving it means they are withheld silently, on every "
+        "attempt of every stage that asks for one.",
+        fatal=False,
+    )
 
 
 def _plan_checks(cfg: ProjectConfig, git: Git) -> list[Check]:

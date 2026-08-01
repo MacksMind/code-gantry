@@ -413,3 +413,78 @@ class TestCredentialsAreActuallyTested:
 
         exc = type("E", (Exception,), {"status_code": 429})("slow down")
         assert _credential_check("planner", self._client(exc)).ok
+
+
+class TestFilesTooLargeToEverBeReference:
+    """`read_files` is capped in total, so a file over the cap is unreachable.
+
+    Not a tail that got trimmed to fit — a structural impossibility, in every
+    stage, for any planner, in any combination. Observed: a 1,443-line model
+    declared against a 1,200-line budget, withheld identically on six
+    consecutive stages and logged each time as though it were a sizing
+    decision. Nothing could learn from it because nothing was variable.
+
+    A warning, not a failure. The budget exists because unbounded context
+    degraded the executor, so an operator may well accept that large files are
+    unreachable — the point is that they decide it once, knowingly.
+    """
+
+    def _repo(self, tmp_path, run_git, files):
+        repo = tmp_path / "target"
+        repo.mkdir()
+        run_git(repo, "init", "-q", "-b", "main")
+        run_git(repo, "config", "user.email", "t@example.com")
+        run_git(repo, "config", "user.name", "T")
+        run_git(repo, "config", "commit.gpgsign", "false")
+        for name, lines in files.items():
+            (repo / name).write_text("x\n" * lines)
+        (repo / "PLAN.md").write_text("# Plan")
+        run_git(repo, "add", "-A")
+        run_git(repo, "commit", "-qm", "init")
+        return repo
+
+    def _check(self, repo, cap):
+        from orchestrator.gitops import Git
+        from orchestrator.preflight import _read_budget_check
+
+        cfg = parse_config({
+            "target_repo": str(repo), "base_ref": "main", "project_branch": "proj",
+            "plan_root": "PLAN.md", "test_command": "true",
+            "executor": {"model": "m", "max_read_lines": cap},
+            "planner": {"model": "claude-opus-5"}, "reviewer": {"model": "gpt-5.5"},
+        })
+        return _read_budget_check(cfg, Git(repo))
+
+    def test_it_warns_without_blocking(self, tmp_path, run_git):
+        repo = self._repo(tmp_path, run_git, {"big.rb": 300})
+        check = self._check(repo, 100)
+        assert not check.ok
+        assert not check.blocking, "an operator may accept this; it must not refuse to start"
+
+    def test_a_repo_that_fits_says_so(self, tmp_path, run_git):
+        repo = self._repo(tmp_path, run_git, {"small.rb": 10})
+        assert self._check(repo, 100).ok
+
+    def test_no_ceiling_is_not_a_problem(self, tmp_path, run_git):
+        repo = self._repo(tmp_path, run_git, {"big.rb": 5000})
+        assert self._check(repo, None).ok
+
+    def test_it_names_the_files_closest_to_the_line(self, tmp_path, run_git):
+        # Not the largest. The biggest file over the cap is usually a fixture
+        # nobody would cite; the ones just over it are the plausible references
+        # and the ones a new ceiling would recover.
+        repo = self._repo(
+            tmp_path, run_git,
+            {"just_over.rb": 110, "enormous_fixture.txt": 9000},
+        )
+        detail = self._check(repo, 100).detail
+        assert "just_over.rb (110)" in detail
+        assert detail.index("just_over.rb") < detail.index("enormous_fixture.txt")
+        assert "past 110" in detail
+
+    def test_binary_files_are_skipped(self, tmp_path, run_git):
+        repo = self._repo(tmp_path, run_git, {"code.rb": 10})
+        (repo / "blob.bin").write_bytes(b"\0" * 400_000)
+        run_git(repo, "add", "-A")
+        run_git(repo, "commit", "-qm", "blob")
+        assert self._check(repo, 100).ok, "a binary blob is not a candidate reference"

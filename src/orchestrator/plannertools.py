@@ -75,12 +75,20 @@ READ_TOOLS: list[dict[str, Any]] = [
     {
         "name": "search",
         "description": (
-            "Search tracked files for a regular expression. Returns "
-            "path:line:text.\n\n"
-            "Use this to count things and to find exact identifiers. When a "
-            "plan document states how many occurrences exist, that is a claim "
+            "Search tracked files for a regular expression, over the working "
+            "tree as it stands. Returns path:line:text.\n\n"
+            "Exact, current, and authoritative. Use it to count occurrences "
+            "and to find identifiers you can already name. When a plan "
+            "document states how many of something exist, that is a claim "
             "about the code as it was when someone wrote it down; this tool is "
-            "the code as it is. Where they disagree, the code wins."
+            "the code as it is. Where they disagree, the code wins.\n\n"
+            "Its limit is that it can only find what you can already spell. A "
+            "sweep is only as complete as the list of patterns you thought to "
+            "search for — so when the question is *what else is like this*, or "
+            "*is my list complete*, that is `semantic_search`, not this. "
+            "Observed: a removal was declared finished after searching for the "
+            "five spellings the plan named, and the sixth kind of usage — one "
+            "nobody had listed — broke the build."
         ),
         "input_schema": {
             "type": "object",
@@ -128,16 +136,28 @@ SEMANTIC_TOOL: dict[str, Any] = {
     "name": "semantic_search",
     "description": (
         "Find code by meaning rather than by name. Returns ranked "
-        "path:start-end citations with a two-line snippet.\n\n"
-        "Use it when you do not know what the code is called — 'where is the "
-        "CSV feed built' when the method is named `feed`. It ranks by "
-        "similarity, so it always returns its closest guesses even when "
-        "nothing relevant exists.\n\n"
-        "Two things it cannot do. It is not an existence check: use "
-        "list_files. And it is not evidence: every result is a pointer into a "
-        "file, so read the lines before you rely on them. Its index includes "
-        "plan documents, which state claims about the code that may be out of "
-        "date."
+        "path:start-end citations with a score and a two-line snippet.\n\n"
+        "Ask it questions phrased as behaviour or concept, not as names: "
+        "'where is the CSV feed built' when the method is called `feed`. Its "
+        "best use is the question `search` cannot answer — **have I found "
+        "every kind of this?** Before declaring a sweep complete, or before "
+        "trusting a plan document's list of call sites, ask for the concept "
+        "and see whether anything comes back that your patterns did not "
+        "match.\n\n"
+        "Do not reach for it merely because an identifier is unfamiliar. If "
+        "you can spell the thing, `search` is faster and exact.\n\n"
+        "Three limits. It ranks by similarity and always returns its closest "
+        "guesses, so a result is not evidence that anything matched — judge by "
+        "whether the snippets answer the question, never by rank or by the "
+        "fact that something came back. It is not an existence check: use "
+        "`list_files`. And it is not proof of content: every result is a "
+        "pointer, so `read_file` the lines before relying on them.\n\n"
+        "It searches an index the project maintains separately from the "
+        "repository, so it is a snapshot rather than the current tree, and how "
+        "closely it tracks the code is a property of that project rather than "
+        "of this tool. Use it to find out what exists; confirm what the code "
+        "says with `search` or `read_file`. The index includes plan documents, "
+        "which state claims about the code that may be out of date."
     ),
     "input_schema": {
         "type": "object",
