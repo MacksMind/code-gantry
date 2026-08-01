@@ -1636,3 +1636,56 @@ class TestTheWithoutLandingBudgetIsTerminalAndSaysSo:
         rt, state = self._stuck(repo, tmp_path)
         nodes.plan(state, rt)
         assert rt.planner.calls == [], "the budget must stop the call, not judge it"
+class TestResumingIsConsumedNotRemembered:
+    """`resuming` means "this step", not "this run has been resumed once".
+
+    Nothing cleared it. `cli.resume` set it true and it stayed true, so every
+    later reader saw a run that was permanently mid-resume. The progress layer
+    treats it as a hard bypass:
+
+        if ctx.resuming:
+            return None
+
+    so one resume disabled "the attempt reproduced the previous diff exactly"
+    for the rest of the run. Observed: a stage produced byte-identical diffs on
+    two attempts, both rejected for the same reason, and the guard whose whole
+    job is to redraw such a stage never fired — the repetition was put down to
+    a stuck reviewer.
+    """
+
+    def test_precheck_consumes_it(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        state = with_stage(state, rt)
+        state = {**state, "resuming": True, "stage_branch": None}
+        assert nodes.precheck(state, rt)["resuming"] is False
+
+    def test_verify_consumes_it(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("changed\n")
+        out = nodes.verify({**state, "resuming": True}, rt)
+        assert out["resuming"] is False
+
+    def test_the_progress_guard_works_again_on_the_next_attempt(
+        self, repo, tmp_path
+    ):
+        """The behaviour the leak suppressed.
+
+        A resumed run verifies once under the exemption — re-entering at verify
+        is re-checking a human's fix, not repeating an attempt — and after that
+        an identical diff must route to the planner as it always did.
+        """
+        cfg, rt, state = make(repo, tmp_path)
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("changed\n")
+
+        first = nodes.verify({**state, "resuming": True}, rt)
+        state = {**state, **first}
+        assert state["resuming"] is False, "the exemption is spent"
+
+        # The executor reproduces the previous diff exactly.
+        again = nodes.verify(state, rt)
+        assert again.get("failure_layer") == "progress", (
+            "with the flag consumed, an identical redo is caught again"
+        )
+        assert again["next_hop"] == "plan"

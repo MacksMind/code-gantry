@@ -356,7 +356,10 @@ def precheck(state: RunState, rt: Runtime) -> dict:
     if stage is None:  # pragma: no cover - graph never routes here without one
         return {"next_hop": "plan"}
 
-    update: dict = {}
+    # Cleared here as well as in verify: a resume re-enters at plan, precheck
+    # or verify, and plan always routes onward through precheck — so between
+    # the two, every path consumes it exactly once.
+    update: dict = {"resuming": False}
     rt.log(f"[precheck] stage {stage.id} revision {state.get('revision', 0)}")
 
     for command in stage.preconditions:
@@ -539,6 +542,15 @@ def verify(state: RunState, rt: Runtime) -> dict:
         _record_flakes(rt, stage.id, outcome.flaky_files, outcome.flaky_seeds)
 
     accumulated = {
+        # Consumed here. `resuming` means "this is the first step after a
+        # resume", and every reader treats it that way — but nothing cleared
+        # it, so it meant "this run has been resumed at some point" and stayed
+        # true forever. The progress layer treats it as a hard bypass, so a
+        # single resume disabled "the attempt reproduced the previous diff
+        # exactly" for the remainder of the run. Observed: a stage produced
+        # byte-identical diffs on two attempts, both rejected for the same
+        # reason, and the guard that exists to redraw such a stage never fired.
+        "resuming": False,
         "flake_reruns": state.get("flake_reruns", 0) + outcome.flake_reruns,
         "flaky_files": _merge_flaky(state, outcome.flaky_files),
         "test_seconds": state.get("test_seconds", 0.0) + outcome.test_seconds,
