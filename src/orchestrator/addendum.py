@@ -74,7 +74,55 @@ def heading_at(text: str, line: int) -> str:
     return ""
 
 
-def resolve_header(ref: str, read_plan) -> tuple[str, str]:
+_NOISE = re.compile(r"[`*_>#\[\]]")
+
+
+def _normalise(text: str) -> str:
+    """Markdown punctuation and whitespace removed, for comparing quotes."""
+    return " ".join(_NOISE.sub("", text or "").split()).casefold()
+
+
+def quotes_the_range(supersedes: str, span: str) -> bool:
+    """Does the quoted plan text actually appear in the lines cited?
+
+    The check the whole scheme rests on. A line reference is only better than
+    a quotation because it is verifiable, and nothing verified it: the first
+    two notes written under the new format both cited real files, real
+    in-range lines, and the wrong place entirely — one pointed the
+    `ApplicationRecord` item at a `render text:` bullet forty lines away. Both
+    passed a "does this range exist" check, which is all there was.
+
+    The note already carries the evidence to catch that. `supersedes` is what
+    the planner says the plan currently states, `plan_ref` is where it says it
+    states it, and the two have to agree.
+
+    Deliberately tolerant, because the failure being caught is gross. A quote
+    lightly reworded, with an ellipsis, or with different markdown emphasis is
+    still the same passage; a quote from a different section shares almost
+    nothing. So: normalise, allow an ellipsis to split a quote into parts, and
+    accept a part when most of its substantial words are present.
+    """
+    hay = _normalise(span)
+    if not hay:
+        return False
+    for part in re.split(r"\.{3}|…", supersedes or ""):
+        needle = _normalise(part)
+        # Too short to be evidence in either direction — a handful of common
+        # words appears in any prose, and flagging on it would train the reader
+        # to ignore the warning.
+        if len(needle) < 12:
+            continue
+        if needle in hay:
+            continue
+        words = [w for w in needle.split() if len(w) > 3]
+        if not words:
+            continue
+        if sum(1 for w in words if w in hay) / len(words) < 0.6:
+            return False
+    return True
+
+
+def resolve_citation(ref: str, supersedes: str, read_plan) -> tuple[str, str]:
     """(header, problem) for a citation, without ever discarding the note.
 
     A bad citation costs a header. It must not cost the observation: the
@@ -93,10 +141,20 @@ def resolve_header(ref: str, read_plan) -> tuple[str, str]:
         return "", f"`{path}` is not readable in the plan at this commit"
     if text is None:
         return "", f"`{path}` is not readable in the plan at this commit"
-    total = len(text.splitlines())
-    if start > total:
-        return "", f"`{path}` has {total} lines; L{start} is past the end"
-    return heading_at(text, start), ""
+    body = text.splitlines()
+    if start > len(body):
+        return "", f"`{path}` has {len(body)} lines; L{start} is past the end"
+
+    header = heading_at(text, start)
+    if supersedes and not quotes_the_range(supersedes, "\n".join(body[start - 1 : end])):
+        # The header still stands — it is genuinely the section at those lines.
+        # Saying so alongside the mismatch is more use to whoever folds this
+        # than withholding it, since the point is that the two disagree.
+        return header, (
+            f"L{start}-L{end} of `{path}` do not contain the quoted text; the "
+            "reference and the quotation disagree"
+        )
+    return header, ""
 
 
 def _entry(note: dict, stage_id: str, read_plan=None, plan_sha: str = "") -> str:
@@ -116,7 +174,9 @@ def _entry(note: dict, stage_id: str, read_plan=None, plan_sha: str = "") -> str
     ref = (note.get("plan_ref") or "").strip()
     header, problem = ("", "")
     if ref and read_plan is not None:
-        header, problem = resolve_header(ref, read_plan)
+        header, problem = resolve_citation(
+            ref, note.get("supersedes") or "", read_plan
+        )
 
     title = header or note.get("plan_step") or "(unattributed)"
     if ref:

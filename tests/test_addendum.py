@@ -215,3 +215,87 @@ class TestTheHeadingIsLiftedFromThePlan:
             read_plan=self.plan, plan_sha="a3f19c2",
         )
         assert "not readable in the plan at this commit" in written.read_text()
+
+
+class TestTheCitationAndTheQuotationMustAgree:
+    """A reference is only better than a quotation because it is checkable.
+
+    Nothing checked it. The first three notes written under the reference
+    format all cited a real file and a real in-range line span, and all three
+    pointed somewhere else — one aimed the `ApplicationRecord` item at a
+    `render text:` bullet forty lines away. Every one passed the only test
+    there was, "does this range exist".
+
+    The note carries the evidence to catch it: `supersedes` is what the planner
+    says the plan states, `plan_ref` is where it says so, and they have to
+    agree.
+    """
+
+    PLAN = (
+        "# Plan\n\n## Models\n\n"
+        "Add `ApplicationRecord` base class, migrate models in batches.\n\n"
+        "## Rendering\n\n"
+        "`render text:` becomes `render plain:` across 9 controllers.\n"
+    )
+
+    def plan(self, path):
+        return self.PLAN if path == "docs/PLAN.md" else None
+
+    def test_a_quote_from_another_section_is_flagged(self, tmp_path):
+        written = write(
+            tmp_path,
+            [note(
+                plan_ref="docs/PLAN.md#L8-L9",
+                observation="the sweep is done",
+                supersedes="Add `ApplicationRecord` base class, migrate models in batches.",
+            )],
+            read_plan=self.plan, plan_sha="a3f19c2",
+        )
+        text = written.read_text()
+        assert "reference and the quotation disagree" in text
+        assert "the sweep is done" in text, "the observation survives regardless"
+
+    def test_a_quote_that_is_there_passes(self, tmp_path):
+        written = write(
+            tmp_path,
+            [note(
+                plan_ref="docs/PLAN.md#L5",
+                supersedes="Add `ApplicationRecord` base class, migrate models in batches.",
+            )],
+            read_plan=self.plan, plan_sha="a3f19c2",
+        )
+        assert "disagree" not in written.read_text()
+
+    def test_rewording_and_emphasis_do_not_trip_it(self, tmp_path):
+        # The failure being caught is gross. Flagging a lightly reworded quote
+        # would train whoever folds these to ignore the warning.
+        written = write(
+            tmp_path,
+            [note(
+                plan_ref="docs/PLAN.md#L5",
+                supersedes="add **ApplicationRecord** base class, migrate models in batches",
+            )],
+            read_plan=self.plan, plan_sha="a3f19c2",
+        )
+        assert "disagree" not in written.read_text()
+
+    def test_an_ellipsis_splits_the_quote(self, tmp_path):
+        written = write(
+            tmp_path,
+            [note(
+                plan_ref="docs/PLAN.md#L3-L5",
+                supersedes="## Models ... migrate models in batches.",
+            )],
+            read_plan=self.plan, plan_sha="a3f19c2",
+        )
+        assert "disagree" not in written.read_text()
+
+    def test_a_note_with_no_quotation_is_not_flagged(self, tmp_path):
+        # `supersedes` is optional — the plan may simply be silent. With
+        # nothing to compare, there is no disagreement to report.
+        written = write(
+            tmp_path,
+            [note(plan_ref="docs/PLAN.md#L5", supersedes="")],
+            read_plan=self.plan, plan_sha="a3f19c2",
+        )
+        assert "disagree" not in written.read_text()
