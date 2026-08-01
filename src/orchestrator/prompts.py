@@ -427,9 +427,16 @@ def build_planner_messages(
     """
     # Only what is fixed for the whole run. The plan is read once at base_ref
     # and the layout once at base_sha; neither changes while the run does.
-    leading = _plan_block(plan, _addendum(cfg))
+    # Layout first, then the plan — the reverse of how they read, and for the
+    # same reason the log goes last among the plan documents. The layout is
+    # fixed for the run; the log is now live and gains a couple of KB per
+    # landing. Behind the plan block it was re-billed every time the log moved,
+    # which is the defect the document ordering fixed one level down and this
+    # reintroduced one level up the moment the log stopped being frozen.
+    leading = ""
     if layout:
-        leading += "\n\n## What the repository contains\n\n" + layout
+        leading = "## What the repository contains\n\n" + layout + "\n\n"
+    leading += _plan_block(plan, _addendum(cfg))
 
     # The completed history and the deferred list used to live in here too, and
     # both change as the run proceeds — so every landed stage and every deferral
