@@ -57,9 +57,28 @@ class PlanTree:
     def ok(self) -> bool:
         return self.root is not None and not self.problems
 
-    def as_prompt_payload(self) -> str:
-        """One byte-stable block, roots first, for the cacheable prompt prefix."""
-        blocks = [f"### {d.path}\n\n{d.content.strip()}" for d in self.documents]
+    def as_prompt_payload(self, last: str | None = None) -> str:
+        """One byte-stable block, roots first, for the cacheable prompt prefix.
+
+        `last` names a document to sink to the end — the progress log, in
+        practice. A cached prefix is matched as a prefix, so a document that
+        grows invalidates everything concatenated *after* it, and only what
+        comes after it. The log is the one plan document that grows, and
+        children are ordered by where the root links them: this project links
+        the log in its opening paragraph, which put a file gaining ~2KB per
+        landed stage ahead of seven static runbooks totalling ~168KB. Every
+        one of those was re-billed whenever the log moved.
+
+        Sinking it costs nothing — the documents are labelled by path and the
+        planner is told which one records progress, so order carries no meaning
+        to the reader. It is purely where the growth is allowed to happen.
+        """
+        docs = self.documents
+        if last:
+            docs = [d for d in docs if d.path != last] + [
+                d for d in docs if d.path == last
+            ]
+        blocks = [f"### {d.path}\n\n{d.content.strip()}" for d in docs]
         return "\n\n".join(blocks)
 
 

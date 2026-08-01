@@ -179,7 +179,11 @@ def _plan_block(plan: PlanTree, addendum_path: str | None = None) -> str:
             "code — a count in a document is a claim about when someone wrote "
             "it down."
         )
-    return intro + "\n\n" + plan.as_prompt_payload()
+    # The log goes last among the documents. It is the only one that grows, and
+    # in a concatenated cache prefix a document that grows re-bills everything
+    # after it — here, seven static runbooks that happened to be linked below
+    # it in the plan's opening paragraph.
+    return intro + "\n\n" + plan.as_prompt_payload(last=addendum_path)
 
 
 def _deferred_block(deferred: list[dict] | None) -> str:

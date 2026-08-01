@@ -9,6 +9,8 @@ from pathlib import Path
 
 from orchestrator.gitops import Git
 from orchestrator.plandoc import (
+    PlanDocument,
+    PlanTree,
     extract_links,
     load_snapshot,
     resolve_plan_tree,
@@ -260,3 +262,48 @@ class TestPromptPayload:
         first = resolve_plan_tree(git, "docs/plan.md", sha).as_prompt_payload()
         second = resolve_plan_tree(git, "docs/plan.md", sha).as_prompt_payload()
         assert first == second
+
+
+class TestTheGrowingDocumentGoesLast:
+    """A cached prefix is matched as a prefix, so growth must go at the end.
+
+    Children are ordered by where the root links them, and this project's plan
+    links its progress log in the opening paragraph — putting the one document
+    that grows (~2KB per landed stage) ahead of seven static runbooks totalling
+    ~168KB. Every byte the log gained re-billed all seven behind it. Order
+    carries no meaning to the reader: documents are labelled by path and the
+    planner is told which one records progress. It only decides where the churn
+    is allowed to land.
+    """
+
+    def _tree(self):
+        return PlanTree(
+            root=PlanDocument(path="PLAN.md", content="# Plan"),
+            children=[
+                PlanDocument(path="progress_log.md", content="log"),
+                PlanDocument(path="stream_one.md", content="one"),
+                PlanDocument(path="stream_two.md", content="two"),
+            ],
+        )
+
+    def test_the_named_document_is_sunk_to_the_end(self):
+        payload = self._tree().as_prompt_payload(last="progress_log.md")
+        assert payload.index("stream_one.md") < payload.index("progress_log.md")
+        assert payload.index("stream_two.md") < payload.index("progress_log.md")
+
+    def test_the_root_still_leads(self):
+        payload = self._tree().as_prompt_payload(last="progress_log.md")
+        assert payload.startswith("### PLAN.md")
+
+    def test_every_document_survives_the_reordering(self):
+        payload = self._tree().as_prompt_payload(last="progress_log.md")
+        for path in ("PLAN.md", "progress_log.md", "stream_one.md", "stream_two.md"):
+            assert f"### {path}" in payload
+
+    def test_without_a_name_the_order_is_unchanged(self):
+        payload = self._tree().as_prompt_payload()
+        assert payload.index("progress_log.md") < payload.index("stream_one.md")
+
+    def test_a_name_that_is_not_in_the_tree_changes_nothing(self):
+        payload = self._tree().as_prompt_payload(last="nowhere.md")
+        assert payload.index("progress_log.md") < payload.index("stream_one.md")
