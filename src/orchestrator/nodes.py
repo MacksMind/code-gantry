@@ -23,7 +23,7 @@ import time
 from orchestrator.addendum import append_notes
 from orchestrator.commands import truncate_middle
 from orchestrator.config import Stage, validate_stage
-from orchestrator.flake import adjudicate, predates_stage
+from orchestrator.flake import adjudicate, append_flakes, predates_stage
 from orchestrator.globs import matches_any
 from orchestrator.planner import append_stage_cost, append_status, recent_stage_costs
 from orchestrator.prompts import (
@@ -508,6 +508,9 @@ def verify(state: RunState, rt: Runtime) -> dict:
         _verify_log(outcome),
     )
 
+    if outcome.flaky_files:
+        _record_flakes(rt, stage.id, outcome.flaky_files, outcome.flaky_seeds)
+
     accumulated = {
         "flake_reruns": state.get("flake_reruns", 0) + outcome.flake_reruns,
         "flaky_files": _merge_flaky(state, outcome.flaky_files),
@@ -727,6 +730,7 @@ def review(state: RunState, rt: Runtime) -> dict:
         seconds += verdict.seconds
         if verdict.flaked:
             rt.log(f"[review] {stage.id}: full suite flaked — {verdict.summary}")
+            _record_flakes(rt, stage.id, verdict.files, verdict.seeds)
             return {
                 **base,
                 "test_seconds": state.get("test_seconds", 0.0) + seconds,
@@ -795,6 +799,31 @@ def review(state: RunState, rt: Runtime) -> dict:
         "test_seconds": state.get("test_seconds", 0.0) + seconds,
         "next_hop": "advance",
     }
+
+
+def _record_flakes(
+    rt: Runtime, stage_id: str, files: list[str], seeds: dict[str, str]
+) -> None:
+    """Write the excusal down where it outlives the run.
+
+    Logged as well as filed, because the seed is only useful to someone who
+    knows it exists — and the line it prints is the command to run.
+    """
+    path = append_flakes(
+        rt.project.project_dir, stage_id, files, seeds, rt.cfg.flake_repro_command
+    )
+    for name in files:
+        seed = seeds.get(name)
+        if seed and rt.cfg.flake_repro_command:
+            rt.log(
+                f"[flake] {name} seed {seed} — reproduce with "
+                f"{rt.cfg.flake_repro_command.format(seed=seed, path=name)}"
+            )
+        elif seed:
+            rt.log(f"[flake] {name} seed {seed}")
+        else:
+            rt.log(f"[flake] {name} — no seed reported")
+    rt.log(f"[flake] recorded in {path}")
 
 
 def _merge_flaky(state: RunState, files: list[str]) -> list[str]:

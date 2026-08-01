@@ -73,6 +73,9 @@ class VerifyOutcome:
     flake_reruns: int = 0
     # Files excused as suite flakes, for the run-level list in the report.
     flaky_files: list[str] = field(default_factory=list)
+    # And the ordering seed each of them failed under, so an excusal leaves
+    # something reproducible behind rather than only a name.
+    flaky_seeds: dict[str, str] = field(default_factory=dict)
     test_seconds: float = 0.0
     # Populated on a scope violation. The planner decides whether to adopt these
     # paths into the stage or have them reverted; the stage's other work is
@@ -557,6 +560,7 @@ def _layer_tests(ctx: _Context, outcome: VerifyOutcome):
         flaked = verdict.flaked
         if flaked:
             outcome.flaky_files.extend(verdict.files)
+            outcome.flaky_seeds.update(verdict.seeds)
     else:
         rerun = ctx.runner.run(command)
         outcome.results.append(rerun)

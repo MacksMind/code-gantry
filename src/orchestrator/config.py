@@ -416,6 +416,28 @@ class ProjectConfig(_Strict):
     # exactly the kind of project knowledge that does not belong here. Unset,
     # the re-run falls back to running the whole suite again.
     failed_file_pattern: str | None = None
+    # Regex, group 1 capturing the ordering seed a runner reports. Same
+    # reasoning as above about defaults, and one more: excusing a flake without
+    # recording how to reproduce it is what makes a flake permanent. The
+    # orchestrator has excused the same handful of files all night and the only
+    # record of *which ordering* did it lives in an output nobody keeps.
+    #
+    # Matched after each failing file, not once for the whole run: a parallel
+    # runner is many independent orderings, and the seed that matters is the
+    # one belonging to the worker that failed. Fourteen were printed on the run
+    # that motivated this.
+    seed_pattern: str | None = None
+    # What the operator would run to chase an excused flake, with `{seed}` and
+    # `{path}` filled in. Recorded, never run: the orchestrator excuses flakes
+    # in seconds and this search takes minutes, so it belongs to whoever is
+    # fixing the suite rather than to the loop trying to land a stage.
+    #
+    # The first target's `bin/fragile_bisect <seed> <spec>` is the shape this
+    # is for — it holds the failing file and the seed fixed and bisects the
+    # other 220 spec files for the minimal set that reproduces the ordering.
+    # That is the whole distance from "excused again" to a filed bug, and it
+    # needs exactly the two things recorded here.
+    flake_repro_command: str | None = None
     # Above this many, a red suite is a broken stage rather than a flake, and
     # re-running to prove it is minutes spent on a foregone conclusion.
     flake_rerun_max_files: int = 5
@@ -736,6 +758,39 @@ def _structural_problems(cfg: ProjectConfig) -> list[str]:
                     "around the file path to re-run. With none it would match "
                     "and yield nothing, which looks identical to a test runner "
                     "we cannot read"
+                )
+
+    if cfg.flake_repro_command:
+        missing = [
+            slot
+            for slot in ("{seed}", "{path}")
+            if slot not in cfg.flake_repro_command
+        ]
+        if missing:
+            problems.append(
+                f"flake_repro_command must contain {' and '.join(missing)} — a "
+                "recorded repro line that does not name the seed or the file "
+                "reproduces nothing, and it is recorded precisely because "
+                "nobody is watching when the flake is excused"
+            )
+        if not cfg.seed_pattern:
+            problems.append(
+                "flake_repro_command needs seed_pattern: without it there is "
+                "no seed to fill in"
+            )
+
+    if cfg.seed_pattern:
+        try:
+            compiled = re.compile(cfg.seed_pattern, re.MULTILINE)
+        except re.error as e:
+            problems.append(f"seed_pattern is not a valid regex: {e}")
+        else:
+            if compiled.groups != 1:
+                problems.append(
+                    "seed_pattern must have exactly one capture group, around "
+                    "the seed itself. A pattern that matches the line and "
+                    "captures nothing records an excusal with no way to "
+                    "reproduce it, which is the thing this exists to prevent"
                 )
 
     if not cfg.test_command and not cfg.stage_defaults.checks:

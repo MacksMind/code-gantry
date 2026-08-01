@@ -36,6 +36,7 @@ from __future__ import annotations
 import re
 import shlex
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from orchestrator.commands import CommandResult, CommandRunner
@@ -53,6 +54,11 @@ class FlakeVerdict:
     results: list[CommandResult] = field(default_factory=list)
     files: list[str] = field(default_factory=list)
     summary: str = ""
+    # file -> the ordering seed that produced the failure, where the runner
+    # said. Read from the run that failed, never from the re-runs: the whole
+    # point is the ordering that broke, and the re-runs deliberately use a
+    # different one.
+    seeds: dict[str, str] = field(default_factory=dict)
 
     @property
     def output(self) -> str:
@@ -95,6 +101,46 @@ def normalize(path: str) -> str:
     return path[2:] if path.startswith("./") else path
 
 
+def seeds_by_file(
+    output: str, failed_pattern: str | None, seed_pattern: str | None
+) -> dict[str, str]:
+    """The ordering seed to reproduce each failing file, where one is findable.
+
+    Excusing a flake and recording only its name leaves the operator with a
+    file and no way to make it fail again, which is most of the distance
+    between "known flaky" and "fixed". The seed is the rest of it.
+
+    Taken as the *first seed reported after* each failing file rather than a
+    single seed for the run, because a parallel runner is many independent
+    orderings. The run that motivated this printed fourteen, and each worker's
+    summary ends with its own — so the seed that follows a failure is the one
+    belonging to the worker that produced it. Anything else records a number
+    that reproduces a different worker's ordering.
+
+    A file with no seed after it is simply absent: half an answer is better
+    reported as none than as a seed that does not reproduce anything.
+    """
+    if not output or not failed_pattern or not seed_pattern:
+        return {}
+
+    text = strip_ansi(output)
+    try:
+        failures = list(re.finditer(failed_pattern, text, re.MULTILINE))
+        seeds = list(re.finditer(seed_pattern, text, re.MULTILINE))
+    except re.error:  # pragma: no cover - config validation rejects these
+        return {}
+
+    found: dict[str, str] = {}
+    for failure in failures:
+        path = normalize(failure.group(1))
+        if not path or path in found:
+            continue
+        after = next((s for s in seeds if s.start() > failure.end()), None)
+        if after:
+            found[path] = after.group(1)
+    return found
+
+
 def adjudicate(
     *,
     output: str,
@@ -124,6 +170,7 @@ def adjudicate(
     paths = " ".join(shlex.quote(f) for f in files)
     command_text = cfg.scoped_test_command.format(paths=paths)
     listed = ", ".join(files)
+    seeds = seeds_by_file(output, cfg.failed_file_pattern, cfg.seed_pattern)
 
     # Three strikes: the group run that got us here, then up to two alone. One
     # isolated attempt proved too few — a spec failed in the suite, failed
@@ -145,6 +192,7 @@ def adjudicate(
         seconds=seconds,
         results=results,
         files=files,
+        seeds=seeds,
         summary=(
             f"{len(files)} failing file(s) passed when re-run whole and alone "
             f"({listed}); recorded as a suite flake"
@@ -317,3 +365,66 @@ def predates_stage(
             f"{base_sha[:8]} ({', '.join(also)}); the rest are this stage's"
         ),
     )
+
+
+# A red suite excused is a bug deferred, and the deferral is only honest if it
+# leaves something to act on. `flaky_files` in the run state answers "which
+# files", which is enough to notice a pattern and not enough to chase one — and
+# it dies with the run, so the two-sighting bar for filing a bug is a question
+# nobody can answer without grepping an old log. This file is the answer:
+# append-only, one line per excusal, every run of every stage, small enough to
+# read whole and structured enough to count.
+FLAKES_FILENAME = "flakes.md"
+
+
+def append_flakes(
+    project_dir: Path | str,
+    stage_id: str,
+    files: list[str],
+    seeds: dict[str, str],
+    repro_command: str | None,
+) -> Path:
+    """Record what was excused, and how to make it happen again."""
+    project_dir = Path(project_dir)
+    project_dir.mkdir(parents=True, exist_ok=True)
+    path = project_dir / FLAKES_FILENAME
+
+    lines = []
+    for name in files:
+        seed = seeds.get(name)
+        line = f"- flake `{stage_id}` `{name}`"
+        if seed:
+            line += f" seed `{seed}`"
+            if repro_command:
+                line += f" — `{repro_command.format(seed=seed, path=name)}`"
+        else:
+            # Said plainly rather than left blank. "No seed" is a fact about
+            # the runner's output that the operator can go fix in
+            # `seed_pattern`; a silently short line looks like the flake had
+            # no ordering, which is never true.
+            line += " — no seed reported"
+        lines.append(line + "\n")
+
+    with path.open("a") as fh:
+        fh.writelines(lines)
+    return path
+
+
+def recent_flakes(path: Path | str) -> list[dict]:
+    """Every excusal recorded so far, oldest first.
+
+    Deliberately not deduplicated: two sightings of one file is the signal
+    that it is worth filing, and collapsing them destroys exactly that.
+    """
+    path = Path(path)
+    if not path.is_file():
+        return []
+    found = []
+    for stage_id, name, seed in _FLAKE.findall(path.read_text()):
+        found.append({"stage_id": stage_id, "file": name, "seed": seed or None})
+    return found
+
+
+_FLAKE = re.compile(
+    r"^- flake `([^`]*)` `([^`]*)`(?: seed `([^`]*)`)?", re.MULTILINE
+)

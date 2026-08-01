@@ -20,12 +20,20 @@ stage touched or named is never credited as a flake, however it re-runs.
 """
 
 import re
+from pathlib import Path
 
 import pytest
 
 from orchestrator.commands import CommandRunner
 from orchestrator.config import ConfigError, parse_config
-from orchestrator.flake import adjudicate, failed_files
+from orchestrator.flake import (
+    FLAKES_FILENAME,
+    adjudicate,
+    append_flakes,
+    failed_files,
+    recent_flakes,
+    seeds_by_file,
+)
 
 # The operator's, from projects/example/config.yaml. Group 1 is the file path;
 # it stops before `[1:1]` or `:531`, so both of RSpec's locator forms reduce to
@@ -365,3 +373,92 @@ class TestThreeStrikes:
         out = judge(repo, RSPEC_OUTPUT, cfg)
         assert not out.flaked, "one attempt means one strike in isolation"
         assert len(out.results) == 1
+
+
+class TestTheSeedThatProducedTheFailure:
+    """Excusing a flake without its seed makes the flake permanent.
+
+    The orchestrator excused the same handful of files all night, and the only
+    record of *which ordering* did it lived in output nobody kept. The target
+    repo already ships `bin/fragile_bisect <seed> <spec>`, which pins those two
+    and searches the other 220 spec files for the minimal set that reproduces
+    the ordering — so the seed is not a note, it is the missing argument to a
+    tool that already exists.
+    """
+
+    SEED = r"^Randomized with seed (\d+)"
+
+    # Verbatim from a `bin/parallel_rspec` run that flaked: two workers, two
+    # files, two different seeds. A single-seed reading gets one of them wrong.
+    REAL = (
+        Path(__file__).parent / "fixtures" / "parallel_rspec_two_workers.txt"
+    ).read_text()
+
+    def test_each_file_gets_its_own_workers_seed(self):
+        assert seeds_by_file(self.REAL, RSPEC_PATTERN, self.SEED) == {
+            "spec/models/user_spec.rb": "4845",
+            "spec/requests/checkout_spec.rb": "58072",
+        }
+
+    def test_the_seed_before_a_failure_is_not_its_seed(self):
+        # parallel_rspec prints every worker's seed up front, before any of
+        # them has run. Reading the nearest seed rather than the following one
+        # would attribute all 14 failures to the first worker's ordering.
+        text = (
+            "Randomized with seed 111\n\n"
+            "Randomized with seed 222\n\n"
+            "Failed examples:\n\n"
+            "rspec ./spec/a_spec.rb:12 # boom\n\n"
+            "Randomized with seed 333\n"
+        )
+        assert seeds_by_file(text, RSPEC_PATTERN, self.SEED) == {
+            "spec/a_spec.rb": "333"
+        }
+
+    def test_a_failure_with_no_seed_after_it_is_omitted(self):
+        # Half an answer reproduces nothing. Better absent than wrong.
+        text = "Failed examples:\n\nrspec ./spec/a_spec.rb:12 # boom\n"
+        assert seeds_by_file(text, RSPEC_PATTERN, self.SEED) == {}
+
+    def test_no_seed_pattern_configured_yields_nothing(self):
+        assert seeds_by_file(self.REAL, RSPEC_PATTERN, None) == {}
+
+    def test_the_verdict_carries_the_seeds(self, repo):
+        verdict = judge(repo, self.REAL, cfg=config(repo, seed_pattern=self.SEED))
+        assert verdict.seeds["spec/models/user_spec.rb"] == "4845"
+
+
+class TestTheExcusalOutlivesTheRun:
+    """`flaky_files` dies with the run, and the bar for filing is two sightings.
+
+    Counting them meant grepping a run log that the next run truncates. One
+    append-only file per project answers it directly.
+    """
+
+    def test_a_line_carries_the_command_that_reproduces_it(self, tmp_path):
+        append_flakes(
+            tmp_path, "some-stage",
+            ["spec/models/user_spec.rb"],
+            {"spec/models/user_spec.rb": "4845"},
+            "bin/fragile_bisect {seed} {path}",
+        )
+        text = (tmp_path / FLAKES_FILENAME).read_text()
+        assert "bin/fragile_bisect 4845 spec/models/user_spec.rb" in text
+
+    def test_repeat_sightings_are_kept_apart(self, tmp_path):
+        # Deduplicating would destroy the exact signal the filing bar reads.
+        for stage in ("stage-a", "stage-b"):
+            append_flakes(
+                tmp_path, stage, ["spec/models/user_spec.rb"],
+                {"spec/models/user_spec.rb": "4845"}, None,
+            )
+        found = recent_flakes(tmp_path / FLAKES_FILENAME)
+        assert len(found) == 2
+        assert [f["stage_id"] for f in found] == ["stage-a", "stage-b"]
+
+    def test_a_missing_seed_says_so(self, tmp_path):
+        # A silently short line reads as "this flake had no ordering", which is
+        # never true; it means seed_pattern needs fixing.
+        append_flakes(tmp_path, "s", ["spec/a_spec.rb"], {}, "x {seed} {path}")
+        assert "no seed reported" in (tmp_path / FLAKES_FILENAME).read_text()
+        assert recent_flakes(tmp_path / FLAKES_FILENAME)[0]["seed"] is None

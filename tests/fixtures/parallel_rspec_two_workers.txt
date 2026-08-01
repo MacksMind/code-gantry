@@ -1,0 +1,29 @@
+     # /bundle/gems/vcr-5.1.0/lib/vcr/util/variable_args_block_caller.rb:9:in `call'
+     # /bundle/gems/vcr-5.1.0/lib/vcr/util/variable_args_block_caller.rb:9:in `call_block'
+     # /bundle/gems/vcr-5.1.0/lib/vcr.rb:188:in `use_cassette'
+     # ./spec/support/vcr.rb:27:in `block (2 levels) in <top (required)>'
+     # /bundle/gems/webmock-3.16.2/lib/webmock/rspec.rb:37:in `block (2 levels) in <top (required)>'
+
+Finished in 2 minutes 16.4 seconds (files took 5.18 seconds to load)
+313 examples, 1 failure, 1 pending
+
+Failed examples:
+
+rspec ./spec/models/user_spec.rb:443 # User#merge_into copies over any user personalizations used by this signature
+
+Randomized with seed 4845
+
+     # /bundle/gems/vcr-5.1.0/lib/vcr.rb:188:in `use_cassette'
+     # ./spec/support/vcr.rb:27:in `block (2 levels) in <top (required)>'
+     # /bundle/gems/webmock-3.16.2/lib/webmock/rspec.rb:37:in `block (2 levels) in <top (required)>'
+
+Finished in 2 minutes 24.7 seconds (files took 5.14 seconds to load)
+194 examples, 1 failure, 2 pending
+
+Failed examples:
+
+rspec './spec/requests/checkout_spec.rb[1:1:1:1]' # Checkout Storefront checkout process existing account check out with cart created at login
+
+Randomized with seed 58072
+
+....Coverage report generated for (10/14), (13/14), (3/14), (4/14), (7/14) to /current/coverage. 14283 / 31087 LOC (45.95%) covered.
