@@ -760,3 +760,34 @@ class TestStageCostsSurviveTheRun:
         from orchestrator.planner import recent_stage_costs
 
         assert recent_stage_costs(tmp_path) == []
+
+
+class TestInstructionsQuoteCodeInFencedBlocks:
+    """An indented code block makes markup indistinguishable from source.
+
+    The executor reads the instruction as raw text, not rendered Markdown, so
+    the four spaces that open an indented block arrive as four spaces of
+    content. Told to match a line exactly, it matches what it was shown.
+
+    Observed: a stage quoted two lines of a model file as an indented block,
+    presenting them at six spaces where the file has two. Four attempts
+    produced no edit at all — `SearchReplaceNoExactMatch` every time — the
+    stage exhausted its budget without one diff reaching review, and the
+    instruction itself had said "keep the run of spaces exactly as shown".
+    """
+
+    def test_the_field_says_fenced_not_indented(self):
+        from orchestrator.planner import PlannedStage
+
+        described = PlannedStage.model_fields["instruction"].description.lower()
+        assert "fenced" in described
+        assert "indented" in described
+
+    def test_it_says_why_rather_than_only_what(self):
+        # A rule with no reason is one the model discards under pressure to be
+        # helpful. This one has to survive an instruction that is otherwise
+        # begging to be indented for readability.
+        described = __import__(
+            "orchestrator.planner", fromlist=["PlannedStage"]
+        ).PlannedStage.model_fields["instruction"].description.lower()
+        assert "raw text" in described

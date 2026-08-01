@@ -359,7 +359,7 @@ def run(slug: str, run_id: str | None, skip_preflight_tests: bool) -> None:
         f"(plan: {len(tree.documents)} document(s))\n"
     )
     try:
-        code = _drive(cfg, project, paths, state)
+        code = _drive(cfg, project, paths, state, _warnings(checks))
     finally:
         git.restore_gc(previous_gc)
     sys.exit(code)
@@ -444,6 +444,7 @@ def resume(run_id: str) -> None:
                 # produce and no way to say so.
                 "stage_has_work": _stage_has_work(git, saved),
             },
+            _warnings(checks),
         )
     finally:
         git.restore_gc(previous_gc)
@@ -467,11 +468,31 @@ def status(run_id: str) -> None:
 # --- internals -----------------------------------------------------------
 
 
+def _warnings(checks) -> list[str]:
+    """Non-blocking preflight findings, one line each."""
+    return [
+        f"{c.name}: {' '.join((c.detail or '').split())}"
+        for c in checks
+        if not c.ok and not c.fatal
+    ]
+
+
 def _drive(
-    cfg: ProjectConfig, project: ProjectPaths, paths: RunPaths, graph_input: dict
+    cfg: ProjectConfig,
+    project: ProjectPaths,
+    paths: RunPaths,
+    graph_input: dict,
+    warnings: list[str] | None = None,
 ) -> int:
     saver, conn = open_checkpointer(paths.state_db)
     log = RunLog(paths.run_log)
+    # Non-blocking preflight findings, repeated into the run log. They are
+    # already printed to stdout, which for an unattended run is a nohup file
+    # nobody opens unless something has gone wrong — so a warning that only
+    # lives there is a warning that gets missed. The run log is the artifact an
+    # operator actually tails.
+    for warning in warnings or []:
+        log(f"[preflight] {warning}")
     try:
         rt = build_runtime(
             cfg,

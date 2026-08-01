@@ -57,7 +57,23 @@ class PlannedStage(BaseModel):
     instruction: str = Field(
         description=(
             "What the executor must do, in full. It has no memory of previous "
-            "stages and cannot see the plan document, so this must stand alone."
+            "stages and cannot see the plan document, so this must stand "
+            "alone.\n\n"
+            "**Quote code in fenced blocks, never indented ones.** The "
+            "executor reads this as raw text, not rendered Markdown, so the "
+            "four spaces that make an indented block are indistinguishable "
+            "from four spaces of source. Asked to match a line exactly, it "
+            "matches what it was shown — including your formatting — and the "
+            "edit silently fails to apply.\n\n"
+            "Observed: a stage quoting two lines of a model file as an "
+            "indented block presented them at six spaces where the file has "
+            "two. Four attempts produced no edit at all, the stage exhausted "
+            "its budget without a single diff reaching review, and the "
+            "instruction had said 'keep the run of spaces exactly as shown'. "
+            "A fenced block would have shown the file's own bytes.\n\n"
+            "This matters most for the code you want matched character for "
+            "character, which is exactly the code most likely to be indented "
+            "for readability."
         )
     )
     edit_files: list[str] = Field(
