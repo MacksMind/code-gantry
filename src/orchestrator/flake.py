@@ -382,9 +382,22 @@ def append_flakes(
     stage_id: str,
     files: list[str],
     seeds: dict[str, str],
-    repro_command: str | None,
+    now: str,
 ) -> Path:
-    """Record what was excused, and how to make it happen again."""
+    """Record what was excused, when, and under which ordering.
+
+    The arguments to a reproduction, not a reproduction — whoever chases this
+    knows how to invoke the repo's own bisect tool, and a formatted command
+    line would be one more thing to keep correct as that tool changes.
+
+    `now` is the reason this is not just a seed. A suite can go red for reasons
+    no ordering explains: the failure that motivated the baseline check was a
+    spec asserting `Time.zone.today - 1.month`, which broke the instant the
+    clock crossed into the 31st and would have gone on breaking every 29th
+    through 31st. Nothing about the file name or the seed says that. A column
+    of timestamps does, at a glance, the first time two of them cluster after
+    midnight.
+    """
     project_dir = Path(project_dir)
     project_dir.mkdir(parents=True, exist_ok=True)
     path = project_dir / FLAKES_FILENAME
@@ -392,11 +405,9 @@ def append_flakes(
     lines = []
     for name in files:
         seed = seeds.get(name)
-        line = f"- flake `{stage_id}` `{name}`"
+        line = f"- flake `{now}` `{stage_id}` `{name}`"
         if seed:
             line += f" seed `{seed}`"
-            if repro_command:
-                line += f" — `{repro_command.format(seed=seed, path=name)}`"
         else:
             # Said plainly rather than left blank. "No seed" is a fact about
             # the runner's output that the operator can go fix in
@@ -420,11 +431,18 @@ def recent_flakes(path: Path | str) -> list[dict]:
     if not path.is_file():
         return []
     found = []
-    for stage_id, name, seed in _FLAKE.findall(path.read_text()):
-        found.append({"stage_id": stage_id, "file": name, "seed": seed or None})
+    for when, stage_id, name, seed in _FLAKE.findall(path.read_text()):
+        found.append(
+            {
+                "at": when,
+                "stage_id": stage_id,
+                "file": name,
+                "seed": seed or None,
+            }
+        )
     return found
 
 
 _FLAKE = re.compile(
-    r"^- flake `([^`]*)` `([^`]*)`(?: seed `([^`]*)`)?", re.MULTILINE
+    r"^- flake `([^`]*)` `([^`]*)` `([^`]*)`(?: seed `([^`]*)`)?", re.MULTILINE
 )

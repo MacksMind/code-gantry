@@ -435,22 +435,43 @@ class TestTheExcusalOutlivesTheRun:
     append-only file per project answers it directly.
     """
 
-    def test_a_line_carries_the_command_that_reproduces_it(self, tmp_path):
+    def test_a_line_carries_the_arguments_a_bisect_needs(self, tmp_path):
+        # The arguments, not a command line: whoever chases this knows how to
+        # invoke the repo's own bisect tool, and a formatted command would be
+        # one more thing to keep correct as that tool changes.
         append_flakes(
             tmp_path, "some-stage",
             ["spec/models/user_spec.rb"],
             {"spec/models/user_spec.rb": "4845"},
-            "bin/fragile_bisect {seed} {path}",
+            "2026-07-31T01:14:34-04:00",
         )
-        text = (tmp_path / FLAKES_FILENAME).read_text()
-        assert "bin/fragile_bisect 4845 spec/models/user_spec.rb" in text
+        found = recent_flakes(tmp_path / FLAKES_FILENAME)[0]
+        assert found["file"] == "spec/models/user_spec.rb"
+        assert found["seed"] == "4845"
+
+    def test_the_timestamp_is_kept_so_time_bugs_are_visible(self, tmp_path):
+        """Not every red suite has an ordering behind it.
+
+        The failure that motivated the baseline check was a spec asserting
+        `Time.zone.today - 1.month`, which broke the moment the clock crossed
+        into the 31st. No file name and no seed says that. A column of
+        timestamps says it the first time two of them cluster after midnight.
+        """
+        append_flakes(
+            tmp_path, "s", ["spec/a_spec.rb"], {"spec/a_spec.rb": "1"},
+            "2026-07-31T00:06:12-04:00",
+        )
+        assert recent_flakes(tmp_path / FLAKES_FILENAME)[0]["at"] == (
+            "2026-07-31T00:06:12-04:00"
+        )
 
     def test_repeat_sightings_are_kept_apart(self, tmp_path):
         # Deduplicating would destroy the exact signal the filing bar reads.
         for stage in ("stage-a", "stage-b"):
             append_flakes(
                 tmp_path, stage, ["spec/models/user_spec.rb"],
-                {"spec/models/user_spec.rb": "4845"}, None,
+                {"spec/models/user_spec.rb": "4845"},
+                "2026-07-31T01:14:34-04:00",
             )
         found = recent_flakes(tmp_path / FLAKES_FILENAME)
         assert len(found) == 2
@@ -459,6 +480,6 @@ class TestTheExcusalOutlivesTheRun:
     def test_a_missing_seed_says_so(self, tmp_path):
         # A silently short line reads as "this flake had no ordering", which is
         # never true; it means seed_pattern needs fixing.
-        append_flakes(tmp_path, "s", ["spec/a_spec.rb"], {}, "x {seed} {path}")
+        append_flakes(tmp_path, "s", ["spec/a_spec.rb"], {}, "2026-07-31T01:00:00-04:00")
         assert "no seed reported" in (tmp_path / FLAKES_FILENAME).read_text()
         assert recent_flakes(tmp_path / FLAKES_FILENAME)[0]["seed"] is None

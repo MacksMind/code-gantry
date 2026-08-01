@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime
 
 from orchestrator.addendum import append_notes
 from orchestrator.commands import truncate_middle
@@ -806,23 +807,22 @@ def _record_flakes(
 ) -> None:
     """Write the excusal down where it outlives the run.
 
-    Logged as well as filed, because the seed is only useful to someone who
-    knows it exists — and the line it prints is the command to run.
+    Logged as well as filed, because a record nobody knows was written is not
+    much better than no record.
     """
     path = append_flakes(
-        rt.project.project_dir, stage_id, files, seeds, rt.cfg.flake_repro_command
+        rt.project.project_dir,
+        stage_id,
+        files,
+        seeds,
+        datetime.now().astimezone().isoformat(timespec="seconds"),
     )
     for name in files:
         seed = seeds.get(name)
-        if seed and rt.cfg.flake_repro_command:
-            rt.log(
-                f"[flake] {name} seed {seed} — reproduce with "
-                f"{rt.cfg.flake_repro_command.format(seed=seed, path=name)}"
-            )
-        elif seed:
-            rt.log(f"[flake] {name} seed {seed}")
-        else:
-            rt.log(f"[flake] {name} — no seed reported")
+        rt.log(
+            f"[flake] {name} seed {seed}" if seed
+            else f"[flake] {name} — no seed reported"
+        )
     rt.log(f"[flake] recorded in {path}")
 
 
