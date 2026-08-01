@@ -1008,6 +1008,159 @@ class TestProgressGuardAfterAFlakyMergeGate:
         assert again["next_hop"] in ("review", "advance")
 
 
+class TestAFailureThatPredatesTheStage:
+    """Whose failure is it?
+
+    `adjudicate` answers "flake or real", and the gate treated every real
+    failure as the stage's. It is not. Observed live: a stage renamed four
+    macros in one controller, was approved by the reviewer three times with a
+    byte-identical diff, and was sent back three times because a
+    commission-report spec in a file it never touched started failing when the
+    clock crossed into the 31st. The executor was scoped to that controller and
+    could not have fixed the spec under any instruction, so the whole rework
+    budget bought nothing. Sixteen minutes, three Aider runs, three reviews,
+    three full suites.
+
+    One scoped run against the base tree separates the two cases.
+    """
+
+    FAILED = (
+        "echo 'Failed examples:'; "
+        "echo \"rspec './spec/a_spec.rb[1:1]' # boom\"; exit 1"
+    )
+
+    def _land(self, run_git, repo, text="changed\n", extra=None):
+        """Commit the stage's work, as the executor's own commit would."""
+        (repo / "app.py").write_text(text)
+        if extra:
+            (repo / extra).write_text("x\n")
+        run_git(repo, "add", "-A")
+        run_git(repo, "commit", "-qm", "stage work")
+
+    def test_it_goes_to_the_planner_rather_than_the_executor(
+        self, repo, tmp_path, run_git
+    ):
+        cfg, rt, state = make(
+            repo, tmp_path,
+            full_test_command=self.FAILED,
+            scoped_test_command="false {paths}",
+            failed_file_pattern=RSPEC_PATTERN,
+        )
+        state = with_stage(state, rt)
+        self._land(run_git, repo)
+        out = nodes.review(state, rt)
+
+        assert out["next_hop"] == "plan", (
+            "the executor is scoped to its own files and cannot repair a spec "
+            "that was already red; reworking it spends attempts to learn nothing"
+        )
+        assert out["failure_layer"] == "full_suite"
+        assert out["last_failure"]["failing_paths"] == ["spec/a_spec.rb"]
+        assert "predates" in out["last_failure"]["detail"]
+
+    def test_a_failure_the_stage_caused_still_goes_to_rework(
+        self, repo, tmp_path, run_git
+    ):
+        # The guard has to stay narrow. Green at the base means the stage did
+        # break it, and that is exactly what rework is for.
+        cfg, rt, state = make(
+            repo, tmp_path,
+            full_test_command=self.FAILED,
+            # Green at the base, red at the tip: the stage committed the file.
+            scoped_test_command="echo {paths} >/dev/null; test ! -f broke.txt",
+            failed_file_pattern=RSPEC_PATTERN,
+        )
+        state = with_stage(state, rt)
+        self._land(run_git, repo, extra="broke.txt")
+        out = nodes.review(state, rt)
+
+        assert out["next_hop"] == "execute"
+        assert out["failure_layer"] == "full_suite"
+
+    def test_the_tree_is_left_where_it_was_found(self, repo, tmp_path, run_git):
+        # The baseline run reverts to the base and back. Getting the second
+        # half wrong would silently delete an approved stage's work.
+        cfg, rt, state = make(
+            repo, tmp_path,
+            full_test_command=self.FAILED,
+            scoped_test_command="false {paths}",
+            failed_file_pattern=RSPEC_PATTERN,
+        )
+        state = with_stage(state, rt)
+        self._land(run_git, repo, text="the approved work\n")
+        head = rt.git.head_sha()
+
+        nodes.review(state, rt)
+
+        assert (repo / "app.py").read_text() == "the approved work\n"
+        assert rt.git.head_sha() == head
+
+    def test_setup_runs_on_both_sides_of_the_revert(self, repo, tmp_path, run_git):
+        """The environment follows the tree, or the answer is about the wrong one.
+
+        Reverting to the base with containers still built for the tip tests the
+        base tree against the stage's environment — and it fails in the
+        direction that produces a false "pre-existing", which routes correct
+        work to the planner. The restoring run is not optional either: leaving
+        the environment at the base is the same mistake pointed the other way.
+        """
+        ran = tmp_path / "setup-ran"
+        cfg, rt, state = make(
+            repo, tmp_path,
+            full_test_command=self.FAILED,
+            scoped_test_command="false {paths}",
+            failed_file_pattern=RSPEC_PATTERN,
+            setup_command=f"echo up >> {ran}",
+        )
+        state = with_stage(state, rt)
+        self._land(run_git, repo)
+        out = nodes.review(state, rt)
+
+        assert out["next_hop"] == "plan"
+        assert ran.read_text().count("up") == 2, (
+            "once at the base before running it, once after restoring the tree"
+        )
+
+    def test_a_base_that_will_not_build_answers_nothing(self, repo, tmp_path, run_git):
+        # "Setup failed at the base" is not evidence that the specs were
+        # already red. Blaming the tree for it would route a stage that may
+        # well be at fault to the planner instead of to rework.
+        cfg, rt, state = make(
+            repo, tmp_path,
+            full_test_command=self.FAILED,
+            scoped_test_command="false {paths}",
+            failed_file_pattern=RSPEC_PATTERN,
+            setup_command="exit 3",
+        )
+        state = with_stage(state, rt)
+        self._land(run_git, repo)
+        out = nodes.review(state, rt)
+
+        assert out["next_hop"] == "execute"
+
+    def test_an_uncommitted_tree_is_never_reset(self, repo, tmp_path):
+        """Restoring by sha restores what is committed.
+
+        So on a dirty tree the check declines to run rather than destroying
+        work the caller may be about to rework *forward* from. The executor
+        commits, so this is the unusual case — but it is the one where being
+        wrong loses work rather than time.
+        """
+        cfg, rt, state = make(
+            repo, tmp_path,
+            full_test_command=self.FAILED,
+            scoped_test_command="false {paths}",
+            failed_file_pattern=RSPEC_PATTERN,
+            rework_reset=False,
+        )
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("uncommitted\n")
+        out = nodes.review(state, rt)
+
+        assert (repo / "app.py").read_text() == "uncommitted\n"
+        assert out["next_hop"] == "execute"
+
+
 class TestPlannerArtifactRecordsCacheWrites:
     """The write premium has to be visible per call, not just collected.
 

@@ -23,7 +23,7 @@ import time
 from orchestrator.addendum import append_notes
 from orchestrator.commands import truncate_middle
 from orchestrator.config import Stage, validate_stage
-from orchestrator.flake import adjudicate
+from orchestrator.flake import adjudicate, predates_stage
 from orchestrator.globs import matches_any
 from orchestrator.planner import append_stage_cost, append_status, recent_stage_costs
 from orchestrator.prompts import (
@@ -735,12 +735,52 @@ def review(state: RunState, rt: Runtime) -> dict:
                 "next_hop": "advance",
             }
 
+        # A real failure is not necessarily *this stage's* failure. Ask the one
+        # question that separates them before spending an attempt: were these
+        # files already red before the stage ran? The executor is scoped to
+        # `edit_files`, so when the answer is yes it cannot fix them under any
+        # instruction, and every rework attempt is spent to learn nothing.
+        baseline = predates_stage(
+            files=verdict.files,
+            base_sha=state.get("stage_start_sha", ""),
+            cfg=rt.cfg,
+            runner=rt.runner,
+            git=rt.git,
+            # Moving the tree moves the environment with it. A stage that
+            # touched the Dockerfile or the schema would otherwise have the
+            # base tree's specs run against containers built for the tip.
+            setup_command=stage.effective_setup_command(rt.cfg),
+        )
+        seconds += baseline.seconds
+        if baseline.checked:
+            rt.log(f"[review] {stage.id}: baseline — {baseline.summary}")
+
+        if baseline.predates:
+            return {
+                **base,
+                "test_seconds": state.get("test_seconds", 0.0) + seconds,
+                **_planner_failure(
+                    state,
+                    "full_suite",
+                    "the full suite is red on failures that predate this stage",
+                    "The reviewer approved this stage and the full suite is "
+                    f"red, but {baseline.summary}. The stage is scoped to its "
+                    "own files and cannot repair these, so reworking it would "
+                    "produce the same diff and the same red suite.\n\nFix the "
+                    "failing specs as their own stage, then draw this one "
+                    f"again.\n{_clip(baseline.output)}",
+                    failing_paths=baseline.files,
+                ),
+            }
+
         feedback = list(state.get("review_feedback") or [])
         feedback.append(
             "The reviewer approved this stage but the full suite failed, so it "
             f"cannot land ({verdict.summary}):\n"
             f"{_clip(verdict.output or result.output)}"
         )
+        if baseline.checked and baseline.files:
+            feedback.append(f"Baseline check: {baseline.summary}")
         return {
             **base,
             "test_seconds": state.get("test_seconds", 0.0) + seconds,

@@ -172,3 +172,148 @@ def _whole_suite_rerun(command: str, runner: CommandRunner) -> FlakeVerdict:
             else "could not tell which files failed; the whole suite failed again"
         ),
     )
+
+
+@dataclass
+class BaselineVerdict:
+    """Whether a real failure was already there before the stage ran."""
+
+    predates: bool = False
+    checked: bool = False
+    seconds: float = 0.0
+    # The subset that also failed at the base. Empty when nothing did, which is
+    # the "the stage caused this" answer.
+    files: list[str] = field(default_factory=list)
+    summary: str = ""
+    output: str = ""
+
+
+def predates_stage(
+    *,
+    files: list[str],
+    base_sha: str,
+    cfg: ProjectConfig,
+    runner: CommandRunner,
+    git,
+    setup_command: str | None = None,
+) -> BaselineVerdict:
+    """Did these files already fail before this stage touched anything?
+
+    `adjudicate` answers "flake or real". That is one question short of what
+    the merge gate has to decide, because a real failure is not necessarily
+    *this stage's* failure. A suite can go red between one stage and the next
+    for reasons no diff explains — a spec that depends on the calendar is the
+    cleanest example, and it is what motivated this: a stage that renamed four
+    macros in one controller was sent back three times, with a byte-identical
+    diff approved by the reviewer each time, because a commission-report spec
+    in a file it never touched began failing when the clock crossed into the
+    31st. The executor was scoped to that one controller and could not have
+    fixed the spec under any instruction, so all three attempts were spent to
+    learn nothing.
+
+    So: re-run the same files against the tree as it stood at `base_sha`. Red
+    there too and the stage did not cause it, which makes rework the wrong
+    route no matter how many attempts remain — only the planner can act on it.
+
+    Costs one scoped run, and only on a failure that has already been ruled a
+    real one. The tree is returned to where it was found: both directions go
+    through `reset_hard`, so untracked files are treated the same coming and
+    going, and every commit involved is on the stage branch.
+
+    Two limits, stated rather than papered over. A stage that changes the
+    schema or the test environment can make the base run fail for reasons of
+    its own, which reads as "pre-existing" — the planner sees the output and
+    can tell. And `predates` requires *every* failing file to fail at the base;
+    a partial overlap is reported but still routed as the stage's problem,
+    because part of it is.
+
+    Skipped outright on a dirty tree. Restoring by sha restores what is
+    committed, so uncommitted work would be destroyed rather than put back —
+    and the caller may be about to rework *forward* from it, with
+    `rework_reset` off. The executor commits its own work, so the normal case
+    is clean; declining to answer is the right move when it is not.
+
+    `setup_command` runs after each reset, not just the first. Moving the tree
+    moves the environment with it: a stage that touched the Dockerfile, the
+    Gemfile, or the schema leaves containers built for the tip, and running the
+    base tree's specs against them measures the wrong thing in the direction
+    that produces a false "pre-existing". The restoring run matters for the
+    same reason — the environment is left matching the tree, as it was found.
+    If setup cannot be made to work at the base, the question goes unanswered
+    rather than being answered wrongly.
+    """
+    if not files or not cfg.scoped_test_command or not base_sha:
+        return BaselineVerdict(summary="no baseline comparison available")
+
+    try:
+        if not git.is_clean():
+            return BaselineVerdict(
+                summary=(
+                    "the tree has uncommitted changes, so it cannot be put "
+                    "back after a baseline run; not compared"
+                )
+            )
+        restore_sha = git.head_sha()
+    except Exception:  # pragma: no cover - a broken repo fails louder elsewhere
+        return BaselineVerdict(summary="could not read HEAD to compare a baseline")
+
+    paths = " ".join(shlex.quote(f) for f in files)
+    command_text = cfg.scoped_test_command.format(paths=paths)
+    listed = ", ".join(files)
+
+    spent = [0.0]
+
+    def timed(command: str):
+        outcome = runner.run(command)
+        spent[0] += outcome.duration_seconds
+        return outcome
+
+    git.reset_hard(base_sha)
+    try:
+        setup = timed(setup_command) if setup_command else None
+        result = timed(command_text) if setup is None or setup.ok else None
+    finally:
+        git.reset_hard(restore_sha)
+        if setup_command:
+            timed(setup_command)
+
+    seconds = spent[0]
+
+    if result is None:
+        return BaselineVerdict(
+            seconds=seconds,
+            output=setup.output,
+            summary=(
+                f"the environment could not be set up at {base_sha[:8]}, so "
+                "the baseline was not compared"
+            ),
+        )
+
+    if result.ok:
+        return BaselineVerdict(
+            checked=True,
+            seconds=result.duration_seconds,
+            output=result.output,
+            summary=(
+                f"the same file(s) passed at {base_sha[:8]}, before this stage "
+                f"({listed}); the failure is this stage's"
+            ),
+        )
+
+    also = failed_files(result.output, cfg.failed_file_pattern) or list(files)
+    every = all(f in also for f in files)
+    return BaselineVerdict(
+        predates=every,
+        checked=True,
+        seconds=result.duration_seconds,
+        files=also,
+        output=result.output,
+        summary=(
+            f"{len(files)} failing file(s) failed the same way at "
+            f"{base_sha[:8]}, before this stage ran ({listed}); the failure "
+            "predates the stage"
+            if every
+            else f"{len(also)} of {len(files)} failing file(s) also failed at "
+            f"{base_sha[:8]} ({', '.join(also)}); the rest are this stage's"
+        ),
+    )
