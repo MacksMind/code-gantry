@@ -445,12 +445,15 @@ def build_planner_messages(
     # which was the system block, the only part that had not changed. They now
     # follow the breakpoint, costing full price for their own few hundred
     # tokens rather than taking ninety thousand down with them.
-    situational = (
-        _history_block(completed, _addendum(cfg))
-        + _costs_block(stage_costs)
-        + "\n\n"
-        + _deferred_block(deferred)
-    )
+    # Split, so the append-only half can be cached separately from the half
+    # that churns. The completed history only ever grows at the end, so a
+    # breakpoint after it lets Anthropic extend the cached prefix between
+    # stages rather than rebuild it. The cost table is a sliding window of the
+    # last twelve and the deferral list mutates in place, so both sit outside
+    # it — a breakpoint after *those* would miss on every stage and cost more
+    # than not caching at all.
+    history = _history_block(completed, _addendum(cfg))
+    volatile = _costs_block(stage_costs) + "\n\n" + _deferred_block(deferred)
 
     # The breakpoint, and the reason the ordering above exists. Anthropic
     # caching is explicit: without this marker the plan snapshot and the
@@ -469,24 +472,29 @@ def build_planner_messages(
     # expired every time, while the system block one file over carried the
     # configured lifetime and survived. That is precisely what the reports
     # showed across two runs: 3% cached, the 3% being the system block.
-    messages = [
+    blocks = [
         {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": leading,
-                    "cache_control": cache_control(
-                        getattr(cfg, "cache_ttl", None)
-                    ),
-                }
-            ],
-        }
+            "type": "text",
+            "text": leading,
+            "cache_control": cache_control(getattr(cfg, "cache_ttl", None)),
+        },
+        # The second breakpoint, and the reason this is worth the complexity.
+        # The planner is an agentic loop: every turn re-sends the whole prompt,
+        # and a derivation runs ten to twenty-five turns. This block is
+        # byte-identical across all of them and was being re-sent uncached each
+        # time. Measured before the change: 118M prompt tokens across 72 calls
+        # at a 50% hit rate, with per-call volume risen from ~670k to ~2.96M as
+        # the history grew.
+        {
+            "type": "text",
+            "text": history,
+            "cache_control": cache_control(getattr(cfg, "cache_ttl", None)),
+        },
     ]
 
     # History and deferrals lead the situational half: they are the run's state
     # rather than its instructions, and the planner reads them before deciding.
-    current: list[str] = [situational]
+    current: list[str] = [volatile]
 
     if status_tail:
         current.append(
@@ -541,8 +549,11 @@ def build_planner_messages(
             "restating the same instruction."
         )
 
-    messages.append({"role": "user", "content": "\n\n".join(current)})
-    return messages
+    # One user message, three blocks. Two consecutive user messages would be
+    # rejected by the API, and splitting across messages would put the
+    # breakpoints in the wrong place anyway.
+    blocks.append({"type": "text", "text": "\n\n".join(current)})
+    return [{"role": "user", "content": blocks}]
 
 
 def _failure_block(failure: FailureDetail) -> str:

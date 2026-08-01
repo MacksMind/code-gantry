@@ -85,7 +85,7 @@ class TestCacheLifetime:
         messages = build_planner_messages(
             cfg=cfg, plan=a_plan(), completed=[], layout="- `src/` (1)"
         )
-        assert messages[0]["content"][-1]["cache_control"] == {
+        assert messages[0]["content"][0]["cache_control"] == {
             "type": "ephemeral",
             "ttl": "1h",
         }
@@ -96,7 +96,7 @@ class TestCacheLifetime:
         messages = build_planner_messages(
             cfg=SimpleNamespace(cache_ttl=None), plan=a_plan(), completed=[]
         )
-        assert messages[0]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+        assert messages[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
 
 
 class TestPlannerCacheBreakpoint:
@@ -106,7 +106,7 @@ class TestPlannerCacheBreakpoint:
         )
         blocks = messages[0]["content"]
         assert isinstance(blocks, list), "a string cannot carry cache_control"
-        assert blocks[-1]["cache_control"] == {"type": "ephemeral"}
+        assert blocks[0]["cache_control"] == {"type": "ephemeral"}
 
     def test_the_plan_and_layout_are_inside_the_cached_block(self):
         messages = build_planner_messages(
@@ -132,7 +132,7 @@ class TestPlannerCacheBreakpoint:
             interventions_max=12,
         )
         assert "TAIL_MARKER" not in leading_text(messages)
-        assert "TAIL_MARKER" in messages[-1]["content"]
+        assert "TAIL_MARKER" in messages[0]["content"][-1]["text"]
 
     def test_the_budget_countdown_is_not_cached(self):
         # It decrements on interventions, so caching it would defeat the point.
@@ -142,20 +142,31 @@ class TestPlannerCacheBreakpoint:
         )
         assert "intervention(s) left" not in leading_text(messages)
 
-    def test_exactly_one_breakpoint(self):
-        # Anthropic allows a small number of breakpoints; spending them on
-        # anything but the one boundary that matters wastes them.
+    def test_two_breakpoints_and_no_more(self):
+        """One after the plan, one after the completed history.
+
+        The second is what makes the agentic loop affordable: a derivation
+        runs ten to twenty-five turns, every turn re-sends the whole prompt,
+        and the history is byte-identical across all of them. It sits after
+        the plan rather than with it because it grows — and it grows only at
+        the end, so the provider extends the cached prefix instead of
+        rebuilding it.
+
+        The cost table and the deferral list stay outside both. The table is a
+        sliding window of the last twelve and the list mutates in place, so a
+        breakpoint after them would miss on every stage and cost more than not
+        caching at all.
+        """
         messages = build_planner_messages(
             cfg=None, plan=a_plan(), completed=[], layout="x"
         )
         marked = [
-            b
-            for m in messages
+            b for m in messages
             if isinstance(m["content"], list)
             for b in m["content"]
             if "cache_control" in b
         ]
-        assert len(marked) == 1
+        assert len(marked) == 2
 
     def test_the_prefix_is_identical_across_calls_within_a_stage(self):
         # Caching depends on a byte-identical prefix. Anything varying here —
@@ -166,7 +177,9 @@ class TestPlannerCacheBreakpoint:
         second = build_planner_messages(
             cfg=None, plan=a_plan(), completed=[], layout="L", status_tail="b"
         )
-        assert first[0] == second[0]
+        # The cached blocks, not the whole message: the volatile tail is
+        # expected to differ, which is why it is outside the breakpoints.
+        assert first[0]["content"][:2] == second[0]["content"][:2]
 
 
 class TestARunsHistoryIsNotTheProjectsHistory:
@@ -506,10 +519,12 @@ class TestThePlannerPrefixAlsoSurvivesALanding:
         messages = build_planner_messages(
             cfg=None, plan=a_plan("PLAN_TEXT"), completed=[], layout="LAYOUT_TEXT"
         )
-        marked = messages[0]["content"][-1]
+        marked = messages[0]["content"][0]
         assert "PLAN_TEXT" in marked["text"]
         assert "LAYOUT_TEXT" in marked["text"]
         assert "cache_control" in marked
+        # And the volatile tail is deliberately not marked.
+        assert "cache_control" not in messages[0]["content"][-1]
 
     def test_the_history_is_outside_the_marked_block(self):
         from orchestrator.prompts import build_planner_messages
@@ -521,13 +536,29 @@ class TestThePlannerPrefixAlsoSurvivesALanding:
         assert "earlier" not in leading_text(messages)
 
     def test_the_prefix_is_identical_before_and_after_a_landing(self):
+        """The plan block must survive a landing untouched.
+
+        The history block is *expected* to change — it grew — but it grows only
+        at the end, which is what lets the provider extend the cached prefix
+        rather than rebuild it.
+        """
         from orchestrator.prompts import build_planner_messages
 
-        before = build_planner_messages(cfg=None, plan=a_plan(), completed=[], layout="L")
-        after = build_planner_messages(
+        one = build_planner_messages(
             cfg=None, plan=a_plan(), completed=[{"id": "x", "index": 0}], layout="L"
         )
-        assert before[0] == after[0]
+        two = build_planner_messages(
+            cfg=None, plan=a_plan(),
+            completed=[{"id": "x", "index": 0}, {"id": "y", "index": 1}],
+            layout="L",
+        )
+        assert one[0]["content"][0] == two[0]["content"][0], "the plan is untouched"
+        # Steady state, which is what the cache sees for all but the first
+        # landing: the empty-history block says "no stages yet" and so is not a
+        # prefix of the populated one, but every landing after that appends.
+        assert two[0]["content"][1]["text"].startswith(
+            one[0]["content"][1]["text"]
+        ), "the history must grow at the end, never be rewritten"
 
     def test_a_deferral_does_not_evict_the_plan_either(self):
         from orchestrator.prompts import build_planner_messages
@@ -537,7 +568,7 @@ class TestThePlannerPrefixAlsoSurvivesALanding:
             cfg=None, plan=a_plan(), completed=[], layout="L",
             deferred=[{"plan_step": "aws", "reason": "no access"}],
         )
-        assert before[0] == after[0]
+        assert before[0]["content"][:2] == after[0]["content"][:2]
 
     def test_the_history_still_reaches_the_planner(self):
         from orchestrator.prompts import build_planner_messages

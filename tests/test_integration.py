@@ -608,9 +608,8 @@ class TestDeferredPlanSteps:
         # it on every change. It must still reach the planner, just later.
         leading = messages[0]["content"][0]["text"]
         assert "Audit CloudWatch logs" not in leading
-        rest = "".join(
-            m["content"] if isinstance(m["content"], str)
-            else "".join(b["text"] for b in m["content"])
-            for m in messages[1:]
-        )
+        # Everything after the two cached blocks. The planner now returns a
+        # single message whose blocks are plan, history, then the volatile
+        # tail, so "the rest" is that tail rather than later messages.
+        rest = "".join(b["text"] for b in messages[0]["content"][2:])
         assert "Audit CloudWatch logs" in rest
