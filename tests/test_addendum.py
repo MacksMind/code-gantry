@@ -17,8 +17,8 @@ from pathlib import Path
 from orchestrator.addendum import append_notes
 
 
-def note(step="item 17", observation="8 of 9 controllers are clean", **over):
-    n = {"plan_step": step, "observation": observation, "supersedes": ""}
+def note(observation="8 of 9 controllers are clean", **over):
+    n = {"plan_path": "docs/PLAN.md", "anchor": "", "observation": observation}
     n.update(over)
     return n
 
@@ -45,7 +45,6 @@ class TestContent:
     def test_records_the_observation_and_where_it_came_from(self, tmp_path):
         written = write(tmp_path, [note(observation="`search` found 0 remaining")])
         body = written.read_text()
-        assert "item 17" in body
         assert "`search` found 0 remaining" in body
         # Which stage produced it, and nothing else about provenance. The sha
         # and the date belong to the commit this entry lands inside, and git
@@ -56,7 +55,7 @@ class TestContent:
 
     def test_records_what_the_plan_currently_claims(self, tmp_path):
         written = write(
-            tmp_path, [note(supersedes="checklist says 24 sites across 9 controllers")]
+            tmp_path, [note(anchor="checklist says 24 sites across 9 controllers")]
         )
         assert "24 sites across 9 controllers" in written.read_text()
 
@@ -128,174 +127,101 @@ class TestTheHeadingIsLiftedFromThePlan:
     The log this replaces had one heading repeated seventeen times — the
     superseded plan text, quoted verbatim by seventeen stages sweeping one
     item. Identical, and distinguishable only by a count buried in the prose,
-    so nothing could tell which was still true. Keying on a line reference and
-    lifting the heading from the document makes stages working the same section
-    agree by construction rather than by the model phrasing it the same way
-    twice.
+    so nothing could tell which was still true.
+
+    Now the planner quotes a passage, the tool finds it, and the heading comes
+    from the document. Two stages working the same section agree by
+    construction rather than by the model phrasing it the same way twice.
     """
 
     def plan(self, path):
         return PLAN if path == "docs/PLAN.md" else None
 
-    def test_the_header_comes_from_the_document(self, tmp_path):
+    def test_the_header_and_the_lines_come_from_the_document(self, tmp_path):
         written = write(
             tmp_path,
-            [note(observation="zero sites remain", plan_ref="docs/PLAN.md#L7-L9")],
-            read_plan=self.plan,
-            plan_sha="a3f19c2bcd45",
+            [note(observation="zero sites remain",
+                  anchor="`before_filter` is deprecated. 152 sites.")],
+            read_plan=self.plan, plan_sha="a3f19c2bcd45",
         )
-        text = written.read_text()
-        assert "## Filter macros — `docs/PLAN.md#L7-L9` @ `a3f19c2bcd45`" in text
+        # Line 7 of PLAN, found by the tool rather than counted by the planner.
+        assert "## Filter macros — `docs/PLAN.md#L7` @ `a3f19c2bcd45`" in written.read_text()
 
-    def test_two_stages_citing_one_section_get_one_heading(self, tmp_path):
-        # The entire point. These are written by separate stages with different
-        # prose, and they must still collate.
-        for observation in ("seven remain", "zero remain"):
+    def test_two_stages_quoting_one_section_get_one_heading(self, tmp_path):
+        # The entire point. Different prose, different quotes from the same
+        # section, and they must still collate.
+        for anchor in ("`before_filter` is deprecated. 152 sites.",
+                       "Line about something else."):
             written = write(
-                tmp_path,
-                [note(observation=observation, plan_ref="docs/PLAN.md#L9")],
-                read_plan=self.plan,
-                plan_sha="a3f19c2bcd45",
+                tmp_path, [note(anchor=anchor)],
+                read_plan=self.plan, plan_sha="a3f19c2bcd45",
             )
         headings = [
-            line for line in written.read_text().splitlines()
+            line.split(" — ")[0] for line in written.read_text().splitlines()
             if line.startswith("## ")
         ]
-        assert len(headings) == 2
-        assert headings[0] == headings[1]
+        assert headings == ["## Filter macros", "## Filter macros"]
 
-    def test_it_finds_the_section_the_line_is_inside(self, tmp_path):
+    def test_it_finds_the_section_the_quote_is_inside(self, tmp_path):
         written = write(
             tmp_path,
-            [note(plan_ref="docs/PLAN.md#L13")],
+            [note(anchor="The gem must come out before Rails 5.")],
             read_plan=self.plan, plan_sha="a3f19c2",
         )
         assert "## Deprecated finders" in written.read_text()
 
-    def test_a_preamble_falls_under_the_documents_title(self, tmp_path):
-        # Line 3 sits above every `##` but below the `#`. The title is the
-        # section it is in, and is a better answer than refusing to name one.
+    def test_a_quote_spanning_lines_gets_a_range(self, tmp_path):
         written = write(
             tmp_path,
-            [note(step="", plan_ref="docs/PLAN.md#L3")],
+            [note(anchor="`before_filter` is deprecated. 152 sites. Line about something else.")],
+            read_plan=self.plan, plan_sha="a3f19c2",
+        )
+        assert "`docs/PLAN.md#L7-L9`" in written.read_text()
+
+    def test_a_preamble_falls_under_the_documents_title(self, tmp_path):
+        # Above every `##` but below the `#`. The title is the section it is
+        # in, and a better answer than refusing to name one.
+        written = write(
+            tmp_path,
+            [note(anchor="Preamble that belongs to no section.")],
             read_plan=self.plan, plan_sha="a3f19c2",
         )
         assert "## Rails 5 migration — `docs/PLAN.md#L3`" in written.read_text()
 
-    def test_a_bad_citation_never_costs_the_observation(self, tmp_path):
+    def test_a_quote_that_is_not_there_never_costs_the_observation(self, tmp_path):
         """The entry is written regardless, with the problem named.
 
         Three defects on this project were plan notes computed correctly and
         lost on the way to disk. The progress record is what the next run reads
-        to know what is done; a malformed line reference is worth a missing
-        header, not a missing fact.
+        to know what is done; a quotation the tool cannot find is worth a
+        missing heading, not a missing fact.
         """
         written = write(
             tmp_path,
-            [note(observation="zero remain", plan_ref="docs/PLAN.md#L900")],
+            [note(observation="zero remain", anchor="a passage that is nowhere in this document")],
             read_plan=self.plan, plan_sha="a3f19c2",
         )
         text = written.read_text()
         assert "zero remain" in text
-        assert "citation" in text and "past the end" in text
-
-    def test_an_unparseable_reference_says_so(self, tmp_path):
-        written = write(
-            tmp_path,
-            [note(observation="zero remain", plan_ref="item 17, the filter bit")],
-            read_plan=self.plan, plan_sha="a3f19c2",
-        )
-        assert "zero remain" in written.read_text()
-        assert "not a `path#Lstart-Lend` reference" in written.read_text()
+        assert "the quoted text was not found" in text
 
     def test_a_document_that_is_not_in_the_plan_commit(self, tmp_path):
         written = write(
             tmp_path,
-            [note(plan_ref="docs/NOPE.md#L1-L2")],
+            [note(plan_path="docs/NOPE.md", anchor="The gem must come out before Rails 5.")],
             read_plan=self.plan, plan_sha="a3f19c2",
         )
         assert "not readable in the plan at this commit" in written.read_text()
 
-
-class TestTheCitationAndTheQuotationMustAgree:
-    """A reference is only better than a quotation because it is checkable.
-
-    Nothing checked it. The first three notes written under the reference
-    format all cited a real file and a real in-range line span, and all three
-    pointed somewhere else — one aimed the `ApplicationRecord` item at a
-    `render text:` bullet forty lines away. Every one passed the only test
-    there was, "does this range exist".
-
-    The note carries the evidence to catch it: `supersedes` is what the planner
-    says the plan states, `plan_ref` is where it says so, and they have to
-    agree.
-    """
-
-    PLAN = (
-        "# Plan\n\n## Models\n\n"
-        "Add `ApplicationRecord` base class, migrate models in batches.\n\n"
-        "## Rendering\n\n"
-        "`render text:` becomes `render plain:` across 9 controllers.\n"
-    )
-
-    def plan(self, path):
-        return self.PLAN if path == "docs/PLAN.md" else None
-
-    def test_a_quote_from_another_section_is_flagged(self, tmp_path):
+    def test_a_literal_escape_becomes_the_character_it_meant(self, tmp_path):
+        # A planner that double-escapes emits `\\u2014` in its JSON, which
+        # decodes to a literal backslash-u and lands in committed Markdown
+        # looking like a bug in this tool. Seen twice in one stage of fifty-two.
         written = write(
             tmp_path,
-            [note(
-                plan_ref="docs/PLAN.md#L8-L9",
-                observation="the sweep is done",
-                supersedes="Add `ApplicationRecord` base class, migrate models in batches.",
-            )],
+            [note(observation="Stage 1 \\u2192 Stage 2 is done \\u2014 fully")],
             read_plan=self.plan, plan_sha="a3f19c2",
         )
         text = written.read_text()
-        assert "reference and the quotation disagree" in text
-        assert "the sweep is done" in text, "the observation survives regardless"
-
-    def test_a_quote_that_is_there_passes(self, tmp_path):
-        written = write(
-            tmp_path,
-            [note(
-                plan_ref="docs/PLAN.md#L5",
-                supersedes="Add `ApplicationRecord` base class, migrate models in batches.",
-            )],
-            read_plan=self.plan, plan_sha="a3f19c2",
-        )
-        assert "disagree" not in written.read_text()
-
-    def test_rewording_and_emphasis_do_not_trip_it(self, tmp_path):
-        # The failure being caught is gross. Flagging a lightly reworded quote
-        # would train whoever folds these to ignore the warning.
-        written = write(
-            tmp_path,
-            [note(
-                plan_ref="docs/PLAN.md#L5",
-                supersedes="add **ApplicationRecord** base class, migrate models in batches",
-            )],
-            read_plan=self.plan, plan_sha="a3f19c2",
-        )
-        assert "disagree" not in written.read_text()
-
-    def test_an_ellipsis_splits_the_quote(self, tmp_path):
-        written = write(
-            tmp_path,
-            [note(
-                plan_ref="docs/PLAN.md#L3-L5",
-                supersedes="## Models ... migrate models in batches.",
-            )],
-            read_plan=self.plan, plan_sha="a3f19c2",
-        )
-        assert "disagree" not in written.read_text()
-
-    def test_a_note_with_no_quotation_is_not_flagged(self, tmp_path):
-        # `supersedes` is optional — the plan may simply be silent. With
-        # nothing to compare, there is no disagreement to report.
-        written = write(
-            tmp_path,
-            [note(plan_ref="docs/PLAN.md#L5", supersedes="")],
-            read_plan=self.plan, plan_sha="a3f19c2",
-        )
-        assert "disagree" not in written.read_text()
+        assert "Stage 1 → Stage 2 is done — fully" in text
+        assert "u2192" not in text

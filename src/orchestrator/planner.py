@@ -196,21 +196,23 @@ class PlanNote(BaseModel):
     about what the work has become and does not belong mid-run.
     """
 
-    plan_ref: str = Field(
+    plan_path: str = Field(
+        description="Which plan document this is about, as a repo-relative "
+        "path. One of the documents shown to you above."
+    )
+    anchor: str = Field(
         description=(
-            "Where in the plan this is about, as `path#Lstart-Lend` — the same "
-            "shape as a GitHub line link, e.g. `docs/PLAN.md#L120-L134`. Use a "
-            "plan document, and use the line numbers you actually saw: "
-            "`read_file` and `search` both number what they return, so cite "
-            "from those rather than from memory.\n\n"
-            "A reference, not a quotation. Every stage that advances one plan "
-            "section cites the same lines, which is what lets a reader see all "
-            "of them together and take the last as current — quoting the "
-            "text instead produced seventeen entries with identical headings "
-            "and no way to tell which one still held.\n\n"
-            "Do not write a title for the entry. The heading above these lines "
-            "is lifted from the document itself, so two stages working the "
-            "same section get the same one without having to agree."
+            "A short exact quote from that document — the sentence, bullet or "
+            "table row this note is about. Copy it, do not paraphrase it: it "
+            "is matched against the document to work out which lines you mean, "
+            "and the line numbers in the entry are derived from where it is "
+            "found.\n\n"
+            "So do not give line numbers yourself. The documents are shown to "
+            "you as prose and counting their lines is not something you can do "
+            "reliably — three attempts at it each named a real file, a real "
+            "span, and the wrong passage. Quoting is the part you are good at.\n\n"
+            "One or two sentences is plenty. Long enough to appear once in the "
+            "document rather than anywhere, short enough to copy exactly."
         )
     )
     observation: str = Field(
@@ -230,13 +232,6 @@ class PlanNote(BaseModel):
             "decrement the plan twice."
         )
     )
-    supersedes: str = Field(
-        default="",
-        description="What the plan currently says about this, if it says "
-        "anything — the text a later pass will be replacing. Leave empty when "
-        "the plan is merely silent.",
-    )
-
 
 class PlannerResponse(BaseModel):
     verdict: Verdict = Field(

@@ -1264,9 +1264,9 @@ class TestPlanNotesSurviveFromDerivationToLanding:
     """
 
     A_NOTE = {
-        "plan_ref": "PLAN.md#L3-L4",
+        "plan_path": "PLAN.md",
+        "anchor": "24 sites across 9 controllers.",
         "observation": "This sweep is complete; 0 sites remain in app/controllers.",
-        "supersedes": "checklist says 24 sites across 9 controllers",
     }
 
     def test_the_note_survives_stage_derivation(self, repo, tmp_path):
@@ -1317,8 +1317,8 @@ class TestPlanNotesSurviveFromDerivationToLanding:
         # The heading is lifted from the cited document at `plan_sha`, so the
         # reference has to survive the same trip the observation does — and be
         # resolvable against the commit once it arrives.
-        assert "## Render sweeps — `PLAN.md#L3-L4`" in text, (
-            "the citation must reach the writer and resolve against the plan"
+        assert "## Render sweeps — `PLAN.md#L4`" in text, (
+            "the quote must reach the writer and be located in the plan"
         )
         # Inside the stage's own commit, not trailing after it.
         assert "progress_log.md" in rt.git._out("show", "--stat", "HEAD")

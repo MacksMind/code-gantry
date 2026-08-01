@@ -88,9 +88,9 @@ def stub_planner(monkeypatch, notes, *, reader=object()):
 
 
 A_NOTE = {
-    "plan_step": "1. Convert 24 call sites",
+    "plan_path": "PLAN.md",
+    "anchor": "1. Convert 24 call sites",
     "observation": "search finds 0 remaining in app/",
-    "supersedes": "the plan says 24",
 }
 
 
@@ -109,7 +109,7 @@ class TestItActuallyRuns:
         CliRunner().invoke(cli.main, ["reconcile", "demo"])
         written = (repo / "docs" / "addendum" / "plan-addendum.md").read_text()
         assert "search finds 0 remaining" in written
-        assert "the plan says 24" in written
+        assert "1. Convert 24 call sites" in written
 
     def test_dry_run_writes_nothing(self, project, monkeypatch):
         repo, _ = project

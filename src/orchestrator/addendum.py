@@ -82,79 +82,88 @@ def _normalise(text: str) -> str:
     return " ".join(_NOISE.sub("", text or "").split()).casefold()
 
 
-def quotes_the_range(supersedes: str, span: str) -> bool:
-    """Does the quoted plan text actually appear in the lines cited?
+def locate(anchor: str, text: str) -> tuple[int, int] | None:
+    """The line span of `anchor` within `text`, 1-based and inclusive.
 
-    The check the whole scheme rests on. A line reference is only better than
-    a quotation because it is verifiable, and nothing verified it: the first
-    two notes written under the new format both cited real files, real
-    in-range lines, and the wrong place entirely — one pointed the
-    `ApplicationRecord` item at a `render text:` bullet forty lines away. Both
-    passed a "does this range exist" check, which is all there was.
+    The counting belongs here. Asking the planner for a line range meant
+    asking a model to count lines in a document the prompt shows it as
+    unnumbered prose — the first three citations under that scheme were each a
+    real file and a real in-range span pointing at the wrong place entirely.
+    Character offsets would be worse, not better; nothing that reads text as
+    tokens can count either.
 
-    The note already carries the evidence to catch that. `supersedes` is what
-    the planner says the plan currently states, `plan_ref` is where it says it
-    states it, and the two have to agree.
-
-    Deliberately tolerant, because the failure being caught is gross. A quote
-    lightly reworded, with an ellipsis, or with different markdown emphasis is
-    still the same passage; a quote from a different section shares almost
-    nothing. So: normalise, allow an ellipsis to split a quote into parts, and
-    accept a part when most of its substantial words are present.
+    What the planner is reliably good at is quoting. Every anchor it produced
+    while the field was called `supersedes` was real text from a real plan
+    document; only the arithmetic was wrong. So it quotes and this counts.
     """
-    hay = _normalise(span)
-    if not hay:
-        return False
-    for part in re.split(r"\.{3}|…", supersedes or ""):
-        needle = _normalise(part)
-        # Too short to be evidence in either direction — a handful of common
-        # words appears in any prose, and flagging on it would train the reader
-        # to ignore the warning.
-        if len(needle) < 12:
-            continue
-        if needle in hay:
-            continue
-        words = [w for w in needle.split() if len(w) > 3]
-        if not words:
-            continue
-        if sum(1 for w in words if w in hay) / len(words) < 0.6:
-            return False
-    return True
+    needle = _normalise(anchor)
+    if len(needle) < 12:
+        return None
+    lines = text.splitlines()
+
+    # The tightest window, not the first one found. Windows are tested from the
+    # top of the document, so the earliest `first` that reaches the quote at
+    # all is line 1 — returning that would cite the whole document up to the
+    # passage rather than the passage.
+    best: tuple[int, int] | None = None
+    for first in range(len(lines)):
+        for last in range(first, len(lines)):
+            joined = _normalise("\n".join(lines[first : last + 1]))
+            if needle in joined:
+                if best is None or (last - first) < (best[1] - best[0]):
+                    best = (first, last)
+                break
+            if len(joined) > len(needle) * 3:
+                break
+    return (best[0] + 1, best[1] + 1) if best else None
 
 
-def resolve_citation(ref: str, supersedes: str, read_plan) -> tuple[str, str]:
-    """(header, problem) for a citation, without ever discarding the note.
+def resolve_anchor(path: str, anchor: str, read_plan) -> tuple[str, str, str]:
+    """(header, `path#Lx-Ly`, problem) — never discarding the note.
 
-    A bad citation costs a header. It must not cost the observation: the
-    progress record is the thing the next run reads to know what is done, and
-    three separate defects this project has already shipped were notes computed
-    correctly and lost on the way to disk. So an unresolvable reference is
-    reported in the entry and the entry is still written.
+    A quotation that cannot be found costs its location. It must not cost the
+    observation: the progress record is what the next run reads to know what is
+    done, and three separate defects on this project were notes computed
+    correctly and lost on the way to disk.
     """
-    parsed = parse_ref(ref)
-    if not parsed:
-        return "", "citation is not a `path#Lstart-Lend` reference"
-    path, start, end = parsed
+    if not path:
+        return "", "", "no plan document named"
     try:
         text = read_plan(path)
     except Exception:
-        return "", f"`{path}` is not readable in the plan at this commit"
+        text = None
     if text is None:
-        return "", f"`{path}` is not readable in the plan at this commit"
-    body = text.splitlines()
-    if start > len(body):
-        return "", f"`{path}` has {len(body)} lines; L{start} is past the end"
+        return "", "", f"`{path}` is not readable in the plan at this commit"
+    if not anchor.strip():
+        return "", "", "no quotation given, so there is nothing to locate"
 
-    header = heading_at(text, start)
-    if supersedes and not quotes_the_range(supersedes, "\n".join(body[start - 1 : end])):
-        # The header still stands — it is genuinely the section at those lines.
-        # Saying so alongside the mismatch is more use to whoever folds this
-        # than withholding it, since the point is that the two disagree.
-        return header, (
-            f"L{start}-L{end} of `{path}` do not contain the quoted text; the "
-            "reference and the quotation disagree"
+    span = locate(anchor, text)
+    if span is None:
+        return "", "", (
+            f"the quoted text was not found in `{path}`; the note and the "
+            "document disagree about what the plan says"
         )
-    return header, ""
+    first, last = span
+    ref = f"{path}#L{first}" + (f"-L{last}" if last != first else "")
+    return heading_at(text, first), ref, ""
+
+
+_ESCAPE = re.compile(r"(?<!\\)\\u([0-9a-fA-F]{4})")
+
+
+def decode_escapes(text: str) -> str:
+    """`\\u2014` written literally becomes the character it meant.
+
+    The planner returns JSON, and a model that double-escapes a non-ASCII
+    character emits `\\\\u2014` — which decodes correctly to a backslash
+    followed by `u2014`, and lands in a committed Markdown document looking
+    like a bug in this tool. Seen twice in one stage out of fifty-two.
+
+    Narrow on purpose: a sequence already escaped by a preceding backslash is
+    left alone, so a document that legitimately discusses escape syntax keeps
+    saying what it said.
+    """
+    return _ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), text or "")
 
 
 def _entry(note: dict, stage_id: str, read_plan=None, plan_sha: str = "") -> str:
@@ -171,14 +180,14 @@ def _entry(note: dict, stage_id: str, read_plan=None, plan_sha: str = "") -> str
     them blame forty lines to see which piece of work each came from would be a
     poor trade for one line of redundancy.
     """
-    ref = (note.get("plan_ref") or "").strip()
-    header, problem = ("", "")
-    if ref and read_plan is not None:
-        header, problem = resolve_citation(
-            ref, note.get("supersedes") or "", read_plan
+    anchor = decode_escapes((note.get("anchor") or "").strip())
+    header, ref, problem = ("", "", "")
+    if read_plan is not None:
+        header, ref, problem = resolve_anchor(
+            (note.get("plan_path") or "").strip(), anchor, read_plan
         )
 
-    title = header or note.get("plan_step") or "(unattributed)"
+    title = header or "(unattributed)"
     if ref:
         title += f" — `{ref}`"
         if plan_sha:
@@ -190,9 +199,9 @@ def _entry(note: dict, stage_id: str, read_plan=None, plan_sha: str = "") -> str
     lines = [f"## {title}", "", f"- **observed** while landing `{stage_id}`"]
     if problem:
         lines.append(f"- **citation** unresolved: {problem}")
-    if note.get("supersedes"):
-        lines.append(f"- **supersedes** {note['supersedes']}")
-    lines += ["", note.get("observation", "").strip(), ""]
+    if anchor:
+        lines.append(f"- **the plan says** {anchor}")
+    lines += ["", decode_escapes(note.get("observation", "")).strip(), ""]
     return "\n".join(lines)
 
 

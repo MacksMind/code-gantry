@@ -198,9 +198,9 @@ def reconcile(slug: str, dry_run: bool) -> None:
 
     click.echo(f"\n{len(outcome.plan_notes)} observation(s):")
     for note in outcome.plan_notes:
-        click.echo(f"\n  {note.get('plan_ref') or note.get('plan_step')}")
-        if note.get("supersedes"):
-            click.echo(f"    plan says: {note['supersedes']}")
+        click.echo(f"\n  {note.get('plan_path')}")
+        if note.get("anchor"):
+            click.echo(f"    plan says: {note['anchor']}")
         click.echo(f"    observed:  {note.get('observation')}")
 
     if dry_run:
