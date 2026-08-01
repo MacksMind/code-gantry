@@ -129,7 +129,8 @@ def plan(state: RunState, rt: Runtime) -> dict:
 
     messages = build_planner_messages(
         cfg=rt.cfg,
-        plan=rt.plan,
+        # Live, not the snapshot: this one says what has been done.
+        plan=rt.live_plan,
         completed=state.get("completed") or [],
         current_stage=stage,
         failure=state.get("last_failure"),

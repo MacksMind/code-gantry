@@ -1515,3 +1515,78 @@ class TestTheReadBudgetIsToldToThePlanner:
         state = with_stage(state, rt)
         out = nodes.execute(state, rt)
         assert "withheld_reads" not in out
+
+
+class TestTheProgressLogIsSentLive:
+    """The one plan document that must not be frozen.
+
+    Freezing the plan is right: a run should not have its instructions change
+    underneath it mid-flight. Applying that to the progress log made it
+    useless. Measured on the first long run — the snapshot held 6,680 bytes
+    while the file on disk had reached 114,554, so the planner was being shown
+    6% of the record of what had been done, and the prompt's instruction to
+    fetch the rest with `read_file` was taken twice in forty-nine derivations.
+
+    The log was only frozen because it is reachable by a markdown link from the
+    plan root, not because anyone decided progress should be immutable.
+    """
+
+    def _rt(self, repo, tmp_path, log="## Landed\n\nzero sites remain\n"):
+        cfg, rt, state = make(
+            repo, tmp_path, plan_addendum_path="docs/progress_log.md"
+        )
+        rt._plan = PlanTree(
+            root=PlanDocument(path="PLAN.md", content="# The plan"),
+            children=[
+                PlanDocument(path="docs/progress_log.md", content="stale"),
+                PlanDocument(path="runbook.md", content="static"),
+            ],
+        )
+        if log is not None:
+            (repo / "docs").mkdir(exist_ok=True)
+            (repo / "docs" / "progress_log.md").write_text(log)
+        return cfg, rt, state
+
+    def test_the_planner_gets_what_is_on_disk_now(self, repo, tmp_path):
+        cfg, rt, state = self._rt(repo, tmp_path)
+        payload = rt.live_plan.as_prompt_payload()
+        assert "zero sites remain" in payload
+        assert "stale" not in payload
+
+    def test_the_snapshot_itself_is_not_mutated(self, repo, tmp_path):
+        # `rt.plan` is held for the run and handed to the reviewer. Swapping a
+        # document in place would change what the reviewer judges against.
+        cfg, rt, state = self._rt(repo, tmp_path)
+        rt.live_plan
+        assert "stale" in rt.plan.as_prompt_payload()
+
+    def test_the_reviewer_still_judges_against_the_frozen_plan(
+        self, repo, tmp_path
+    ):
+        # Progress is not evidence about whether a diff did what it was asked.
+        cfg, rt, state = self._rt(repo, tmp_path)
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("changed\n")
+        nodes.review(state, rt)
+        sent = "\n".join(str(m) for m in rt.reviewer.cache_keys)
+        assert "zero sites remain" not in sent
+
+    def test_a_log_absent_from_the_snapshot_is_added(self, repo, tmp_path):
+        # A project whose plan root never links the log would otherwise never
+        # show the planner any progress at all.
+        cfg, rt, state = self._rt(repo, tmp_path)
+        rt._plan = PlanTree(root=PlanDocument(path="PLAN.md", content="# Plan"))
+        assert "zero sites remain" in rt.live_plan.as_prompt_payload()
+
+    def test_a_missing_file_falls_back_rather_than_failing(self, repo, tmp_path):
+        # A planner call is far too expensive to lose over a progress file that
+        # has not been written yet.
+        cfg, rt, state = self._rt(repo, tmp_path, log=None)
+        assert "stale" in rt.live_plan.as_prompt_payload()
+
+    def test_it_still_sinks_to_the_end(self, repo, tmp_path):
+        # It is now both live and the largest growing document, so its position
+        # in the cached prefix matters more than before, not less.
+        cfg, rt, state = self._rt(repo, tmp_path)
+        payload = rt.live_plan.as_prompt_payload(last="docs/progress_log.md")
+        assert payload.index("static") < payload.index("zero sites remain")

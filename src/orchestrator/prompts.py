@@ -172,12 +172,12 @@ def _plan_block(plan: PlanTree, addendum_path: str | None = None) -> str:
             f"them as it happens. `{addendum_path}` is where that is recorded, "
             "appended as each stage lands. When the two disagree about whether "
             "something is outstanding, the log is later.\n\n"
-            "Every document here was read once, when this run started. The log "
-            "on disk is appended to as stages land, so by mid-run it is ahead "
-            "of the copy above; reading it with `read_file` gives you the "
-            "later version. And neither is a substitute for looking at the "
-            "code — a count in a document is a claim about when someone wrote "
-            "it down."
+            "The other documents here were read once, when this run started, "
+            "and are the plan as it stood then. The log is not: it is included "
+            "as it stands now, with every entry written up to this call. There "
+            "is no later version to go and fetch.\n\n"
+            "It is still not a substitute for looking at the code. A count in "
+            "a document is a claim about when someone wrote it down."
         )
     # The log goes last among the documents. It is the only one that grows, and
     # in a concatenated cache prefix a document that grows re-bills everything
