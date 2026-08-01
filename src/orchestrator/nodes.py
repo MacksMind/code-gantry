@@ -497,12 +497,30 @@ def execute(state: RunState, rt: Runtime) -> dict:
     # it to verify: the gates exist to judge a tree, and they are better at it
     # than a report from the editor about its own blocks. If the tree really is
     # untouched, nothing below changes.
-    if result.unapplied_edit and not result.timed_out:
+    # A timeout counts too, but only on a *committed* tree. The first cut of
+    # this excluded timeouts on the reasoning that a stage killed mid-write can
+    # have half an edit — true, but "was it killed" is the wrong discriminator.
+    # The editor commits after applying, so a kill mid-write leaves the tree
+    # dirty; a kill while it churns on redundant blocks leaves it clean with
+    # commits ahead. That is the difference worth testing.
+    #
+    # Observed on two consecutive stages: the edit applied, the editor
+    # committed it, the model kept re-issuing blocks for work already done —
+    # "the REPLACE lines are already in app/models/item_svg.rb!" — and the
+    # reflection loop ran until the 900s kill. Three attempts, forty-five
+    # minutes, all of it redoing finished work before the fourth happened to
+    # stop early enough to be counted.
+    committed = not result.timed_out or (
+        rt.git.is_clean() and bool(rt.git.diff_names(state["stage_start_sha"]))
+    )
+    if (result.unapplied_edit or result.timed_out) and committed:
         if rt.git.diff_names(state["stage_start_sha"]):
-            rt.log(
-                f"[execute] {stage.id}: the editor could not apply part of its "
-                "reply, but the tree has changed — verifying what is there"
+            why = (
+                "was killed but had committed its work"
+                if result.timed_out
+                else "could not apply part of its reply, but the tree has changed"
             )
+            rt.log(f"[execute] {stage.id}: the editor {why} — verifying what is there")
             return {"next_hop": "verify", **measured}
 
     if result.timed_out:

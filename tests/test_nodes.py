@@ -1739,16 +1739,18 @@ class TestAnUnappliedEditOnAChangedTree:
         assert out["next_hop"] == "execute"
         assert "could not apply" in " ".join(out["review_feedback"])
 
-    def test_a_timeout_is_never_reinterpreted(self, repo, tmp_path):
-        # A stage killed mid-write may have a changed tree and half an edit.
-        # Only a completed reply earns the benefit of the doubt.
+    def test_a_timeout_on_a_dirty_tree_still_fails(self, repo, tmp_path, run_git):
+        """Killed mid-write. The edit is half applied and uncommitted.
+
+        "Was it killed" is the wrong discriminator — the editor commits after
+        applying, so a kill mid-write leaves the tree dirty and a kill while it
+        churns on redundant blocks leaves it clean with commits ahead.
+        """
         executor = StubExecutor(repo=repo, edits=[("app.py", "half\n")])
 
         def timed_out(stage, prompt, history_dir=None):
-            executor._apply()
-            return ExecutionResult(
-                ok=False, log="killed", timed_out=True, unapplied_edit=True
-            )
+            executor._apply()  # writes, does not commit
+            return ExecutionResult(ok=False, log="killed", timed_out=True)
 
         executor.run_agent_stage = timed_out
         cfg, rt, state = make(repo, tmp_path, executor=executor)
@@ -1756,3 +1758,29 @@ class TestAnUnappliedEditOnAChangedTree:
         out = nodes.execute(state, rt)
         assert out["next_hop"] == "execute"
         assert "timed out" in " ".join(out["review_feedback"])
+
+    def test_a_timeout_on_committed_work_goes_to_verify(
+        self, repo, tmp_path, run_git
+    ):
+        """Killed while churning on blocks it had already applied.
+
+        Observed on two consecutive stages: the edit landed, the editor
+        committed it, and the model kept re-issuing blocks for work already
+        done until the 900s kill. Three attempts and forty-five minutes went on
+        redoing finished work.
+        """
+        executor = StubExecutor(repo=repo, edits=[])
+
+        def committed_then_hung(stage, prompt, history_dir=None):
+            (repo / "app.py").write_text("the edit landed\n")
+            run_git(repo, "add", "-A")
+            run_git(repo, "commit", "-qm", "editor's own commit")
+            return ExecutionResult(ok=False, log="already applied", timed_out=True)
+
+        executor.run_agent_stage = committed_then_hung
+        cfg, rt, state = make(repo, tmp_path, executor=executor)
+        state = with_stage(state, rt)
+        out = nodes.execute(state, rt)
+        assert out["next_hop"] == "verify", (
+            "a clean tree with commits ahead is finished work, not a half edit"
+        )
