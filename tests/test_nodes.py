@@ -1590,3 +1590,49 @@ class TestTheProgressLogIsSentLive:
         cfg, rt, state = self._rt(repo, tmp_path)
         payload = rt.live_plan.as_prompt_payload(last="docs/progress_log.md")
         assert payload.index("static") < payload.index("zero sites remain")
+
+
+class TestTheWithoutLandingBudgetIsTerminalAndSaysSo:
+    """Hitting it kills the run, and the message has to admit that.
+
+    The check runs before the planner is called, and the counter only clears
+    when a stage lands — so a run that hits it re-escalates on every resume
+    with nothing having run. That terminality is deliberate: a budget an
+    operator can clear by re-running is not a budget, and resume-in-a-loop is
+    the exact failure it guards against.
+
+    What was wrong was the silence. Every other escalation means "fix it and
+    resume", resume works, and nothing distinguished this one — so the natural
+    next move spent a preflight and a container start to print the identical
+    message.
+    """
+
+    def _stuck(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        state = with_stage(state, rt)
+        return rt, {**state, "interventions_since_landing": 3}
+
+    def test_it_escalates(self, repo, tmp_path):
+        rt, state = self._stuck(repo, tmp_path)
+        out = nodes.plan(state, rt)
+        assert out["next_hop"] == "escalate"
+
+    def test_it_says_resume_will_not_help(self, repo, tmp_path):
+        rt, state = self._stuck(repo, tmp_path)
+        reason = nodes.plan(state, rt)["escalation_reason"]
+        assert "Resume alone will not clear this" in reason
+
+    def test_it_names_every_way_out(self, repo, tmp_path):
+        # A dead end that does not say which doors exist sends the operator to
+        # the one door that is locked.
+        rt, state = self._stuck(repo, tmp_path)
+        reason = nodes.plan(state, rt)["escalation_reason"]
+        assert "--reset-progress-budget" in reason
+        assert "max_interventions_without_landing" in reason
+        assert "fresh run" in reason
+
+    def test_the_planner_is_never_called(self, repo, tmp_path):
+        # The whole point: it stops before spending anything.
+        rt, state = self._stuck(repo, tmp_path)
+        nodes.plan(state, rt)
+        assert rt.planner.calls == [], "the budget must stop the call, not judge it"

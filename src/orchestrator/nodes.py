@@ -89,7 +89,24 @@ def plan(state: RunState, rt: Runtime) -> dict:
             "landing work is not capped, so this is the signal that it has "
             "stopped making progress rather than that it has done a lot.\n\n"
             f"The last failure was: "
-            f"{(state.get('last_failure') or {}).get('summary')}",
+            f"{(state.get('last_failure') or {}).get('summary')}\n\n"
+            # Said here because the natural next move is `resume`, and resume
+            # alone re-enters at this same check and prints this same message,
+            # having spent a preflight and an environment setup to do it. Every
+            # other escalation means "fix it and resume"; this one does not,
+            # and nothing else distinguishes them.
+            "**Resume alone will not clear this.** The counter only resets "
+            "when a stage lands, and no stage can land while this check stops "
+            "the run before the planner is called. Your options:\n"
+            "  - `orchestrator resume <run_id> --reset-progress-budget`, if "
+            "you have changed something that makes the earlier failures no "
+            "longer apply. That is you asserting it, not the run inferring "
+            "it.\n"
+            "  - Raise `max_interventions_without_landing` and approve the "
+            "config, if the work legitimately needs more attempts.\n"
+            "  - Start a fresh run. The progress log, stage costs, flake "
+            "record and project branch all outlive this run, so a new one "
+            "picks up where the work is rather than where the run was.",
         )
 
     if stage is not None and state.get("planner_interventions", 0) >= limits.max_planner_interventions:

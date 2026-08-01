@@ -393,8 +393,31 @@ def pause(run_id: str, note: str) -> None:
 
 @main.command()
 @click.argument("run_id")
-def resume(run_id: str) -> None:
-    """Continue after an interruption or an escalation a human has fixed."""
+@click.option(
+    "--reset-progress-budget",
+    is_flag=True,
+    help="Clear the without-landing intervention counter. Use when you have "
+    "changed something that makes the earlier failures no longer apply.",
+)
+def resume(run_id: str, reset_progress_budget: bool) -> None:
+    """Continue after an interruption or an escalation a human has fixed.
+
+    `--reset-progress-budget` exists because `max_interventions_without_landing`
+    is otherwise terminal: it is checked before the planner is called, so a run
+    that hits it re-escalates on every resume without anything running, and the
+    counter only clears when a stage lands.
+
+    That terminality is deliberate — a budget an operator can clear by
+    re-running is not a budget, and the failure it guards against is exactly
+    resume-in-a-loop. So the reset is explicit and human-asserted rather than
+    inferred from anything. A config change or a code fix does not clear it by
+    itself; someone has to say that the earlier failures no longer apply.
+
+    Observed: three interventions were spent on a stage whose instruction
+    required a file restoration that had already been done, and on quoted code
+    carrying four spaces of Markdown indentation. Both causes were fixed. The
+    run had no way to be told.
+    """
     project, cfg = _locate_run(run_id)
     paths = RunPaths(project, run_id)
 
@@ -443,6 +466,10 @@ def resume(run_id: str) -> None:
                 # redo it — asked to redo a finished stage, it has nothing to
                 # produce and no way to say so.
                 "stage_has_work": _stage_has_work(git, saved),
+                # Only when asked. Merging an empty dict leaves the counter
+                # where it was, so the default resume cannot clear it by
+                # accident.
+                **({"interventions_since_landing": 0} if reset_progress_budget else {}),
             },
             _warnings(checks),
         )
