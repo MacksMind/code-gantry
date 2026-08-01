@@ -665,7 +665,10 @@ def review(state: RunState, rt: Runtime) -> dict:
     stage = current_stage(state, rt)
     attempt = _attempt(state)
 
-    diff = rt.git.diff(state["stage_start_sha"])
+    # Line-ending churn hidden from the reviewer: it is the editor's doing in
+    # whichever direction the host's platform dictates, and judging it costs a
+    # stage that cannot comply.
+    diff = rt.git.diff(state["stage_start_sha"], ignore_line_endings=True)
     messages = build_review_messages(
         stage=stage,
         cfg=rt.cfg,

@@ -415,3 +415,84 @@ class TestRestartingAStageBranch:
         g.ensure_project_branch("proj", "main")
         start = g.cut_stage_branch("proj-stage/002-t", "proj", fresh=True)
         assert start == g.rev_parse("proj")
+
+
+class TestLineEndingChurnIsHiddenFromReview:
+    """The editor rewrites line endings; the reviewer must not judge that.
+
+    aider reads with universal newlines and writes with `--line-endings
+    platform`, so every file it touches is rewritten to the host's convention.
+    On a repository with mixed endings — most have some — a one-line semantic
+    change arrives as a whole-file rewrite.
+
+    Observed: a stage converting one Prototype call in a 156-line CRLF template
+    was rejected with "the semantic conversion matches the stage, but the
+    whole-file line-ending churn is out of scope and must be removed". The
+    executor cannot comply, so it reproduced the identical diff until the
+    progress guard stopped it.
+
+    Symmetric deliberately. On Linux and macOS the platform default turns CRLF
+    into LF; on Windows it turns LF into CRLF. Treating either direction as the
+    correct one would be wrong for half the operators, so direction is not
+    judged at all.
+    """
+
+    @staticmethod
+    def _changed(diff: str) -> str:
+        """Only the +/- lines. Context lines are not changes."""
+        return "\n".join(
+            l for l in diff.splitlines()
+            if (l.startswith("+") or l.startswith("-"))
+            and not l.startswith(("+++", "---"))
+        )
+
+    def _repo_with(self, tmp_path, run_git, original: bytes):
+        repo = tmp_path / "t"
+        repo.mkdir()
+        run_git(repo, "init", "-q", "-b", "main")
+        run_git(repo, "config", "user.email", "t@e.com")
+        run_git(repo, "config", "user.name", "T")
+        run_git(repo, "config", "commit.gpgsign", "false")
+        # Hermetic: a global core.hooksPath on the developer's machine counts
+        # a carriage return as trailing whitespace, which would make a CRLF
+        # fixture uncommittable and this test unrunnable.
+        run_git(repo, "config", "core.hooksPath", str(repo / ".no-hooks"))
+        (repo / "view.erb").write_bytes(original)
+        run_git(repo, "add", "-A")
+        run_git(repo, "commit", "-qm", "base")
+        return repo, run_git(repo, "rev-parse", "HEAD")
+
+    def test_crlf_to_lf_churn_is_invisible(self, tmp_path, run_git):
+        # The macOS and Linux case.
+        repo, base = self._repo_with(
+            tmp_path, run_git, b"<a>\r\n<b>\r\n<c>\r\n"
+        )
+        (repo / "view.erb").write_bytes(b"<a>\n<B>\n<c>\n")  # one real change
+        g = Git(repo)
+        shown = self._changed(g.diff(base, ignore_line_endings=True))
+        assert "<B>" in shown, "the semantic change must still be visible"
+        assert "<a>" not in shown, "churn on untouched lines must not be"
+
+    def test_lf_to_crlf_churn_is_invisible(self, tmp_path, run_git):
+        # The Windows case, which is the same problem pointed the other way.
+        repo, base = self._repo_with(tmp_path, run_git, b"<a>\n<b>\n<c>\n")
+        (repo / "view.erb").write_bytes(b"<a>\r\n<B>\r\n<c>\r\n")
+        g = Git(repo)
+        shown = self._changed(g.diff(base, ignore_line_endings=True))
+        assert "<B>" in shown
+        assert "<a>" not in shown
+
+    def test_without_the_flag_the_churn_is_visible(self, tmp_path, run_git):
+        # The default is unchanged: every other caller still sees everything.
+        repo, base = self._repo_with(tmp_path, run_git, b"<a>\r\n<b>\r\n<c>\r\n")
+        (repo / "view.erb").write_bytes(b"<a>\n<B>\n<c>\n")
+        assert "<a>" in self._changed(Git(repo).diff(base))
+
+    def test_a_content_change_cannot_hide_in_the_churn(self, tmp_path, run_git):
+        # The reason this is safe: only a trailing CR is disregarded. Anything
+        # else about a line still shows, so a real edit cannot ride along.
+        repo, base = self._repo_with(tmp_path, run_git, b"x = 1;\r\ny = 2;\r\n")
+        (repo / "view.erb").write_bytes(b"x = 1;\ny = 99;\n")
+        shown = self._changed(Git(repo).diff(base, ignore_line_endings=True))
+        assert "y = 99" in shown
+        assert "x = 1" not in shown

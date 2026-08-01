@@ -263,9 +263,39 @@ class Git:
         """
         self._run("add", "-A", "-N", ".")
 
-    def diff(self, since_sha: str) -> str:
+    def diff(self, since_sha: str, *, ignore_line_endings: bool = False) -> str:
+        """The stage's diff.
+
+        `ignore_line_endings` hides hunks whose only difference is a carriage
+        return at end of line. That churn is the editor's, not the model's:
+        aider reads with universal newlines and writes with `--line-endings
+        platform`, so every file it touches is rewritten to the host's
+        convention. On a repository with mixed endings — most have some — a
+        one-line semantic change arrives as a whole-file rewrite.
+
+        Symmetric on purpose. On Linux and macOS the platform default converts
+        CRLF to LF; on Windows it converts LF to CRLF. A fix that assumed
+        either direction was "correct" would be wrong for the other half of the
+        operators, so the direction is not judged at all.
+
+        Observed: a stage converting one Prototype call in a 156-line CRLF
+        template was rejected with "the semantic conversion matches the stage,
+        but the whole-file line-ending churn is out of scope and must be
+        removed". The executor cannot comply — nothing in the model chose the
+        rewrite — so it reproduced the identical diff until the progress guard
+        stopped it.
+
+        Used for the reviewer's copy only. `diff_names`, the scope guard and
+        `added_lines` are unaffected, and the churn still lands in the commit:
+        this hides it from a judgement it would only distort, not from the
+        record.
+        """
         self._mark_intent_to_add()
-        return self._run("diff", since_sha).stdout
+        args = ["diff"]
+        if ignore_line_endings:
+            args.append("--ignore-cr-at-eol")
+        args.append(since_sha)
+        return self._run(*args).stdout
 
     def diff_names(self, since_sha: str) -> list[str]:
         self._mark_intent_to_add()
