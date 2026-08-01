@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import traceback
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -542,6 +543,22 @@ def _drive(
                 ),
             },
         )
+    except Exception as exc:
+        # The run log is the artifact an operator tails, and until now it said
+        # nothing at all about a crash: the traceback went to stdout, which for
+        # an unattended run is a nohup file that the next resume overwrites.
+        #
+        # Observed: `advance` raised inside `squash_merge` — the project repo's
+        # pre-commit hook rejected a line the executor had written with
+        # trailing whitespace — and the log simply stopped mid-stage after
+        # "recorded 5 plan observation(s)". The repository was left with the
+        # merge staged and uncommitted, and it took reading SQUASH_MSG off the
+        # filesystem to reconstruct what had happened. The traceback that would
+        # have said so in one line was already gone.
+        log(f"[crash] {type(exc).__name__}: {exc}")
+        for line in traceback.format_exc().splitlines():
+            log(f"[crash] {line}")
+        raise
     finally:
         log.close()
         conn.close()

@@ -613,3 +613,52 @@ class TestDeferredPlanSteps:
         # tail, so "the rest" is that tail rather than later messages.
         rest = "".join(b["text"] for b in messages[0]["content"][2:])
         assert "Audit CloudWatch logs" in rest
+
+
+class TestACrashReachesTheRunLog:
+    """A node that raises must say so where an operator will find it.
+
+    `graph.invoke` was wrapped in try/finally with no except, so an exception
+    propagated to stdout — which for an unattended run is a nohup file the next
+    resume overwrites. The run log, the artifact anyone actually tails, said
+    nothing.
+
+    Observed: `advance` raised inside `squash_merge` when the project's own
+    pre-commit hook rejected a line the executor had written with trailing
+    whitespace. The log stopped mid-stage after "recorded 5 plan
+    observation(s)", the repository was left with the merge staged and
+    uncommitted, and reconstructing it meant reading SQUASH_MSG off the
+    filesystem three hours later.
+    """
+
+    def test_the_exception_is_written_to_the_run_log(self, tmp_path):
+        from orchestrator.runlog import RunLog
+
+        path = tmp_path / "run.log"
+        log = RunLog(path)
+        try:
+            try:
+                raise RuntimeError("squash merge of 'x' into 'y' failed: hook said no")
+            except Exception as exc:
+                import traceback as tb
+
+                log(f"[crash] {type(exc).__name__}: {exc}")
+                for line in tb.format_exc().splitlines():
+                    log(f"[crash] {line}")
+        finally:
+            log.close()
+
+        written = path.read_text()
+        assert "[crash] RuntimeError: squash merge" in written
+        assert "Traceback" in written, "the traceback is what makes it diagnosable"
+
+    def test_the_driver_has_an_except_clause(self):
+        # The defect was structural: try/finally with nothing catching. Pin it,
+        # because it reads as complete and is not.
+        import inspect
+        from orchestrator import cli
+
+        source = inspect.getsource(cli._drive)
+        assert "except Exception" in source
+        assert "[crash]" in source
+        assert "raise" in source, "logging must not swallow the failure"
