@@ -62,6 +62,10 @@ class StageResult(TypedDict, total=False):
     # Surfaced to the planner so it sizes the next stage from what this
     # executor actually carried rather than from a file count.
     executor_context_tokens: int
+    # Reference files the stage declared and the executor never received,
+    # because they did not fit `max_read_lines`. Told to the planner so it can
+    # choose what to drop, rather than having the tail of its list cut for it.
+    withheld_reads: list[str]
     base_sha: str
     merge_sha: str
     wall_seconds: float
@@ -158,6 +162,7 @@ class RunState(TypedDict, total=False):
     # not happen.
     pending_plan_notes: list[dict]
     executor_context_tokens: int
+    withheld_reads: list[str]
 
     planner_interventions: int
     # Reset every time a stage lands; see Limits.max_interventions_without_landing.
@@ -283,6 +288,10 @@ def fresh_stage_fields() -> dict:
         "review_verdict": None,
         "review_summary": None,
         "planner_notes": [],
+        # Belongs to the attempt that was truncated. Carried into the next
+        # stage it would report a withholding that stage never suffered, and
+        # the planner would trim a reference list that fits.
+        "withheld_reads": [],
         "stage_usage": _zero_usage(),
     }
 

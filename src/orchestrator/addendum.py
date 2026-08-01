@@ -32,10 +32,74 @@ launder its own history.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
-def _entry(note: dict, stage_id: str) -> str:
+_REF = re.compile(r"^(?P<path>[^#\s]+)#L(?P<start>\d+)(?:-L?(?P<end>\d+))?$")
+
+
+def parse_ref(ref: str) -> tuple[str, int, int] | None:
+    """`path#L23-L45`, the shape a GitHub permalink uses.
+
+    Returns None for anything that is not one, which is how a note whose
+    citation cannot be trusted stops being treated as a citation.
+    """
+    match = _REF.match((ref or "").strip())
+    if not match:
+        return None
+    start = int(match.group("start"))
+    end = int(match.group("end") or start)
+    return match.group("path"), start, min_max(start, end)
+
+
+def min_max(start: int, end: int) -> int:
+    return end if end >= start else start
+
+
+def heading_at(text: str, line: int) -> str:
+    """The nearest Markdown heading at or above `line`.
+
+    Derived rather than written. A header the planner composes is only as
+    consistent as the model's memory of how it phrased the same section last
+    time, and grouping entries is the entire job — two stages working the same
+    plan section have to produce the same string *necessarily*, not usually.
+    Lifting it from the document makes that structural.
+    """
+    body = text.splitlines()
+    for index in range(min(line, len(body)) - 1, -1, -1):
+        candidate = body[index].strip()
+        if candidate.startswith("#"):
+            return candidate.lstrip("#").strip()
+    return ""
+
+
+def resolve_header(ref: str, read_plan) -> tuple[str, str]:
+    """(header, problem) for a citation, without ever discarding the note.
+
+    A bad citation costs a header. It must not cost the observation: the
+    progress record is the thing the next run reads to know what is done, and
+    three separate defects this project has already shipped were notes computed
+    correctly and lost on the way to disk. So an unresolvable reference is
+    reported in the entry and the entry is still written.
+    """
+    parsed = parse_ref(ref)
+    if not parsed:
+        return "", "citation is not a `path#Lstart-Lend` reference"
+    path, start, end = parsed
+    try:
+        text = read_plan(path)
+    except Exception:
+        return "", f"`{path}` is not readable in the plan at this commit"
+    if text is None:
+        return "", f"`{path}` is not readable in the plan at this commit"
+    total = len(text.splitlines())
+    if start > total:
+        return "", f"`{path}` has {total} lines; L{start} is past the end"
+    return heading_at(text, start), ""
+
+
+def _entry(note: dict, stage_id: str, read_plan=None, plan_sha: str = "") -> str:
     """One observation, carrying only what git cannot tell you.
 
     No commit sha and no timestamp. Both belong to the commit this entry is
@@ -49,11 +113,23 @@ def _entry(note: dict, stage_id: str) -> str:
     them blame forty lines to see which piece of work each came from would be a
     poor trade for one line of redundancy.
     """
-    lines = [
-        f"## {note.get('plan_step', '(unattributed)')}",
-        "",
-        f"- **observed** while landing `{stage_id}`",
-    ]
+    ref = (note.get("plan_ref") or "").strip()
+    header, problem = ("", "")
+    if ref and read_plan is not None:
+        header, problem = resolve_header(ref, read_plan)
+
+    title = header or note.get("plan_step") or "(unattributed)"
+    if ref:
+        title += f" — `{ref}`"
+        if plan_sha:
+            # Pinned for the same reason a GitHub permalink is: the folding
+            # pass edits these documents, so a line range means one thing at
+            # the commit it was read from and something else afterwards.
+            title += f" @ `{plan_sha[:12]}`"
+
+    lines = [f"## {title}", "", f"- **observed** while landing `{stage_id}`"]
+    if problem:
+        lines.append(f"- **citation** unresolved: {problem}")
     if note.get("supersedes"):
         lines.append(f"- **supersedes** {note['supersedes']}")
     lines += ["", note.get("observation", "").strip(), ""]
@@ -66,6 +142,8 @@ def append_notes(
     notes: list[dict],
     *,
     stage_id: str,
+    read_plan=None,
+    plan_sha: str = "",
 ) -> Path | None:
     """Append entries to the progress log. Returns the file written, if any.
 
@@ -97,6 +175,6 @@ def append_notes(
 
     with target.open("a") as fh:
         for note in notes:
-            fh.write(_entry(note, stage_id))
+            fh.write(_entry(note, stage_id, read_plan, plan_sha))
             fh.write("\n")
     return target

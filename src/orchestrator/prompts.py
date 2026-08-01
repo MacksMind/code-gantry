@@ -289,6 +289,16 @@ def _history_block(completed: list[StageResult], addendum_path: str | None = Non
             line += (
                 f"\nExecutor context: {entry['executor_context_tokens']:,} tokens."
             )
+        # The stage asked for these and the executor never saw them: they did
+        # not fit the read budget, so the tail of the list was cut. Said here
+        # because the choice of what to drop is the planner's to make — it
+        # knows which reference it can do without, and truncation does not.
+        if entry.get("withheld_reads"):
+            line += (
+                "\nRead budget: the executor was not given "
+                f"{', '.join(entry['withheld_reads'])} — over `max_read_lines`. "
+                "Declare fewer or smaller `read_files` and the rest arrive."
+            )
         if entry.get("review_summary"):
             line += f"\nReviewer: {entry['review_summary']}"
         entries.append(line)

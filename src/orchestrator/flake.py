@@ -282,11 +282,12 @@ def predates_stage(
     is clean; declining to answer is the right move when it is not.
 
     `setup_command` runs after each reset, not just the first. Moving the tree
-    moves the environment with it: a stage that touched the Dockerfile, the
-    Gemfile, or the schema leaves containers built for the tip, and running the
-    base tree's specs against them measures the wrong thing in the direction
-    that produces a false "pre-existing". The restoring run matters for the
-    same reason — the environment is left matching the tree, as it was found.
+    moves the environment with it: a stage that touched a container image, a
+    dependency manifest, or the database schema leaves the environment built
+    for the tip, and running the base tree's tests against it measures the
+    wrong thing in the direction that produces a false "pre-existing". The
+    restoring run matters for the same reason — the environment is left
+    matching the tree, as it was found.
     If setup cannot be made to work at the base, the question goes unanswered
     rather than being answered wrongly.
     """

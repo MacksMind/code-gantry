@@ -42,7 +42,11 @@ READ_TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Repository-relative path, e.g. app/controllers/order_controller.rb",
+                    # No example path. This string is sent to the planner, and
+                    # an example drawn from one stack is a hint about a repo it
+                    # may not be looking at — the layout block already shows it
+                    # what this project's paths look like.
+                    "description": "Repository-relative path.",
                 },
                 "start": {"type": "integer", "description": "First line, 1-based."},
                 "end": {"type": "integer", "description": "Last line, inclusive."},

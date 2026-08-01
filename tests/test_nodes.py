@@ -18,7 +18,7 @@ from orchestrator.plandoc import PlanDocument, PlanTree
 from orchestrator.planner import PlannerOutcome, PlannerUsage
 from orchestrator.reviewer import Issue, ReviewOutcome, TokenUsage
 from orchestrator.runtime import ProjectPaths, RunPaths, Runtime
-from orchestrator.state import new_state
+from orchestrator.state import RunState, fresh_stage_fields, new_state
 
 # The operator's pattern, as a real project would configure it.
 RSPEC_PATTERN = r"^\s*rspec\s+'?\.?/?([^'\s\[:]+_spec\.rb)"
@@ -74,12 +74,16 @@ class StubExecutor:
             path.write_text(text)
 
     log: str = "executor log"
+    dropped_reads: list = field(default_factory=list)
 
     def run_agent_stage(self, stage, prompt, history_dir=None):
         self.prompts.append(prompt)
         self.history_dirs.append(history_dir)
         self._apply()
-        return ExecutionResult(ok=self.ok, log=self.log, timed_out=self.timed_out)
+        return ExecutionResult(
+            ok=self.ok, log=self.log, timed_out=self.timed_out,
+            dropped_reads=list(self.dropped_reads),
+        )
 
     def run_script_stage(self, stage):
         self._apply()
@@ -1260,7 +1264,7 @@ class TestPlanNotesSurviveFromDerivationToLanding:
     """
 
     A_NOTE = {
-        "plan_step": "item 17: render text: across 9 controllers",
+        "plan_ref": "PLAN.md#L3-L4",
         "observation": "This sweep is complete; 0 sites remain in app/controllers.",
         "supersedes": "checklist says 24 sites across 9 controllers",
     }
@@ -1281,7 +1285,7 @@ class TestPlanNotesSurviveFromDerivationToLanding:
             "the per-stage reset must not discard notes the planner just wrote"
         )
 
-    def test_the_note_lands_in_the_stage_commit(self, repo, tmp_path):
+    def test_the_note_lands_in_the_stage_commit(self, repo, tmp_path, run_git):
         planner = StubPlanner(
             [
                 PlannerOutcome(
@@ -1291,6 +1295,13 @@ class TestPlanNotesSurviveFromDerivationToLanding:
                 )
             ]
         )
+        # A real plan document, committed before the run measures anything, so
+        # the note's line reference has something to resolve against.
+        (repo / "PLAN.md").write_text(
+            "# The plan\n\n## Render sweeps\n24 sites across 9 controllers.\n"
+        )
+        run_git(repo, "add", "-A")
+        run_git(repo, "commit", "-qm", "plan")
         cfg, rt, state = make(
             repo, tmp_path, planner=planner, plan_addendum_path="docs/progress_log.md"
         )
@@ -1301,7 +1312,14 @@ class TestPlanNotesSurviveFromDerivationToLanding:
 
         log = repo / "docs" / "progress_log.md"
         assert log.exists(), "the stage landed without recording what it did"
-        assert "0 sites remain" in log.read_text()
+        text = log.read_text()
+        assert "0 sites remain" in text
+        # The heading is lifted from the cited document at `plan_sha`, so the
+        # reference has to survive the same trip the observation does — and be
+        # resolvable against the commit once it arrives.
+        assert "## Render sweeps — `PLAN.md#L3-L4`" in text, (
+            "the citation must reach the writer and resolve against the plan"
+        )
         # Inside the stage's own commit, not trailing after it.
         assert "progress_log.md" in rt.git._out("show", "--stat", "HEAD")
 
@@ -1425,3 +1443,75 @@ class TestStageCostOutlivesTheRun:
         (repo / "app.py").write_text("stage work\n")
         nodes.advance(state, rt)
         assert recent_stage_costs(rt.project.project_dir) == []
+
+
+class TestTheReadBudgetIsToldToThePlanner:
+    """The planner declares `read_files`; the tool silently cuts the tail.
+
+    Observed live: four consecutive stages each asked for one reference file
+    too many — `user.rb`, `schedule.rb`, `item.rb`, then a form template — and
+    each time the executor worked without a file the instruction went on to
+    reason about. Nothing failed, which is what makes it worth fixing: the
+    planner was choosing blind and had no way to learn it.
+
+    Same shape as the executor-token gap before it. A measurement the tool has
+    and the planner does not is a decision made on a guess.
+    """
+
+    def test_it_survives_from_the_executor_to_the_planners_history(
+        self, repo, tmp_path
+    ):
+        """End to end, because every part of this worked in isolation before.
+
+        Three defects this session were values computed correctly, written
+        correctly, and lost in transit — dropped by a schema that did not
+        declare them, or by a reset spread over the top of them. A unit test
+        on each end would have passed for all three.
+        """
+        executor = StubExecutor(
+            repo=repo,
+            edits=[("app.py", "changed\n")],
+            dropped_reads=["app/models/user.rb"],
+        )
+        cfg, rt, state = make(repo, tmp_path, executor=executor)
+        state = with_stage(state, rt)
+
+        state = {**state, **nodes.execute(state, rt)}
+        assert state["withheld_reads"] == ["app/models/user.rb"], (
+            "the execute node must carry what the executor withheld"
+        )
+
+        state = {**state, **nodes.verify(state, rt)}
+        state = {**state, **nodes.review(state, rt)}
+        state = {**state, **nodes.advance(state, rt)}
+        landed = state["completed"][-1]
+        assert landed["withheld_reads"] == ["app/models/user.rb"], (
+            "and the landed stage must keep it, or the planner never sees it"
+        )
+
+        nodes.plan(state, rt)
+        prompt = "\n".join(
+            m["content"] if isinstance(m["content"], str) else str(m["content"])
+            for m in rt.planner.calls[-1]
+        )
+        assert "app/models/user.rb" in prompt
+        assert "max_read_lines" in prompt
+
+    def test_it_is_declared_on_the_state_schema(self, repo, tmp_path):
+        # The graph drops keys the schema does not know. `full_suite_digest`
+        # shipped without this line once: written every time, discarded every
+        # time, and silently never used.
+        assert "withheld_reads" in RunState.__annotations__
+
+    def test_it_does_not_leak_into_the_next_stage(self, repo, tmp_path):
+        # Carried forward it would report a withholding the next stage never
+        # suffered, and the planner would trim a reference list that fits.
+        assert fresh_stage_fields()["withheld_reads"] == []
+
+    def test_a_stage_that_fit_says_nothing(self, repo, tmp_path):
+        # Rendered as an empty list it would read as a budget problem with no
+        # files, which is worse than silence.
+        cfg, rt, state = make(repo, tmp_path)
+        state = with_stage(state, rt)
+        out = nodes.execute(state, rt)
+        assert "withheld_reads" not in out

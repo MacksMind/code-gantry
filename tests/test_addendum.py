@@ -104,3 +104,114 @@ class TestPathHandling:
         assert not (tmp_path / "docs").exists()
         written = write(tmp_path, [note()], path="docs/deep/nested/addendum")
         assert written.exists()
+
+
+PLAN = """# Rails 5 migration
+
+Preamble that belongs to no section.
+
+## Filter macros
+
+`before_filter` is deprecated. 152 sites.
+
+Line about something else.
+
+## Deprecated finders
+
+The gem must come out before Rails 5.
+"""
+
+
+class TestTheHeadingIsLiftedFromThePlan:
+    """Entries group by the plan section they are about, not by their wording.
+
+    The log this replaces had one heading repeated seventeen times — the
+    superseded plan text, quoted verbatim by seventeen stages sweeping one
+    item. Identical, and distinguishable only by a count buried in the prose,
+    so nothing could tell which was still true. Keying on a line reference and
+    lifting the heading from the document makes stages working the same section
+    agree by construction rather than by the model phrasing it the same way
+    twice.
+    """
+
+    def plan(self, path):
+        return PLAN if path == "docs/PLAN.md" else None
+
+    def test_the_header_comes_from_the_document(self, tmp_path):
+        written = write(
+            tmp_path,
+            [note(observation="zero sites remain", plan_ref="docs/PLAN.md#L7-L9")],
+            read_plan=self.plan,
+            plan_sha="a3f19c2bcd45",
+        )
+        text = written.read_text()
+        assert "## Filter macros — `docs/PLAN.md#L7-L9` @ `a3f19c2bcd45`" in text
+
+    def test_two_stages_citing_one_section_get_one_heading(self, tmp_path):
+        # The entire point. These are written by separate stages with different
+        # prose, and they must still collate.
+        for observation in ("seven remain", "zero remain"):
+            written = write(
+                tmp_path,
+                [note(observation=observation, plan_ref="docs/PLAN.md#L9")],
+                read_plan=self.plan,
+                plan_sha="a3f19c2bcd45",
+            )
+        headings = [
+            line for line in written.read_text().splitlines()
+            if line.startswith("## ")
+        ]
+        assert len(headings) == 2
+        assert headings[0] == headings[1]
+
+    def test_it_finds_the_section_the_line_is_inside(self, tmp_path):
+        written = write(
+            tmp_path,
+            [note(plan_ref="docs/PLAN.md#L13")],
+            read_plan=self.plan, plan_sha="a3f19c2",
+        )
+        assert "## Deprecated finders" in written.read_text()
+
+    def test_a_preamble_falls_under_the_documents_title(self, tmp_path):
+        # Line 3 sits above every `##` but below the `#`. The title is the
+        # section it is in, and is a better answer than refusing to name one.
+        written = write(
+            tmp_path,
+            [note(step="", plan_ref="docs/PLAN.md#L3")],
+            read_plan=self.plan, plan_sha="a3f19c2",
+        )
+        assert "## Rails 5 migration — `docs/PLAN.md#L3`" in written.read_text()
+
+    def test_a_bad_citation_never_costs_the_observation(self, tmp_path):
+        """The entry is written regardless, with the problem named.
+
+        Three defects on this project were plan notes computed correctly and
+        lost on the way to disk. The progress record is what the next run reads
+        to know what is done; a malformed line reference is worth a missing
+        header, not a missing fact.
+        """
+        written = write(
+            tmp_path,
+            [note(observation="zero remain", plan_ref="docs/PLAN.md#L900")],
+            read_plan=self.plan, plan_sha="a3f19c2",
+        )
+        text = written.read_text()
+        assert "zero remain" in text
+        assert "citation" in text and "past the end" in text
+
+    def test_an_unparseable_reference_says_so(self, tmp_path):
+        written = write(
+            tmp_path,
+            [note(observation="zero remain", plan_ref="item 17, the filter bit")],
+            read_plan=self.plan, plan_sha="a3f19c2",
+        )
+        assert "zero remain" in written.read_text()
+        assert "not a `path#Lstart-Lend` reference" in written.read_text()
+
+    def test_a_document_that_is_not_in_the_plan_commit(self, tmp_path):
+        written = write(
+            tmp_path,
+            [note(plan_ref="docs/NOPE.md#L1-L2")],
+            read_plan=self.plan, plan_sha="a3f19c2",
+        )
+        assert "not readable in the plan at this commit" in written.read_text()

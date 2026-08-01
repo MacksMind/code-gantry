@@ -25,6 +25,7 @@ from orchestrator.addendum import append_notes
 from orchestrator.commands import truncate_middle
 from orchestrator.config import Stage, validate_stage
 from orchestrator.flake import adjudicate, append_flakes, predates_stage
+from orchestrator.gitops import GitError
 from orchestrator.globs import matches_any
 from orchestrator.planner import append_stage_cost, append_status, recent_stage_costs
 from orchestrator.prompts import (
@@ -448,6 +449,13 @@ def execute(state: RunState, rt: Runtime) -> dict:
     # 60k of context loaded is exactly the datum that should shrink the next
     # stage, and it is the one most likely to be discarded.
     measured = {"executor_context_tokens": result.context_tokens} if result.context_tokens else {}
+    # Same reasoning, and the same gap it closes. The planner chooses
+    # `read_files` and the tool silently truncates the tail of that choice to
+    # fit `max_read_lines`; logging it tells the operator and leaves the
+    # planner picking blind. Four stages running asked for one reference too
+    # many, each time a large model the instruction went on to reason about.
+    if result.dropped_reads:
+        measured["withheld_reads"] = list(result.dropped_reads)
 
     if result.ok:
         return {"next_hop": "verify", **measured}
@@ -859,11 +867,28 @@ def advance(state: RunState, rt: Runtime) -> dict:
     # it would not be for code — this is markdown at a configured path, written
     # by the orchestrator from structured planner output, not a model editing
     # the repository. The guards exist to catch the executor wandering.
+    plan_sha = state.get("plan_sha") or state.get("base_sha") or ""
+
+    def read_plan(path: str) -> str | None:
+        """A plan document as it stood at `plan_sha`.
+
+        Read from the commit rather than the worktree because that is the
+        revision the planner was shown and cited line numbers against. The
+        worktree has moved: this very function runs after a stage landed, and
+        the log itself is a plan document that grows on every landing.
+        """
+        try:
+            return rt.git.show_file(plan_sha, path)
+        except GitError:
+            return None
+
     written = append_notes(
         rt.cfg.target_repo,
         rt.cfg.plan_addendum_path,
         state.get("pending_plan_notes") or [],
         stage_id=stage.id,
+        read_plan=read_plan,
+        plan_sha=plan_sha,
     )
     if written is not None:
         rt.log(
@@ -894,6 +919,7 @@ def advance(state: RunState, rt: Runtime) -> dict:
         "flake_reruns_review_gate": state.get("flake_reruns_review_gate", 0),
         "instruction": stage.instruction or "",
         "executor_context_tokens": state.get("executor_context_tokens", 0),
+        "withheld_reads": list(state.get("withheld_reads") or []),
         "base_sha": start_sha,
         "merge_sha": merge_sha or rt.git.head_sha(),
         "wall_seconds": max(time.time() - (state.get("stage_started_at") or 0), 0.0),

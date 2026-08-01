@@ -196,10 +196,22 @@ class PlanNote(BaseModel):
     about what the work has become and does not belong mid-run.
     """
 
-    plan_step: str = Field(
-        description="Which part of the plan this is about, quoted closely "
-        "enough that a human — or a later pass folding this in — can find the "
-        "exact place to update."
+    plan_ref: str = Field(
+        description=(
+            "Where in the plan this is about, as `path#Lstart-Lend` — the same "
+            "shape as a GitHub line link, e.g. `docs/PLAN.md#L120-L134`. Use a "
+            "plan document, and use the line numbers you actually saw: "
+            "`read_file` and `search` both number what they return, so cite "
+            "from those rather than from memory.\n\n"
+            "A reference, not a quotation. Every stage that advances one plan "
+            "section cites the same lines, which is what lets a reader see all "
+            "of them together and take the last as current — quoting the "
+            "text instead produced seventeen entries with identical headings "
+            "and no way to tell which one still held.\n\n"
+            "Do not write a title for the entry. The heading above these lines "
+            "is lifted from the document itself, so two stages working the "
+            "same section get the same one without having to agree."
+        )
     )
     observation: str = Field(
         description=(
