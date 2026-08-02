@@ -18,6 +18,7 @@ separate budgets and one counter cannot enforce both.
 
 from __future__ import annotations
 
+import time
 from typing import Literal, TypedDict
 
 Status = Literal["running", "complete", "escalated"]
@@ -307,6 +308,43 @@ def fresh_stage_fields() -> dict:
         # the planner would trim a reference list that fits.
         "withheld_reads": [],
         "stage_usage": _zero_usage(),
+    }
+
+
+def resume_fields(*, stage_has_work: bool, reset_progress_budget: bool) -> dict:
+    """What a resume merges over the saved checkpoint.
+
+    This was inline in `cli.py` until a live checkpoint was found reporting
+    `escalated`, with an hour-old reason, while the run was actively landing
+    work at revision 2. `status` and `escalation_reason` are written when a run
+    stops and nothing cleared them when it started again, so the operator's
+    primary question answered with the stop that had already been fixed — for
+    the whole of the next session. It lives here so the merge has a seam to be
+    tested at.
+    """
+    return {
+        # How the entry router re-enters: verify for a repository-state
+        # failure, so a human's fix is checked rather than discarded; plan for
+        # a planning failure.
+        "resuming": True,
+        "next_hop": "",
+        # `wall_clock_hours` bounds one unattended stretch. The hours between
+        # an escalation and a human reaching it were not spent working, and
+        # measuring from the original start would make a run escalated
+        # overnight impossible to resume.
+        "session_started_at": time.time(),
+        # Did the interrupted stage get far enough to commit? If so the resume
+        # verifies that work rather than asking the executor to redo it — asked
+        # to redo a finished stage it has nothing to produce and no way to say
+        # so.
+        "stage_has_work": stage_has_work,
+        # The run is running again. Left as they were, these describe the stop
+        # this resume exists to undo.
+        "status": "running",
+        "escalation_reason": None,
+        # Only when asked. Merging an empty dict leaves the counter where it
+        # was, so the default resume cannot clear it by accident.
+        **({"interventions_since_landing": 0} if reset_progress_budget else {}),
     }
 
 

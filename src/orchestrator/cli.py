@@ -40,7 +40,7 @@ from orchestrator.report import build_report
 from orchestrator.reviewer import make_reviewer
 from orchestrator.runlog import RunLog
 from orchestrator.runtime import PROJECTS_ROOT, ProjectPaths, RunPaths, build_runtime
-from orchestrator.state import new_state
+from orchestrator.state import new_state, resume_fields
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -446,32 +446,14 @@ def resume(run_id: str, reset_progress_budget: bool) -> None:
     previous_gc = git.disable_gc()
     click.echo(f"\nresuming {run_id} (last failure: {saved.get('failure_layer')})\n")
     try:
-        # `resuming` tells the entry router how to re-enter: verify for a
-        # repository-state failure, so the human's fix is checked rather than
-        # discarded; plan for a planning failure.
-        #
-        # The session clock restarts. `wall_clock_hours` bounds one unattended
-        # stretch, and the hours between an escalation and a human getting to it
-        # were not spent working — measuring from the original run start would
-        # make a run escalated overnight impossible to resume.
         code = _drive(
             cfg,
             project,
             paths,
-            {
-                "resuming": True,
-                "next_hop": "",
-                "session_started_at": time.time(),
-                # Did the interrupted stage get far enough to commit? If so the
-                # resume verifies that work rather than asking the executor to
-                # redo it — asked to redo a finished stage, it has nothing to
-                # produce and no way to say so.
-                "stage_has_work": _stage_has_work(git, saved),
-                # Only when asked. Merging an empty dict leaves the counter
-                # where it was, so the default resume cannot clear it by
-                # accident.
-                **({"interventions_since_landing": 0} if reset_progress_budget else {}),
-            },
+            resume_fields(
+                stage_has_work=_stage_has_work(git, saved),
+                reset_progress_budget=reset_progress_budget,
+            ),
             _warnings(checks),
         )
     finally:

@@ -5,6 +5,8 @@ looks like progress and never makes any — which is exactly the bug the first
 implementation pass hit with gated stages.
 """
 
+import pytest
+
 from orchestrator.state import (
     PLANNING_FAILURES,
     REPO_STATE_FAILURES,
@@ -284,3 +286,57 @@ class TestResumingAnInterruptedStage:
         from orchestrator.state import resume_entry_point
 
         assert resume_entry_point({"resuming": True, "stage_has_work": False}) == "plan"
+
+
+class TestResumingClearsTheStopItIsUndoing:
+    """`status` described the previous stop for the whole of the next session.
+
+    Found by reading a live checkpoint: the run was at revision 2, landing work,
+    and `status` still said `escalated` with the reason from an escalation an
+    hour earlier. `orchestrator status` is the operator's primary question and
+    it was answering with the stop that had already been fixed.
+
+    The merge was inline in `cli.py`, which is why nothing caught it — there was
+    no seam to test. That is the reason it lives here now.
+    """
+
+    def _fields(self, **over):
+        from orchestrator.state import resume_fields
+
+        args = {"stage_has_work": False, "reset_progress_budget": False}
+        args.update(over)
+        return resume_fields(**args)
+
+    def test_the_run_is_running_again(self):
+        assert self._fields()["status"] == "running"
+
+    def test_the_old_escalation_reason_is_cleared(self):
+        # Left in place it is reported as the current reason, and a later
+        # escalation that forgets to set one would inherit it.
+        assert self._fields()["escalation_reason"] is None
+
+    def test_it_re_enters_rather_than_continuing(self):
+        got = self._fields()
+        assert got["resuming"] is True
+        assert got["next_hop"] == ""
+
+    def test_the_session_clock_restarts(self):
+        # wall_clock_hours bounds one unattended stretch; the hours a run spent
+        # waiting for a human were not spent working.
+        import time
+
+        assert self._fields()["session_started_at"] == pytest.approx(
+            time.time(), abs=5
+        )
+
+    def test_work_already_on_the_branch_is_carried_in(self):
+        assert self._fields(stage_has_work=True)["stage_has_work"] is True
+
+    def test_the_progress_budget_is_untouched_by_default(self):
+        # Merging an empty dict leaves the counter where it was, so an ordinary
+        # resume cannot clear it by accident.
+        assert "interventions_since_landing" not in self._fields()
+
+    def test_the_progress_budget_clears_only_when_asked(self):
+        got = self._fields(reset_progress_budget=True)
+        assert got["interventions_since_landing"] == 0
