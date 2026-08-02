@@ -225,3 +225,46 @@ class TestTheHeadingIsLiftedFromThePlan:
         text = written.read_text()
         assert "Stage 1 → Stage 2 is done — fully" in text
         assert "u2192" not in text
+
+
+class TestTheFindingIsItsOwnLine:
+    """What the planner found, as distinct from what the plan says.
+
+    The heading is lifted from the plan document, which is right — two stages
+    working one section then group together necessarily rather than usually.
+    But a plan heading says what a passage is *about* and nothing about what
+    this stage discovered, and before the heading was lifted that one line was
+    the only summary an entry had. Reading a log of four hundred entries, the
+    prose is the substance and the heading is a filing label; without this
+    there is nothing in between.
+
+    Optional. Not every observation has a one-line form worth separating from
+    its prose, and an empty bullet is worse than an absent one.
+    """
+
+    def test_it_is_rendered_as_its_own_bullet(self, tmp_path):
+        text = write(
+            tmp_path,
+            [note(finding="7 of 24 sites remain, all inline `<script>` renders")],
+        ).read_text()
+        assert "- **found** 7 of 24 sites remain, all inline `<script>` renders" in text
+
+    def test_it_sits_after_the_plan_quote(self, tmp_path):
+        # The plan first, then what this stage found about it — the order a
+        # reader needs and the order the migrated entries already use.
+        text = write(
+            tmp_path, [note(anchor="**36** occurrences", finding="now 25")]
+        ).read_text()
+        assert text.index("the plan says") < text.index("found")
+
+    def test_the_prose_still_follows(self, tmp_path):
+        text = write(
+            tmp_path, [note(observation="the sweep is complete", finding="0 remain")]
+        ).read_text()
+        assert text.index("found") < text.index("the sweep is complete")
+
+    def test_an_absent_finding_renders_no_bullet(self, tmp_path):
+        assert "**found**" not in write(tmp_path, [note()]).read_text()
+
+    def test_an_empty_finding_renders_no_bullet(self, tmp_path):
+        assert "**found**" not in write(tmp_path, [note(finding="   ")]).read_text()

@@ -201,6 +201,14 @@ def _entry(note: dict, stage_id: str, read_plan=None, plan_sha: str = "") -> str
         lines.append(f"- **citation** unresolved: {problem}")
     if anchor:
         lines.append(f"- **the plan says** {anchor}")
+    # The planner's own one-line finding, after what the plan claims and before
+    # the prose. The heading is lifted from the plan so that two stages working
+    # one section group together necessarily rather than usually — which is
+    # right, and says nothing about what was found. Without this, an entry has
+    # a filing label and a paragraph and nothing in between.
+    finding = decode_escapes(note.get("finding") or "").strip()
+    if finding:
+        lines.append(f"- **found** {finding}")
     lines += ["", decode_escapes(note.get("observation", "")).strip(), ""]
     return "\n".join(lines)
 

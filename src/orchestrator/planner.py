@@ -232,6 +232,21 @@ class PlanNote(BaseModel):
             "document rather than anywhere, short enough to copy exactly."
         )
     )
+    finding: str = Field(
+        default="",
+        description=(
+            "The one-line version of what you found, if it has one. Rendered "
+            "as its own bullet above the prose.\n\n"
+            "The entry's heading is lifted from the plan document you cited, "
+            "so it says what the passage is about and nothing about what this "
+            "stage discovered. This is where that goes: '7 of 24 sites remain, "
+            "all inline <script> renders' or 'the gem is gone; the monkey-patch "
+            "that depended on it is not'.\n\n"
+            "A total, like the observation, never a change. Leave it empty "
+            "when the observation has no shorter form worth separating — an "
+            "empty bullet is worse than an absent one."
+        ),
+    )
     observation: str = Field(
         description=(
             "A concise summary of what changed and where that leaves the plan "

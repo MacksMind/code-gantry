@@ -2078,3 +2078,44 @@ class TestTheRejectedAnswerReachesTheArtifact:
         )
         assert "rejected_answer" in written
         assert written["rejected_answer"] is None
+
+
+class TestTheFindingSurvivesToTheAddendum:
+    """Planner response to plan note to state to the file on disk.
+
+    The same journey `plan_notes` itself was lost on once, to a reset spread
+    over the top of it. A new field on that note travels the identical path and
+    gets the identical test.
+    """
+
+    def test_a_finding_reaches_the_written_entry(self, repo, tmp_path):
+        note = {
+            "plan_path": "PLAN.md",
+            "anchor": "24 sites across 9 controllers.",
+            "finding": "7 of 24 remain, all inline `<script>` renders",
+            "observation": "The mechanical half is done.",
+        }
+        planner = StubPlanner(
+            [
+                PlannerOutcome(
+                    "next_stage", "next", "e",
+                    stage_fields=planned_stage(),
+                    plan_notes=[note],
+                )
+            ]
+        )
+        cfg, rt, state = make(
+            repo, tmp_path, planner=planner,
+            plan_addendum_path="docs/progress_log.md",
+        )
+        (repo / "docs").mkdir(exist_ok=True)
+        (repo / "PLAN.md").write_text("# Plan\n\n24 sites across 9 controllers.\n")
+
+        state = {**state, **nodes.plan(state, rt)}
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("stage work\n")
+        nodes.advance(state, rt)
+
+        written = (repo / "docs/progress_log.md").read_text()
+        assert "- **found** 7 of 24 remain, all inline `<script>` renders" in written
+        assert "The mechanical half is done." in written
