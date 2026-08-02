@@ -659,3 +659,47 @@ class TestTheReviewerIsToldWhatTheEditorDoes:
         from orchestrator.prompts import REVIEW_SYSTEM_PROMPT
 
         assert "anything else about whitespace" in REVIEW_SYSTEM_PROMPT.lower()
+
+
+class TestTheBreakpointBudgetIsFullySpent:
+    """Four is the API's limit, and all four are now in use.
+
+    The system prompt, the plan-and-layout block and the completed history are
+    static and carry the configured lifetime. The fourth moves with the tool
+    loop and is added at request time by `_with_loop_breakpoint`.
+
+    Pinned because exceeding the limit fails the request, not a test — every
+    planner call in the run would break at once, and the cause would read as a
+    transport error. A fifth breakpoint means removing one of these four
+    deliberately, not adding to them.
+    """
+
+    def _marks(self, blocks):
+        return [b for b in blocks if isinstance(b, dict) and "cache_control" in b]
+
+    def test_the_built_message_spends_exactly_two(self):
+        from orchestrator.prompts import build_planner_messages
+
+        messages = build_planner_messages(
+            cfg=SimpleNamespace(cache_ttl="1h"),
+            plan=a_plan(),
+            completed=[{"index": 0, "id": "s1", "instruction": "did it"}],
+            layout="- `src/` (1)",
+        )
+        assert len(messages) == 1, "one user message; the loop appends after it"
+        assert len(self._marks(messages[0]["content"])) == 2
+
+    def test_system_plus_message_plus_the_moving_one_is_four(self):
+        from orchestrator.planner import _system_blocks, _with_loop_breakpoint
+        from orchestrator.prompts import build_planner_messages
+
+        messages = build_planner_messages(
+            cfg=SimpleNamespace(cache_ttl="1h"), plan=a_plan(), completed=[]
+        )
+        system = _system_blocks("1h")
+        outgoing = _with_loop_breakpoint(messages)
+
+        total = len(self._marks(system)) + sum(
+            len(self._marks(m["content"])) for m in outgoing
+        )
+        assert total == 4, f"the API allows 4 cache breakpoints, found {total}"

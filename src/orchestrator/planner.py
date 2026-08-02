@@ -509,7 +509,7 @@ class AnthropicPlanner:
                     max_tokens=16_000,
                     output_config={"effort": "high"},
                     system=_system_blocks(self.cfg.cache_ttl, self.cfg.guidance),
-                    messages=conversation,
+                    messages=_with_loop_breakpoint(conversation),
                     output_format=PlannerResponse,
                     **({"tools": tools} if tools else {}),
                 )
@@ -864,6 +864,44 @@ def cache_control(ttl: str | None = None) -> dict:
     if ttl:
         marker["ttl"] = ttl
     return marker
+
+
+def _with_loop_breakpoint(conversation: list[dict]) -> list[dict]:
+    """Mark the end of the newest message, so the tool loop caches by increment.
+
+    The fourth and last breakpoint the API allows. Three are static — the
+    system prompt, the plan snapshot, the completed history — and everything
+    after them was uncached on every turn: the volatile tail, each assistant
+    turn, each tool result. A derivation runs ten to twenty-five turns and
+    resends all of it each time, so cost grew with the square of the turn
+    count. Measured across 125 decisions of one run, a decision making no tool
+    calls spent 48k uncached input tokens and one making sixteen or more spent
+    1.4M.
+
+    It moves rather than accumulates. Marking each turn's message and leaving
+    the mark would pass four breakpoints by the fifth turn and the request
+    would be rejected — so this is computed fresh from an unmarked
+    conversation and applied to the outgoing copy only. The loop's own
+    accumulated conversation never carries a marker, which also keeps the
+    corrective retry appending to an unmutated prefix.
+
+    Deliberately the 5-minute default rather than the run's configured `1h`.
+    Turns inside a decision are seconds apart — nineteen tool calls in five
+    minutes, observed — so the short window suffices, and its writes cost
+    1.25x against 2x. The static prefix keeps the long lifetime because that
+    is what has to survive a whole stage between decisions.
+    """
+    if not conversation:
+        return conversation
+    last = conversation[-1]
+    content = last.get("content")
+    if not isinstance(content, list) or not content:
+        return conversation
+    if not isinstance(content[-1], dict):
+        return conversation
+    blocks = list(content)
+    blocks[-1] = {**blocks[-1], "cache_control": cache_control()}
+    return conversation[:-1] + [{**last, "content": blocks}]
 
 
 def _system_blocks(

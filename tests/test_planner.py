@@ -791,3 +791,114 @@ class TestInstructionsQuoteCodeInFencedBlocks:
             "orchestrator.planner", fromlist=["PlannedStage"]
         ).PlannedStage.model_fields["instruction"].description.lower()
         assert "raw text" in described
+
+
+class TestTheToolLoopIsCached:
+    """The loop re-sent everything it had accumulated, every turn.
+
+    A derivation runs ten to twenty-five turns, and each one resends the whole
+    conversation. With breakpoints only on the system prompt, the plan snapshot
+    and the completed history, everything after them — the volatile tail, every
+    assistant turn, every tool result — was uncached on every turn. Cost grew
+    with the square of the turn count.
+
+    Measured over 125 decisions of one run: a decision making no tool calls
+    spent 48k uncached input tokens, one making sixteen or more spent 1.4M. The
+    run's 70.6M uncached tokens are almost entirely this.
+
+    Anthropic allows four breakpoints and three were in use. The fourth moves:
+    each turn marks the end of the newest message, so the turn writes only its
+    own increment and reads everything before it. Marking every turn's message
+    instead would exceed the limit by turn five, which is why it moves rather
+    than accumulates.
+
+    Its lifetime is deliberately the 5-minute default rather than the run's
+    configured 1h. Turns within a decision are seconds apart — 19 tool calls in
+    five minutes, measured — so the shorter window is enough, and its writes
+    cost 1.25x against 2x. The static prefix still carries the long TTL,
+    because that is what has to survive a whole stage between decisions.
+    """
+
+    def _blocks(self, text="derive the next stage"):
+        return [{"role": "user", "content": [{"type": "text", "text": text}]}]
+
+    def _done(self):
+        return SimpleNamespace(
+            content=[TextBlock("done")],
+            stop_reason="end_turn",
+            usage=None,
+            parsed_output=PlannerResponse(
+                verdict="project_complete", reasoning="r", status_entry="e"
+            ),
+        )
+
+    def test_the_last_block_of_the_last_message_is_marked(self):
+        client = StubClient(self._done())
+        AnthropicPlanner(cfg(), client=client).plan(self._blocks())
+        sent = client.calls[0]["messages"]
+        assert sent[-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+
+    def test_the_mark_uses_the_default_lifetime_not_the_configured_one(self):
+        # 1h writes cost 2x; 5m cost 1.25x. Turns are seconds apart, so the
+        # loop breakpoint has no use for the long window the prefix needs.
+        client = StubClient(self._done())
+        AnthropicPlanner(cfg(cache_ttl="1h"), client=client).plan(self._blocks())
+        marker = client.calls[0]["messages"][-1]["content"][-1]["cache_control"]
+        assert "ttl" not in marker
+        assert client.calls[0]["system"][0]["cache_control"]["ttl"] == "1h"
+
+    def test_string_content_is_left_alone(self):
+        # Nothing to attach a marker to without rewriting the message shape,
+        # and only the tests send bare strings.
+        client = StubClient(self._done())
+        AnthropicPlanner(cfg(), client=client).plan(MESSAGES)
+        assert client.calls[0]["messages"] == MESSAGES
+
+    def test_the_mark_moves_and_never_accumulates(self, tmp_path):
+        # Four breakpoints is the API limit and three are already spoken for.
+        # A mark left behind on every turn would break the request by turn five.
+        asked = SimpleNamespace(
+            content=[ToolBlock("search", {"pattern": "render text:"})],
+            stop_reason="tool_use",
+            usage=None,
+            parsed_output=None,
+        )
+        client = SequenceClient([asked, asked, self._done()])
+        planner = AnthropicPlanner(
+            cfg(), client=client, reader=TestRepositoryToolLoop()._reader(tmp_path)
+        )
+        planner.plan(self._blocks())
+
+        assert len(client.calls) == 3
+        for call in client.calls:
+            marked = [
+                block
+                for message in call["messages"]
+                if isinstance(message["content"], list)
+                for block in message["content"]
+                if isinstance(block, dict) and "cache_control" in block
+            ]
+            assert len(marked) == 1, "exactly one moving breakpoint at a time"
+        # And it is on the newest message each time, which is what makes the
+        # turn's write an increment rather than the whole conversation.
+        for call in client.calls:
+            assert "cache_control" in call["messages"][-1]["content"][-1]
+
+    def test_the_stored_conversation_stays_clean(self, tmp_path):
+        # The marker is applied to the outgoing copy. If it were written into
+        # the conversation the loop accumulates, the marks would pile up and
+        # the corrective retry would append to a mutated prefix.
+        asked = SimpleNamespace(
+            content=[ToolBlock("search", {"pattern": "render text:"})],
+            stop_reason="tool_use",
+            usage=None,
+            parsed_output=None,
+        )
+        client = SequenceClient([asked, self._done()])
+        planner = AnthropicPlanner(
+            cfg(), client=client, reader=TestRepositoryToolLoop()._reader(tmp_path)
+        )
+        planner.plan(self._blocks())
+        # The first message is resent on the second turn without its old mark.
+        first_message_second_turn = client.calls[1]["messages"][0]
+        assert "cache_control" not in first_message_second_turn["content"][-1]
