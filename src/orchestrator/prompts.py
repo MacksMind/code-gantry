@@ -159,6 +159,35 @@ def _addendum(cfg: ProjectConfig | None) -> str | None:
     return getattr(cfg, "plan_addendum_path", None) if cfg else None
 
 
+def _history_limit(cfg: ProjectConfig | None) -> int | None:
+    """How many landed stages the reviewer is shown, if it is bounded.
+
+    Defensive for the same reason as `_addendum`: `cfg` is optional on these
+    builders and several tests pass None, so this must not be the thing that
+    raises on a path every review takes.
+    """
+    reviewer = getattr(cfg, "reviewer", None) if cfg else None
+    return getattr(reviewer, "history_stages", None) if reviewer else None
+
+
+def _without_addendum(plan: PlanTree, addendum_path: str | None) -> PlanTree:
+    """The plan tree with the progress log taken out.
+
+    The log is reachable by a markdown link from the plan root, so it arrives
+    as one more child of the frozen snapshot — frozen at run start, which for
+    the one document whose whole job is to be current means wrong. Readers that
+    want it get the live copy handed to them separately.
+    """
+    if not addendum_path:
+        return plan
+    return PlanTree(
+        root=plan.root,
+        children=[d for d in plan.children if d.path != addendum_path],
+        problems=list(plan.problems),
+        skipped=list(plan.skipped),
+    )
+
+
 def _plan_block(plan: PlanTree, addendum_path: str | None = None) -> str:
     """The plan documents, with the progress log identified among them.
 
@@ -263,7 +292,11 @@ def _costs_block(costs: list[dict] | None) -> str:
     )
 
 
-def _history_block(completed: list[StageResult], addendum_path: str | None = None) -> str:
+def _history_block(
+    completed: list[StageResult],
+    addendum_path: str | None = None,
+    limit: int | None = None,
+) -> str:
     """What *this run* has landed — which is not what the project has landed.
 
     The empty case used to read "this is the first stage of the project". True
@@ -293,8 +326,14 @@ def _history_block(completed: list[StageResult], addendum_path: str | None = Non
             "anything in the plan is still outstanding."
         )
 
+    shown = completed
+    dropped = 0
+    if limit is not None and len(completed) > limit:
+        shown = completed[-limit:]
+        dropped = len(completed) - limit
+
     entries = []
-    for entry in completed:
+    for entry in shown:
         line = f"### Stage {entry.get('index')}: {entry.get('id')}"
         if entry.get("revisions"):
             line += f" (took {entry['revisions'] + 1} revisions)"
@@ -325,11 +364,24 @@ def _history_block(completed: list[StageResult], addendum_path: str | None = Non
             line += f"\nReviewer: {entry['review_summary']}"
         entries.append(line)
 
-    return (
-        "## Completed stages, in order\n\n"
-        "Each landed as one commit on the project branch after passing review "
-        "and the full suite.\n\n" + "\n\n".join(entries)
-    )
+    # A truncated list that does not say so reads as the whole record, and
+    # anything judging completeness against it would judge against a fifth of
+    # one. Said in the heading rather than a footnote, because the heading is
+    # what orients a reader who skims.
+    if dropped:
+        head = (
+            f"## Completed stages: the last {len(shown)} of {len(shown) + dropped}\n\n"
+            f"The {dropped} earlier ones are not shown. What the project has "
+            "done is recorded above; these are here for the shape of recent "
+            "work, not as the record of it.\n\n"
+        )
+    else:
+        head = (
+            "## Completed stages, in order\n\n"
+            "Each landed as one commit on the project branch after passing "
+            "review and the full suite.\n\n"
+        )
+    return head + "\n\n".join(entries)
 
 
 def build_review_messages(
@@ -338,11 +390,20 @@ def build_review_messages(
     diff: str,
     plan: PlanTree,
     completed: list[StageResult],
+    progress_log: str | None = None,
 ) -> list[dict[str, str]]:
     """Chat messages for the reviewer, stable payload first.
 
-    Everything before the last message is byte-identical across the stages of a
+    Everything before the breakpoint is byte-identical across the stages of a
     run — that is what makes prefix caching hit, and why the diff is last.
+
+    `progress_log` is the addendum as it stands now, and it goes *after* the
+    breakpoint. The snapshot's copy is whatever existed at run start — 6,680
+    bytes against 480,867 on the branch, measured on one long run — so the
+    reviewer's only account of what had been done was the completed-stage
+    history. Passing the live one fixes that; putting it in the cached prefix
+    would break the one thing that caches, because this model does not fall
+    back to the longest matching prefix and every landing would miss.
     """
     messages = [{"role": "system", "content": REVIEW_SYSTEM_PROMPT}]
     # A content-block list rather than a string, so it can carry the cache
@@ -366,15 +427,30 @@ def build_review_messages(
                     # reviewer calls, three full-price writes, one of them only
                     # 13 minutes after its predecessor and well inside the
                     # retention window. History now follows the breakpoint.
-                    "text": _plan_block(plan, _addendum(cfg)),
+                    # The addendum is dropped from this tree rather than
+                    # rendered here: the snapshot's copy is stale, and two
+                    # copies of one document with one of them wrong is worse
+                    # than either alone. The live one follows the breakpoint.
+                    "text": _plan_block(_without_addendum(plan, _addendum(cfg)), None),
                     "prompt_cache_breakpoint": {"mode": "explicit"},
                 }
             ],
         }
     )
 
-    current: list[str] = [
-        _history_block(completed, _addendum(cfg)),
+    current: list[str] = []
+    addendum = _addendum(cfg)
+    if progress_log and progress_log.strip():
+        current.append(
+            "## What has been done\n\n"
+            f"`{addendum}`, as it stands now — an entry appended as each stage "
+            "lands. The plan above says what the work **is**; this says what it "
+            "has **become**. Where the two disagree about whether something is "
+            "outstanding, this is later.\n\n" + progress_log.strip()
+        )
+
+    current += [
+        _history_block(completed, addendum, limit=_history_limit(cfg)),
         f"## The stage under review: {stage.id}\n\n{stage.instruction or ''}",
     ]
 

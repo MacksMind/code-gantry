@@ -47,8 +47,11 @@ class StubReviewer:
     calls: int = 0
     cache_keys: list = field(default_factory=list)
 
+    messages: list = field(default_factory=list)
+
     def review(self, messages, cache_key=None):
         self.cache_keys.append(cache_key)
+        self.messages.append(messages)
         self.calls += 1
         if self.outcomes:
             return self.outcomes.pop(0)
@@ -2191,3 +2194,59 @@ class TestAFailedLandingLeavesNothingBehind:
         monkeypatch.setattr(rt.git, "squash_merge", boom)
         with pytest.raises(GitError):
             nodes.advance(state, rt)
+
+
+class TestTheReviewerIsGivenTheLiveRecord:
+    """Runtime to node to the messages the reviewer actually receives.
+
+    The frozen snapshot's copy of the progress log is whatever existed at run
+    start — 6,680 bytes against 480,867 on the branch, measured on one long
+    run — so the reviewer had no real account of what had been done. Both
+    halves of the fix pass through here, and both have somewhere to be dropped
+    on the way.
+    """
+
+    def _text(self, messages):
+        out = []
+        for message in messages:
+            content = message["content"]
+            if isinstance(content, str):
+                out.append(content)
+            else:
+                out += [b.get("text", "") for b in content]
+        return "\n".join(out)
+
+    def test_the_live_log_reaches_the_reviewer(self, repo, tmp_path):
+        reviewer = StubReviewer()
+        cfg, rt, state = make(
+            repo, tmp_path, reviewer=reviewer,
+            plan_addendum_path="docs/progress_log.md",
+        )
+        (repo / "docs").mkdir(exist_ok=True)
+        (repo / "docs/progress_log.md").write_text(
+            "## a section\n\n- **found** 7 of 24 remain\n"
+        )
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("stage work\n")
+
+        nodes.review(state, rt)
+        assert "7 of 24 remain" in self._text(reviewer.messages[0])
+
+    def test_the_history_cap_reaches_the_reviewer(self, repo, tmp_path):
+        reviewer = StubReviewer()
+        cfg, rt, state = make(repo, tmp_path, reviewer=reviewer)
+        rt.cfg.reviewer.history_stages = 2
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("stage work\n")
+        state = {
+            **state,
+            "completed": [
+                {"index": i, "id": f"stage-{i}", "instruction": f"work {i}"}
+                for i in range(5)
+            ],
+        }
+
+        nodes.review(state, rt)
+        text = self._text(reviewer.messages[0])
+        assert "stage-4" in text
+        assert "stage-0" not in text

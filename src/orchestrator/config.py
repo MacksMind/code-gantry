@@ -289,6 +289,16 @@ class ReviewerConfig(_EndpointConfig):
     # same failure — both clients died to the same disconnection.
     transport_retry_seconds: float = 900.0
     transport_retry_max_delay_seconds: float | None = None
+    # How many landed stages the reviewer is shown, most recent first. None
+    # keeps all of them, which is the old behaviour and the right default for a
+    # project with no progress log — there the history is the only account of
+    # what has been done.
+    #
+    # Where a log exists, it is the better account and it rides in the cached
+    # prefix. The history does not: it sits after the breakpoint and is
+    # re-billed on every review, and across 164 stored verdicts on one run not
+    # one cited an earlier stage. Set this where the log carries the record.
+    history_stages: int | None = None
 
 
 class Limits(_Strict):

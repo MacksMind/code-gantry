@@ -15,7 +15,7 @@ it shows up here rather than on an invoice.
 from types import SimpleNamespace
 
 from orchestrator.plandoc import PlanDocument, PlanTree
-from orchestrator.prompts import build_planner_messages
+from orchestrator.prompts import build_planner_messages, build_review_messages
 
 
 def a_plan(text="do the thing"):
@@ -775,3 +775,112 @@ class TestThePlannerSeesTheDiagnosisNotOnlyTheConsequence:
         text = all_text(self._messages(self.LATEST, None))
         assert "reproduced the previous diff" in text
         assert "Add Personalization" not in text
+
+
+class TestTheReviewerReadsTheLiveRecord:
+    """What has been done, and how much of it is worth paying for every call.
+
+    The reviewer was handed the frozen plan snapshot, whose copy of the
+    progress log is whatever existed at run start — measured at 6,680 bytes
+    against 480,867 on the branch. So its only account of this run's 133
+    landed stages was the completed-stage history, which sits after the cache
+    breakpoint and is re-billed in full on every review. At 322k prompt tokens
+    against 56k cached, that history was most of what every review cost.
+
+    Two changes, in opposite directions. The live log replaces the stale one,
+    so the reviewer sees the actual record. The history is capped, because
+    across 164 stored verdicts not one cites an earlier stage — it was paying
+    roughly 220k tokens a call to prevent a failure that has not occurred.
+
+    Ordering is the whole trick. GPT-5.6 caches at an explicit breakpoint and
+    does not fall back to the longest matching prefix, so a growing region
+    placed before it misses on every landing. The frozen documents stay in the
+    cached prefix; the log and the tail go after it.
+    """
+
+    def _messages(self, log="## entry\n\nit was done", completed=None, **cfg_over):
+        return build_review_messages(
+            stage=SimpleNamespace(
+                id="s", instruction="do it", constraints=None, acceptance=None
+            ),
+            cfg=_review_cfg(**cfg_over),
+            diff="--- a\n+++ b",
+            plan=_plan_with_log(),
+            completed=completed if completed is not None else [],
+            progress_log=log,
+        )
+
+    def test_the_live_log_is_in_the_prompt(self):
+        assert "it was done" in all_text(self._messages())
+
+    def test_the_frozen_copy_is_not(self):
+        # Two copies of the same document, one of them wrong, is worse than
+        # either alone.
+        assert "STALE SNAPSHOT" not in all_text(self._messages())
+
+    def test_the_log_sits_after_the_breakpoint(self):
+        # Before it, every landing would invalidate the reviewer's only
+        # working cache — this model has no longest-prefix fallback.
+        messages = self._messages()
+        cached = "".join(
+            b["text"] for b in messages[1]["content"] if "prompt_cache_breakpoint" in b
+        )
+        assert "it was done" not in cached
+
+    def test_the_plan_documents_stay_cached(self):
+        messages = self._messages()
+        cached = "".join(
+            b["text"] for b in messages[1]["content"] if "prompt_cache_breakpoint" in b
+        )
+        assert "THE PLAN ITSELF" in cached
+
+    def test_the_history_is_capped(self):
+        completed = [
+            {"index": i, "id": f"stage-{i}", "instruction": f"work {i}"}
+            for i in range(30)
+        ]
+        text = all_text(self._messages(completed=completed, history_stages=10))
+        assert "stage-29" in text, "the most recent stages are the ones kept"
+        assert "stage-19" not in text, "an older stage is dropped"
+
+    def test_the_cap_says_what_it_dropped(self):
+        # A truncated list that does not say it is truncated reads as the whole
+        # record, and the reviewer would judge completeness against it.
+        completed = [
+            {"index": i, "id": f"stage-{i}", "instruction": f"work {i}"}
+            for i in range(30)
+        ]
+        text = all_text(self._messages(completed=completed, history_stages=10))
+        assert "30" in text and "10" in text
+
+    def test_no_cap_keeps_everything(self):
+        completed = [
+            {"index": i, "id": f"stage-{i}", "instruction": f"work {i}"}
+            for i in range(30)
+        ]
+        text = all_text(self._messages(completed=completed, history_stages=None))
+        assert "stage-0" in text
+
+    def test_a_missing_log_still_builds(self):
+        # A project with no addendum configured, or one not yet written. A
+        # review is far too expensive to fail over a missing progress file.
+        assert "do it" in all_text(self._messages(log=None))
+
+
+def _review_cfg(history_stages=None, addendum="docs/progress_log.md"):
+    return SimpleNamespace(
+        cache_ttl=None,
+        plan_addendum_path=addendum,
+        reviewer=SimpleNamespace(history_stages=history_stages),
+    )
+
+
+def _plan_with_log():
+    return PlanTree(
+        root=PlanDocument(path="PLAN.md", content="THE PLAN ITSELF"),
+        children=[
+            PlanDocument(path="docs/progress_log.md", content="STALE SNAPSHOT"),
+        ],
+        problems=[],
+        skipped=[],
+    )

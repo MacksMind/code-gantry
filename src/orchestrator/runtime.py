@@ -165,9 +165,10 @@ class Runtime:
         same file the last landing left. There is no revision at which it is
         more current.
 
-        Only the planner uses this. The reviewer keeps the frozen tree: it
-        judges a diff against what the stage was asked to do, and progress is
-        not evidence about that.
+        The reviewer keeps the frozen *tree* — it judges a diff against what
+        the stage was asked to do, and the plan documents must not move
+        underneath it — but takes the live log separately, after its cache
+        breakpoint. See `live_progress_log`.
         """
         tree = self.plan
         path = self.cfg.plan_addendum_path
@@ -192,6 +193,27 @@ class Runtime:
             problems=tree.problems,
             skipped=tree.skipped,
         )
+
+    @property
+    def live_progress_log(self) -> str | None:
+        """The addendum as it stands now, or None if there isn't one.
+
+        The same file `live_plan` splices in, handed over on its own so a
+        caller can place it where it belongs. The reviewer needs that: the
+        document has to sit *after* its cache breakpoint, because it grows on
+        every landing and GPT-5.6 does not fall back to the longest matching
+        prefix — inside the cached region it would miss on every stage.
+
+        Never raises. A review is far too expensive to fail over a missing
+        progress file, and a project without one is an ordinary case.
+        """
+        path = self.cfg.plan_addendum_path
+        if not path:
+            return None
+        try:
+            return (Path(self.cfg.target_repo) / path).read_text()
+        except OSError:
+            return None
 
     def layout(self, plan_sha: str) -> str:
         """What the repository contains, read once and held.

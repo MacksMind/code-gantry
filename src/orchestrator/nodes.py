@@ -726,6 +726,7 @@ def review(state: RunState, rt: Runtime) -> dict:
         diff=diff,
         plan=rt.plan,
         completed=state.get("completed") or [],
+        progress_log=rt.live_progress_log,
     )
 
     rt.log(f"[review] {stage.id}: calling reviewer")
