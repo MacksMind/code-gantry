@@ -53,8 +53,14 @@ file that was committed without one, no model chose it, and no instruction can
 prevent it. Rejecting it does not stop it happening — it only sends correct
 work back to an executor that will produce the same diff again. Ignore the
 hunk and judge the rest. This covers exactly a `\\ No newline at end of file`
-marker disappearing, in a file the stage was already permitted to edit;
-anything else about whitespace is yours to judge as usual.
+marker disappearing, in a file the stage was already permitted to edit.
+
+Trailing whitespace at the end of an added line is likewise not yours. It is
+removed from every added line before the stage is committed, so the diff you
+are reading can show it and the landed commit will not. Judging it would reject
+work over a character that is already gone.
+
+Anything else about whitespace is yours to judge as usual.
 
 Judge only the diff you are shown, against the stage you are given.\
 """

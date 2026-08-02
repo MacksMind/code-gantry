@@ -833,6 +833,18 @@ class TestAdvance:
         assert "[extract]" in rt.git.commit_subject()
         assert out["completed"][0]["merge_sha"]
 
+    def test_what_it_lands_carries_no_trailing_whitespace(self, repo, tmp_path):
+        # End to end because this is where it mattered: the strip is correct in
+        # gitops and the commit is correct in gitops, and the run still died
+        # because nothing called one before the other. A pre-commit hook
+        # rejecting `git diff --cached --check` turned a landed stage into a
+        # crash with a staged merge stranded on the project branch.
+        cfg, rt, state = make(repo, tmp_path)
+        state = with_stage(state, rt)
+        (repo / "app.py").write_bytes(b"kept   \nwork\t\n")
+        nodes.advance(state, rt)
+        assert rt.git.show_file("proj", "app.py") == "kept\nwork\n"
+
     def test_deletes_the_child_branch(self, repo, tmp_path):
         cfg, rt, state = make(repo, tmp_path)
         state = with_stage(state, rt)

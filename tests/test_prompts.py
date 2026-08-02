@@ -641,10 +641,21 @@ class TestTheReviewerIsToldWhatTheEditorDoes:
         assert "final newline" in text
         assert "no newline at end of file" in text
 
+    def test_trailing_whitespace_on_added_lines_is_declared(self):
+        # The second thing the machinery does without asking. `advance` strips
+        # it before committing, because a pre-commit hook rejecting it killed a
+        # stage four times — so the diff the reviewer reads and the commit that
+        # lands genuinely differ, and only the tool can say so.
+        from orchestrator.prompts import REVIEW_SYSTEM_PROMPT
+
+        text = REVIEW_SYSTEM_PROMPT.lower()
+        assert "trailing whitespace" in text
+        assert "before the stage is committed" in text
+
     def test_it_is_narrow(self):
         # Not a licence on whitespace generally. Everything else about it stays
         # the reviewer's to judge, which is the difference between an exemption
         # and a hole.
         from orchestrator.prompts import REVIEW_SYSTEM_PROMPT
 
-        assert "anything else about whitespace" in REVIEW_SYSTEM_PROMPT
+        assert "anything else about whitespace" in REVIEW_SYSTEM_PROMPT.lower()

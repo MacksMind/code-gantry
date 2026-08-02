@@ -20,8 +20,11 @@ A `--no-ff` merge would drag the red commits onto the project branch.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
+
+_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)")
 
 
 class GitError(Exception):
@@ -322,7 +325,89 @@ class Git:
                 added.append((current, line[1:]))
         return added
 
+    def _added_line_numbers(self, since_sha: str) -> dict[str, set[int]]:
+        """Line numbers, in the working tree, of every line the stage added."""
+        self._mark_intent_to_add()
+        out = self._run("diff", "-U0", "--no-color", since_sha).stdout
+        added: dict[str, set[int]] = {}
+        path: str | None = None
+        lineno = 0
+        for line in out.splitlines():
+            if line.startswith("+++"):
+                raw = line[3:].strip()
+                if raw == "/dev/null":
+                    path = None
+                else:
+                    path = raw[2:] if raw.startswith(("a/", "b/")) else raw
+                continue
+            if line.startswith("---"):
+                continue
+            match = _HUNK.match(line)
+            if match:
+                lineno = int(match.group(1))
+                continue
+            if path and line.startswith("+"):
+                added.setdefault(path, set()).add(lineno)
+                lineno += 1
+        return added
+
     # --- mutations ------------------------------------------------------
+
+    def strip_added_trailing_whitespace(self, since_sha: str) -> list[str]:
+        """Remove trailing blanks from the lines this stage added.
+
+        What the orchestrator commits must survive a pre-commit hook, and
+        `git diff --cached --check` — the usual form of one — rejects trailing
+        whitespace on added lines. Nothing upstream reliably prevents it.
+        `executor.lint_command` reaches Aider as `--lint-cmd`, but Aider's
+        linter returns before it consults that command whenever
+        `filename_to_lang` cannot name the file's language, so ERB templates,
+        YAML and most non-source files are never linted at all.
+
+        The line need not be the executor's. One that already carried trailing
+        whitespace becomes an *added* line the moment the edit rewrites enough
+        of its surroundings. Observed: a single inherited trailing space in an
+        ERB partial failed the same stage four times, and a fresh branch would
+        not have helped — the executor had nothing to do differently.
+
+        Added lines only. Rewriting whole files would put churn on lines no
+        stage touched in front of the reviewer, which is the mistake the
+        line-ending exemption in `diff` exists to undo. Carriage returns are
+        left alone for the same reason: a CRLF file is not a file with trailing
+        whitespace, and stripping the `\\r` would rewrite every line in it.
+
+        Returns the paths it rewrote, for the log.
+        """
+        changed: list[str] = []
+        for rel, numbers in sorted(self._added_line_numbers(since_sha).items()):
+            target = self.repo / rel
+            if not target.is_file():
+                continue
+            try:
+                raw = target.read_bytes()
+            except OSError:
+                continue
+            if b"\0" in raw:
+                continue
+            # Split on "\n" rather than `splitlines`, which also breaks on form
+            # feeds and \x1c-\x1e. Git counts lines by "\n", and a numbering
+            # that disagreed with git's would strip the wrong line.
+            lines = raw.split(b"\n")
+            touched = False
+            for number in numbers:
+                if not 1 <= number <= len(lines):
+                    continue
+                body = lines[number - 1]
+                cr = b"\r" if body.endswith(b"\r") else b""
+                core = body[:-1] if cr else body
+                stripped = core.rstrip(b" \t")
+                if stripped != core:
+                    lines[number - 1] = stripped + cr
+                    touched = True
+            if touched:
+                target.write_bytes(b"\n".join(lines))
+                changed.append(rel)
+        return changed
 
     def commit_all(self, message: str) -> str | None:
         """Commit everything outstanding. Returns the new sha, or None if there

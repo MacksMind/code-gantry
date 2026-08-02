@@ -976,6 +976,17 @@ def advance(state: RunState, rt: Runtime) -> dict:
     # commits — some of them red, since it commits before testing — are
     # discarded by the squash. That is why "every commit on the project branch
     # is green" and "Aider commits before testing" are both true.
+    # Before anything is committed, not after: a pre-commit hook rejecting
+    # trailing whitespace on added lines is common, and neither the executor
+    # nor its linter reliably avoids one. `git commit` raising here strands a
+    # staged merge on the project branch and ends the run.
+    stripped = rt.git.strip_added_trailing_whitespace(start_sha)
+    if stripped:
+        rt.log(
+            f"[advance] removed trailing whitespace from added lines in "
+            f"{', '.join(stripped)}"
+        )
+
     rt.git.commit_all(f"[{stage.id}] wip")
     merge_sha = rt.git.squash_merge(
         branch, rt.cfg.project_branch, f"[{stage.id}] {_first_line(stage)}"

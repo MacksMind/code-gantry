@@ -371,6 +371,119 @@ class TestCommit:
         assert Git(repo).commit_all("nothing") is None
 
 
+class TestTrailingWhitespaceOnAddedLines:
+    """What the orchestrator commits must not carry trailing whitespace.
+
+    A repository-side hook rejecting it is common — `git diff --cached --check`
+    in a pre-commit hook is the usual form — and the executor cannot be relied
+    on to avoid it. `executor.lint_command` reaches Aider as `--lint-cmd`, but
+    Aider's linter returns before consulting that command whenever
+    `filename_to_lang` cannot name the file's language: ERB templates, YAML and
+    most non-source files lint as nothing at all.
+
+    The harder half is that the offending line need not be the executor's. A
+    line that already carried trailing whitespace becomes an *added* line the
+    moment the edit changes enough of its surroundings, and `--check` judges
+    added lines. Observed: one pre-existing trailing space in a 156-line ERB
+    partial killed a stage four times, and would have killed it on a fresh
+    branch too — the executor had nothing to do differently.
+
+    Only added lines are stripped. Rewriting whole files would put churn on
+    lines no stage touched in front of the reviewer, which is the same mistake
+    the line-ending exemption exists to undo.
+    """
+
+    def _repo_with(self, tmp_path, run_git, original: bytes):
+        repo = tmp_path / "t"
+        repo.mkdir()
+        run_git(repo, "init", "-q", "-b", "main")
+        run_git(repo, "config", "user.email", "t@e.com")
+        run_git(repo, "config", "user.name", "T")
+        run_git(repo, "config", "commit.gpgsign", "false")
+        # Hermetic: the developer's global hooksPath rejects trailing
+        # whitespace, which would make these fixtures uncommittable.
+        run_git(repo, "config", "core.hooksPath", str(repo / ".no-hooks"))
+        (repo / "view.erb").write_bytes(original)
+        run_git(repo, "add", "-A")
+        run_git(repo, "commit", "-qm", "base")
+        return repo, run_git(repo, "rev-parse", "HEAD")
+
+    def test_strips_whitespace_from_a_line_the_stage_added(self, tmp_path, run_git):
+        repo, base = self._repo_with(tmp_path, run_git, b"<a>\n")
+        (repo / "view.erb").write_bytes(b"<a>\n<new>   \n")
+        assert Git(repo).strip_added_trailing_whitespace(base) == ["view.erb"]
+        assert (repo / "view.erb").read_bytes() == b"<a>\n<new>\n"
+
+    def test_leaves_untouched_lines_alone(self, tmp_path, run_git):
+        # The whitespace on `<a>` predates the stage and is on no added line.
+        # Stripping it would be churn the stage never asked for.
+        repo, base = self._repo_with(tmp_path, run_git, b"<a>  \n<b>\n")
+        (repo / "view.erb").write_bytes(b"<a>  \n<B>\n")
+        assert Git(repo).strip_added_trailing_whitespace(base) == []
+        assert (repo / "view.erb").read_bytes() == b"<a>  \n<B>\n"
+
+    def test_strips_inherited_whitespace_once_the_line_counts_as_added(
+        self, tmp_path, run_git
+    ):
+        # The case that killed the stage. The trailing space on `<a>` is
+        # inherited, but rewriting the line around it makes git call the line
+        # added, and `--check` judges added lines.
+        repo, base = self._repo_with(tmp_path, run_git, b"<a>  \n")
+        (repo / "view.erb").write_bytes(b"<a href='x'>  \n")
+        assert Git(repo).strip_added_trailing_whitespace(base) == ["view.erb"]
+        assert (repo / "view.erb").read_bytes() == b"<a href='x'>\n"
+
+    def test_preserves_carriage_returns(self, tmp_path, run_git):
+        # A CRLF file is not a file with trailing whitespace. Treating the \r
+        # as strippable would rewrite every line ending in the file, which is
+        # exactly the churn the reviewer already cannot judge.
+        repo, base = self._repo_with(tmp_path, run_git, b"<a>\r\n")
+        (repo / "view.erb").write_bytes(b"<a>\r\n<new>  \r\n")
+        assert Git(repo).strip_added_trailing_whitespace(base) == ["view.erb"]
+        assert (repo / "view.erb").read_bytes() == b"<a>\r\n<new>\r\n"
+
+    def test_strips_tabs_as_well_as_spaces(self, tmp_path, run_git):
+        repo, base = self._repo_with(tmp_path, run_git, b"<a>\n")
+        (repo / "view.erb").write_bytes(b"<a>\n<new>\t \n")
+        assert Git(repo).strip_added_trailing_whitespace(base) == ["view.erb"]
+        assert (repo / "view.erb").read_bytes() == b"<a>\n<new>\n"
+
+    def test_covers_files_the_stage_created(self, tmp_path, run_git):
+        repo, base = self._repo_with(tmp_path, run_git, b"<a>\n")
+        (repo / "fresh.rb").write_bytes(b"x = 1  \n")
+        assert Git(repo).strip_added_trailing_whitespace(base) == ["fresh.rb"]
+        assert (repo / "fresh.rb").read_bytes() == b"x = 1\n"
+
+    def test_skips_binary_files(self, tmp_path, run_git):
+        repo, base = self._repo_with(tmp_path, run_git, b"<a>\n")
+        blob = b"\x89PNG\x00 \x00 \n"
+        (repo / "logo.png").write_bytes(blob)
+        assert Git(repo).strip_added_trailing_whitespace(base) == []
+        assert (repo / "logo.png").read_bytes() == blob
+
+    def test_a_clean_stage_changes_nothing(self, tmp_path, run_git):
+        repo, base = self._repo_with(tmp_path, run_git, b"<a>\n")
+        (repo / "view.erb").write_bytes(b"<a>\n<b>\n")
+        assert Git(repo).strip_added_trailing_whitespace(base) == []
+        assert (repo / "view.erb").read_bytes() == b"<a>\n<b>\n"
+
+    def test_a_deleted_file_is_not_resurrected(self, tmp_path, run_git):
+        repo, base = self._repo_with(tmp_path, run_git, b"<a>  \n")
+        (repo / "view.erb").unlink()
+        assert Git(repo).strip_added_trailing_whitespace(base) == []
+        assert not (repo / "view.erb").exists()
+
+    def test_the_resulting_commit_passes_gits_own_check(self, tmp_path, run_git):
+        # End to end, against the gate that actually rejected the stage:
+        # `git diff --cached --check`, which is what a pre-commit hook runs.
+        repo, base = self._repo_with(tmp_path, run_git, b"<a>  \n")
+        (repo / "view.erb").write_bytes(b"<a href='x'>  \n<new>\t\n")
+        g = Git(repo)
+        g.strip_added_trailing_whitespace(base)
+        run_git(repo, "add", "-A")
+        assert run_git(repo, "diff", "--cached", "--check") == ""
+
+
 class TestRestartingAStageBranch:
     """A restart must not inherit the attempt it is restarting from.
 
