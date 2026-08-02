@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Callable
 
 from orchestrator.commands import CommandRunner
-from orchestrator.config import ProjectConfig
+from orchestrator.config import ProjectConfig, validate_stage
 from orchestrator.executor import Executor
 from orchestrator.gitops import Git, GitError
 from orchestrator.layout import summarize_layout
@@ -233,6 +233,20 @@ class Runtime:
         return path
 
 
+def _stage_problems(cfg: ProjectConfig, fields: dict) -> list[str]:
+    """The same check `nodes.py` applies, phrased for the planner.
+
+    Building the stage can fail on its own — an id that is not a string, a
+    glob list that is not a list — and that is as much a reason to answer
+    again as a pattern that will not compile. Reported rather than raised, so
+    a malformed field costs one more call instead of ending the run.
+    """
+    try:
+        return validate_stage(cfg.stage_from_planner(fields), cfg)
+    except Exception as e:  # noqa: BLE001 - any failure here is the model's
+        return [f"the stage spec could not be read: {e}"]
+
+
 def build_runtime(
     cfg: ProjectConfig,
     project: ProjectPaths,
@@ -249,6 +263,14 @@ def build_runtime(
     for client in (planner, reviewer):
         if hasattr(client, "log"):
             client.log = logger
+    # The planner cannot check its own stage against project rules — they live
+    # in config, and the schema has no way to express "this string compiles as
+    # a regex". Told what is wrong it can usually fix it in one more call; not
+    # told, a single bad character escalates to a human and discards the whole
+    # tool loop that produced the stage. `nodes.py` still rejects the stage if
+    # the second attempt is no better.
+    if hasattr(planner, "validate_stage_fields"):
+        planner.validate_stage_fields = lambda fields: _stage_problems(cfg, fields)
     runner = CommandRunner(
         cwd=cfg.target_repo,
         timeout=cfg.limits.command_timeout_seconds,

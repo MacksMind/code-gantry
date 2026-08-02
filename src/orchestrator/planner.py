@@ -28,7 +28,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Callable, Literal, Protocol
 
 from pydantic import BaseModel, Field
 
@@ -407,6 +407,12 @@ class AnthropicPlanner:
         # out an outage silently is the failure this exists to fix, so a
         # missing log is a degradation, not a detail.
         self.log = log
+        # Also set by `build_runtime`. Takes the raw stage fields and returns
+        # the reasons the caller cannot use them, which is knowledge this
+        # module deliberately does not have: `forbidden_patterns` is a list of
+        # strings to the schema, and every invalid regex is a valid string.
+        # Injected rather than imported so project rules stay in `config.py`.
+        self.validate_stage_fields: Callable[[dict], list[str]] | None = None
         self._client = client if client is not None else _build_anthropic_client(cfg)
         # Absent on a project with no repository access configured, in which
         # case no tools are offered and this is the single-call planner it has
@@ -466,7 +472,7 @@ class AnthropicPlanner:
                 terminal.tool_calls = self._tool_log()
                 return terminal
 
-            problem = _semantic_problem(parsed)
+            problem = _semantic_problem(parsed) or self._unusable(parsed)
             if problem is None:
                 return PlannerOutcome(
                     verdict=parsed.verdict,
@@ -504,6 +510,20 @@ class AnthropicPlanner:
             ]
 
         raise AssertionError("unreachable")  # pragma: no cover
+
+    def _unusable(self, parsed: PlannerResponse) -> str | None:
+        """Why the caller cannot use this stage, if it cannot.
+
+        Every problem, not the first: fixing one and being told about the next
+        costs another whole round trip, and the planner has the stage in front
+        of it either way.
+        """
+        if self.validate_stage_fields is None or parsed.stage is None:
+            return None
+        problems = self.validate_stage_fields(parsed.stage.model_dump())
+        if not problems:
+            return None
+        return "; ".join(problems)
 
     def _attempt(
         self, messages: list[dict]

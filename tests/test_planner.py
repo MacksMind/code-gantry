@@ -283,6 +283,144 @@ class TestMalformedResponseIsRetried:
         assert len(client.calls) == 1
 
 
+class TestAStageTheCallerCannotUseIsRetried:
+    """Validation the schema cannot express, fed back instead of escalated.
+
+    Observed on stage 130 of a 129-stage run: the planner authored a
+    `forbidden_patterns` entry containing `$?`. `$` is an anchor, so there is
+    nothing for `?` to quantify and `re.compile` rejects it. The rest of the
+    stage was correct. It cost a human round trip, and discarded twelve minutes
+    and twenty-one tool reads, to fix one character.
+
+    The schema cannot catch it, because `forbidden_patterns` is a list of
+    strings and every invalid regex is a valid string. The check lives in
+    `config.py`, which is why it arrives as an injected callable rather than an
+    import — this module stays free of project knowledge, and the same retry
+    then covers any future rule the caller adds.
+
+    One retry, matching the malformed-answer path above. Two identical
+    rejections mean the planner cannot fix it and a human should look.
+    """
+
+    BAD = r"\.html_safe\s*$?.*funnel_request"
+
+    def _plan(self, stages, problems_for):
+        planner = AnthropicPlanner(
+            cfg(),
+            client=SequenceClient(
+                [
+                    response(
+                        parsed=PlannerResponse(
+                            verdict="next_stage",
+                            reasoning="r",
+                            status_entry="e",
+                            stage=s,
+                        )
+                    )
+                    for s in stages
+                ]
+            ),
+        )
+        planner.validate_stage_fields = problems_for
+        return planner.plan(MESSAGES), planner._client
+
+    def _rejects_bad_pattern(self, fields):
+        return [
+            f"forbidden_patterns entry {p!r} is not a valid regex: "
+            "nothing to repeat at position 12"
+            for p in fields.get("forbidden_patterns") or []
+            if p == self.BAD
+        ]
+
+    def test_a_rejected_stage_is_retried(self):
+        outcome, client = self._plan(
+            [a_stage(forbidden_patterns=[self.BAD]), a_stage(forbidden_patterns=["ok"])],
+            self._rejects_bad_pattern,
+        )
+        assert outcome.verdict == "next_stage"
+        assert outcome.stage_fields["forbidden_patterns"] == ["ok"]
+        assert len(client.calls) == 2
+
+    def test_the_retry_says_which_field_and_why(self):
+        # "Answer again" without the reason is a coin flip on the same typo.
+        _, client = self._plan(
+            [a_stage(forbidden_patterns=[self.BAD]), a_stage(forbidden_patterns=["ok"])],
+            self._rejects_bad_pattern,
+        )
+        correction = client.calls[1]["messages"][-1]["content"]
+        assert "forbidden_patterns" in correction
+        assert "not a valid regex" in correction
+
+    def test_the_correction_is_appended_so_the_prefix_stays_cacheable(self):
+        _, client = self._plan(
+            [a_stage(forbidden_patterns=[self.BAD]), a_stage(forbidden_patterns=["ok"])],
+            self._rejects_bad_pattern,
+        )
+        first, retry = client.calls[0]["messages"], client.calls[1]["messages"]
+        assert retry[: len(first)] == first
+
+    def test_a_second_rejection_blocks_rather_than_looping(self):
+        outcome, client = self._plan(
+            [a_stage(forbidden_patterns=[self.BAD])] * 2, self._rejects_bad_pattern
+        )
+        assert outcome.verdict == "blocked"
+        assert "not a valid regex" in outcome.reasoning
+        assert len(client.calls) == 2, "exactly one retry, not a loop"
+
+    def test_every_problem_is_reported_not_just_the_first(self):
+        # Fixing one and escalating on the next costs a whole round trip each.
+        outcome, _ = self._plan(
+            [a_stage(forbidden_patterns=[self.BAD])] * 2,
+            lambda fields: ["first problem", "second problem"],
+        )
+        assert "first problem" in outcome.reasoning
+        assert "second problem" in outcome.reasoning
+
+    def test_an_accepted_stage_costs_only_one_call(self):
+        _, client = self._plan([a_stage()], lambda fields: [])
+        assert len(client.calls) == 1
+
+    def test_no_validator_leaves_the_planner_unchanged(self):
+        # The backstop in `nodes.py` still rejects the stage; this only decides
+        # whether the planner got a chance to fix it first.
+        good = PlannerResponse(
+            verdict="next_stage", reasoning="r", status_entry="e", stage=a_stage()
+        )
+        client = SequenceClient([response(parsed=good)])
+        outcome = AnthropicPlanner(cfg(), client=client).plan(MESSAGES)
+        assert outcome.verdict == "next_stage"
+        assert len(client.calls) == 1
+
+    def test_a_verdict_carrying_no_stage_is_not_validated(self):
+        # `project_complete` has no stage to check, and calling a validator
+        # with nothing would invent a problem out of an empty dict.
+        seen = []
+
+        def record(fields):
+            seen.append(fields)
+            return ["invented"]
+
+        outcome, _ = self._plan_verdict("project_complete", record)
+        assert outcome.verdict == "project_complete"
+        assert seen == []
+
+    def _plan_verdict(self, verdict, problems_for):
+        planner = AnthropicPlanner(
+            cfg(),
+            client=SequenceClient(
+                [
+                    response(
+                        parsed=PlannerResponse(
+                            verdict=verdict, reasoning="r", status_entry="e", stage=None
+                        )
+                    )
+                ]
+            ),
+        )
+        planner.validate_stage_fields = problems_for
+        return planner.plan(MESSAGES), planner._client
+
+
 class TestDefensiveHandling:
     def test_a_transport_failure_becomes_blocked(self):
         outcome, _ = plan_with(RuntimeError("connection reset"))
