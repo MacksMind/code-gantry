@@ -1930,3 +1930,94 @@ class TestTheOpeningFailureOutlivesItsConsequences:
         assert "Add Personalization" in prompt, "the diagnosis reached the planner"
         assert "order_funnel_add_item_spec.rb" in prompt
         assert "reproduced the previous diff exactly" in prompt
+
+
+class TestPrecheckRefusesToBuildOnSomebodyElsesChanges:
+    """Between stages the tree is clean, because `advance` just committed.
+
+    A dirty tree at precheck means something wrote outside the pipeline — a
+    crash between `merge --squash` and `commit`, an editor left open, a human
+    mid-edit. Cutting a stage branch over it sweeps those files into the next
+    stage's diff, where the scope guard reports them as the executor editing
+    out of scope. The executor did nothing of the kind, and the stage pays a
+    retry for it.
+
+    Not on a resume. Preflight exempts resume from its own clean-tree check for
+    a reason that applies here exactly: a run is resumed because a human just
+    fixed something, and that fix is normally uncommitted. Guarding it would
+    make every escalation unrecoverable.
+    """
+
+    def _dirty(self, repo):
+        (repo / "app.py").write_text("someone was editing this\n")
+
+    def test_a_dirty_tree_between_stages_escalates(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        state = {**state, "current": Stage(**planned_stage()).model_dump(),
+                 "resuming": False}
+        self._dirty(repo)
+        out = nodes.precheck(state, rt)
+        assert out["next_hop"] == "escalate"
+        assert out["failure_layer"] == "workspace"
+
+    def test_it_names_the_files(self, repo, tmp_path):
+        # "the tree is dirty" without the paths sends the operator to run the
+        # command themselves.
+        cfg, rt, state = make(repo, tmp_path)
+        state = {**state, "current": Stage(**planned_stage()).model_dump(),
+                 "resuming": False}
+        self._dirty(repo)
+        assert "app.py" in nodes.precheck(state, rt)["escalation_reason"]
+
+    def test_a_clean_tree_proceeds(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        state = {**state, "current": Stage(**planned_stage()).model_dump(),
+                 "resuming": False}
+        assert nodes.precheck(state, rt)["next_hop"] == "execute"
+
+    def test_a_resume_is_exempt(self, repo, tmp_path):
+        # The human's fix is the dirt.
+        cfg, rt, state = make(repo, tmp_path)
+        state = {**state, "current": Stage(**planned_stage()).model_dump(),
+                 "resuming": True}
+        self._dirty(repo)
+        assert nodes.precheck(state, rt)["next_hop"] == "execute"
+
+    def test_the_resume_re_enters_at_precheck(self):
+        # Not verify: the check runs before a branch is cut, so there is no
+        # stage branch to diff against. Back to precheck, which re-checks.
+        from orchestrator.state import resume_entry_point
+
+        assert (
+            resume_entry_point(
+                {
+                    "resuming": True,
+                    "failure_layer": "workspace",
+                    "current": {"id": "s"},
+                    "stage_has_work": False,
+                }
+            )
+            == "precheck"
+        )
+
+    def test_a_revision_is_exempt(self, repo, tmp_path):
+        # A restart re-enters precheck without passing through `advance`, and
+        # `advance` is what commits. An uncommitted attempt in the tree is the
+        # ordinary state of a redraw, so guarding here would escalate every one.
+        cfg, rt, state = make(repo, tmp_path)
+        state = {
+            **state,
+            "current": Stage(**planned_stage()).model_dump(),
+            "resuming": False,
+            "revision": 2,
+        }
+        self._dirty(repo)
+        assert nodes.precheck(state, rt)["next_hop"] == "execute"
+
+    def test_a_stage_already_holding_a_branch_is_exempt(self, repo, tmp_path):
+        # Mid-stage, for the same reason.
+        cfg, rt, state = make(repo, tmp_path)
+        state = with_stage(state, rt)
+        state = {**state, "resuming": False}
+        self._dirty(repo)
+        assert nodes.precheck(state, rt)["next_hop"] == "execute"

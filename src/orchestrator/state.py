@@ -26,6 +26,7 @@ Status = Literal["running", "complete", "escalated"]
 FailureLayer = Literal[
     "precondition",
     "setup",
+    "workspace",
     "branch",
     "scope",
     "patterns",
@@ -47,6 +48,11 @@ REPO_STATE_FAILURES = frozenset(
      "progress", "review", "full_suite"}
 )
 PLANNING_FAILURES = frozenset({"precondition", "planner"})
+# `workspace` is deliberately in neither set. It is not a planning defect — the
+# planner cannot commit somebody's files — and routing it to verify would diff
+# against a stage branch that was never cut, because the check runs before
+# precheck cuts one. Falling through sends the resume back to precheck, which
+# re-runs the same check against the tree the human has since tidied.
 
 
 class StageResult(TypedDict, total=False):

@@ -363,6 +363,45 @@ def precheck(state: RunState, rt: Runtime) -> dict:
     update: dict = {"resuming": False}
     rt.log(f"[precheck] stage {stage.id} revision {state.get('revision', 0)}")
 
+    # Between stages the tree is clean: `advance` commits everything it lands,
+    # and the executor commits its own work. Anything uncommitted here was
+    # written outside the pipeline — a crash between `merge --squash` and
+    # `commit`, an editor left open, a human mid-edit. Cutting a stage branch
+    # over it sweeps those files into the next stage's diff, where the scope
+    # guard reports them as the executor editing out of scope. It did nothing
+    # of the kind, and the stage pays a retry to find that out.
+    #
+    # Never on a resume, for the reason preflight gives for its own exemption:
+    # a run is resumed because a human just fixed something and that fix is
+    # normally uncommitted. Guarding it here would make every escalation
+    # unrecoverable.
+    #
+    # And only for a newly drawn stage about to cut its first branch. A
+    # revision re-enters precheck mid-stage, and `advance` — the thing that
+    # leaves a clean tree — has not run: it is `advance` that calls
+    # `commit_all`, so an uncommitted attempt in the tree is the ordinary state
+    # of a restart, not evidence of anything. Checking there would escalate
+    # every rework the planner redraws.
+    fresh_stage = state.get("revision", 0) == 0 and not state.get("stage_branch")
+    if fresh_stage and not state.get("resuming"):
+        dirty = rt.git.uncommitted()
+        if dirty:
+            listed = "\n".join(dirty[:20])
+            more = f"\n… and {len(dirty) - 20} more" if len(dirty) > 20 else ""
+            return {
+                **update,
+                **_escalate(
+                    "workspace",
+                    f"The working tree is not clean before stage {stage.id!r}, "
+                    "and nothing in the pipeline leaves it that way between "
+                    "stages. Cutting a branch over these would attribute them "
+                    "to the executor and fail the stage on scope.\n\n"
+                    f"{listed}{more}\n\n"
+                    "Commit them if they are wanted, discard them if they are "
+                    "debris, then resume.",
+                ),
+            }
+
     for command in stage.preconditions:
         result = rt.runner.run(command)
         if not result.ok:

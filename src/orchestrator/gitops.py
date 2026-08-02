@@ -62,6 +62,16 @@ class Git:
         files, caches, and test databases."""
         return self._out("status", "--porcelain") == ""
 
+    def uncommitted(self) -> list[str]:
+        """Porcelain lines for whatever is dirty, for an operator to read.
+
+        `is_clean` answers whether to stop; this answers what to look at. A
+        message that says the tree is dirty and not which files sends someone
+        to run the command themselves.
+        """
+        out = self._out("status", "--porcelain")
+        return [line for line in out.splitlines() if line.strip()]
+
     def head_sha(self) -> str:
         return self._out("rev-parse", "HEAD")
 
