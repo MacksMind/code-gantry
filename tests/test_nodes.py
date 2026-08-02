@@ -1796,3 +1796,137 @@ class TestAnUnappliedEditOnAChangedTree:
         assert out["next_hop"] == "verify", (
             "a clean tree with commits ahead is finished work, not a half edit"
         )
+
+
+class TestTheOpeningFailureOutlivesItsConsequences:
+    """The first failure of a retry sequence is the diagnosis.
+
+    Live, on stage 130 of a 129-stage run: an `assert_select` assertion failed
+    in one spec, the executor reworked twice, aider hit its 900s timeout, and
+    the no-progress guard sent the stage to the planner carrying only "the
+    attempt reproduced the previous diff exactly". The planner redrew the stage
+    knowing nothing about the assertion, and the redraw failed the same way.
+
+    A previous incident was the same shape and cost thirty-five minutes: a
+    legible `ArgumentError` naming a file and line became "the executor timed
+    out", and the planner reasoned correctly from the wrong failure.
+
+    So the sequence keeps its first failure as well as its last. Not a list —
+    the ones in between are the same consequence repeated, and the planner
+    prompt is not the place to pay for them.
+    """
+
+    def _rt(self, repo, tmp_path, **over):
+        _, rt, state = make(repo, tmp_path, **over)
+        return rt, state
+
+    def test_the_first_failure_is_recorded_when_the_executor_retries(
+        self, repo, tmp_path
+    ):
+        rt, state = self._rt(repo, tmp_path)
+        out = nodes._retry_or_plan(
+            state, rt, "tests", "the suite failed", "feedback", "assert_select failed"
+        )
+        assert out["next_hop"] == "execute", "still within the retry budget"
+        assert out["opening_failure"]["summary"] == "the suite failed"
+        assert out["opening_failure"]["detail"] == "assert_select failed"
+
+    def test_a_later_failure_does_not_overwrite_it(self, repo, tmp_path):
+        rt, state = self._rt(repo, tmp_path)
+        first = nodes._retry_or_plan(
+            state, rt, "tests", "the suite failed", "f", "assert_select failed"
+        )
+        state = {**state, **first}
+        later = nodes._planner_failure(
+            state, "progress", "the attempt reproduced the previous diff", "d"
+        )
+        assert "opening_failure" not in later or later["opening_failure"] == first[
+            "opening_failure"
+        ], "the diagnosis is not replaced by its consequence"
+
+    def test_the_planner_receives_both(self, repo, tmp_path):
+        rt, state = self._rt(repo, tmp_path)
+        state = {
+            **state,
+            **nodes._retry_or_plan(
+                state, rt, "tests", "the suite failed", "f", "assert_select failed"
+            ),
+        }
+        out = nodes._planner_failure(
+            state, "progress", "reproduced the previous diff", "no progress"
+        )
+        assert out["next_hop"] == "plan"
+        assert out["last_failure"]["summary"] == "reproduced the previous diff"
+        assert state["opening_failure"]["summary"] == "the suite failed"
+
+    def test_a_failure_that_goes_straight_to_the_planner_opens_the_sequence(
+        self, repo, tmp_path
+    ):
+        # Nothing preceded it, so it is both the diagnosis and the consequence.
+        rt, state = self._rt(repo, tmp_path)
+        out = nodes._planner_failure(state, "scope", "edited outside scope", "d")
+        assert out["opening_failure"]["summary"] == "edited outside scope"
+
+    def test_a_revision_clears_it(self, repo, tmp_path):
+        # A redrawn stage is a different instruction; the old diagnosis is
+        # about work that no longer exists.
+        from orchestrator.state import fresh_revision_fields
+
+        assert fresh_revision_fields()["opening_failure"] is None
+
+    def test_a_landed_stage_clears_it(self):
+        assert fresh_stage_fields()["opening_failure"] is None
+
+    def test_the_state_schema_declares_it(self):
+        # Four defects have been values written correctly and dropped by a
+        # schema that did not know the key.
+        from orchestrator.state import RunState as Schema
+
+        assert "opening_failure" in Schema.__annotations__
+
+    def test_it_reaches_the_planner_prompt(self, repo, tmp_path):
+        """Node to state to prompt, not the endpoints separately.
+
+        Four defects have been values computed correctly, written correctly,
+        and lost in transit — dropped by a schema that did not declare the key,
+        or zeroed by a reset spread over the top of them. Both are live risks
+        here, so the journey is the test.
+        """
+        planner = StubPlanner()
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        state = with_stage(state, rt)
+
+        # The diagnosis: a real assertion failure, which retries.
+        state = {
+            **state,
+            **nodes._retry_or_plan(
+                state,
+                rt,
+                "tests",
+                "the suite failed",
+                "feedback for the executor",
+                "assert_select('a[href=...]', 'Add Personalization') failed",
+                failing_paths=["spec/features/order_funnel_add_item_spec.rb"],
+            ),
+        }
+        # The consequence: retries stop changing anything.
+        state = {
+            **state,
+            **nodes._planner_failure(
+                state,
+                "progress",
+                "the attempt reproduced the previous diff exactly",
+                "retrying costs another review for the same result",
+            ),
+        }
+
+        nodes.plan(state, rt)
+        prompt = "".join(
+            block["text"]
+            for message in planner.calls[0]
+            for block in message["content"]
+            if block.get("type") == "text"
+        )
+        assert "Add Personalization" in prompt, "the diagnosis reached the planner"
+        assert "order_funnel_add_item_spec.rb" in prompt
+        assert "reproduced the previous diff exactly" in prompt

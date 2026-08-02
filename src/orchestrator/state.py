@@ -136,6 +136,18 @@ class RunState(TypedDict, total=False):
     session_seconds: float
 
     last_failure: FailureDetail | None
+    # The first failure since the stage was drawn or last redrawn, kept because
+    # it is the diagnosis and `last_failure` is usually its consequence. A
+    # stage whose tests fail, is reworked twice and then trips the no-progress
+    # guard reaches the planner saying only that it repeated itself — true,
+    # and no help in deciding what to draw instead. Observed twice: once
+    # turning an `ArgumentError` naming a file and line into "the executor
+    # timed out", once sending the planner to redraw a stage without the
+    # assertion that broke it, which it then failed on again.
+    #
+    # Two, not a history. The failures in between are the same consequence
+    # repeated, and every one of them would be re-billed on each planner call.
+    opening_failure: FailureDetail | None
     failure_layer: str | None
     failed_stage_id: str | None
 
@@ -222,6 +234,7 @@ def new_state(
         full_suite_digest="",
         pending_plan_notes=[],
         last_failure=None,
+        opening_failure=None,
         failure_layer=None,
         failed_stage_id=None,
         flake_reruns=0,
@@ -282,6 +295,7 @@ def fresh_stage_fields() -> dict:
         # A new stage has a new tree; nothing has been proven about it yet.
         "full_suite_digest": "",
         "last_failure": None,
+        "opening_failure": None,
         "failure_layer": None,
         "failed_stage_id": None,
         "review_feedback": [],
@@ -310,6 +324,7 @@ def fresh_revision_fields() -> dict:
         "last_diff_digest": "",
         "full_suite_digest": "",
         "last_failure": None,
+        "opening_failure": None,
         "failure_layer": None,
         "review_feedback": [],
         "review_verdict": None,

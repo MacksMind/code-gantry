@@ -415,6 +415,7 @@ def build_planner_messages(
     completed: list[StageResult],
     current_stage: Stage | None = None,
     failure: FailureDetail | None = None,
+    opening_failure: FailureDetail | None = None,
     revision: int = 0,
     interventions_used: int = 0,
     interventions_max: int = 0,
@@ -534,8 +535,35 @@ def build_planner_messages(
                 f"### Its constraints\n\n{current_stage.constraints}"
             )
 
+        # The diagnosis first, then what it went on to cause. Read the other
+        # way round the planner acts on the consequence: "the attempt
+        # reproduced the previous diff" tells it retrying is pointless and
+        # nothing about what to draw instead. Both sit here, after the
+        # breakpoint, with the rest of the situational material.
+        if opening_failure and opening_failure != failure:
+            current.append(
+                _failure_block(
+                    opening_failure,
+                    heading="How it first failed",
+                    preamble=(
+                        "This is what went wrong before the retries. The "
+                        "attempts after it were responses to this, so this is "
+                        "the failure to draw against."
+                    ),
+                )
+            )
+
         if failure:
-            current.append(_failure_block(failure))
+            current.append(
+                _failure_block(
+                    failure,
+                    heading=(
+                        "Where it ended up"
+                        if opening_failure and opening_failure != failure
+                        else "How it failed"
+                    ),
+                )
+            )
 
         current.append(
             "Decide whether to revise this stage, insert a predecessor stage "
@@ -565,12 +593,22 @@ def build_planner_messages(
     return [{"role": "user", "content": blocks}]
 
 
-def _failure_block(failure: FailureDetail) -> str:
+def _failure_block(
+    failure: FailureDetail,
+    heading: str = "How it failed",
+    preamble: str | None = None,
+) -> str:
     """What the planner needs to tell "widen this stage" from "insert a
-    predecessor" — the specific damage, not an exit code."""
+    predecessor" — the specific damage, not an exit code.
+
+    `heading` is a parameter because a stage can arrive here having failed
+    twice for unrelated reasons, and two blocks both titled "How it failed"
+    would read as a contradiction rather than a sequence.
+    """
     parts = [
-        "### How it failed\n\n"
-        f"Gate: **{failure.get('layer')}**\n"
+        f"### {heading}\n\n"
+        + (f"{preamble}\n\n" if preamble else "")
+        + f"Gate: **{failure.get('layer')}**\n"
         f"Summary: {failure.get('summary')}"
     ]
 

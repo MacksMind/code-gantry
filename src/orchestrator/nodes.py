@@ -151,6 +151,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
         completed=state.get("completed") or [],
         current_stage=stage,
         failure=state.get("last_failure"),
+        opening_failure=state.get("opening_failure"),
         revision=state.get("revision", 0),
         interventions_used=state.get("planner_interventions", 0),
         interventions_max=limits.max_planner_interventions,
@@ -1184,6 +1185,34 @@ def _escalate(layer: str, reason: str) -> dict:
     return {"failure_layer": layer, "escalation_reason": reason, "next_hop": "escalate"}
 
 
+def _failure_detail(
+    layer: str,
+    summary: str,
+    detail: str,
+    out_of_scope_paths: list[str] | None = None,
+    failing_paths: list[str] | None = None,
+) -> dict:
+    return {
+        "layer": layer,
+        "summary": summary,
+        "detail": detail,
+        "out_of_scope_paths": out_of_scope_paths or [],
+        "failing_paths": failing_paths or [],
+    }
+
+
+def _opening(state: RunState, detail: dict) -> dict:
+    """Claim the sequence's first failure, or leave the claim standing.
+
+    Write-once per stage or revision. Whichever failure got here first is the
+    diagnosis; everything after it is what that failure caused, and overwriting
+    is precisely the defect this exists to fix.
+    """
+    if state.get("opening_failure"):
+        return {}
+    return {"opening_failure": detail}
+
+
 def _planner_failure(
     state: RunState,
     layer: str,
@@ -1193,15 +1222,13 @@ def _planner_failure(
     failing_paths: list[str] | None = None,
 ) -> dict:
     """Hand the failure to the planner with what it needs to act on."""
+    latest = _failure_detail(
+        layer, summary, detail, out_of_scope_paths, failing_paths
+    )
     return {
         "failure_layer": layer,
-        "last_failure": {
-            "layer": layer,
-            "summary": summary,
-            "detail": detail,
-            "out_of_scope_paths": out_of_scope_paths or [],
-            "failing_paths": failing_paths or [],
-        },
+        "last_failure": latest,
+        **_opening(state, latest),
         "next_hop": "plan",
     }
 
@@ -1233,6 +1260,13 @@ def _retry_or_plan(
         "failure_layer": layer,
         "verify_attempt": consumed + 1,
         "review_feedback": accumulated,
+        # Recorded on the way to the executor, not only on the way to the
+        # planner. This is the branch the diagnosis is usually lost on: the
+        # real failure retries, the retries stop making progress, and only the
+        # guard that noticed reaches the planner.
+        **_opening(
+            state, _failure_detail(layer, summary, detail, failing_paths=failing_paths)
+        ),
         "next_hop": "execute",
     }
 
@@ -1265,6 +1299,9 @@ def _rework_or_plan(
         "failure_layer": layer,
         "review_feedback": feedback,
         "rework_attempt": consumed + 1,
+        **_opening(
+            state, _failure_detail(layer, summary, "\n\n".join(feedback[-2:]))
+        ),
         "next_hop": "execute",
     }
 

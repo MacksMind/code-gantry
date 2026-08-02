@@ -703,3 +703,75 @@ class TestTheBreakpointBudgetIsFullySpent:
             len(self._marks(m["content"])) for m in outgoing
         )
         assert total == 4, f"the API allows 4 cache breakpoints, found {total}"
+
+
+class TestThePlannerSeesTheDiagnosisNotOnlyTheConsequence:
+    """Both ends of a retry sequence, when they differ.
+
+    A stage that fails its tests, is reworked twice, then trips the no-progress
+    guard arrives at the planner describing only the guard. That is true and
+    useless: "the attempt reproduced the previous diff exactly" says retrying
+    is pointless and says nothing about what to draw instead. Observed live —
+    the planner redrew the stage blind and the redraw failed on the same spec.
+
+    Both blocks sit after the cache breakpoint, with the situational material
+    they belong to. Nothing here touches the cached prefix.
+    """
+
+    def _stage(self):
+        return SimpleNamespace(
+            id="funnel-links",
+            instruction="Convert the funnel request links.",
+            edit_files=["app/views/**"],
+            constraints=None,
+        )
+
+    def _messages(self, failure, opening):
+        return build_planner_messages(
+            cfg=_cfg(),
+            plan=a_plan(),
+            completed=[],
+            current_stage=self._stage(),
+            failure=failure,
+            opening_failure=opening,
+        )
+
+    OPENING = {
+        "layer": "tests",
+        "summary": "the suite failed",
+        "detail": "assert_select('a[href=...]', 'Add Personalization') failed",
+        "failing_paths": ["spec/features/order_funnel_add_item_spec.rb"],
+    }
+    LATEST = {
+        "layer": "progress",
+        "summary": "the attempt reproduced the previous diff exactly",
+        "detail": "retrying costs another review for the same result",
+    }
+
+    def test_the_opening_failure_is_rendered(self):
+        text = all_text(self._messages(self.LATEST, self.OPENING))
+        assert "Add Personalization" in text
+        assert "order_funnel_add_item_spec.rb" in text
+
+    def test_the_latest_failure_is_still_rendered(self):
+        text = all_text(self._messages(self.LATEST, self.OPENING))
+        assert "reproduced the previous diff" in text
+
+    def test_the_diagnosis_leads(self):
+        # The guard says retrying is pointless; the assertion says what to draw
+        # instead. Read in the other order the planner acts on the consequence.
+        text = all_text(self._messages(self.LATEST, self.OPENING))
+        assert text.index("Add Personalization") < text.index(
+            "reproduced the previous diff"
+        )
+
+    def test_an_unrepeated_failure_is_shown_once(self):
+        # The common case: one failure, straight to the planner. A second
+        # identical block would be noise in a paid prompt.
+        text = all_text(self._messages(self.OPENING, self.OPENING))
+        assert text.count("Add Personalization") == 1
+
+    def test_no_opening_failure_renders_as_before(self):
+        text = all_text(self._messages(self.LATEST, None))
+        assert "reproduced the previous diff" in text
+        assert "Add Personalization" not in text
