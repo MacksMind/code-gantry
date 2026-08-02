@@ -218,6 +218,10 @@ def plan(state: RunState, rt: Runtime) -> dict:
                 "tool_calls": list(outcome.tool_calls),
                 "plan_notes": list(outcome.plan_notes),
                 "client_failure": outcome.failed,
+                # Present only when we rejected an answer the model did give.
+                # Null for a refusal or a transport failure, where the verdict
+                # above is the whole of what happened.
+                "rejected_answer": outcome.raw,
             },
             indent=2,
         ),

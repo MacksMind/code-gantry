@@ -6,6 +6,7 @@ throws work away; and whether the expensive half of the merge gate runs only
 when the cheap half passed.
 """
 
+import json
 import time
 from dataclasses import dataclass, field
 
@@ -2021,3 +2022,59 @@ class TestPrecheckRefusesToBuildOnSomebodyElsesChanges:
         state = {**state, "resuming": False}
         self._dirty(repo)
         assert nodes.precheck(state, rt)["next_hop"] == "execute"
+
+
+class TestTheRejectedAnswerReachesTheArtifact:
+    """A field on the dataclass that never reaches the file is worth nothing.
+
+    `planner.json` is what anyone actually opens afterwards. The rejected
+    answer exists to be read there, so the test is the journey — planner client
+    to node to file — not the dataclass.
+    """
+
+    def test_planner_json_carries_the_rejected_answer(self, repo, tmp_path):
+        rejected = {"verdict": "revise", "reasoning": "narrow it", "stage": None}
+        planner = StubPlanner(
+            [
+                PlannerOutcome(
+                    "blocked",
+                    "the planner returned 'revise' without a stage spec",
+                    "e",
+                    failed=True,
+                    raw=rejected,
+                )
+            ]
+        )
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        nodes.plan(state, rt)
+
+        written = json.loads(
+            (
+                rt.paths.attempt_dir(state.get("stage_index", 0), "plan", 0, 0)
+                / "planner.json"
+            ).read_text()
+        )
+        assert written["rejected_answer"] == rejected
+        assert written["client_failure"] is True
+
+    def test_an_accepted_answer_records_it_as_null(self, repo, tmp_path):
+        # Recorded either way. An absent key cannot be told apart from a
+        # feature that never ran — the same reason tool_calls is always
+        # written, even empty.
+        planner = StubPlanner(
+            [
+                PlannerOutcome(
+                    "next_stage", "r", "e", stage_fields=planned_stage()
+                )
+            ]
+        )
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        nodes.plan(state, rt)
+        written = json.loads(
+            (
+                rt.paths.attempt_dir(state.get("stage_index", 0), "plan", 0, 0)
+                / "planner.json"
+            ).read_text()
+        )
+        assert "rejected_answer" in written
+        assert written["rejected_answer"] is None

@@ -350,6 +350,17 @@ class PlannerOutcome:
     # True when `blocked` is ours rather than the planner's, so the report does
     # not imply a judgement the model never made.
     failed: bool = False
+    # The answer we refused, when we refused one. On a rejection the outcome is
+    # ours — a synthesized `blocked` carrying our reason — and the model's own
+    # verdict, reasoning and stage were being dropped at the moment they became
+    # most worth reading. Live: `revise` arrived without a stage spec twice, the
+    # run escalated, and the artifact recorded our message and its tool calls
+    # but not the answer, so there was no way to tell a model that reasoned well
+    # and fumbled a field from one producing nonsense. Set only when something
+    # was parsed and then rejected: a refusal or a transport failure has no
+    # answer to keep, and inventing an empty one would read like a malformed
+    # response.
+    raw: dict | None = None
 
 
 class PlannerClient(Protocol):
@@ -491,6 +502,7 @@ class AnthropicPlanner:
                 outcome = _blocked(problem)
                 outcome.usage = billed
                 outcome.tool_calls = self._tool_log()
+                outcome.raw = parsed.model_dump()
                 return outcome
 
             # Appended, never prepended: the plan and repository layout at the

@@ -1116,3 +1116,65 @@ class TestOutagesAreWaitedOutNotEscalated:
             cfg(transport_retry_seconds=0.01), client=client, log=lines.append
         ).plan(MESSAGES)
         assert any("retrying in" in line for line in lines), lines
+
+
+class TestARejectedAnswerIsStillRecorded:
+    """What the planner said, when we decided we could not use it.
+
+    `planner.json` records the outcome, and on a rejection the outcome is ours:
+    a synthesized `blocked` carrying our reason. The model's own answer — the
+    verdict it chose, the stage it drew, the reasoning it gave — is discarded at
+    the moment it becomes most worth reading.
+
+    Live: the planner returned `revise` without a stage spec twice and the run
+    escalated. The tool calls survived in the artifact and the answer did not,
+    so there was no way afterwards to tell a model that had reasoned well and
+    fumbled a field from one that had produced nonsense. It resolved on a third
+    attempt, which is the other reason to keep it — a stochastic failure is
+    only diagnosable across occurrences.
+    """
+
+    def _rejected(self, bad, good=None):
+        responses = [response(parsed=bad)]
+        responses.append(response(parsed=good if good is not None else bad))
+        client = SequenceClient(responses)
+        return AnthropicPlanner(cfg(), client=client).plan(MESSAGES)
+
+    def test_a_semantic_rejection_keeps_the_answer(self):
+        bad = PlannerResponse(
+            verdict="revise", reasoning="narrow it", status_entry="e", stage=a_stage()
+        )
+        outcome = self._rejected(bad)
+        assert outcome.verdict == "blocked"
+        assert outcome.raw is not None
+        assert outcome.raw["verdict"] == "revise"
+        assert outcome.raw["reasoning"] == "narrow it"
+
+    def test_the_stage_it_drew_is_kept_too(self):
+        # The field that was missing is the point; the fields that were there
+        # say whether the rest of the answer was sound.
+        bad = PlannerResponse(
+            verdict="revise", reasoning="r", status_entry="e", stage=a_stage()
+        )
+        outcome = self._rejected(bad)
+        assert outcome.raw["stage"]["id"] == "extract-service"
+
+    def test_an_accepted_answer_records_nothing_extra(self):
+        # `raw` is for the rejected case. On success the outcome already is the
+        # answer, and duplicating it would double the artifact for nothing.
+        good = PlannerResponse(
+            verdict="next_stage", reasoning="r", status_entry="e", stage=a_stage()
+        )
+        client = SequenceClient([response(parsed=good)])
+        assert AnthropicPlanner(cfg(), client=client).plan(MESSAGES).raw is None
+
+    def test_a_refusal_has_no_answer_to_keep(self):
+        # Nothing was parsed, so there is nothing to record. It must not invent
+        # an empty one that reads like a malformed answer.
+        client = SequenceClient([response(parsed=None, stop_reason="refusal")])
+        assert AnthropicPlanner(cfg(), client=client).plan(MESSAGES).raw is None
+
+    def test_a_transport_failure_has_no_answer_to_keep(self):
+        outcome, _ = plan_with(RuntimeError("connection reset"))
+        assert outcome.failed is True
+        assert outcome.raw is None
