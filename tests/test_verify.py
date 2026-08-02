@@ -222,6 +222,86 @@ class TestForbiddenPatterns:
         assert verify(repo, cfg, stage, sha).failed_layer is Layer.PATTERNS
 
 
+class TestAPatternIsNotForbiddenInATest:
+    """A test proving a construct is gone must be allowed to name it.
+
+    The gate reads added lines, which is what lets it catch reintroduction —
+    and makes `expect(body).not_to include('new Ajax.Request')` textually
+    identical to reintroducing `new Ajax.Request`. There is no way to tell
+    them apart by reading the line.
+
+    Left alone it deadlocks a stage across three components. Observed: the
+    planner prescribed that exact assertion in the stage instruction, the
+    reviewer reworked the stage for omitting it — "part of the prescribed exact
+    spec content" — and this gate rejected it on every attempt that included
+    it. The executor oscillated between residue and patterns for forty minutes
+    with no move available that satisfied all three.
+
+    Scoped by `test_file_patterns`, which the project already declares, rather
+    than a new knob. A test that genuinely uses the construct rather than
+    asserting its absence still faces the residue check and the reviewer; a
+    test file is not where a migration's damage lands.
+    """
+
+    OWNED = ["app/**", "spec/**"]
+
+    def test_an_assertion_naming_the_construct_passes(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo, "spec/thing_spec.rb", "expect(body).not_to include('Ajax')\n")
+        cfg, stage = build(
+            repo, {"forbidden_patterns": ["Ajax"], "edit_files": self.OWNED}
+        )
+        assert verify(repo, cfg, stage, sha).passed
+
+    def test_the_same_line_in_production_code_still_fails(self, repo):
+        # The exemption is about where the line is, not what it says.
+        sha = Git(repo).head_sha()
+        edit(repo, "app/views/list.erb", "new Ajax.Request(url)\n")
+        cfg, stage = build(
+            repo, {"forbidden_patterns": ["Ajax"], "edit_files": self.OWNED}
+        )
+        out = verify(repo, cfg, stage, sha)
+        assert out.failed_layer is Layer.PATTERNS
+
+    def test_a_violation_outside_tests_is_still_reported_alongside_one_inside(
+        self, repo
+    ):
+        # The exemption must not swallow a real hit that happens to share the
+        # diff with an exempt one.
+        sha = Git(repo).head_sha()
+        edit(repo, "spec/thing_spec.rb", "expect(body).not_to include('Ajax')\n")
+        edit(repo, "app/views/list.erb", "new Ajax.Request(url)\n")
+        cfg, stage = build(
+            repo, {"forbidden_patterns": ["Ajax"], "edit_files": self.OWNED}
+        )
+        out = verify(repo, cfg, stage, sha)
+        assert out.failed_layer is Layer.PATTERNS
+        assert "list.erb" in out.feedback
+        assert "thing_spec.rb" not in out.feedback
+
+    def test_the_skip_is_not_silent(self, repo):
+        # A gate that quietly stops checking reads as a gate that found
+        # nothing. When the exemption actually suppresses a hit, it says so.
+        sha = Git(repo).head_sha()
+        edit(repo, "spec/thing_spec.rb", "expect(body).not_to include('Ajax')\n")
+        cfg, stage = build(
+            repo, {"forbidden_patterns": ["Ajax"], "edit_files": self.OWNED}
+        )
+        out = verify(repo, cfg, stage, sha)
+        assert out.passed
+        assert out.exempt_pattern_files == ["spec/thing_spec.rb"]
+
+    def test_nothing_is_reported_when_the_exemption_changed_nothing(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo, "spec/thing_spec.rb", "expect(body).to be_ok\n")
+        cfg, stage = build(
+            repo, {"forbidden_patterns": ["Ajax"], "edit_files": self.OWNED}
+        )
+        out = verify(repo, cfg, stage, sha)
+        assert out.passed
+        assert out.exempt_pattern_files == []
+
+
 class TestResidue:
     """"No occurrence of X should remain" — a check the diff cannot make.
 

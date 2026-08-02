@@ -607,6 +607,13 @@ def verify(state: RunState, rt: Runtime) -> dict:
             "would scope it."
         )
 
+    if outcome.exempt_pattern_files:
+        rt.log(
+            f"[verify] {stage.id}: forbidden patterns matched in "
+            f"{', '.join(outcome.exempt_pattern_files)} and were excused as "
+            "tests. A test proving a construct is gone has to name it."
+        )
+
     if outcome.passed:
         rt.log(f"[verify] {stage.id}: all gates passed")
         return {

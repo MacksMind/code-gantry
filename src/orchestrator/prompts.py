@@ -126,7 +126,10 @@ def build_executor_prompt(
             "## Patterns you must not introduce\n\n"
             f"{listed}\n\n"
             "These are checked mechanically against the lines you add. They may "
-            "be correct elsewhere in the project but are out of bounds here."
+            "be correct elsewhere in the project but are out of bounds here.\n\n"
+            "Test files are exempt. A test asserting one of these is gone has "
+            "to quote it, so write that assertion normally — the check skips "
+            "test files and will not reject it."
         )
 
     if context:

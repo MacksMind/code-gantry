@@ -89,6 +89,11 @@ class VerifyOutcome:
     # which specs this stage affects. Correct, but expensive enough on a real
     # project to be worth surfacing rather than looking like a slow scoped run.
     unscoped_tests: bool = False
+    # Test files whose added lines matched a forbidden pattern and were excused
+    # for being tests. Reported rather than skipped in silence: a gate that
+    # quietly stops checking is indistinguishable from a gate that found
+    # nothing.
+    exempt_pattern_files: list[str] = field(default_factory=list)
     # Set when this layer ran `full_test_command` itself and it came back green:
     # a fingerprint of the tree that passed. The merge gate re-runs the full
     # suite after review, and when verify has already run that exact command on
@@ -403,11 +408,26 @@ def _layer_patterns(ctx: _Context, outcome: VerifyOutcome):
 
     added = ctx.git.added_lines(ctx.stage_start_sha)
     hits: list[str] = []
+    exempt: list[str] = []
     for pattern in ctx.stage.forbidden_patterns:
         compiled = re.compile(pattern)
         for path, text in added:
-            if compiled.search(text):
-                hits.append(f"  {path}: {text.strip()}   [matches /{pattern}/]")
+            if not compiled.search(text):
+                continue
+            # A test proving the construct is gone has to name it. The gate
+            # reads added lines, so `not_to include('new Ajax.Request')` and
+            # reintroducing `new Ajax.Request` are the same text — nothing in
+            # the line distinguishes them. Deadlocked a stage across all three
+            # components: the planner prescribed the assertion, the reviewer
+            # reworked the stage for omitting it, and this gate rejected every
+            # attempt that included it.
+            if matches_any(path, ctx.cfg.test_file_patterns):
+                if path not in exempt:
+                    exempt.append(path)
+                continue
+            hits.append(f"  {path}: {text.strip()}   [matches /{pattern}/]")
+
+    outcome.exempt_pattern_files = exempt
 
     if not hits:
         return None
