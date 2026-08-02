@@ -162,6 +162,17 @@ class _EndpointConfig(_Strict):
 class ExecutorConfig(_EndpointConfig):
     model: str
     api_key_env: str | None = None
+    # Passed to aider as `--lint-cmd`, which is narrower than it reads. Aider's
+    # linter calls `filename_to_lang` first and returns before consulting this
+    # command whenever the file's language cannot be named — grep-ast has no
+    # parser for ERB, YAML, Haml or Markdown, so those are never linted at all,
+    # whatever this says. Prefixing a language does not help either: the lookup
+    # is `self.languages.get(lang)` with `lang` still None.
+    #
+    # So it suits a formatter for a recognised source language — `rubocop -a`,
+    # `ruff check --fix`, which is what `discover` infers — and cannot carry a
+    # guarantee that has to hold for every file. Trailing whitespace was one
+    # such guarantee; it lives in `advance` instead.
     lint_command: str | None = None
     # Aider's default varies by model and is usually right for hosted ones. A
     # local model frequently cannot produce a valid diff — the first real run
