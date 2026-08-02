@@ -8,13 +8,15 @@ when the cheap half passed.
 
 import json
 import time
+
+import pytest
 from dataclasses import dataclass, field
 
 from orchestrator import nodes
 from orchestrator.commands import CommandRunner
 from orchestrator.config import Stage, parse_config
 from orchestrator.executor import ExecutionResult
-from orchestrator.gitops import Git
+from orchestrator.gitops import Git, GitError
 from orchestrator.plandoc import PlanDocument, PlanTree
 from orchestrator.planner import PlannerOutcome, PlannerUsage
 from orchestrator.reviewer import Issue, ReviewOutcome, TokenUsage
@@ -2119,3 +2121,73 @@ class TestTheFindingSurvivesToTheAddendum:
         written = (repo / "docs/progress_log.md").read_text()
         assert "- **found** 7 of 24 remain, all inline `<script>` renders" in written
         assert "The mechanical half is done." in written
+
+
+class TestAFailedLandingLeavesNothingBehind:
+    """Either the stage lands or the tree is as advance found it.
+
+    `advance` mutates in four steps — write the plan note, strip whitespace,
+    commit, squash-merge — and a failure in any of them used to leave the
+    repository part-way through. Two faces of that: a staged merge stranded on
+    the project branch, and an uncommitted plan note left in the worktree.
+
+    The second is the more confusing one. The next resume re-enters at verify,
+    whose scope guard sees a plan document changed during a stage and routes it
+    to the planner as the executor editing the record of its own work. That
+    never happened, and the planner cannot fix it.
+    """
+
+    def _cfg(self, repo, tmp_path):
+        cfg, rt, state = make(
+            repo, tmp_path, plan_addendum_path="docs/progress_log.md"
+        )
+        (repo / "docs").mkdir(exist_ok=True)
+        (repo / "PLAN.md").write_text("# Plan\n\nsome item\n")
+        return cfg, rt, state
+
+    A_NOTE = {
+        "plan_path": "PLAN.md",
+        "anchor": "some item",
+        "observation": "done",
+    }
+
+    def test_a_failed_merge_unwinds_the_plan_note(self, repo, tmp_path, monkeypatch):
+        cfg, rt, state = self._cfg(repo, tmp_path)
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("stage work\n")
+        state = {**state, "pending_plan_notes": [self.A_NOTE]}
+
+        def boom(*a, **kw):
+            raise GitError("pre-commit hook rejected the commit")
+
+        monkeypatch.setattr(rt.git, "squash_merge", boom)
+
+        with pytest.raises(GitError):
+            nodes.advance(state, rt)
+
+        assert not (repo / "docs/progress_log.md").exists(), (
+            "the note was written by advance and must not outlive its failure"
+        )
+
+    def test_a_successful_landing_keeps_the_note(self, repo, tmp_path):
+        cfg, rt, state = self._cfg(repo, tmp_path)
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("stage work\n")
+        state = {**state, "pending_plan_notes": [self.A_NOTE]}
+
+        nodes.advance(state, rt)
+        assert "done" in (repo / "docs/progress_log.md").read_text()
+
+    def test_a_landing_with_no_note_is_unaffected(self, repo, tmp_path, monkeypatch):
+        # Nothing was written, so there is nothing to unwind and the unwind
+        # must not invent a revert of a file that never existed.
+        cfg, rt, state = self._cfg(repo, tmp_path)
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("stage work\n")
+
+        def boom(*a, **kw):
+            raise GitError("nope")
+
+        monkeypatch.setattr(rt.git, "squash_merge", boom)
+        with pytest.raises(GitError):
+            nodes.advance(state, rt)

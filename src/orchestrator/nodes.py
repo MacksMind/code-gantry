@@ -1038,10 +1038,26 @@ def advance(state: RunState, rt: Runtime) -> dict:
             f"{', '.join(stripped)}"
         )
 
-    rt.git.commit_all(f"[{stage.id}] wip")
-    merge_sha = rt.git.squash_merge(
-        branch, rt.cfg.project_branch, f"[{stage.id}] {_first_line(stage)}"
-    )
+    # The note is written to the worktree and committed a few lines below, so
+    # anything that raises in between leaves it modified and uncommitted. The
+    # next resume re-enters at verify, whose scope guard sees a plan document
+    # changed by a stage and routes it to the planner as the executor wandering
+    # into the record of its own work — a diagnosis that is wrong, and that the
+    # planner cannot act on because it did not happen.
+    #
+    # `squash_merge` already restores the project branch if its own commit
+    # fails. This covers the other half: either the stage lands or the tree is
+    # as advance found it.
+    try:
+        rt.git.commit_all(f"[{stage.id}] wip")
+        merge_sha = rt.git.squash_merge(
+            branch, rt.cfg.project_branch, f"[{stage.id}] {_first_line(stage)}"
+        )
+    except Exception:
+        if written is not None and rt.cfg.plan_addendum_path:
+            rt.log("[advance] landing failed; unwinding the plan note")
+            rt.git.revert_paths(start_sha, [rt.cfg.plan_addendum_path])
+        raise
     rt.git.delete_branch(branch)
 
     usage = state.get("stage_usage") or {}

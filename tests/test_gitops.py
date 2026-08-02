@@ -609,3 +609,78 @@ class TestLineEndingChurnIsHiddenFromReview:
         shown = self._changed(Git(repo).diff(base, ignore_line_endings=True))
         assert "y = 99" in shown
         assert "x = 1" not in shown
+
+
+class TestALandingLeavesNoHalfMergedBranch:
+    """`merge --squash` stages; `commit` is a second step that can fail.
+
+    Between them the project branch holds a staged merge and a modified
+    worktree with no commit. Seen three times: a pre-commit hook rejecting
+    trailing whitespace is the usual cause, and neither the executor nor its
+    linter reliably avoids one. The run ends there, and the next resume opens
+    on a project branch that is dirty in a way nothing in the pipeline
+    produced — which the workspace guard now escalates, correctly but
+    unhelpfully, because the real fault happened one step earlier.
+
+    Nothing is at risk in a rollback: the stage branch still holds every commit,
+    so restoring the project branch loses no work and the landing can be retried.
+    """
+
+    def _project_with_a_stage(self, repo, run_git):
+        run_git(repo, "checkout", "-q", "-b", "proj")
+        run_git(repo, "checkout", "-q", "-b", "stage")
+        (repo / "app.py").write_text("stage work\n")
+        run_git(repo, "add", "-A")
+        run_git(repo, "commit", "-qm", "stage work")
+        run_git(repo, "checkout", "-q", "proj")
+        return Git(repo)
+
+    def test_a_failing_commit_restores_the_project_branch(
+        self, repo, run_git, monkeypatch
+    ):
+        git = self._project_with_a_stage(repo, run_git)
+        before = git.rev_parse("proj")
+
+        real = git._run
+
+        def fail_the_commit(*args, **kw):
+            if args and args[0] == "-c" and "commit" in args:
+                raise GitError("pre-commit hook rejected trailing whitespace")
+            return real(*args, **kw)
+
+        monkeypatch.setattr(git, "_run", fail_the_commit)
+
+        with pytest.raises(GitError, match="pre-commit"):
+            git.squash_merge("stage", "proj", "[stage] work")
+
+        assert git.rev_parse("proj") == before, "the branch moved"
+        assert git.is_clean(), "a staged merge was left behind"
+
+    def test_the_stage_branch_still_holds_the_work(self, repo, run_git, monkeypatch):
+        # The rollback is safe precisely because this is true.
+        git = self._project_with_a_stage(repo, run_git)
+        real = git._run
+
+        def fail_the_commit(*args, **kw):
+            if args and args[0] == "-c" and "commit" in args:
+                raise GitError("nope")
+            return real(*args, **kw)
+
+        monkeypatch.setattr(git, "_run", fail_the_commit)
+        with pytest.raises(GitError):
+            git.squash_merge("stage", "proj", "[stage] work")
+
+        assert "stage work" in git.show_file("stage", "app.py")
+
+    def test_a_successful_landing_is_unaffected(self, repo, run_git):
+        git = self._project_with_a_stage(repo, run_git)
+        sha = git.squash_merge("stage", "proj", "[stage] work")
+        assert sha == git.rev_parse("proj")
+        assert git.is_clean()
+
+    def test_an_empty_child_still_returns_none(self, repo, run_git):
+        # Nothing to land is not a failure, and must not trigger a rollback.
+        run_git(repo, "checkout", "-q", "-b", "proj")
+        run_git(repo, "checkout", "-q", "-b", "empty")
+        run_git(repo, "checkout", "-q", "proj")
+        assert Git(repo).squash_merge("empty", "proj", "m") is None

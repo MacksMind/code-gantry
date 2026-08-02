@@ -468,15 +468,35 @@ class Git:
         was not already on the project branch.
         """
         self.checkout(project_branch)
-        merge = self._run("merge", "--squash", child_branch, check=False)
-        if merge.returncode != 0:
-            raise GitError(
-                f"squash merge of {child_branch!r} into {project_branch!r} "
-                f"failed: {merge.stderr.strip() or merge.stdout.strip()}"
-            )
-        if self._out("diff", "--cached", "--name-only") == "":
-            return None
-        self._run("-c", "commit.gpgsign=false", "commit", "-q", "-m", message)
+        # `merge --squash` stages and `commit` is a second step, so between
+        # them the project branch carries a staged merge and a modified
+        # worktree with no commit. Anything that fails in that window — a
+        # pre-commit hook rejecting whitespace is the usual one, seen three
+        # times — used to end the run there and leave the next resume opening
+        # on a project branch dirty in a way nothing in the pipeline produced.
+        #
+        # So the window is closed by rolling back to where the branch was. This
+        # is safe because the child branch still holds every commit: the
+        # landing can simply be retried, and nothing that was not already
+        # recoverable is lost.
+        before = self.head_sha()
+        try:
+            merge = self._run("merge", "--squash", child_branch, check=False)
+            if merge.returncode != 0:
+                raise GitError(
+                    f"squash merge of {child_branch!r} into {project_branch!r} "
+                    f"failed: {merge.stderr.strip() or merge.stdout.strip()}"
+                )
+            if self._out("diff", "--cached", "--name-only") == "":
+                return None
+            self._run("-c", "commit.gpgsign=false", "commit", "-q", "-m", message)
+        except Exception:
+            # Best effort, and deliberately silent: the original failure is the
+            # diagnosis and must be what reaches the caller. A rollback that
+            # cannot run leaves exactly the state that existed before this
+            # method tried to help.
+            self._run("reset", "--hard", before, check=False)
+            raise
         return self.head_sha()
 
     # --- run-scoped repo settings ---------------------------------------
