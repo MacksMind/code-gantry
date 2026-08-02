@@ -242,6 +242,13 @@ def build_runtime(
     log: Callable[[str], None] | None = None,
 ) -> Runtime:
     logger = log or (lambda _msg: None)
+    # The model clients wait out network outages themselves and have to be
+    # able to say so — a silent fifteen-minute wait and a hung process look
+    # identical from outside. They are built before the runtime exists, so
+    # the log reaches them here rather than through their constructors.
+    for client in (planner, reviewer):
+        if hasattr(client, "log"):
+            client.log = logger
     runner = CommandRunner(
         cwd=cfg.target_repo,
         timeout=cfg.limits.command_timeout_seconds,

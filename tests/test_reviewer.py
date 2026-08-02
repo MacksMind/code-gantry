@@ -72,6 +72,21 @@ class StubClient:
         return self._result
 
 
+class SequenceClient(StubClient):
+    """One scripted result per call, so a retry can be observed."""
+
+    def __init__(self, results):
+        super().__init__(None)
+        self._results = list(results)
+
+    def _parse(self, **kwargs):
+        self.calls.append(kwargs)
+        result = self._results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
 MESSAGES = [
     {"role": "system", "content": "you are a reviewer"},
     {"role": "user", "content": "stable prefix"},
@@ -341,3 +356,44 @@ class TestExplicitCacheMode:
         # sending a deprecated parameter alongside its replacement invites the
         # kind of silent misbehaviour this whole area just cost us.
         assert "prompt_cache_retention" not in self.call()
+
+
+class TestOutagesAreWaitedOutNotEscalated:
+    """The reviewer died to the same disconnection, two seconds apart.
+
+    Same reasoning as the planner's: bounded by wall clock rather than by a
+    retry count, and out loud, because SDK retries log at DEBUG where `run.log`
+    never sees them and a silent fifteen-minute wait is indistinguishable from
+    a hang.
+    """
+
+    def _connection_error(self):
+        import httpx
+        from openai import APIConnectionError
+
+        return APIConnectionError(request=httpx.Request("POST", "https://x/y"))
+
+    def test_a_connection_error_is_retried(self):
+        verdict = ReviewVerdict(verdict="approved", summary="Fine.", issues=[])
+        client = SequenceClient([self._connection_error(), response(parsed=verdict)])
+        out = OpenAIReviewer(
+            cfg_with(transport_retry_seconds=0.01).reviewer, client=client
+        ).review(MESSAGES)
+        assert out.verdict == "approved"
+        assert len(client.calls) == 2
+
+    def test_it_blocks_once_the_budget_is_spent(self):
+        client = StubClient(self._connection_error())
+        out = OpenAIReviewer(
+            cfg_with(transport_retry_seconds=0.01).reviewer, client=client
+        ).review(MESSAGES)
+        assert out.verdict == "blocked"
+        assert "Connection error" in out.summary
+
+    def test_a_refusal_is_not_retried(self):
+        client = StubClient(response(parsed=None, refusal="I will not."))
+        out = OpenAIReviewer(
+            cfg_with(transport_retry_seconds=900).reviewer, client=client
+        ).review(MESSAGES)
+        assert out.verdict == "blocked"
+        assert len(client.calls) == 1

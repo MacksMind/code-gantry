@@ -33,6 +33,7 @@ from typing import Literal, Protocol
 from pydantic import BaseModel, Field
 
 from orchestrator.config import PlannerConfig
+from orchestrator.retry import Backoff, with_transport_retry
 from orchestrator.plannertools import dispatch, tool_schemas
 
 Verdict = Literal["next_stage", "revise", "project_complete", "blocked"]
@@ -379,9 +380,33 @@ def _blocked(reason: str) -> PlannerOutcome:
     )
 
 
+def _transport_errors() -> tuple[type[BaseException], ...]:
+    """The exception types that mean "the request never arrived".
+
+    Resolved lazily and defensively: the SDK is imported lazily everywhere
+    else in this module, and a version that renamed these should degrade to
+    not retrying rather than to not running.
+
+    `APITimeoutError` subclasses `APIConnectionError` in both SDKs, so the
+    one entry covers both.
+    """
+    try:
+        from anthropic import APIConnectionError
+    except ImportError:  # pragma: no cover - the SDK is a hard dependency
+        return ()
+    return (APIConnectionError,)
+
+
 class AnthropicPlanner:
-    def __init__(self, cfg: PlannerConfig, client=None, reader=None, semantic=None):
+    def __init__(
+        self, cfg: PlannerConfig, client=None, reader=None, semantic=None, log=None
+    ):
         self.cfg = cfg
+        # Set by `build_runtime`, which is where the run log becomes
+        # available — the client is constructed before it exists. Waiting
+        # out an outage silently is the failure this exists to fix, so a
+        # missing log is a degradation, not a detail.
+        self.log = log
         self._client = client if client is not None else _build_anthropic_client(cfg)
         # Absent on a project with no repository access configured, in which
         # case no tools are offered and this is the single-call planner it has
@@ -500,18 +525,26 @@ class AnthropicPlanner:
         # ignores the refusal and keeps asking.
         for _ in range(self._max_tool_turns() + 1):
             try:
-                response = self._client.messages.parse(
-                    model=self.cfg.model,
-                    # Generous: thinking is on by default on current models and
-                    # counts against max_tokens along with the response, so a
-                    # tight budget truncates the verdict rather than the
-                    # reasoning.
-                    max_tokens=16_000,
-                    output_config={"effort": "high"},
-                    system=_system_blocks(self.cfg.cache_ttl, self.cfg.guidance),
-                    messages=_with_loop_breakpoint(conversation),
-                    output_format=PlannerResponse,
-                    **({"tools": tools} if tools else {}),
+                response = with_transport_retry(
+                    lambda: self._client.messages.parse(
+                        model=self.cfg.model,
+                        # Generous: thinking is on by default on current models and
+                        # counts against max_tokens along with the response, so a
+                        # tight budget truncates the verdict rather than the
+                        # reasoning.
+                        max_tokens=16_000,
+                        output_config={"effort": "high"},
+                        system=_system_blocks(self.cfg.cache_ttl, self.cfg.guidance),
+                        messages=_with_loop_breakpoint(conversation),
+                        output_format=PlannerResponse,
+                        **({"tools": tools} if tools else {}),
+                    ),
+                    retry_on=_transport_errors(),
+                    backoff=Backoff(
+                        budget_seconds=self.cfg.transport_retry_seconds,
+                        max_delay_seconds=self.cfg.transport_retry_max_delay_seconds,
+                    ),
+                    log=self.log,
                 )
             except Exception as e:  # noqa: BLE001 - any failure means "no plan"
                 return _blocked(f"the planner call failed: {e}"), None, usage

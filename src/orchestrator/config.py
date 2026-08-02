@@ -237,6 +237,24 @@ class PlannerConfig(_EndpointConfig):
     guidance: str | None = None
     request_timeout_seconds: float = 900.0
     max_retries: int = 2
+    # How long a network outage should be survivable, in seconds. Zero turns
+    # retrying off rather than being an unsupported value found out about
+    # during an outage.
+    #
+    # Not `max_retries`, which is the SDK's and stays small. Both SDKs clamp
+    # every wait at MAX_RETRY_DELAY = 8s, so their schedule is linear after
+    # four retries and spanning fifteen minutes costs 116 retries at best and
+    # 154 at worst — and a count is not a clock, since the same setting honours
+    # `retry-after` on a 429 and could then wait for hours. The decisive
+    # difference is that SDK retries log at DEBUG, so fifteen minutes of them
+    # look exactly like a hung process in `run.log`. Observed twice: Wi-Fi
+    # dropped, planner and reviewer failed within two seconds of each other,
+    # and a fourteen-hour run ended waiting for a human to notice.
+    #
+    # The two compose. `max_retries` handles sub-second blips fast; this waits
+    # out real outages slowly and says so.
+    transport_retry_seconds: float = 900.0
+    transport_retry_max_delay_seconds: float | None = None
     # What the planner may look at, and how much of it. Absent means no tools:
     # the planner is handed the plan and a directory listing and asked to
     # reason from them, which is how it invented spec paths and mis-counted
@@ -267,6 +285,10 @@ class ReviewerConfig(_EndpointConfig):
     prompt_cache_retention: str | None = None
     request_timeout_seconds: float = 600.0
     max_retries: int = 2
+    # See `PlannerConfig.transport_retry_seconds`; same reasoning,
+    # same failure — both clients died to the same disconnection.
+    transport_retry_seconds: float = 900.0
+    transport_retry_max_delay_seconds: float | None = None
 
 
 class Limits(_Strict):

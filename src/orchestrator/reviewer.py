@@ -20,6 +20,7 @@ from typing import Literal, Protocol
 from pydantic import BaseModel
 
 from orchestrator.config import ReviewerConfig
+from orchestrator.retry import Backoff, with_transport_retry
 
 Verdict = Literal["approved", "rework", "blocked"]
 
@@ -89,9 +90,25 @@ def _blocked(reason: str) -> ReviewOutcome:
     return ReviewOutcome(verdict="blocked", summary=reason, failed=True)
 
 
+def _transport_errors() -> tuple[type[BaseException], ...]:
+    """Exception types meaning the request never arrived.
+
+    `APITimeoutError` subclasses `APIConnectionError`, so one entry covers
+    both. Resolved lazily and degrading to no retrying, matching how the
+    SDK is imported everywhere else here.
+    """
+    try:
+        from openai import APIConnectionError
+    except ImportError:  # pragma: no cover - the SDK is a hard dependency
+        return ()
+    return (APIConnectionError,)
+
+
 class OpenAIReviewer:
-    def __init__(self, cfg: ReviewerConfig, client=None):
+    def __init__(self, cfg: ReviewerConfig, client=None, log=None):
         self.cfg = cfg
+        # Assigned by `build_runtime`; the client predates the run log.
+        self.log = log
         self._client = client if client is not None else _build_openai_client(cfg)
 
     def review(
@@ -118,11 +135,19 @@ class OpenAIReviewer:
             extra["prompt_cache_retention"] = self.cfg.prompt_cache_retention
 
         try:
-            completion = self._client.chat.completions.parse(
-                model=self.cfg.model,
-                messages=messages,
-                response_format=ReviewVerdict,
-                **extra,
+            completion = with_transport_retry(
+                lambda: self._client.chat.completions.parse(
+                    model=self.cfg.model,
+                    messages=messages,
+                    response_format=ReviewVerdict,
+                    **extra,
+                ),
+                retry_on=_transport_errors(),
+                backoff=Backoff(
+                    budget_seconds=self.cfg.transport_retry_seconds,
+                    max_delay_seconds=self.cfg.transport_retry_max_delay_seconds,
+                ),
+                log=self.log,
             )
         except Exception as e:  # noqa: BLE001 - any failure means "no verdict"
             return _blocked(f"The reviewer call failed: {e}")

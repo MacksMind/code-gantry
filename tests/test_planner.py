@@ -902,3 +902,79 @@ class TestTheToolLoopIsCached:
         # The first message is resent on the second turn without its old mark.
         first_message_second_turn = client.calls[1]["messages"][0]
         assert "cache_control" not in first_message_second_turn["content"][-1]
+
+
+class TestOutagesAreWaitedOutNotEscalated:
+    """A dropped network must not end a fourteen-hour run.
+
+    It has twice. The laptop's Wi-Fi went down, the planner and the reviewer
+    both failed inside two seconds of each other, and the run escalated with
+    `the planner call failed: Connection error.` — leaving the work intact but
+    needing a human to notice and type `resume`.
+
+    Not `max_retries`, which stays small and is the SDK's. Both SDKs clamp each
+    wait at 8s, so covering fifteen minutes there costs 116 retries at best and
+    154 at worst, their retries log at DEBUG where `run.log` never sees them,
+    and a count is not a clock — the same setting honours `retry-after` on a
+    429 and could wait for hours.
+    """
+
+    def _connection_error(self):
+        import httpx
+        from anthropic import APIConnectionError
+
+        return APIConnectionError(request=httpx.Request("POST", "https://x/y"))
+
+    def test_a_connection_error_is_retried_rather_than_blocking(self):
+        parsed = PlannerResponse(
+            verdict="project_complete", reasoning="r", status_entry="e"
+        )
+        client = SequenceClient([self._connection_error(), response(parsed=parsed)])
+        out = AnthropicPlanner(
+            cfg(transport_retry_seconds=0.01), client=client
+        ).plan(MESSAGES)
+        assert out.verdict == "project_complete", out.reasoning
+        assert len(client.calls) == 2
+
+    def test_it_still_blocks_once_the_budget_is_spent(self):
+        # Bounded by wall clock, so an outage that outlasts the cap escalates
+        # with the real error rather than retrying forever.
+        client = StubClient(self._connection_error())
+        out = AnthropicPlanner(
+            cfg(transport_retry_seconds=0.01), client=client
+        ).plan(MESSAGES)
+        assert out.verdict == "blocked"
+        assert out.failed is True
+        assert "Connection error" in out.reasoning
+
+    def test_a_zero_budget_blocks_on_the_first_failure(self):
+        client = StubClient(self._connection_error())
+        out = AnthropicPlanner(
+            cfg(transport_retry_seconds=0), client=client
+        ).plan(MESSAGES)
+        assert out.verdict == "blocked"
+        assert len(client.calls) == 1
+
+    def test_a_model_decision_is_not_retried(self):
+        # A refusal is an answer. Waiting fifteen minutes to be told it again
+        # would hide the answer behind the whole budget.
+        client = StubClient(response(parsed=None, stop_reason="refusal"))
+        out = AnthropicPlanner(
+            cfg(transport_retry_seconds=900), client=client
+        ).plan(MESSAGES)
+        assert out.verdict == "blocked"
+        assert len(client.calls) == 1
+
+    def test_the_wait_is_written_to_the_run_log(self):
+        # The whole reason this is not `max_retries`. A silent wait and a hung
+        # process are indistinguishable from outside, and the last outage was
+        # diagnosed by a human noticing the run had stopped.
+        lines = []
+        parsed = PlannerResponse(
+            verdict="project_complete", reasoning="r", status_entry="e"
+        )
+        client = SequenceClient([self._connection_error(), response(parsed=parsed)])
+        AnthropicPlanner(
+            cfg(transport_retry_seconds=0.01), client=client, log=lines.append
+        ).plan(MESSAGES)
+        assert any("retrying in" in line for line in lines), lines
