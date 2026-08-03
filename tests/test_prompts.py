@@ -988,7 +988,28 @@ class TestReviewerToolGuidance:
         # executor that cannot fix it.
         text = self._system(True)
         assert "those are `issues`" in text
-        assert "An empty list is the normal answer" in text
+
+    def test_a_difference_with_no_consequence_is_an_observation(self):
+        # The routing that matters. Rejecting over a difference nobody can
+        # observe costs a rework cycle and returns the same diff; recording it
+        # reaches a human who can decide.
+        text = self._system(True)
+        assert "cannot trace to a consequence" in text
+        assert "approve it and write an observation instead" in text
+
+    def test_the_guidance_carries_no_project_vocabulary(self):
+        # This string ships to every project's reviewer. An example drawn from
+        # one stack is a hint about a repository it may not be looking at.
+        # Only tokens that cannot be ordinary English. "permit" and "form" are
+        # excluded deliberately: the base contract already says "permitted to
+        # edit", and rejecting that would be the test dictating prose rather
+        # than catching a leak.
+        text = self._system(True).lower()
+        for word in (
+            "rails", "ruby", "gemfile", "rspec", "attr_accessible",
+            ".erb", "activerecord", "bundler", "app/", "spec/",
+        ):
+            assert word not in text, f"{word!r} is project knowledge in a prompt"
 
     def test_it_is_told_to_read_before_approving_on_an_unseen_file(self):
         assert "read the file" in self._system(True)

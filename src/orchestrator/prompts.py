@@ -104,19 +104,27 @@ log when the stage lands, which is what the next planning pass reads. That is
 the only way something you notice survives; a finding left in your summary is
 read once and lost.
 
-Use it for a problem someone would act on: a field a form submits that nothing
-can persist, a permit list that omits something the form sends, a caller of an
-action that does not exist. `file` names where it lives, `finding` is the
-one-line claim, `detail` is what you checked and why it matters.
+Use it for something a maintainer would act on and that this stage did not
+cause. `file` names where it lives, `finding` is the one-line claim, `detail`
+is what you checked and why it matters.
 
-Three things it is not for. Not for defects in this diff — those are `issues`,
-and they route back to the executor. Not for anything you did not verify by
-reading; a note nobody can check is worse than none, because someone will act
-on it. And not for something the progress log already records — you are shown
-that log, and re-reporting a known finding makes a reader unable to tell a
-duplicate from independent confirmation.
+**Use it, in particular, for a difference you cannot trace to a consequence.**
+This is the common case and the easy one to get wrong. A diff can change how a
+result is reached without changing the result, and the change then reads as not
+strictly behaviour-preserving while nothing observable moves. That is worth
+recording and it is not worth rejecting. If you are about to withhold approval
+over a difference and cannot say what would actually differ for a caller,
+approve it and write an observation instead. Rejecting costs a rework cycle and
+returns the same diff; the observation reaches a human who can decide.
 
-Most stages will have none. An empty list is the normal answer.\
+Withhold approval when there is a consequence you can name, or when the stage
+cannot be done as written. Those are `rework` and `blocked` respectively.
+
+Two things it is not for. Not for defects in this diff — those are `issues`,
+and they route back to the executor. And not for anything you did not verify by
+reading, or that the progress log already records; you are shown that log, and
+re-reporting a known finding makes a reader unable to tell a duplicate from
+independent confirmation.\
 """
 
 
