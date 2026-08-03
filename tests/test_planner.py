@@ -1178,3 +1178,33 @@ class TestARejectedAnswerIsStillRecorded:
         outcome, _ = plan_with(RuntimeError("connection reset"))
         assert outcome.failed is True
         assert outcome.raw is None
+
+
+class TestATruncatedAnswerIsLegible:
+    """A response that ran out of room must say so.
+
+    The `stop_reason == "max_tokens"` guard cannot catch this shape: the SDK
+    parses structured output before returning, so a response truncated
+    mid-JSON raises inside the call and the guard never runs. What reached one
+    run's log was a pydantic dump for what is simply an answer too long for its
+    budget — and the two have different fixes, so the distinction has to
+    survive to the operator.
+    """
+
+    def test_a_truncated_json_payload_is_named_as_truncation(self):
+        from orchestrator.planner import _call_failure
+
+        message = (
+            "1 validation error for PlannerResponse\n  Invalid JSON: EOF while "
+            "parsing a string at line 1 column 11710"
+        )
+        text = _call_failure(ValueError(message))
+        assert "truncated" in text
+        assert "max_tokens" in text
+
+    def test_an_ordinary_failure_is_left_alone(self):
+        from orchestrator.planner import _call_failure
+
+        text = _call_failure(RuntimeError("connection reset by peer"))
+        assert "connection reset by peer" in text
+        assert "truncated" not in text

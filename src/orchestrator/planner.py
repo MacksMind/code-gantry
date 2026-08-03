@@ -397,6 +397,32 @@ def _add_usage(a: PlannerUsage, b: PlannerUsage) -> PlannerUsage:
     )
 
 
+def _call_failure(error: Exception) -> str:
+    """Why the call produced no plan, said in terms an operator can act on.
+
+    There is a `stop_reason == "max_tokens"` guard below, and for structured
+    output it is unreachable: the SDK parses before it returns, so a response
+    truncated mid-JSON raises here instead and the guard never sees it. What
+    reached the run log was a pydantic dump — "1 validation error for
+    PlannerResponse ... EOF while parsing a string at line 1 column 11710" —
+    for what is simply an answer that ran out of room.
+
+    The distinction matters because the two have different fixes. A transport
+    failure is waited out; a truncation means the budget is too small for the
+    instructions this planner writes, and no amount of retrying changes that.
+    """
+    text = str(error)
+    truncated = "EOF while parsing" in text or "json_invalid" in text
+    if truncated:
+        return (
+            "the planner's response was truncated mid-JSON, so its verdict "
+            "cannot be trusted. The output budget is too small for the stage "
+            "instruction it was writing — raise the planner's max_tokens "
+            f"rather than retrying. ({text.splitlines()[0]})"
+        )
+    return f"the planner call failed: {error}"
+
+
 def _blocked(reason: str) -> PlannerOutcome:
     return PlannerOutcome(
         verdict="blocked",
@@ -579,7 +605,16 @@ class AnthropicPlanner:
                         # counts against max_tokens along with the response, so a
                         # tight budget truncates the verdict rather than the
                         # reasoning.
-                        max_tokens=16_000,
+                        # Thinking counts against this along with the response,
+                        # so a tight budget truncates the verdict rather than
+                        # the reasoning. 16,000 was not enough: stage
+                        # instructions on a real project reached 10,664
+                        # characters, and a derivation died mid-string at
+                        # 11,710 with the reasoning already spent. The cost of
+                        # headroom is nothing — this is a ceiling, not an
+                        # allocation — and the cost of hitting it is a whole
+                        # derivation discarded.
+                        max_tokens=32_000,
                         output_config={"effort": "high"},
                         system=_system_blocks(self.cfg.cache_ttl, self.cfg.guidance),
                         messages=_with_loop_breakpoint(conversation),
@@ -594,7 +629,7 @@ class AnthropicPlanner:
                     log=self.log,
                 )
             except Exception as e:  # noqa: BLE001 - any failure means "no plan"
-                return _blocked(f"the planner call failed: {e}"), None, usage
+                return _blocked(_call_failure(e)), None, usage
 
             usage = _merge_usage(usage, _extract_usage(getattr(response, "usage", None)))
 
