@@ -422,6 +422,24 @@ class ProjectConfig(_Strict):
     # by a stage. The scope guard treats it as a plan document precisely so an
     # executor cannot edit the record of its own work.
     plan_addendum_path: str | None = None
+    # Documents the repository already keeps for whoever works in it: how to
+    # run the suite, what the container does, which conventions bite. They are
+    # maintained because humans and interactive sessions read them, and the
+    # planner could not — so the same facts had to be hand-copied into
+    # `planner.guidance`, and a hand copy drifts. Observed: `AGENTS.md`
+    # recorded that editing the Gemfile reinstalls the bundle automatically,
+    # the guidance said nothing, and the plan asserted the opposite across five
+    # items nobody drew because they read as blocked.
+    #
+    # Unset means the conventional names — a project that keeps one has almost
+    # always called it one of these. An explicit empty list is different: it
+    # means the operator looked and decided there is none.
+    #
+    # Read once at the plan sha and frozen, like the plan itself, and protected
+    # by the scope guard for the same reason: a document the planner draws
+    # conventions from must not be editable by the executor those conventions
+    # govern.
+    agent_context: list[str] | None = None
     # Optional. `{paths}` is filled by the orchestrator from the stage diff.
     scoped_test_command: str | None = None
     # Used instead of `scoped_test_command` when any of those paths is a
@@ -511,6 +529,19 @@ class ProjectConfig(_Strict):
     @property
     def plan_root_path(self) -> Path:
         return self.target_repo / self.plan_root
+
+    @property
+    def effective_agent_context(self) -> list[str]:
+        """The agent-context documents to read, defaults applied.
+
+        `None` and `[]` differ: unset means nobody chose, so try the names a
+        project almost always uses; empty means the operator looked and decided
+        there is none. Collapsing them would make "we have no such file" say
+        the same thing as "nobody thought about it".
+        """
+        if self.agent_context is None:
+            return ["AGENTS.md", "CLAUDE.md"]
+        return list(self.agent_context)
 
     @property
     def stage_branch_namespace(self) -> str:

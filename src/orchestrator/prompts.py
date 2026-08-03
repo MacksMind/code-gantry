@@ -499,6 +499,7 @@ def build_planner_messages(
     layout: str | None = None,
     deferred: list[dict] | None = None,
     stage_costs: list[dict] | None = None,
+    agent_context: str | None = None,
 ) -> list[dict[str, str]]:
     """Chat messages for the planner.
 
@@ -520,8 +521,23 @@ def build_planner_messages(
     # which is the defect the document ordering fixed one level down and this
     # reintroduced one level up the moment the log stopped being frozen.
     leading = ""
+    if agent_context:
+        # Before the plan, because it describes the machine the plan runs on.
+        # A planner that does not know a Gemfile edit reinstalls the bundle
+        # reads five items as blocked and draws none of them — which happened.
+        leading += (
+            "## How this repository works\n\n"
+            "Conventions its maintainers keep for whoever works in it, read "
+            "once at the plan's commit. **These are facts about the "
+            "repository, not work to do** — nothing here is a plan item, and "
+            "no stage is drawn from it. Where it contradicts a plan document "
+            "about what is possible, it is describing the machine and the "
+            "plan is describing intent; say so in `reasoning`.\n\n"
+            + agent_context
+            + "\n\n"
+        )
     if layout:
-        leading = "## What the repository contains\n\n" + layout + "\n\n"
+        leading += "## What the repository contains\n\n" + layout + "\n\n"
     leading += _plan_block(plan, _addendum(cfg))
 
     # The completed history and the deferred list used to live in here too, and

@@ -119,6 +119,17 @@ class Git:
             )
         return proc.stdout
 
+    def is_symlink(self, sha: str, path: str) -> bool:
+        """Whether `path` is a symlink at `sha`.
+
+        Worth asking because `show_file` on one returns the *target path*, not
+        the file it points at — a caller reading it as content gets a document
+        whose entire body is a filename. `CLAUDE.md -> AGENTS.md` is a common
+        enough shape to be worth the extra call.
+        """
+        out = self._run("ls-tree", sha, "--", path, check=False).stdout
+        return out.startswith("120000")
+
     def tracked_paths(self, sha: str) -> list[str]:
         """Every tracked path at `sha`.
 

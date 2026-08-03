@@ -1240,3 +1240,48 @@ class TestAnUncommittedAddendumWouldPoisonTheNextStage:
         out = verify(repo, cfg, stage, sha)
         assert not out.passed
         assert out.failed_layer is Layer.SCOPE
+
+
+class TestAgentContextIsNotAStagesToEdit:
+    """The planner draws conventions from it, so the executor may not move it.
+
+    Same reasoning as the plan documents: a stage that can edit what the
+    planner reads can amend the conventions it will be judged against next
+    cycle, with a green suite behind it, in an unattended loop.
+    """
+
+    def _fixture(self, repo, edit_files, **cfg_over):
+        (repo / "AGENTS.md").write_text("# Conventions\n\nthe bundle installs itself\n")
+        (repo / "docs").mkdir(exist_ok=True)
+        (repo / "docs" / "plan.md").write_text("# Plan\n\nstep one\n")
+        g = Git(repo)
+        g.commit_all("conventions")
+        cfg, stage = build(
+            repo,
+            stage_overrides={"edit_files": edit_files},
+            plan_root="docs/plan.md",
+            **cfg_over,
+        )
+        return cfg, stage, g.head_sha()
+
+    def test_a_stage_may_not_edit_it(self, repo):
+        cfg, stage, sha = self._fixture(repo, ["**"])
+        (repo / "AGENTS.md").write_text("# Conventions\n\nrewritten\n")
+        out = verify(repo, cfg, stage, sha)
+        assert not out.passed
+        assert out.failed_layer is Layer.SCOPE
+
+    def test_declaring_it_in_scope_does_not_help(self, repo):
+        # The planner writes `edit_files`, so that would be a self-granted
+        # permission.
+        cfg, stage, sha = self._fixture(repo, ["AGENTS.md"])
+        (repo / "AGENTS.md").write_text("rewritten\n")
+        out = verify(repo, cfg, stage, sha)
+        assert not out.passed
+        assert out.failed_layer is Layer.SCOPE
+
+    def test_a_file_not_configured_as_context_is_unaffected(self, repo):
+        cfg, stage, sha = self._fixture(repo, ["**"], agent_context=[])
+        (repo / "AGENTS.md").write_text("rewritten\n")
+        out = verify(repo, cfg, stage, sha)
+        assert out.passed or out.failed_layer is not Layer.SCOPE

@@ -884,3 +884,34 @@ def _plan_with_log():
         problems=[],
         skipped=[],
     )
+
+
+class TestTheAgentContextRidesInTheCachedPrefix:
+    """Repository conventions, where the planner will actually see them.
+
+    Static for the run — read once at the plan sha — so it belongs before the
+    breakpoint with the plan and the layout, not after it with the situation.
+    """
+
+    def _messages(self, agent_context="### `AGENTS.md`\n\nthe bundle installs itself"):
+        return build_planner_messages(
+            cfg=_cfg(), plan=a_plan(), completed=[],
+            layout="- `app/` (1)", agent_context=agent_context,
+        )
+
+    def test_it_reaches_the_planner(self):
+        assert "the bundle installs itself" in all_text(self._messages())
+
+    def test_it_is_inside_the_cached_prefix(self):
+        cached = self._messages()[0]["content"][0]
+        assert "cache_control" in cached
+        assert "the bundle installs itself" in cached["text"]
+
+    def test_it_says_these_are_conventions_not_instructions(self):
+        # The plan says what the work is. This says how the repository
+        # behaves — a planner that conflates them will draw stages from it.
+        text = all_text(self._messages())
+        assert "conventions" in text.lower()
+
+    def test_a_project_without_one_builds_normally(self):
+        assert "do the thing" in all_text(self._messages(agent_context=""))

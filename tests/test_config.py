@@ -583,3 +583,45 @@ class TestAStageMustBePossible:
         cfg = parse_config(minimal(test_file_patterns=["spec/**/*_spec.rb"]))
         stage = self._stage(cfg, require_new_tests=False)
         assert not [p for p in validate_stage(stage, cfg) if "require_new_tests" in p]
+
+
+class TestAgentContextDocuments:
+    """Conventions the repository already documents for whoever works in it.
+
+    A project that has agents working in it usually keeps a file telling them
+    how it works — how to run the suite, what the container does, which
+    conventions bite. That file is maintained because humans and interactive
+    sessions read it. The planner could not, so the same facts had to be
+    hand-copied into `planner.guidance`, and a hand copy drifts: on one project
+    `AGENTS.md` recorded that editing the Gemfile reinstalls the bundle
+    automatically, the guidance said nothing, and the plan asserted the
+    opposite for five stages' worth of work nobody drew.
+
+    Unset means the conventional names, because a project that has one has
+    almost always called it one of these. An explicit empty list means the
+    operator decided there is none — which is not the same thing.
+    """
+
+    def _cfg(self, **over):
+        data = {
+            "target_repo": "/tmp/x",
+            "project_branch": "work",
+            "plan_root": "PLAN.md",
+            "test_command": "pytest",
+            "executor": {"model": "m"},
+            "planner": {"model": "claude-opus-5"},
+            "reviewer": {"model": "gpt-5.6"},
+        }
+        data.update(over)
+        return parse_config(data)
+
+    def test_unset_defaults_to_the_conventional_names(self):
+        assert self._cfg().effective_agent_context == ["AGENTS.md", "CLAUDE.md"]
+
+    def test_an_explicit_list_replaces_the_default(self):
+        cfg = self._cfg(agent_context=["docs/conventions.md"])
+        assert cfg.effective_agent_context == ["docs/conventions.md"]
+
+    def test_an_explicit_empty_list_means_none(self):
+        # Distinct from unset: the operator looked and decided there is none.
+        assert self._cfg(agent_context=[]).effective_agent_context == []

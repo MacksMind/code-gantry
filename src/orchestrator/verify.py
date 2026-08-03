@@ -266,6 +266,13 @@ def _is_plan_document(path: str, ctx: _Context) -> bool:
     if addendum and (path == addendum or path.startswith(addendum.rstrip("/") + "/")):
         return True
 
+    # The agent-context documents, for the same reason and with more force: the
+    # planner reads them for what the machine can do, so a stage able to edit
+    # one could retire its own constraints — "the pipeline cannot run bundle
+    # install" is exactly the kind of sentence that lives in them.
+    if path in ctx.cfg.effective_agent_context:
+        return True
+
     root = ctx.cfg.plan_root
     if path == root:
         return True

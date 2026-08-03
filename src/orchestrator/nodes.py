@@ -157,6 +157,9 @@ def plan(state: RunState, rt: Runtime) -> dict:
         interventions_max=limits.max_planner_interventions,
         status_tail=_status_tail(rt),
         layout=rt.layout(state.get("plan_sha") or state.get("base_sha") or ""),
+        agent_context=rt.agent_context(
+            state.get("plan_sha") or state.get("base_sha") or ""
+        ),
         deferred=state.get("deferred") or [],
         stage_costs=recent_stage_costs(rt.project.project_dir),
     )

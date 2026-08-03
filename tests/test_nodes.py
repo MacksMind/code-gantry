@@ -2250,3 +2250,39 @@ class TestTheReviewerIsGivenTheLiveRecord:
         text = self._text(reviewer.messages[0])
         assert "stage-4" in text
         assert "stage-0" not in text
+
+
+class TestTheAgentContextReachesThePlanner:
+    """Repository to runtime to prompt.
+
+    The facts in these documents were previously hand-copied into
+    `planner.guidance`, and the copy drifted: one project's `AGENTS.md`
+    recorded that editing the Gemfile reinstalls the bundle, the guidance said
+    nothing, and the plan asserted the opposite across five items nobody drew.
+    A wiring that stops anywhere short of the prompt reproduces exactly that.
+    """
+
+    def test_conventions_reach_the_planner_prompt(self, repo, tmp_path, run_git):
+        (repo / "AGENTS.md").write_text(
+            "# Conventions\n\nEditing the Gemfile reinstalls the bundle.\n"
+        )
+        run_git(repo, "add", "-A")
+        run_git(repo, "commit", "-qm", "conventions")
+
+        planner = StubPlanner()
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        state = {**state, "plan_sha": rt.git.rev_parse("HEAD")}
+
+        nodes.plan(state, rt)
+        prompt = "".join(
+            block["text"]
+            for message in planner.calls[0]
+            for block in message["content"]
+            if block.get("type") == "text"
+        )
+        assert "Editing the Gemfile reinstalls the bundle." in prompt
+
+    def test_a_project_without_one_plans_normally(self, repo, tmp_path):
+        planner = StubPlanner()
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        assert nodes.plan(state, rt)["next_hop"] in ("precheck", "finalize", "escalate")

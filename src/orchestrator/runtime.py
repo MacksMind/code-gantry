@@ -9,7 +9,7 @@ and reviewer and no network.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable
 
 from orchestrator.commands import CommandRunner
@@ -193,6 +193,49 @@ class Runtime:
             problems=tree.problems,
             skipped=tree.skipped,
         )
+
+    def agent_context(self, sha: str) -> str:
+        """Conventions the repository documents for whoever works in it.
+
+        A project with agents working in it keeps a file saying how it runs —
+        what the container does on a Gemfile change, which files make a diff
+        look wrong. Those facts had to be hand-copied into `planner.guidance`
+        before this existed, and the copy drifted: one project's `AGENTS.md`
+        recorded that editing the Gemfile reinstalls the bundle, the guidance
+        said nothing, and the plan asserted the opposite across five items
+        nobody drew because they read as blocked.
+
+        Read from the commit rather than the worktree, for the reason the plan
+        is: a run should reason about one fixed set of conventions rather than
+        a set that moves under it while stages land.
+
+        Deduplicated by content. `CLAUDE.md` is very often a symlink to
+        `AGENTS.md`, and git stores the resolved text, so both paths come back
+        byte-identical — the default would otherwise bill the same file twice.
+        """
+        blocks: list[str] = []
+        seen: set[str] = set()
+        for path in self.cfg.effective_agent_context:
+            try:
+                # A symlink's blob is its target path, so reading it as content
+                # yields a document whose whole body is a filename. Follow it
+                # once — `CLAUDE.md -> AGENTS.md` is the usual shape — and give
+                # up rather than chase a chain.
+                if self.git.is_symlink(sha, path):
+                    target = self.git.show_file(sha, path).strip()
+                    path = str(PurePosixPath(path).parent / target).lstrip("./")
+                text = self.git.show_file(sha, path)
+            except GitError:
+                # Absent at this sha. The default names two files and most
+                # projects have one, so this is the ordinary case, not a
+                # problem worth reporting.
+                continue
+            body = (text or "").strip()
+            if not body or body in seen:
+                continue
+            seen.add(body)
+            blocks.append(f"### `{path}`\n\n{body}")
+        return "\n\n".join(blocks)
 
     @property
     def live_progress_log(self) -> str | None:
