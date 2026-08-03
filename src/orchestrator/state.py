@@ -180,6 +180,12 @@ class RunState(TypedDict, total=False):
     # note about work that then fails review would record something that did
     # not happen.
     pending_plan_notes: list[dict]
+    # The reviewer's out-of-scope findings, held until the stage lands, for the
+    # same reason as above. Replaced rather than appended on each review: a
+    # stage can be reviewed several times across rework attempts and every one
+    # of them sees the whole cumulative diff, so accumulating would report one
+    # finding once per attempt.
+    pending_observations: list[dict]
     executor_context_tokens: int
     withheld_reads: list[str]
 
@@ -240,6 +246,7 @@ def new_state(
         last_diff_digest="",
         full_suite_digest="",
         pending_plan_notes=[],
+        pending_observations=[],
         last_failure=None,
         opening_failure=None,
         failure_layer=None,

@@ -2286,3 +2286,119 @@ class TestTheAgentContextReachesThePlanner:
         planner = StubPlanner()
         cfg, rt, state = make(repo, tmp_path, planner=planner)
         assert nodes.plan(state, rt)["next_hop"] in ("precheck", "finalize", "escalate")
+
+
+class TestReviewerObservationsReachTheLog:
+    """The whole journey, not its endpoints.
+
+    A finding is produced in the reviewer client, carried on ReviewOutcome,
+    put into state by `review`, and written by `advance`. Four hops. Every
+    value this project has lost in transit passed its unit tests on both ends.
+
+    It matters more than most because the log is the only durable home for
+    something the reviewer notices outside its stage. Left in the summary it is
+    printed once and gone.
+    """
+
+    def _reviewer(self, observations):
+        from orchestrator.reviewer import Observation, ReviewOutcome
+
+        class Once:
+            def review(self, messages, cache_key=None):
+                return ReviewOutcome(
+                    verdict="approved",
+                    summary="fine",
+                    observations=[Observation(**o) for o in observations],
+                )
+
+        return Once()
+
+    def test_an_observation_is_written_when_the_stage_lands(self, repo, tmp_path):
+        reviewer = self._reviewer([
+            {
+                "file": "app/views/admin/product_types/_form.html.erb",
+                "finding": "mailing_service_ids is submitted but never permitted",
+                "detail": "The checkbox posts it and no permit list covers it.",
+            }
+        ])
+        cfg, rt, state = make(
+            repo, tmp_path, reviewer=reviewer,
+            plan_addendum_path="docs/progress_log.md",
+        )
+        (repo / "docs").mkdir(exist_ok=True)
+        (repo / "PLAN.md").write_text("# Plan\n\nsome item\n")
+
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("stage work\n")
+        state = {**state, **nodes.review(state, rt)}
+        nodes.advance(state, rt)
+
+        written = (repo / "docs/progress_log.md").read_text()
+        assert "app/views/admin/product_types/_form.html.erb" in written
+        assert "mailing_service_ids is submitted but never permitted" in written
+        assert "The checkbox posts it and no permit list covers it." in written
+
+    def test_nothing_is_written_when_there_are_none(self, repo, tmp_path):
+        # Most stages have none, so the empty case is the common one and must
+        # not leave an empty heading behind.
+        cfg, rt, state = make(
+            repo, tmp_path, reviewer=self._reviewer([]),
+            plan_addendum_path="docs/progress_log.md",
+        )
+        (repo / "docs").mkdir(exist_ok=True)
+        (repo / "PLAN.md").write_text("# Plan\n\nsome item\n")
+
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("stage work\n")
+        state = {**state, **nodes.review(state, rt)}
+        nodes.advance(state, rt)
+
+        assert not (repo / "docs/progress_log.md").exists()
+
+    def test_a_rework_cycle_does_not_report_the_same_finding_twice(
+        self, repo, tmp_path
+    ):
+        # Every review of a stage sees the whole cumulative diff, so the newest
+        # set supersedes the last. Accumulating would report one finding once
+        # per attempt, and the log cannot distinguish that from independent
+        # confirmation.
+        observation = {
+            "file": "app/models/cart.rb",
+            "finding": "two attr_accessible blocks",
+            "detail": "Lines 149 and 396 both declare one.",
+        }
+        cfg, rt, state = make(
+            repo, tmp_path, reviewer=self._reviewer([observation]),
+            plan_addendum_path="docs/progress_log.md",
+        )
+        (repo / "docs").mkdir(exist_ok=True)
+        (repo / "PLAN.md").write_text("# Plan\n\nsome item\n")
+
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("stage work\n")
+        state = {**state, **nodes.review(state, rt)}
+        state = {**state, **nodes.review(state, rt)}
+        nodes.advance(state, rt)
+
+        written = (repo / "docs/progress_log.md").read_text()
+        assert written.count("two attr_accessible blocks") == 1
+
+    def test_a_stage_that_never_lands_records_nothing(self, repo, tmp_path):
+        # A finding from abandoned work must not enter the record: the log is
+        # what the next run reads to know what is true.
+        cfg, rt, state = make(
+            repo, tmp_path,
+            reviewer=self._reviewer([
+                {"file": "a.rb", "finding": "something", "detail": "detail"}
+            ]),
+            plan_addendum_path="docs/progress_log.md",
+        )
+        (repo / "docs").mkdir(exist_ok=True)
+        (repo / "PLAN.md").write_text("# Plan\n\nsome item\n")
+
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("stage work\n")
+        state = {**state, **nodes.review(state, rt)}
+        # No advance: the stage was abandoned.
+        assert not (repo / "docs/progress_log.md").exists()
+        assert state["pending_observations"][0]["file"] == "a.rb"

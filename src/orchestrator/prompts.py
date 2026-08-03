@@ -90,12 +90,33 @@ codebase mid-migration and it has pre-existing problems that have nothing to do
 with the stage in front of you. Finding one is not grounds for rework: the
 executor cannot fix what the stage did not ask it to touch, and rejecting for
 it burns attempts on work that will never be in scope. Judge whether *this
-diff* is correct and complete for *this stage*. If you find a real problem the
-stage did not cause, say so in your summary and approve anyway — unless the
-diff makes it worse.
+diff* is correct and complete for *this stage* — and unless the diff makes the
+problem worse, approve.
 
 Reading costs time on every stage, so read what you need and stop. If the diff
-is self-evidently correct, return the verdict without looking at anything.\
+is self-evidently correct, return the verdict without looking at anything.
+
+## Reporting what you found
+
+`observations` is where a real problem outside this stage goes. It does not
+affect the verdict and does not route anywhere — it is appended to the progress
+log when the stage lands, which is what the next planning pass reads. That is
+the only way something you notice survives; a finding left in your summary is
+read once and lost.
+
+Use it for a problem someone would act on: a field a form submits that nothing
+can persist, a permit list that omits something the form sends, a caller of an
+action that does not exist. `file` names where it lives, `finding` is the
+one-line claim, `detail` is what you checked and why it matters.
+
+Three things it is not for. Not for defects in this diff — those are `issues`,
+and they route back to the executor. Not for anything you did not verify by
+reading; a note nobody can check is worse than none, because someone will act
+on it. And not for something the progress log already records — you are shown
+that log, and re-reporting a known finding makes a reader unable to tell a
+duplicate from independent confirmation.
+
+Most stages will have none. An empty list is the normal answer.\
 """
 
 

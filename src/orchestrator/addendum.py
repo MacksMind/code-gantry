@@ -213,6 +213,97 @@ def _entry(note: dict, stage_id: str, read_plan=None, plan_sha: str = "") -> str
     return "\n".join(lines)
 
 
+def _observation(note: dict, stage_id: str) -> str:
+    """One reviewer finding, filed under the file it is about.
+
+    No plan citation, and that is the difference from `_entry`. A planner note
+    says the plan is out of date and quotes the passage it contradicts; a
+    reviewer finding says the *code* has a problem the stage did not cause, and
+    usually corresponds to nothing written in the plan at all. Requiring an
+    anchor would mean asking for a quotation that does not exist, and the
+    planner's own citations went wrong in exactly that direction — a real file
+    and a real span pointing at the wrong place.
+
+    So it is filed under the file. Two findings about one file group together
+    for the same structural reason headings are lifted from the plan rather
+    than composed.
+    """
+    path = decode_escapes((note.get("file") or "").strip()) or "(unattributed)"
+    finding = decode_escapes((note.get("finding") or "").strip())
+    detail = decode_escapes((note.get("detail") or "").strip())
+
+    lines = [
+        f"## `{path}`",
+        "",
+        f"- **observed** by the reviewer while landing `{stage_id}`",
+    ]
+    if finding:
+        lines.append(f"- **found** {finding}")
+    lines += ["", detail, ""]
+    return "\n".join(lines)
+
+
+def append_observations(
+    repo: Path,
+    addendum_path: str | None,
+    observations: list[dict],
+    *,
+    stage_id: str,
+) -> Path | None:
+    """Append reviewer findings to the progress log.
+
+    Same file and same append-only guarantee as the planner's notes, and the
+    same reason for existing: something learned while doing the work that the
+    plan does not know. The difference is who noticed and what about.
+
+    Written only when a stage lands. A stage can be reviewed several times
+    across rework attempts, and writing on each would report one finding three
+    times — so `review` replaces what it holds rather than accumulating, and
+    this runs once, from whatever the last review saw.
+
+    Reaching the planner needs no further plumbing: the log is spliced live into
+    the planner's prompt, so a finding written here is in its context on the
+    next derivation. The reviewer is shown the same live log, which is also how
+    it avoids reporting the same thing on every subsequent stage.
+    """
+    if not addendum_path or not observations:
+        return None
+
+    target = _target(repo, addendum_path)
+    _ensure_header(target)
+
+    with target.open("a") as fh:
+        for note in observations:
+            fh.write(_observation(note, stage_id))
+            fh.write("\n")
+    return target
+
+
+def _target(repo: Path, addendum_path: str) -> Path:
+    """The file to append to, creating the directory if needed."""
+    target = Path(repo) / addendum_path
+    # A path may name a directory to collect notes in, or the file itself. A
+    # directory is the better default for a long project: one file per run
+    # keeps a fourteen-hour session from producing one unreadable document.
+    if target.suffix != ".md":
+        target = target / "plan-addendum.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def _ensure_header(target: Path) -> None:
+    if target.exists():
+        return
+    target.write_text(
+        "# Plan addendum\n\n"
+        "Observations recorded during automated runs, each citing what was "
+        "read to support it. Append-only and written by the orchestrator; "
+        "no stage may edit this file.\n\n"
+        "These are notes for a later pass, not changes to the plan. The "
+        "plan documents still say what they said.\n\n"
+    )
+
+
 def append_notes(
     repo: Path,
     addendum_path: str | None,
@@ -232,23 +323,8 @@ def append_notes(
     if not addendum_path or not notes:
         return None
 
-    target = Path(repo) / addendum_path
-    # A path may name a directory to collect notes in, or the file itself. A
-    # directory is the better default for a long project: one file per run
-    # keeps a fourteen-hour session from producing one unreadable document.
-    if target.suffix != ".md":
-        target = target / "plan-addendum.md"
-    target.parent.mkdir(parents=True, exist_ok=True)
-
-    if not target.exists():
-        target.write_text(
-            "# Plan addendum\n\n"
-            "Observations recorded during automated runs, each citing what was "
-            "read to support it. Append-only and written by the orchestrator; "
-            "no stage may edit this file.\n\n"
-            "These are notes for a later pass, not changes to the plan. The "
-            "plan documents still say what they said.\n\n"
-        )
+    target = _target(repo, addendum_path)
+    _ensure_header(target)
 
     with target.open("a") as fh:
         for note in notes:

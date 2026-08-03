@@ -47,12 +47,27 @@ class Issue(BaseModel):
     description: str
 
 
+class Observation(BaseModel):
+    """Something real found nearby that this stage did not cause.
+
+    Deliberately not a fourth verdict. A verdict is a routing decision — land,
+    back to the executor, back to the planner — and a finding is information;
+    the two are independent, and a reviewer that had to choose between
+    reporting and routing would report only when it happened to be rejecting.
+    """
+
+    file: str
+    finding: str
+    detail: str
+
+
 class ReviewVerdict(BaseModel):
     """The schema the reviewer is constrained to return."""
 
     verdict: Verdict
     summary: str
     issues: list[Issue]
+    observations: list[Observation] = []
 
 
 @dataclass
@@ -84,12 +99,18 @@ class ReviewOutcome:
     # is: a verdict reached without reading is worth less than one reached
     # after it, and the two are indistinguishable from the verdict alone.
     tool_calls: list[str] = field(default_factory=list)
+    # Real problems found nearby that this stage did not cause. Carried
+    # separately from `issues`, which are defects in this diff and route it
+    # back to the executor; these route nowhere and are written to the
+    # progress log when the stage lands.
+    observations: list[Observation] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return {
             "verdict": self.verdict,
             "summary": self.summary,
             "issues": [i.model_dump() for i in self.issues],
+            "observations": [o.model_dump() for o in self.observations],
             "tool_calls": list(self.tool_calls),
             "usage": {
                 "prompt_tokens": self.usage.prompt_tokens,
@@ -280,6 +301,7 @@ class OpenAIReviewer:
             verdict=parsed.verdict,
             summary=parsed.summary,
             issues=list(parsed.issues),
+            observations=list(getattr(parsed, "observations", None) or []),
             usage=usage,
             failed=False,
             tool_calls=looked_at,

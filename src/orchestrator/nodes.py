@@ -21,7 +21,7 @@ import json
 import time
 from datetime import datetime
 
-from orchestrator.addendum import append_notes
+from orchestrator.addendum import append_notes, append_observations
 from orchestrator.commands import truncate_middle
 from orchestrator.config import Stage, validate_stage
 from orchestrator.flake import adjudicate, append_flakes, predates_stage
@@ -771,11 +771,24 @@ def review(state: RunState, rt: Runtime) -> dict:
         f"({outcome.usage.prompt_tokens} prompt, {outcome.usage.cached_tokens} cached)"
     )
 
+    if outcome.observations:
+        rt.log(
+            f"[review] {stage.id}: {len(outcome.observations)} observation(s) "
+            "outside this stage: "
+            + "; ".join(o.file for o in outcome.observations)
+        )
+
     base = {
         "run_usage": usage,
         "stage_usage": stage_usage,
         "review_verdict": outcome.verdict,
         "review_summary": outcome.summary,
+        # Replaced, not accumulated. Every review of a stage sees the whole
+        # cumulative diff, so the newest set supersedes the last rather than
+        # adding to it — otherwise a stage reworked twice reports each finding
+        # three times. Written by `advance` if the stage lands, and dropped
+        # with the stage if it never does.
+        "pending_observations": [o.model_dump() for o in outcome.observations],
     }
 
     if outcome.verdict == "blocked":
@@ -1036,6 +1049,22 @@ def advance(state: RunState, rt: Runtime) -> dict:
             f"plan observation(s) in {written.relative_to(rt.cfg.target_repo)}"
         )
 
+    # The reviewer's findings, after the planner's and into the same file. Both
+    # answer "what does the plan not yet know?"; they differ in who noticed and
+    # in what about. Written only on landing, so a finding from a stage that
+    # was abandoned never enters the record.
+    seen = append_observations(
+        rt.cfg.target_repo,
+        rt.cfg.plan_addendum_path,
+        state.get("pending_observations") or [],
+        stage_id=stage.id,
+    )
+    if seen is not None:
+        rt.log(
+            f"[advance] recorded {len(state.get('pending_observations') or [])} "
+            f"reviewer observation(s) in {seen.relative_to(rt.cfg.target_repo)}"
+        )
+
     # Commit anything the executor left uncommitted, then squash the whole
     # child branch onto the project branch as one commit. Aider's intermediate
     # commits — some of them red, since it commits before testing — are
@@ -1124,6 +1153,7 @@ def advance(state: RunState, rt: Runtime) -> dict:
         # per-stage reset — which `plan` also applies, over the notes it has
         # just accumulated.
         "pending_plan_notes": [],
+        "pending_observations": [],
         "stage_index": state["stage_index"] + 1,
         "revision": 0,
         # Something landed, so the run is making progress: the stuck counter

@@ -973,7 +973,22 @@ class TestReviewerToolGuidance:
         # Rejecting for them burns attempts on work that can never be in scope.
         text = self._system(True)
         assert "not grounds for rework" in text
-        assert "approve anyway" in text
+        assert "problem worse, approve" in text
+
+    def test_it_is_told_where_a_finding_should_go(self):
+        # Without this the tool access is half-wired: a reviewer that can look
+        # will find things, and a finding left in the summary is read once and
+        # lost.
+        text = self._system(True)
+        assert "`observations`" in text
+        assert "progress log" in text
+
+    def test_observations_are_distinguished_from_issues(self):
+        # Conflating them would route a pre-existing problem back to an
+        # executor that cannot fix it.
+        text = self._system(True)
+        assert "those are `issues`" in text
+        assert "An empty list is the normal answer" in text
 
     def test_it_is_told_to_read_before_approving_on_an_unseen_file(self):
         assert "read the file" in self._system(True)
