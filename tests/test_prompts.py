@@ -368,8 +368,8 @@ class TestReviewerCacheBreakpoint:
         assert isinstance(stable, list), "a string cannot carry a breakpoint"
         assert stable[-1]["prompt_cache_breakpoint"] == {"mode": "explicit"}
 
-    def test_the_breakpoint_is_before_the_diff(self):
-        # The whole point: the diff must be free to change without moving it.
+    def test_a_breakpoint_precedes_the_diff(self):
+        # The plan block must stay cached however the diff changes.
         messages = self.a_review(diff="DIFF_MARKER")
         marked = [
             i for i, m in enumerate(messages)
@@ -379,15 +379,27 @@ class TestReviewerCacheBreakpoint:
         last = messages[-1]["content"]
         text = last if isinstance(last, str) else last[0]["text"]
         assert "DIFF_MARKER" in text
-        assert marked and max(marked) < len(messages) - 1
+        assert marked and min(marked) < len(messages) - 1
 
-    def test_exactly_one_breakpoint(self):
+    def test_the_diff_message_is_also_marked(self):
+        # The reviewer has tools, so a review is several turns. Without a mark
+        # at the end of the per-stage payload every turn re-sends the progress
+        # log, the history, the stage and the diff at full price.
+        messages = self.a_review(diff="DIFF_MARKER")
+        last = messages[-1]["content"]
+        assert isinstance(last, list), "a string cannot carry a breakpoint"
+        assert last[-1]["prompt_cache_breakpoint"] == {"mode": "explicit"}
+        assert "DIFF_MARKER" in last[-1]["text"]
+
+    def test_two_breakpoints(self):
+        # Two of the four the provider allows: the static plan, and the end of
+        # the per-stage payload. Anything more would have to earn its place.
         messages = self.a_review()
         marked = [
             b for m in messages if isinstance(m["content"], list)
             for b in m["content"] if "prompt_cache_breakpoint" in b
         ]
-        assert len(marked) == 1
+        assert len(marked) == 2
 
     def test_the_prefix_is_byte_identical_across_diffs(self):
         first = self.a_review(diff="one")
@@ -915,3 +927,53 @@ class TestTheAgentContextRidesInTheCachedPrefix:
 
     def test_a_project_without_one_builds_normally(self):
         assert "do the thing" in all_text(self._messages(agent_context=""))
+
+
+class TestReviewerToolGuidance:
+    """The tool section is conditional on there being tools.
+
+    Told it can read when it cannot, the reviewer either invents a lookup or
+    hedges a verdict it should have given outright.
+    """
+
+    def _cfg(self, repo_access):
+        from orchestrator.config import parse_config
+
+        return parse_config(
+            {
+                "target_repo": "/tmp/x",
+                "project_branch": "work",
+                "plan_root": "PLAN.md",
+                "test_command": "pytest",
+                "executor": {"model": "m"},
+                "planner": {"model": "claude-opus-5"},
+                "reviewer": {"model": "gpt-5.6-sol", "repo_access": repo_access},
+            }
+        )
+
+    def _system(self, repo_access):
+        from orchestrator.config import Stage
+
+        return build_review_messages(
+            stage=Stage(id="s", instruction="do it", edit_files=["a.py"]),
+            cfg=self._cfg(repo_access),
+            diff="--- a\n+++ b\n",
+            plan=a_plan("PLAN"),
+            completed=[],
+        )[0]["content"]
+
+    def test_absent_without_repo_access(self):
+        assert "Looking at the repository" not in self._system(False)
+
+    def test_present_with_repo_access(self):
+        assert "Looking at the repository" in self._system(True)
+
+    def test_pre_existing_problems_are_not_grounds_for_rework(self):
+        # A reviewer that can look will find things the stage did not cause.
+        # Rejecting for them burns attempts on work that can never be in scope.
+        text = self._system(True)
+        assert "not grounds for rework" in text
+        assert "approve anyway" in text
+
+    def test_it_is_told_to_read_before_approving_on_an_unseen_file(self):
+        assert "read the file" in self._system(True)

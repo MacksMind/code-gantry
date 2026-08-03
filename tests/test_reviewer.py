@@ -94,6 +94,40 @@ MESSAGES = [
 ]
 
 
+def tool_response(name, arguments, call_id="call_1"):
+    """A turn that asks for one tool instead of answering."""
+    call = SimpleNamespace(
+        id=call_id,
+        function=SimpleNamespace(name=name, arguments=arguments),
+    )
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                finish_reason="tool_calls",
+                message=SimpleNamespace(parsed=None, refusal=None, tool_calls=[call]),
+            )
+        ],
+        usage=SimpleNamespace(
+            prompt_tokens=100,
+            completion_tokens=10,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=90),
+        ),
+    )
+
+
+class StubReader:
+    """Stands in for `RepoReader`. Records what it was asked for."""
+
+    def __init__(self, text="file contents"):
+        self.text = text
+        self.asked = []
+        self.calls = []
+
+    def read_file(self, path, start=None, end=None):
+        self.asked.append(path)
+        return self.text
+
+
 class TestVerdicts:
     def test_approved(self):
         verdict = ReviewVerdict(verdict="approved", summary="Looks right.", issues=[])
@@ -204,7 +238,19 @@ class TestRequestShape:
         verdict = ReviewVerdict(verdict="approved", summary="ok", issues=[])
         client = StubClient(response(parsed=verdict))
         OpenAIReviewer(cfg_with().reviewer, client=client).review(MESSAGES)
+        # Verbatim. The breakpoints are placed once by `build_review_messages`;
+        # the client must not rewrite what it was handed, because a marker that
+        # moved between turns would be a different prefix every time.
         assert client.calls[0]["messages"] == MESSAGES
+
+    def test_no_tools_are_sent_without_repo_access(self):
+        # The default. A reviewer with no reader must make the same request it
+        # always did, or every project without repo access pays for a shape it
+        # cannot use.
+        verdict = ReviewVerdict(verdict="approved", summary="ok", issues=[])
+        client = StubClient(response(parsed=verdict))
+        OpenAIReviewer(cfg_with().reviewer, client=client).review(MESSAGES)
+        assert "tools" not in client.calls[0]
 
     def test_configured_model_is_used(self):
         verdict = ReviewVerdict(verdict="approved", summary="ok", issues=[])
@@ -397,3 +443,122 @@ class TestOutagesAreWaitedOutNotEscalated:
         ).review(MESSAGES)
         assert out.verdict == "blocked"
         assert len(client.calls) == 1
+
+
+class TestToolLoop:
+    """A reviewer that can look at the repository.
+
+    The reason this exists: a stage that deletes an `attr_accessible`
+    declaration is safe exactly when a permit list elsewhere covers the same
+    attributes, and that file is not in the diff. Measured on one run, 8 of 31
+    stages had that shape and every one was approved by a reviewer with no way
+    to check. These tests pin the loop that fixed it.
+    """
+
+    def test_a_tool_request_is_answered_and_the_loop_continues(self):
+        verdict = ReviewVerdict(verdict="approved", summary="ok", issues=[])
+        reader = StubReader("def discount_params\n  permit(:title)\nend")
+        client = SequenceClient(
+            [
+                tool_response("read_file", '{"path": "app/x.rb"}'),
+                response(parsed=verdict),
+            ]
+        )
+        out = OpenAIReviewer(
+            cfg_with().reviewer, client=client, reader=reader
+        ).review(MESSAGES)
+
+        assert out.verdict == "approved"
+        assert reader.asked == ["app/x.rb"]
+        # The second request carries the assistant turn and the tool reply.
+        second = client.calls[1]["messages"]
+        assert second[-1]["role"] == "tool"
+        assert second[-1]["tool_call_id"] == "call_1"
+        assert "discount_params" in second[-1]["content"]
+
+    def test_tools_are_offered_when_a_reader_is_present(self):
+        verdict = ReviewVerdict(verdict="approved", summary="ok", issues=[])
+        client = StubClient(response(parsed=verdict))
+        OpenAIReviewer(
+            cfg_with().reviewer, client=client, reader=StubReader()
+        ).review(MESSAGES)
+        names = [t["function"]["name"] for t in client.calls[0]["tools"]]
+        assert "read_file" in names
+        assert all(t["type"] == "function" for t in client.calls[0]["tools"])
+
+    def test_what_it_looked_at_is_recorded(self):
+        # A verdict reached without reading is worth less than one reached
+        # after it, and the two are indistinguishable from the verdict alone.
+        verdict = ReviewVerdict(verdict="rework", summary="no", issues=[])
+        client = SequenceClient(
+            [
+                tool_response("read_file", '{"path": "app/models/cart.rb"}'),
+                response(parsed=verdict),
+            ]
+        )
+        out = OpenAIReviewer(
+            cfg_with().reviewer, client=client, reader=StubReader()
+        ).review(MESSAGES)
+        assert out.tool_calls == ["read_file(app/models/cart.rb)"]
+        assert out.as_dict()["tool_calls"] == ["read_file(app/models/cart.rb)"]
+
+    def test_usage_is_summed_across_turns(self):
+        # A tool loop bills once per turn. Reporting only the last one
+        # understates what a review cost by however many times it looked.
+        verdict = ReviewVerdict(verdict="approved", summary="ok", issues=[])
+        client = SequenceClient(
+            [
+                tool_response("read_file", '{"path": "a.rb"}'),
+                response(parsed=verdict),
+            ]
+        )
+        out = OpenAIReviewer(
+            cfg_with().reviewer, client=client, reader=StubReader()
+        ).review(MESSAGES)
+        assert out.usage.prompt_tokens == 1100  # 100 from the tool turn + 1000
+        assert out.usage.cached_tokens == 990  # 90 + 900
+
+    def test_unparsable_tool_arguments_do_not_end_the_review(self):
+        # A bad request is not a dead review: the refusal reaches the model as
+        # a readable result and it can answer with what it has.
+        verdict = ReviewVerdict(verdict="approved", summary="ok", issues=[])
+        client = SequenceClient(
+            [
+                tool_response("read_file", "{not json"),
+                response(parsed=verdict),
+            ]
+        )
+        out = OpenAIReviewer(
+            cfg_with().reviewer, client=client, reader=StubReader()
+        ).review(MESSAGES)
+        assert out.verdict == "approved"
+        assert not out.failed
+
+    def test_a_loop_that_never_answers_blocks_rather_than_hangs(self):
+        # The turn ceiling is the backstop for a model that ignores the
+        # reader's refusal and keeps asking.
+        cfg = cfg_with(max_read_calls=2).reviewer
+        client = SequenceClient(
+            [tool_response("read_file", '{"path": "a.rb"}') for _ in range(6)]
+        )
+        out = OpenAIReviewer(cfg, client=client, reader=StubReader()).review(MESSAGES)
+        assert out.verdict == "blocked"
+        assert out.failed
+        # Bounded: turns + 1, not until the transport gives up.
+        assert len(client.calls) == 3
+
+    def test_a_transport_failure_mid_loop_keeps_what_it_saw(self):
+        client = SequenceClient(
+            [
+                tool_response("read_file", '{"path": "a.rb"}'),
+                RuntimeError("connection reset"),
+            ]
+        )
+        out = OpenAIReviewer(
+            cfg_with().reviewer, client=client, reader=StubReader()
+        ).review(MESSAGES)
+        assert out.verdict == "blocked"
+        assert out.failed
+        assert out.tool_calls == ["read_file(a.rb)"]
+        # The first turn's tokens were still spent and must still be reported.
+        assert out.usage.prompt_tokens == 100

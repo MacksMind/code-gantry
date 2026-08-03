@@ -1,9 +1,23 @@
 """The reviewer client.
 
-Review needs no tool access, so this is a direct SDK call rather than an
-agentic wrapper. The provider sits behind a small protocol; OpenAI is the
-only implementation, using the SDK's native structured-output parsing so the
-schema is enforced server-side instead of hoped for.
+The provider sits behind a small protocol; OpenAI is the only implementation,
+using the SDK's native structured-output parsing so the schema is enforced
+server-side instead of hoped for.
+
+Review used to need no tool access, and that was wrong. A diff does not always
+carry the fact that decides it. Measured on one run of 31 stages: 8 of them
+deleted an `attr_accessible` declaration, which is safe exactly when a permit
+list elsewhere covers the same attributes — and that file is not in the diff.
+The reviewer approved all 8, and could not have done anything else. A quarter
+of that run's verdicts were approvals it had no way to withhold, which is not
+a gate; it is the stage instruction restated in the reviewer's voice.
+
+So it reads the repository now, through the same bounded, read-only view the
+planner uses. Reading is not executing: `repotools` answers questions, every
+command it runs is authored there, and nothing the reviewer can do changes a
+file. The budget is its own — see `ReviewerConfig` — because the two roles ask
+different questions and whoever retunes one should not silently retune the
+other.
 
 The defensive posture matters more than the happy path. If there is no usable
 verdict — a refusal, a truncated response, a transport failure — the answer is
@@ -13,6 +27,7 @@ means guess, and it never means crash four stages into a run.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
@@ -20,6 +35,7 @@ from typing import Literal, Protocol
 from pydantic import BaseModel
 
 from orchestrator.config import ReviewerConfig
+from orchestrator.plannertools import dispatch, openai_tool_schemas
 from orchestrator.retry import Backoff, with_transport_retry
 
 Verdict = Literal["approved", "rework", "blocked"]
@@ -64,12 +80,17 @@ class ReviewOutcome:
     # True when the `blocked` verdict is ours rather than the model's, so the
     # report does not imply a judgement the reviewer never made.
     failed: bool = False
+    # What it looked at, in order. Recorded for the same reason the planner's
+    # is: a verdict reached without reading is worth less than one reached
+    # after it, and the two are indistinguishable from the verdict alone.
+    tool_calls: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return {
             "verdict": self.verdict,
             "summary": self.summary,
             "issues": [i.model_dump() for i in self.issues],
+            "tool_calls": list(self.tool_calls),
             "usage": {
                 "prompt_tokens": self.usage.prompt_tokens,
                 "cached_tokens": self.usage.cached_tokens,
@@ -105,11 +126,26 @@ def _transport_errors() -> tuple[type[BaseException], ...]:
 
 
 class OpenAIReviewer:
-    def __init__(self, cfg: ReviewerConfig, client=None, log=None):
+    def __init__(self, cfg: ReviewerConfig, client=None, log=None, reader=None,
+                 semantic=None):
         self.cfg = cfg
         # Assigned by `build_runtime`; the client predates the run log.
         self.log = log
+        # Absent unless the project turned repo access on, in which case the
+        # reviewer judges from the diff alone as it always did.
+        self.reader = reader
+        self.semantic = semantic
         self._client = client if client is not None else _build_openai_client(cfg)
+
+    def _max_tool_turns(self) -> int:
+        """The reader's own call budget is the real ceiling.
+
+        Past it every tool refuses, the reviewer reads the refusal and answers
+        with what it has. This bound is the backstop for a model that ignores
+        the refusal and keeps asking — without it a loop that never converges
+        would hold a stage open until the request timeout.
+        """
+        return max(self.cfg.max_read_calls, 1)
 
     def review(
         self, messages: list[dict[str, str]], cache_key: str | None = None
@@ -134,30 +170,80 @@ class OpenAIReviewer:
         if self.cfg.prompt_cache_retention:
             extra["prompt_cache_retention"] = self.cfg.prompt_cache_retention
 
-        try:
-            completion = with_transport_retry(
-                lambda: self._client.chat.completions.parse(
-                    model=self.cfg.model,
-                    messages=messages,
-                    response_format=ReviewVerdict,
-                    **extra,
-                ),
-                retry_on=_transport_errors(),
-                backoff=Backoff(
-                    budget_seconds=self.cfg.transport_retry_seconds,
-                    max_delay_seconds=self.cfg.transport_retry_max_delay_seconds,
-                ),
-                log=self.log,
-            )
-        except Exception as e:  # noqa: BLE001 - any failure means "no verdict"
-            return _blocked(f"The reviewer call failed: {e}")
+        tools = openai_tool_schemas(self.semantic) if self.reader else []
+        conversation = list(messages)
+        usage = TokenUsage()
+        looked_at: list[str] = []
+        completion = None
 
-        usage = _extract_usage(getattr(completion, "usage", None))
+        # One turn per tool round trip, plus one for the answer.
+        for _ in range(self._max_tool_turns() + 1):
+            try:
+                completion = with_transport_retry(
+                    lambda: self._client.chat.completions.parse(
+                        model=self.cfg.model,
+                        # No moving breakpoint. `build_review_messages` marks
+                        # the end of the diff, which does not move during the
+                        # loop, so from the second turn everything up to it
+                        # reads from cache and only the accumulating tool
+                        # results are fresh. Marking the newest message instead
+                        # would mean attaching a breakpoint to a `tool` message,
+                        # a shape this provider is not known to accept — and
+                        # documented behaviour here has been wrong twice.
+                        messages=conversation,
+                        response_format=ReviewVerdict,
+                        **({"tools": tools} if tools else {}),
+                        **extra,
+                    ),
+                    retry_on=_transport_errors(),
+                    backoff=Backoff(
+                        budget_seconds=self.cfg.transport_retry_seconds,
+                        max_delay_seconds=self.cfg.transport_retry_max_delay_seconds,
+                    ),
+                    log=self.log,
+                )
+            except Exception as e:  # noqa: BLE001 - any failure means "no verdict"
+                outcome = _blocked(f"The reviewer call failed: {e}")
+                outcome.usage = usage
+                outcome.tool_calls = looked_at
+                return outcome
+
+            usage = _merge_usage(usage, _extract_usage(getattr(completion, "usage", None)))
+
+            choices = getattr(completion, "choices", None) or []
+            if not choices:
+                outcome = _blocked("The reviewer returned no choices.")
+                outcome.usage = usage
+                outcome.tool_calls = looked_at
+                return outcome
+
+            requests = getattr(choices[0].message, "tool_calls", None) or []
+            if not requests:
+                break
+
+            # The assistant turn verbatim, then one `tool` message per request.
+            # The API requires every tool call to be answered before the next
+            # assistant turn, keyed by id, or the conversation is malformed.
+            conversation = conversation + [choices[0].message]
+            for req in requests:
+                name, args = _tool_request(req)
+                looked_at.append(_describe(name, args))
+                conversation.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": req.id,
+                        "content": dispatch(name, args, self.reader, self.semantic),
+                    }
+                )
+
+        if completion is None:  # pragma: no cover - the loop always runs once
+            return _blocked("The reviewer produced no response.")
 
         choices = getattr(completion, "choices", None) or []
         if not choices:
             outcome = _blocked("The reviewer returned no choices.")
             outcome.usage = usage
+            outcome.tool_calls = looked_at
             return outcome
 
         choice = choices[0]
@@ -166,6 +252,7 @@ class OpenAIReviewer:
         if getattr(message, "refusal", None):
             outcome = _blocked(f"The reviewer refused to answer: {message.refusal}")
             outcome.usage = usage
+            outcome.tool_calls = looked_at
             return outcome
 
         if getattr(choice, "finish_reason", None) == "length":
@@ -176,12 +263,17 @@ class OpenAIReviewer:
                 "so its verdict cannot be trusted."
             )
             outcome.usage = usage
+            outcome.tool_calls = looked_at
             return outcome
 
         parsed = getattr(message, "parsed", None)
         if parsed is None:
+            # Reached the turn ceiling still asking for tools, or answered with
+            # nothing parsable. Either way there is no verdict, and a review
+            # that ran out of turns must say so rather than look like a refusal.
             outcome = _blocked("The reviewer returned no parsable verdict.")
             outcome.usage = usage
+            outcome.tool_calls = looked_at
             return outcome
 
         return ReviewOutcome(
@@ -190,15 +282,88 @@ class OpenAIReviewer:
             issues=list(parsed.issues),
             usage=usage,
             failed=False,
+            tool_calls=looked_at,
         )
 
 
-def make_reviewer(cfg: ReviewerConfig) -> ReviewerClient:
+def _tool_request(req) -> tuple[str, dict]:
+    """Name and arguments from one OpenAI tool call.
+
+    Arguments arrive as a JSON *string* rather than an object, and a model can
+    emit one that does not parse. That is a bad request, not a dead review — an
+    empty dict reaches `dispatch`, which answers with a readable refusal the
+    reviewer can act on.
+    """
+    fn = getattr(req, "function", None)
+    name = getattr(fn, "name", "") or ""
+    raw = getattr(fn, "arguments", "") or "{}"
+    try:
+        args = json.loads(raw)
+    except (TypeError, ValueError):
+        return name, {}
+    return name, args if isinstance(args, dict) else {}
+
+
+def _describe(name: str, args: dict) -> str:
+    """One tool call, rendered for the log and the artifact."""
+    detail = args.get("path") or args.get("pattern") or args.get("glob") or args.get(
+        "question"
+    ) or args.get("ref") or ""
+    return f"{name}({detail})" if detail else name
+
+
+def _merge_usage(left: TokenUsage, right: TokenUsage) -> TokenUsage:
+    """Totals across the turns of one review.
+
+    A tool loop bills once per turn, so the single-call reading understates what
+    a review cost by however many times it looked at something. Summing here is
+    what keeps `report.md` honest — the economic argument for splitting the
+    models depends on that number staying true.
+    """
+    return TokenUsage(
+        prompt_tokens=left.prompt_tokens + right.prompt_tokens,
+        completion_tokens=left.completion_tokens + right.completion_tokens,
+        cached_tokens=left.cached_tokens + right.cached_tokens,
+        cache_write_tokens=left.cache_write_tokens + right.cache_write_tokens,
+    )
+
+
+def make_reviewer(
+    cfg: ReviewerConfig, target_repo=None, log=None
+) -> ReviewerClient:
     """The pluggable seam. Config validation already restricts the provider,
-    so this only has to map it."""
-    if cfg.provider == "openai":
-        return OpenAIReviewer(cfg)
-    raise RuntimeError(f"unsupported reviewer provider {cfg.provider!r}")
+    so this only has to map it.
+
+    `target_repo` is optional so preflight can build a client just to prove the
+    credentials work, without needing a repo on hand — the same reason
+    `make_planner` takes it that way.
+    """
+    if cfg.provider != "openai":
+        raise RuntimeError(f"unsupported reviewer provider {cfg.provider!r}")
+
+    reader = semantic = None
+    if cfg.repo_access and target_repo is not None:
+        from orchestrator.gitops import Git
+        from orchestrator.repotools import ReadBudget, RepoReader
+        from orchestrator.semantic import SemanticSearch, SemanticSearchConfig
+
+        reader = RepoReader(
+            Git(target_repo),
+            target_repo,
+            ReadBudget(
+                max_lines_per_call=cfg.max_read_lines_per_call,
+                max_total_lines=cfg.max_read_lines_total,
+                max_calls=cfg.max_read_calls,
+            ),
+        )
+        search_cfg = SemanticSearchConfig.from_mapping(cfg.semantic_search)
+        if search_cfg is not None:
+            # One list, shared with the reader, so the log is chronological.
+            # Two lists concatenated say what was looked at but not in what
+            # order, and the order is most of how a conclusion was reached.
+            semantic = SemanticSearch(search_cfg, calls=reader.calls)
+
+    return OpenAIReviewer(cfg, log=log, reader=reader, semantic=semantic)
 
 
 def _build_openai_client(cfg: ReviewerConfig):

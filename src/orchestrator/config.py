@@ -299,6 +299,27 @@ class ReviewerConfig(_EndpointConfig):
     # re-billed on every review, and across 164 stored verdicts on one run not
     # one cited an earlier stage. Set this where the log carries the record.
     history_stages: int | None = None
+    # What the reviewer may look at, and how much of it. Without tools it can
+    # only judge what the diff shows, and a diff does not always carry the fact
+    # that decides it: a stage that deletes an `attr_accessible` declaration is
+    # safe exactly when a permit list elsewhere covers the same attributes, and
+    # that file is not in the diff. Across one run of 31 stages, 8 were
+    # deletions of that shape — a quarter of the verdicts were approvals the
+    # reviewer had no way to withhold.
+    #
+    # Deliberately its own settings rather than borrowed from the planner's,
+    # though they start at the same numbers. These are per-role tuning: the two
+    # ask different questions, and whoever decides the reviewer needs a
+    # different budget should be able to say so in config without touching
+    # code — and without a change to the planner's budget silently moving the
+    # reviewer's.
+    repo_access: bool = False
+    max_read_lines_per_call: int = 400
+    max_read_lines_total: int = 3000
+    max_read_calls: int = 25
+    # See `PlannerConfig.semantic_search`. Same shape, same reason for keeping
+    # the endpoints in the environment.
+    semantic_search: dict | None = None
 
 
 class Limits(_Strict):

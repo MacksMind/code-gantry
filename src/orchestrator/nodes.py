@@ -739,6 +739,16 @@ def review(state: RunState, rt: Runtime) -> dict:
         messages, cache_key=f"orchestrator:{state.get('project_slug') or 'project'}"
     )
 
+    # What it looked at, before the verdict that used it. An approval reached
+    # after reading the file the diff depends on and one reached from the diff
+    # alone read identically in the log otherwise, and those are exactly the
+    # two cases worth telling apart while watching a run.
+    if outcome.tool_calls:
+        rt.log(
+            f"[review] {stage.id}: read {len(outcome.tool_calls)} thing(s): "
+            + "; ".join(outcome.tool_calls)
+        )
+
     rt.write_artifact(
         state["stage_index"], stage.id, state.get("revision", 0), attempt,
         "review.json", json.dumps(outcome.as_dict(), indent=2),

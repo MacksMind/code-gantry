@@ -509,7 +509,7 @@ def _drive(
             project,
             paths,
             planner=make_planner(cfg.planner, cfg.target_repo),
-            reviewer=make_reviewer(cfg.reviewer),
+            reviewer=make_reviewer(cfg.reviewer, cfg.target_repo),
             log=log,
         )
         graph = build_graph(rt, checkpointer=saver)

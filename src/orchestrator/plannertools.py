@@ -177,6 +177,31 @@ def tool_schemas(semantic: SemanticSearch | None) -> list[dict[str, Any]]:
     return [*READ_TOOLS, SEMANTIC_TOOL] if semantic else list(READ_TOOLS)
 
 
+def openai_tool_schemas(semantic: SemanticSearch | None) -> list[dict[str, Any]]:
+    """The same tools, in the shape the other provider's API wants.
+
+    One definition, two renderings. The descriptions are the part that matters
+    — they carry the rules that keep a lookup from becoming a belief — and they
+    must not fork, because a reviewer told something different from the planner
+    would be reasoning from a different contract about the same repository.
+
+    Only the envelope differs: Anthropic takes `input_schema` at the top level,
+    OpenAI wraps the whole thing in a `function` object and calls it
+    `parameters`.
+    """
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": tool["name"],
+                "description": tool["description"],
+                "parameters": tool["input_schema"],
+            },
+        }
+        for tool in tool_schemas(semantic)
+    ]
+
+
 def dispatch(
     name: str,
     args: dict,

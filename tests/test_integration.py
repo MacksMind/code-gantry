@@ -224,6 +224,41 @@ class TestTwoStageProject:
         assert (directory / "verify.log").exists()
         assert json.loads((directory / "review.json").read_text())["verdict"] == "approved"
 
+    def test_what_the_reviewer_read_reaches_the_artifact(
+        self, repo, tmp_path, fake_aider
+    ):
+        # The whole journey, not its endpoints. `tool_calls` is computed in the
+        # client, carried on ReviewOutcome and rendered by as_dict into
+        # review.json — three hops, and every previous value lost in transit
+        # here passed its unit tests on both ends.
+        #
+        # It is also the only record of whether a verdict was reached by
+        # looking. An approval from a reviewer that read the permit list and one
+        # from a reviewer that read nothing are indistinguishable without it,
+        # and those are the two cases worth telling apart.
+        fake_aider.write_text(json.dumps([{"app.py": "a\n"}]))
+        reviewer = ScriptedReviewer(outcomes=[
+            ReviewOutcome(
+                verdict="approved",
+                summary="checked the permit list",
+                usage=TokenUsage(9000, 60, 8500),
+                tool_calls=["read_file(app/models/discount.rb)", "search(permit)"],
+            )
+        ])
+        planner = ScriptedPlanner([
+            PlannerOutcome("next_stage", "r", "e", stage_fields=stage_spec()),
+            PlannerOutcome("project_complete", "done", "e"),
+        ])
+        cfg, project, paths, final = drive(repo, tmp_path, planner=planner,
+                                           reviewer=reviewer)
+        written = json.loads(
+            (paths.attempt_dir(0, "extract", 0, 0) / "review.json").read_text()
+        )
+        assert written["tool_calls"] == [
+            "read_file(app/models/discount.rb)",
+            "search(permit)",
+        ]
+
     def test_verify_log_records_why_a_commandless_gate_failed(
         self, repo, tmp_path, fake_aider
     ):

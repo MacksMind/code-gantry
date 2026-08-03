@@ -65,6 +65,39 @@ Anything else about whitespace is yours to judge as usual.
 Judge only the diff you are shown, against the stage you are given.\
 """
 
+REVIEW_TOOLS_PROMPT = """\
+
+## Looking at the repository
+
+You can read the repository. Use it when the diff's safety depends on code the
+diff does not contain — which is common, and is the case a diff alone cannot
+settle.
+
+The clearest example: a stage that deletes a declaration is safe exactly when
+something elsewhere still covers what the declaration used to. That elsewhere
+is not in the diff. Without reading it you are not judging the change, you are
+restating the stage instruction in your own voice, and an approval that could
+never have been a rejection is not a review.
+
+So: before approving a diff whose correctness rests on a file you have not
+seen, read the file. Before accepting a claim in the stage instruction about
+what the rest of the codebase contains, check it. A count, a "nothing else
+references this", a "the permit list already covers this" — those are claims,
+and the code is the fact.
+
+**What you find outside the diff is context, not a defect.** This is a legacy
+codebase mid-migration and it has pre-existing problems that have nothing to do
+with the stage in front of you. Finding one is not grounds for rework: the
+executor cannot fix what the stage did not ask it to touch, and rejecting for
+it burns attempts on work that will never be in scope. Judge whether *this
+diff* is correct and complete for *this stage*. If you find a real problem the
+stage did not cause, say so in your summary and approve anyway — unless the
+diff makes it worse.
+
+Reading costs time on every stage, so read what you need and stop. If the diff
+is self-evidently correct, return the verdict without looking at anything.\
+"""
+
 
 def build_executor_prompt(
     stage: Stage,
@@ -384,6 +417,20 @@ def _history_block(
     return head + "\n\n".join(entries)
 
 
+def _review_system_prompt(cfg: ProjectConfig | None) -> str:
+    """The contract, plus the tool section when there are tools.
+
+    Told it can read when it cannot, the reviewer either hallucinates a lookup
+    or hedges a verdict it should have given outright — so the section is
+    conditional rather than always present. It rides in the cached prefix
+    either way: `repo_access` is fixed for a run.
+    """
+    reviewer = getattr(cfg, "reviewer", None)
+    if reviewer is not None and getattr(reviewer, "repo_access", False):
+        return REVIEW_SYSTEM_PROMPT + "\n" + REVIEW_TOOLS_PROMPT
+    return REVIEW_SYSTEM_PROMPT
+
+
 def build_review_messages(
     stage: Stage,
     cfg: ProjectConfig,
@@ -405,7 +452,7 @@ def build_review_messages(
     would break the one thing that caches, because this model does not fall
     back to the longest matching prefix and every landing would miss.
     """
-    messages = [{"role": "system", "content": REVIEW_SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": _review_system_prompt(cfg)}]
     # A content-block list rather than a string, so it can carry the cache
     # breakpoint. GPT-5.6 caches at an explicit breakpoint and does not fall
     # back to the longest matching prefix; its default `implicit` mode puts one
@@ -481,7 +528,29 @@ def build_review_messages(
         "routes to the planner, not to a human."
     )
 
-    messages.append({"role": "user", "content": "\n\n".join(current)})
+    # The second breakpoint, and the last thing that does not move during a
+    # review. With tools the reviewer takes several turns, and without a mark
+    # here every one of them re-sends this whole block — the live progress log,
+    # the history, the stage, the diff — at full price. The plan block above is
+    # already cached and stays cached; this marks the end of the per-stage
+    # payload so that from the second turn only the accumulating tool results
+    # are fresh.
+    #
+    # Deliberately not a marker that moves onto the newest message. That would
+    # mean attaching a breakpoint to a `tool` message, and the only shape
+    # measured working on this provider is a text block inside a user message.
+    messages.append(
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "\n\n".join(current),
+                    "prompt_cache_breakpoint": {"mode": "explicit"},
+                }
+            ],
+        }
+    )
     return messages
 
 
