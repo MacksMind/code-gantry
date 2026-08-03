@@ -58,6 +58,20 @@ repository's own agent-facing documents; a document that says what the machine
 can do is the most important of the three, because a stage that could edit it
 could retire its own constraints.
 
+**A gate must be able to reach what decides its verdict.** The reviewer had no
+tool access for most of this project's life, on the reasoning that it judges a
+diff and a diff is what it is shown. But a diff does not always carry the fact
+that settles it: a stage that deletes a declaration is safe exactly when
+something elsewhere still covers what the declaration did, and that file is not
+in the diff. Measured on one run of 31 stages, 8 were deletions of that shape,
+and every one was approved. Not wrongly — the reviewer could not have said
+anything else, which makes those approvals the stage instruction restated in
+its own voice rather than a check on it. A checkpoint that cannot reach its
+evidence produces verdicts that are indistinguishable from judgement and are
+not judgement, and the artifact reads the same either way. Recording what a
+gate *looked at*, not only what it decided, is what makes the difference
+visible afterwards.
+
 ## Rules that cost time when broken
 
 **Project knowledge belongs in config, never in code.** This includes
@@ -65,6 +79,13 @@ model-facing strings. A tool description reading `e.g. app/controllers/order_con
 is a Rails hint shipped to every project's planner. Regexes that identify a
 failing test, a seed, or a file are properties of a project, which is why several
 have no default at all.
+
+This one is easy to break while writing prose rather than code, and hard to
+notice afterwards: a paragraph of guidance illustrated with the vocabulary of
+whatever project is in front of you reads as helpful and ships one migration's
+shape to every reviewer. It is worth a test that fails on the names — a
+framework, a file extension, a directory prefix — so the rule is pinned rather
+than left to the judgement of whoever edits the string next.
 
 **Config should hold the path, not the copy.** The corollary, and it cost more
 than the rule itself. Where a project already maintains a document saying how it
@@ -124,6 +145,46 @@ have shipped into a cached prompt prefix on every call, and the test that caught
 it used two real files with identical contents, which is not what a symlink is.
 Reach for the real shape of the input before writing the test that stands in for
 it.
+
+**A guard can be unreachable for the shape its failure actually takes.** One
+level below the rule above. `planner.py` carried a `stop_reason == "max_tokens"`
+check with a clear message about a truncated verdict, and it had never once
+fired: the SDK parses structured output *before* it returns, so a response cut
+off mid-JSON raises inside the call and lands in the generic handler. What an
+operator saw for an answer that ran out of room was a pydantic dump. The guard
+reviews as correct and is dead code, and only a live failure can show it. When
+adding one, ask which layer actually raises first — a check placed after the
+parse cannot see anything the parse rejects.
+
+**Separate what was found from what should happen next.** A reviewer blocked a
+stage for a difference it had correctly noticed and whose consequence it had
+not checked; the observable outcome was identical, because another mechanism
+already supplied the value. The judgement was right and the routing was wrong,
+and those are two decisions rather than one. A finding with no nameable
+consequence belongs in the record, where a human can weigh it; rejecting on it
+costs a rework cycle and returns the same diff. The corollary is the harder
+half: before withholding approval over a consequence, verify the consequence —
+naming one is not establishing it, and a model asserting an unchecked effect is
+the same failure as a regex producing a confident wrong count.
+
+**Provider shapes come from the installed SDK, not from recall or from docs
+pinned to another version.** Two facts that only a live call produced: tools
+must be declared `strict` or structured output will not auto-parse, and a
+reasoning model's tool call must be echoed back together with the reasoning
+item it declares as required. Neither is visible to a stub, because a stub has
+no reasoning item to omit. Read the installed types — they are generated from
+the provider's own spec and are on disk — and treat a documentation page as
+weaker evidence than the package you are calling.
+
+**Report a measured non-result as a non-result.** Two prompt changes were made
+to get the reviewer to record out-of-scope findings, and a controlled before
+and after over the same 31 stages produced the same verdicts and zero findings
+both times. The temptation is to describe the mechanism as working because it
+is now *capable*; capability and effect are different claims and only one had
+evidence. The same discipline applies to sampling: a replay's rejection rate is
+measured on stages that already passed review once, and tool-use counts on
+identical inputs varied from 0 to 21 between two runs — so a single sample
+showing a model "reading where it mattered" is a story, not a finding.
 
 ## Where things live
 
