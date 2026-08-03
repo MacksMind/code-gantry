@@ -499,7 +499,11 @@ def execute(state: RunState, rt: Runtime) -> dict:
             )
 
         prompt = build_executor_prompt(
-            stage, rt.cfg, context=context, feedback=feedback
+            stage,
+            rt.cfg,
+            context=context,
+            feedback=feedback,
+            failure_layer=state.get("failure_layer"),
         )
         rt.write_artifact(
             state["stage_index"], stage.id, state.get("revision", 0), attempt,

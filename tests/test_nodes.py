@@ -514,6 +514,44 @@ class TestExecute:
         nodes.execute(state, rt)
         assert "Wrong verb on the route." in ex.prompts[0]
 
+    def test_a_review_rejection_tells_the_executor_the_approach_was_rejected(
+        self, repo, tmp_path
+    ):
+        # `rework_reset` puts the branch back to the baseline first, so there is
+        # nothing of the previous attempt left and starting over is the whole
+        # point.
+        ex = StubExecutor(repo=repo, edits=[("app.py", "x\n")])
+        cfg, rt, state = make(repo, tmp_path, executor=ex)
+        state = with_stage(state, rt)
+        state["review_feedback"] = ["Wrong verb on the route."]
+        state["failure_layer"] = "review"
+        nodes.execute(state, rt)
+        assert "rejected" in ex.prompts[0]
+
+    def test_a_gate_failure_does_not_call_the_work_rejected(self, repo, tmp_path):
+        # Measured over one run of 35 stages: this opening fired about a dozen
+        # times and was wrong every one of them, because the reviewer rejected
+        # nothing all run. Seven of those were `residue`, where the work is
+        # incomplete rather than wrong and repeating the approach on the sites
+        # that were missed is exactly the fix — so "do not repeat the rejected
+        # approach" sat fifty lines above feedback saying the opposite.
+        ex = StubExecutor(repo=repo, edits=[("app.py", "x\n")])
+        cfg, rt, state = make(repo, tmp_path, executor=ex)
+        state = with_stage(state, rt)
+        state["review_feedback"] = ["Two occurrences were never edited."]
+        state["failure_layer"] = "residue"
+        nodes.execute(state, rt)
+        prompt = ex.prompts[0]
+        assert "rejected" not in prompt
+        assert "Two occurrences were never edited." in prompt
+
+    def test_a_first_attempt_has_no_opening_at_all(self, repo, tmp_path):
+        ex = StubExecutor(repo=repo, edits=[("app.py", "x\n")])
+        cfg, rt, state = make(repo, tmp_path, executor=ex)
+        state = with_stage(state, rt)
+        nodes.execute(state, rt)
+        assert "previous attempt" not in ex.prompts[0]
+
     def test_executor_failure_retries_then_goes_to_the_planner(self, repo, tmp_path):
         ex = StubExecutor(repo=repo, ok=False)
         cfg, rt, state = make(repo, tmp_path, executor=ex)

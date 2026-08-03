@@ -128,24 +128,54 @@ independent confirmation.\
 """
 
 
+_RETRY_OPENING_REVIEW = (
+    "A previous attempt at this task was rejected. Address the feedback "
+    "below. Do not repeat the rejected approach."
+)
+
+_RETRY_OPENING_GATE = (
+    "Your previous attempt is committed on this branch and did not pass a "
+    "check. It is not being discarded, and it is not assumed to be wrong — the "
+    "feedback below says what is still missing or failing. Read the files as "
+    "they stand now rather than as the task describes them, fix what the "
+    "feedback names, and change nothing else. If part of the task turns out to "
+    "be done already, leave it exactly as it is."
+)
+
+
 def build_executor_prompt(
     stage: Stage,
     cfg: ProjectConfig,
     context: list[tuple[str, str]] | None = None,
     feedback: list[str] | None = None,
+    failure_layer: str | None = None,
 ) -> str:
     """The message handed to the executor.
 
     A rework is a *fresh* invocation with no conversation history, so everything
     it needs is restated. It cannot see the plan document, the other stages, or
     the reviewer — only this.
+
+    The opening depends on which gate sent it back, because the two cases want
+    opposite things. A review rejection arrives with the branch already reset to
+    the stage baseline, so nothing of the previous attempt survives and starting
+    over is the point. A verify failure leaves the work committed on the branch,
+    and `residue` in particular means the sweep was *incomplete* — repeating the
+    approach on the sites that were missed is the fix.
+
+    This said "rejected" on both for the whole of one 35-stage run in which the
+    reviewer rejected nothing at all: the opening fired about a dozen times and
+    was wrong every time, and on the seven `residue` failures it instructed the
+    executor to do the opposite of what the feedback fifty lines below asked
+    for.
     """
     parts: list[str] = []
 
     if feedback:
         parts.append(
-            "A previous attempt at this task was rejected. Address the feedback "
-            "below. Do not repeat the rejected approach."
+            _RETRY_OPENING_REVIEW
+            if failure_layer == "review"
+            else _RETRY_OPENING_GATE
         )
 
     parts.append(f"## Task\n\n{stage.instruction}")
