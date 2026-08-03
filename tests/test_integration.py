@@ -337,6 +337,38 @@ class TestPlannerInterventionLoop:
         assert final["status"] == "complete"
         assert not (repo / "extra.py").exists()
 
+    def test_an_extend_revision_lands_without_running_the_executor_again(
+        self, repo, tmp_path, fake_aider
+    ):
+        # The reason the branch is kept. A second scripted edit is queued and
+        # must still be there at the end: the gates read what is already on the
+        # branch instead of asking for it a second time. Before this, a stage
+        # whose work was complete went back to the executor under an instruction
+        # that still described it as undone, and the executor deleted the line
+        # above its target to produce a change that had already been made.
+        fake_aider.write_text(
+            json.dumps([
+                {"app.py": "correct work\n", "extra.py": "wandered\n"},
+                {"app.py": "the executor should never be asked for this\n"},
+            ])
+        )
+        planner = ScriptedPlanner([
+            PlannerOutcome("next_stage", "r", "e", stage_fields=stage_spec()),
+            PlannerOutcome(
+                "revise", "that file does not belong", "e",
+                stage_fields=stage_spec(), revision_mode="extend",
+            ),
+            PlannerOutcome("project_complete", "done", "e"),
+        ])
+        cfg, project, paths, final = drive(repo, tmp_path, planner=planner)
+
+        assert final["status"] == "complete"
+        assert not (repo / "extra.py").exists()
+        assert (repo / "app.py").read_text() == "correct work\n"
+        assert json.loads(fake_aider.read_text()) == [
+            {"app.py": "the executor should never be asked for this\n"}
+        ]
+
     def test_a_blocked_review_routes_to_the_planner_not_a_human(
         self, repo, tmp_path, fake_aider
     ):

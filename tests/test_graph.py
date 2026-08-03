@@ -12,7 +12,7 @@ class TestEdgeTable:
     def test_edges_match_the_spec(self):
         # PLAN.md's edge list, transcribed. Drift from the spec shows up here.
         assert EDGES == {
-            "plan": ["precheck", "finalize", "escalate"],
+            "plan": ["precheck", "verify", "finalize", "escalate"],
             "precheck": ["execute", "plan", "escalate"],
             "execute": ["verify", "execute", "plan"],
             "verify": ["review", "advance", "execute", "plan", "escalate"],
@@ -34,6 +34,12 @@ class TestEdgeTable:
     def test_verify_can_reach_the_planner(self):
         # Scope violations and exhausted retries route there.
         assert "plan" in EDGES["verify"]
+
+    def test_plan_can_re_enter_at_verify(self):
+        # An `extend` revision leaves the stage's work standing, so the next
+        # question is whether it now passes — not what the executor would write
+        # a second time.
+        assert "verify" in EDGES["plan"]
 
     def test_only_three_nodes_can_escalate(self):
         # The design goal: a run stops for a good reason or not at all.

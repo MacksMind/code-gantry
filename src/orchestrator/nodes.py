@@ -290,7 +290,6 @@ def plan(state: RunState, rt: Runtime) -> dict:
             "revision": state.get("revision", 0) + 1,
             "planner_interventions": interventions,
             "interventions_since_landing": stuck + 1,
-            "next_hop": "precheck",
         }
 
         if not keep_branch:
@@ -298,10 +297,27 @@ def plan(state: RunState, rt: Runtime) -> dict:
             # project tip on the way through precheck.
             update["stage_branch"] = None
             update["stage_start_sha"] = ""
+            update["next_hop"] = "precheck"
         else:
             # Scope was merely too narrow. Anything the planner declined to
             # adopt is reverted; the rest of the stage's work survives.
             _revert_unadopted(state, rt, new_stage)
+            # Re-entering at verify is what makes that survival mean anything.
+            # `extend` asserts the approach was right, so what is on the branch
+            # is the revised stage's work already done — possibly all of it.
+            # Routing onward to the executor hands a finished diff to a model
+            # holding an instruction that still describes it as undone, and
+            # "make this change" has no safe reading once the change is already
+            # true: one stage answered it by deleting the line above its target,
+            # to produce a diff. The gates read state rather than intent, so ask
+            # them instead. If the revision did add work, residue or the tests
+            # fail and route to the executor then, with the gap named.
+            #
+            # Nothing precheck does is owed here. `preconditions` are operator-
+            # only, so a revision cannot have changed them and they passed
+            # already; setup runs inside verify; the branch is kept by
+            # construction; and the clean-tree check exempts revisions.
+            update["next_hop"] = "verify"
 
         return update
 
@@ -365,8 +381,8 @@ def precheck(state: RunState, rt: Runtime) -> dict:
         return {"next_hop": "plan"}
 
     # Cleared here as well as in verify: a resume re-enters at plan, precheck
-    # or verify, and plan always routes onward through precheck — so between
-    # the two, every path consumes it exactly once.
+    # or verify, and plan routes onward through one of the latter two — so
+    # between them, every path consumes it exactly once.
     update: dict = {"resuming": False}
     rt.log(f"[precheck] stage {stage.id} revision {state.get('revision', 0)}")
 

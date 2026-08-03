@@ -368,6 +368,31 @@ class TestRevision:
         assert out["stage_branch"] is None
         assert out["stage_start_sha"] == ""
 
+    def test_extend_re_enters_at_verify(self, repo, tmp_path):
+        # `extend` means the approach was right and only the scope was too
+        # narrow, so the work on the branch stands — that is the mode's whole
+        # premise, and `_revert_unadopted` is careful to preserve it. Routing
+        # onward to the executor denies it: the diff is already written, and the
+        # instruction still describes it as undone. A stage once deleted the
+        # line next to its target to produce a change that was already made.
+        # Ask the gates whether it passes instead.
+        planner = StubPlanner(
+            [PlannerOutcome("revise", "r", "e", stage_fields=planned_stage(), revision_mode="extend")]
+        )
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        state = with_stage(state, rt)
+        assert nodes.plan(state, rt)["next_hop"] == "verify"
+
+    def test_restart_re_enters_at_precheck(self, repo, tmp_path):
+        # Nothing survives a restart, so there is nothing for the gates to read
+        # and the branch has to be re-cut before the executor runs.
+        planner = StubPlanner(
+            [PlannerOutcome("revise", "r", "e", stage_fields=planned_stage(), revision_mode="restart")]
+        )
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        state = with_stage(state, rt)
+        assert nodes.plan(state, rt)["next_hop"] == "precheck"
+
     def test_revision_clears_stale_feedback(self, repo, tmp_path):
         # It was written against an instruction that no longer applies.
         planner = StubPlanner(

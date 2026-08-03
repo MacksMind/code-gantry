@@ -36,7 +36,7 @@ NODES: dict[str, Callable] = {
 # Where each node may send the run. Declarative so it is checkable against the
 # spec rather than buried in lambdas.
 EDGES: dict[str, list[str]] = {
-    "plan": ["precheck", "finalize", "escalate"],
+    "plan": ["precheck", "verify", "finalize", "escalate"],
     "precheck": ["execute", "plan", "escalate"],
     "execute": ["verify", "execute", "plan"],
     "verify": ["review", "advance", "execute", "plan", "escalate"],

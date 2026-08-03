@@ -433,7 +433,10 @@ and exits non-zero.
 ### Edges
 
 ```
-plan      → precheck   (stage derived or revised; per-stage validate passes)
+plan      → precheck   (stage derived, or revised by restart; validate passes)
+plan      → verify     (revised by extend — the stage's work stands, so the
+                        question is whether it now passes, not what the
+                        executor would write over it a second time)
 plan      → finalize   (verdict: project_complete)
 plan      → escalate   (verdict: blocked, or planner budget exhausted)
 
