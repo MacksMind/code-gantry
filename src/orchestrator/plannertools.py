@@ -188,18 +188,50 @@ def openai_tool_schemas(semantic: SemanticSearch | None) -> list[dict[str, Any]]
     Only the envelope differs: Anthropic takes `input_schema` at the top level,
     OpenAI wraps the whole thing in a `function` object and calls it
     `parameters`.
+
+    The tools must be `strict`, and not by preference — the SDK refuses to
+    auto-parse a structured response otherwise, with "Only `strict` function
+    tools can be auto-parsed". Strict mode in turn requires every property to
+    appear in `required` and `additionalProperties: false`, which these schemas
+    do not satisfy: `read_file` takes an optional line range, `search` an
+    optional path filter.
+
+    So the optional ones are made nullable and required, which is the shape
+    strict mode provides for "may be omitted". `dispatch` already reads them
+    with `.get`, so a null arrives as a missing argument and nothing
+    downstream can tell the difference.
     """
-    return [
-        {
-            "type": "function",
-            "function": {
+    out = []
+    for tool in tool_schemas(semantic):
+        schema = tool["input_schema"]
+        properties = {}
+        for name, spec in (schema.get("properties") or {}).items():
+            if name in (schema.get("required") or []):
+                properties[name] = spec
+                continue
+            kind = spec.get("type", "string")
+            properties[name] = {
+                **spec,
+                "type": [kind, "null"] if isinstance(kind, str) else kind,
+            }
+        out.append(
+            {
+                "type": "function",
+                # Flat, not nested under a `function` object. That nesting is
+                # the chat/completions shape; the Responses API takes the name,
+                # description and parameters at the top level of the tool.
                 "name": tool["name"],
                 "description": tool["description"],
-                "parameters": tool["input_schema"],
-            },
-        }
-        for tool in tool_schemas(semantic)
-    ]
+                "strict": True,
+                "parameters": {
+                    **schema,
+                    "properties": properties,
+                    "required": list(properties),
+                    "additionalProperties": False,
+                },
+            }
+        )
+    return out
 
 
 def dispatch(

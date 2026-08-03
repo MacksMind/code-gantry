@@ -256,3 +256,73 @@ class TestSearchDialect:
     def test_a_genuinely_bad_pattern_still_reports(self, repo):
         with pytest.raises(ToolError, match="search failed"):
             reader(repo).search("(unclosed")
+
+
+class TestPinnedToACommit:
+    """Reads answer for one commit, not for the working tree.
+
+    A live review needs no pinning: the stage's work is committed on the stage
+    branch, so the tree is the state being judged. Anything reading after the
+    fact needs it — replaying a review against a tree thirty stages ahead
+    would let it approve a deletion because a permit list landed later, which
+    is the right answer for the wrong reason and looks exactly like judgement.
+    """
+
+    def _repo(self, tmp_path):
+        from orchestrator.gitops import Git
+
+        repo = tmp_path / "r"
+        repo.mkdir()
+        git = Git(repo)
+        git._run("init", "-q")
+        git._run("config", "user.email", "t@example.com")
+        git._run("config", "user.name", "T")
+        (repo / "a.rb").write_text("first version\n")
+        git._run("add", "-A")
+        git._run("-c", "commit.gpgsign=false", "commit", "-q", "-m", "one")
+        first = git.head_sha()
+
+        (repo / "a.rb").write_text("second version\n")
+        (repo / "b.rb").write_text("added later\n")
+        git._run("add", "-A")
+        git._run("-c", "commit.gpgsign=false", "commit", "-q", "-m", "two")
+        return repo, git, first
+
+    def test_read_file_returns_the_pinned_revision(self, tmp_path):
+        repo, git, first = self._repo(tmp_path)
+        pinned = RepoReader(git, repo, at_sha=first)
+        assert "first version" in pinned.read_file("a.rb")
+        assert "second version" in RepoReader(git, repo).read_file("a.rb")
+
+    def test_a_file_added_later_is_refused(self, tmp_path):
+        # The whole point. Without this the replay reads the future.
+        repo, git, first = self._repo(tmp_path)
+        with pytest.raises(ToolError) as e:
+            RepoReader(git, repo, at_sha=first).read_file("b.rb")
+        assert "not in the tree" in str(e.value)
+
+    def test_a_file_deleted_later_is_still_readable(self, tmp_path):
+        # Disk is not the authority when pinned: a file absent from the working
+        # copy because a later stage deleted it demonstrably existed here.
+        repo, git, first = self._repo(tmp_path)
+        (repo / "a.rb").unlink()
+        assert "first version" in RepoReader(git, repo, at_sha=first).read_file("a.rb")
+
+    def test_list_files_reflects_the_pinned_tree(self, tmp_path):
+        repo, git, first = self._repo(tmp_path)
+        assert RepoReader(git, repo, at_sha=first).list_files() == ["a.rb"]
+        assert RepoReader(git, repo).list_files() == ["a.rb", "b.rb"]
+
+    def test_search_is_pinned_and_keeps_the_live_output_shape(self, tmp_path):
+        # git prefixes hits with `<ref>:` when searching a commit. A caller
+        # must not be able to tell which reader it was handed.
+        repo, git, first = self._repo(tmp_path)
+        hits = RepoReader(git, repo, at_sha=first).search("version")
+        assert hits == ["a.rb:1:first version"]
+        assert RepoReader(git, repo).search("version") == ["a.rb:1:second version"]
+
+    def test_the_repository_boundary_still_holds_when_pinned(self, tmp_path):
+        repo, git, first = self._repo(tmp_path)
+        with pytest.raises(ToolError) as e:
+            RepoReader(git, repo, at_sha=first).read_file("../outside.txt")
+        assert "outside the repository" in str(e.value)

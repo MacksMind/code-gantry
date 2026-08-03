@@ -473,7 +473,18 @@ def build_review_messages(
     would break the one thing that caches, because this model does not fall
     back to the longest matching prefix and every landing would miss.
     """
-    messages = [{"role": "system", "content": _review_system_prompt(cfg)}]
+    # The Responses API shape: message items whose content is a list of
+    # `input_text` parts. The reviewer moved off chat/completions because
+    # gpt-5.6-sol refuses function tools together with reasoning there, and a
+    # reviewer that can look but cannot think is the wrong trade for a gate.
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "input_text", "text": _review_system_prompt(cfg)}
+            ],
+        }
+    ]
     # A content-block list rather than a string, so it can carry the cache
     # breakpoint. GPT-5.6 caches at an explicit breakpoint and does not fall
     # back to the longest matching prefix; its default `implicit` mode puts one
@@ -487,7 +498,7 @@ def build_review_messages(
             "role": "user",
             "content": [
                 {
-                    "type": "text",
+                    "type": "input_text",
                     # The plan alone. The completed-stage history used to live
                     # here too, and every landing changed it — taking ~50,000
                     # tokens of unchanged plan documents out of cache with a few
@@ -565,7 +576,7 @@ def build_review_messages(
             "role": "user",
             "content": [
                 {
-                    "type": "text",
+                    "type": "input_text",
                     "text": "\n\n".join(current),
                     "prompt_cache_breakpoint": {"mode": "explicit"},
                 }

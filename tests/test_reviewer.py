@@ -39,20 +39,27 @@ def cfg_with(**reviewer_overrides):
 def response(
     parsed=None,
     refusal=None,
-    finish_reason="stop",
+    status="completed",
     usage=SimpleNamespace(
-        prompt_tokens=1000,
-        completion_tokens=50,
-        prompt_tokens_details=SimpleNamespace(cached_tokens=900),
+        input_tokens=1000,
+        output_tokens=50,
+        input_tokens_details=SimpleNamespace(cached_tokens=900, cache_write_tokens=0),
     ),
 ):
+    """A finished Responses-API answer.
+
+    `output_parsed` is where the SDK puts the validated model; `output` still
+    carries the message, because a refusal lives in its content parts rather
+    than in a field of its own.
+    """
+    content = []
+    if refusal is not None:
+        content.append(SimpleNamespace(type="refusal", refusal=refusal))
     return SimpleNamespace(
-        choices=[
-            SimpleNamespace(
-                finish_reason=finish_reason,
-                message=SimpleNamespace(parsed=parsed, refusal=refusal),
-            )
-        ],
+        output_parsed=parsed,
+        output=[SimpleNamespace(type="message", content=content)],
+        status=status,
+        incomplete_details=SimpleNamespace(reason="max_output_tokens"),
         usage=usage,
     )
 
@@ -63,7 +70,7 @@ class StubClient:
     def __init__(self, result):
         self._result = result
         self.calls = []
-        self.chat = SimpleNamespace(completions=SimpleNamespace(parse=self._parse))
+        self.responses = SimpleNamespace(parse=self._parse)
 
     def _parse(self, **kwargs):
         self.calls.append(kwargs)
@@ -95,22 +102,27 @@ MESSAGES = [
 
 
 def tool_response(name, arguments, call_id="call_1"):
-    """A turn that asks for one tool instead of answering."""
+    """A turn that asks for one tool instead of answering.
+
+    On the Responses API a tool request is an item in `output` with type
+    `function_call`, carrying `name` and `arguments` flat rather than nested.
+    """
     call = SimpleNamespace(
-        id=call_id,
-        function=SimpleNamespace(name=name, arguments=arguments),
+        type="function_call",
+        id="fc_1",
+        call_id=call_id,
+        name=name,
+        arguments=arguments,
     )
     return SimpleNamespace(
-        choices=[
-            SimpleNamespace(
-                finish_reason="tool_calls",
-                message=SimpleNamespace(parsed=None, refusal=None, tool_calls=[call]),
-            )
-        ],
+        output_parsed=None,
+        output=[call],
+        status="completed",
+        incomplete_details=None,
         usage=SimpleNamespace(
-            prompt_tokens=100,
-            completion_tokens=10,
-            prompt_tokens_details=SimpleNamespace(cached_tokens=90),
+            input_tokens=100,
+            output_tokens=10,
+            input_tokens_details=SimpleNamespace(cached_tokens=90, cache_write_tokens=0),
         ),
     )
 
@@ -167,7 +179,7 @@ class TestDefensiveHandling:
         # A verdict cut off mid-JSON is not a verdict. Advancing on a partial
         # review is worse than stopping.
         verdict = ReviewVerdict(verdict="approved", summary="part", issues=[])
-        client = StubClient(response(parsed=verdict, finish_reason="length"))
+        client = StubClient(response(parsed=verdict, status="incomplete"))
         out = OpenAIReviewer(cfg_with().reviewer, client=client).review(MESSAGES)
         assert out.verdict == "blocked"
         assert "truncat" in out.summary.lower() or "length" in out.summary.lower()
@@ -184,8 +196,15 @@ class TestDefensiveHandling:
         assert out.verdict == "blocked"
         assert "connection reset" in out.summary
 
-    def test_no_choices_becomes_blocked(self):
-        client = StubClient(SimpleNamespace(choices=[], usage=None))
+    def test_an_empty_response_becomes_blocked(self):
+        # Nothing parsed and nothing in output. Whatever produced it, there is
+        # no verdict, and a run must stop rather than infer one.
+        client = StubClient(
+            SimpleNamespace(
+                output_parsed=None, output=[], status="completed",
+                incomplete_details=None, usage=None,
+            )
+        )
         out = OpenAIReviewer(cfg_with().reviewer, client=client).review(MESSAGES)
         assert out.verdict == "blocked"
 
@@ -241,7 +260,7 @@ class TestRequestShape:
         # Verbatim. The breakpoints are placed once by `build_review_messages`;
         # the client must not rewrite what it was handed, because a marker that
         # moved between turns would be a different prefix every time.
-        assert client.calls[0]["messages"] == MESSAGES
+        assert client.calls[0]["input"] == MESSAGES
 
     def test_no_tools_are_sent_without_repo_access(self):
         # The default. A reviewer with no reader must make the same request it
@@ -260,11 +279,12 @@ class TestRequestShape:
         )
         assert client.calls[0]["model"] == "gpt-5.4-mini"
 
-    def test_response_format_requests_the_verdict_schema(self):
+    def test_the_verdict_schema_is_requested(self):
+        # Server-side enforcement, rather than hoping the shape comes back.
         verdict = ReviewVerdict(verdict="approved", summary="ok", issues=[])
         client = StubClient(response(parsed=verdict))
         OpenAIReviewer(cfg_with().reviewer, client=client).review(MESSAGES)
-        assert client.calls[0]["response_format"] is ReviewVerdict
+        assert client.calls[0]["text_format"] is ReviewVerdict
 
 
 class TestFactory:
@@ -319,16 +339,11 @@ class TestReviewerCacheControls:
         OpenAIReviewer(cfg_with().reviewer, client=client).review(MESSAGES)
         assert "prompt_cache_key" not in client.calls[0]
 
-    def test_retention_is_sent_when_configured(self):
-        client = StubClient(response(parsed=ReviewVerdict(verdict="approved", summary="ok", issues=[])))
-        OpenAIReviewer(
-            cfg_with(prompt_cache_retention="24h").reviewer, client=client
-        ).review(MESSAGES)
-        assert client.calls[0]["prompt_cache_retention"] == "24h"
-
-    def test_retention_is_absent_by_default(self):
-        # Extended retention stores the prefix for longer, which is a data
-        # policy decision the operator makes, not a default we impose.
+    def test_retention_is_never_sent(self):
+        # `prompt_cache_retention` is a chat-completions field. On the
+        # Responses API the lifetime comes from prompt_cache_options.ttl,
+        # which is fixed at 30m and is currently the only supported value —
+        # so there is nothing here for an operator to choose.
         client = StubClient(response(parsed=ReviewVerdict(verdict="approved", summary="ok", issues=[])))
         OpenAIReviewer(cfg_with().reviewer, client=client).review(MESSAGES)
         assert "prompt_cache_retention" not in client.calls[0]
@@ -471,10 +486,27 @@ class TestToolLoop:
         assert out.verdict == "approved"
         assert reader.asked == ["app/x.rb"]
         # The second request carries the assistant turn and the tool reply.
-        second = client.calls[1]["messages"]
-        assert second[-1]["role"] == "tool"
-        assert second[-1]["tool_call_id"] == "call_1"
-        assert "discount_params" in second[-1]["content"]
+        second = client.calls[1]["input"]
+        assert second[-1]["type"] == "function_call_output"
+        assert second[-1]["call_id"] == "call_1"
+        assert "discount_params" in second[-1]["output"][0]["text"]
+
+    def test_a_tool_result_carries_a_cache_breakpoint(self):
+        # Marks accumulate rather than move: a request writes only its latest
+        # four, but matching considers up to eighty in the conversation, so
+        # every turn extends the cached prefix instead of restarting it.
+        verdict = ReviewVerdict(verdict="approved", summary="ok", issues=[])
+        client = SequenceClient(
+            [
+                tool_response("read_file", '{"path": "a.rb"}'),
+                response(parsed=verdict),
+            ]
+        )
+        OpenAIReviewer(
+            cfg_with().reviewer, client=client, reader=StubReader()
+        ).review(MESSAGES)
+        result = client.calls[1]["input"][-1]
+        assert result["output"][0]["prompt_cache_breakpoint"] == {"mode": "explicit"}
 
     def test_tools_are_offered_when_a_reader_is_present(self):
         verdict = ReviewVerdict(verdict="approved", summary="ok", issues=[])
@@ -482,9 +514,12 @@ class TestToolLoop:
         OpenAIReviewer(
             cfg_with().reviewer, client=client, reader=StubReader()
         ).review(MESSAGES)
-        names = [t["function"]["name"] for t in client.calls[0]["tools"]]
+        names = [t["name"] for t in client.calls[0]["tools"]]
         assert "read_file" in names
         assert all(t["type"] == "function" for t in client.calls[0]["tools"])
+        # Strict is not optional: the SDK refuses to auto-parse a
+        # structured response alongside non-strict function tools.
+        assert all(t["strict"] for t in client.calls[0]["tools"])
 
     def test_what_it_looked_at_is_recorded(self):
         # A verdict reached without reading is worth less than one reached

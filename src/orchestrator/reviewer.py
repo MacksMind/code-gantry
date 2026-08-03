@@ -188,31 +188,21 @@ class OpenAIReviewer:
         extra: dict = {"prompt_cache_options": {"mode": "explicit"}}
         if cache_key:
             extra["prompt_cache_key"] = cache_key
-        if self.cfg.prompt_cache_retention:
-            extra["prompt_cache_retention"] = self.cfg.prompt_cache_retention
 
         tools = openai_tool_schemas(self.semantic) if self.reader else []
         conversation = list(messages)
         usage = TokenUsage()
         looked_at: list[str] = []
-        completion = None
+        response = None
 
         # One turn per tool round trip, plus one for the answer.
         for _ in range(self._max_tool_turns() + 1):
             try:
-                completion = with_transport_retry(
-                    lambda: self._client.chat.completions.parse(
+                response = with_transport_retry(
+                    lambda: self._client.responses.parse(
                         model=self.cfg.model,
-                        # No moving breakpoint. `build_review_messages` marks
-                        # the end of the diff, which does not move during the
-                        # loop, so from the second turn everything up to it
-                        # reads from cache and only the accumulating tool
-                        # results are fresh. Marking the newest message instead
-                        # would mean attaching a breakpoint to a `tool` message,
-                        # a shape this provider is not known to accept — and
-                        # documented behaviour here has been wrong twice.
-                        messages=conversation,
-                        response_format=ReviewVerdict,
+                        input=conversation,
+                        text_format=ReviewVerdict,
                         **({"tools": tools} if tools else {}),
                         **extra,
                     ),
@@ -229,65 +219,79 @@ class OpenAIReviewer:
                 outcome.tool_calls = looked_at
                 return outcome
 
-            usage = _merge_usage(usage, _extract_usage(getattr(completion, "usage", None)))
+            usage = _merge_usage(usage, _extract_usage(getattr(response, "usage", None)))
 
-            choices = getattr(completion, "choices", None) or []
-            if not choices:
-                outcome = _blocked("The reviewer returned no choices.")
-                outcome.usage = usage
-                outcome.tool_calls = looked_at
-                return outcome
-
-            requests = getattr(choices[0].message, "tool_calls", None) or []
+            requests = [
+                item
+                for item in (getattr(response, "output", None) or [])
+                if getattr(item, "type", "") == "function_call"
+            ]
             if not requests:
                 break
 
-            # The assistant turn verbatim, then one `tool` message per request.
-            # The API requires every tool call to be answered before the next
-            # assistant turn, keyed by id, or the conversation is malformed.
-            conversation = conversation + [choices[0].message]
-            for req in requests:
-                name, args = _tool_request(req)
+            # The whole turn back, then its results. Every output item, not
+            # just the calls: a reasoning model emits a `reasoning` item that
+            # each `function_call` declares as required, and echoing the call
+            # without it is rejected — "was provided without its required
+            # 'reasoning' item". The API then requires each call to be answered
+            # by a `function_call_output` with the same `call_id` before the
+            # next turn.
+            conversation.extend(getattr(response, "output", None) or [])
+            for item in requests:
+                name, args = _tool_request(item)
                 looked_at.append(_describe(name, args))
                 conversation.append(
                     {
-                        "role": "tool",
-                        "tool_call_id": req.id,
-                        "content": dispatch(name, args, self.reader, self.semantic),
+                        "type": "function_call_output",
+                        "call_id": item.call_id,
+                        # A content list rather than a bare string, so the
+                        # result can carry a cache breakpoint. Marks accumulate
+                        # rather than move: a request writes only its latest
+                        # four, but matching considers up to the latest eighty
+                        # in the conversation, so every turn extends the cached
+                        # prefix instead of restarting it. Without this the
+                        # loop re-sends every earlier result at full price and
+                        # cost grows with the square of the turn count — the
+                        # planner measured 48k uncached tokens for a decision
+                        # making no tool calls against 1.4M for one making
+                        # sixteen.
+                        "output": [
+                            {
+                                "type": "input_text",
+                                "text": dispatch(
+                                    name, args, self.reader, self.semantic
+                                ),
+                                "prompt_cache_breakpoint": {"mode": "explicit"},
+                            }
+                        ],
                     }
                 )
 
-        if completion is None:  # pragma: no cover - the loop always runs once
+        if response is None:  # pragma: no cover - the loop always runs once
             return _blocked("The reviewer produced no response.")
 
-        choices = getattr(completion, "choices", None) or []
-        if not choices:
-            outcome = _blocked("The reviewer returned no choices.")
+        refusal = _refusal(response)
+        if refusal:
+            outcome = _blocked(f"The reviewer refused to answer: {refusal}")
             outcome.usage = usage
             outcome.tool_calls = looked_at
             return outcome
 
-        choice = choices[0]
-        message = choice.message
-
-        if getattr(message, "refusal", None):
-            outcome = _blocked(f"The reviewer refused to answer: {message.refusal}")
-            outcome.usage = usage
-            outcome.tool_calls = looked_at
-            return outcome
-
-        if getattr(choice, "finish_reason", None) == "length":
+        if getattr(response, "status", None) == "incomplete":
             # A verdict cut off mid-JSON is not a verdict, even if the parsed
             # fragment happens to validate.
+            reason = getattr(
+                getattr(response, "incomplete_details", None), "reason", "unknown"
+            )
             outcome = _blocked(
-                "The reviewer's response was truncated (finish_reason=length), "
-                "so its verdict cannot be trusted."
+                f"The reviewer's response was truncated ({reason}), so its "
+                "verdict cannot be trusted."
             )
             outcome.usage = usage
             outcome.tool_calls = looked_at
             return outcome
 
-        parsed = getattr(message, "parsed", None)
+        parsed = getattr(response, "output_parsed", None)
         if parsed is None:
             # Reached the turn ceiling still asking for tools, or answered with
             # nothing parsable. Either way there is no verdict, and a review
@@ -308,22 +312,40 @@ class OpenAIReviewer:
         )
 
 
-def _tool_request(req) -> tuple[str, dict]:
-    """Name and arguments from one OpenAI tool call.
+def _tool_request(item) -> tuple[str, dict]:
+    """Name and arguments from one `function_call` output item.
+
+    Flat on the Responses API — `name` and `arguments` sit on the item itself
+    rather than under a nested `function` object as they do on chat
+    completions.
 
     Arguments arrive as a JSON *string* rather than an object, and a model can
     emit one that does not parse. That is a bad request, not a dead review — an
     empty dict reaches `dispatch`, which answers with a readable refusal the
     reviewer can act on.
     """
-    fn = getattr(req, "function", None)
-    name = getattr(fn, "name", "") or ""
-    raw = getattr(fn, "arguments", "") or "{}"
+    name = getattr(item, "name", "") or ""
+    raw = getattr(item, "arguments", "") or "{}"
     try:
         args = json.loads(raw)
     except (TypeError, ValueError):
         return name, {}
     return name, args if isinstance(args, dict) else {}
+
+
+def _refusal(response) -> str:
+    """The refusal text, if the model declined.
+
+    A refusal is a content part inside an output message rather than a field on
+    the response, so it has to be looked for. Missing it would let `None` reach
+    the parsed check and be reported as an unparsable verdict — true, but not
+    the diagnosis.
+    """
+    for item in getattr(response, "output", None) or []:
+        for part in getattr(item, "content", None) or []:
+            if getattr(part, "type", "") == "refusal":
+                return getattr(part, "refusal", "") or "no reason given"
+    return ""
 
 
 def _describe(name: str, args: dict) -> str:
@@ -408,16 +430,29 @@ def _build_openai_client(cfg: ReviewerConfig):
 def _extract_usage(usage) -> TokenUsage:
     """Read what the provider reported, tolerating absent fields.
 
-    Cached-token reporting is not guaranteed across models or providers, and a
-    missing field must not take down a run.
+    The Responses API names these `input_tokens` and `output_tokens`, with the
+    cache figures under `input_tokens_details`. The chat-completions names are
+    still read as a fallback so a stub or an older shape does not silently
+    report zero — a usage of zero is indistinguishable from a free call, and
+    the economic argument for splitting the models depends on this number
+    staying true.
     """
     if usage is None:
         return TokenUsage()
 
-    details = getattr(usage, "prompt_tokens_details", None)
+    details = getattr(usage, "input_tokens_details", None) or getattr(
+        usage, "prompt_tokens_details", None
+    )
+    prompt = getattr(usage, "input_tokens", None)
+    if prompt is None:
+        prompt = getattr(usage, "prompt_tokens", 0)
+    completion = getattr(usage, "output_tokens", None)
+    if completion is None:
+        completion = getattr(usage, "completion_tokens", 0)
+
     return TokenUsage(
-        prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
-        completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
+        prompt_tokens=prompt or 0,
+        completion_tokens=completion or 0,
         cached_tokens=(getattr(details, "cached_tokens", 0) or 0) if details else 0,
         cache_write_tokens=(
             (getattr(details, "cache_write_tokens", 0) or 0) if details else 0

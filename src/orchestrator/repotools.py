@@ -88,6 +88,17 @@ class RepoReader:
     repo: Path
     budget: ReadBudget = field(default_factory=ReadBudget)
     calls: list[ToolCall] = field(default_factory=list)
+    # Pin every read to one commit instead of the working tree.
+    #
+    # Empty is right for a live run: the reviewer is called with the stage's
+    # work committed on the stage branch, so the tree already *is* the state
+    # being judged, and reading it needs no git at all.
+    #
+    # It is wrong for anything that reads after the fact. Replaying a review
+    # against a tree that has moved on by thirty stages would let it approve a
+    # deletion because a permit list landed later — the right answer for the
+    # wrong reason, and indistinguishable from judgement.
+    at_sha: str = ""
     _lines_used: int = 0
 
     # --- boundaries -----------------------------------------------------
@@ -114,6 +125,8 @@ class RepoReader:
 
     def _tracked(self) -> set[str]:
         try:
+            if self.at_sha:
+                return set(self.git.tracked_paths(self.at_sha))
             out = self.git._out("ls-files")
         except GitError as e:  # pragma: no cover - a broken repo fails louder elsewhere
             raise ToolError(f"cannot list tracked files: {e}") from e
@@ -128,12 +141,27 @@ class RepoReader:
         turning into a fifteen-minute stall; collapsing them into one message
         would leave it guessing which it had hit.
         """
+        tracked = self._tracked()
+
+        # Pinned to a commit, the tree is the authority and the working copy is
+        # irrelevant: a file may be absent from disk because a later stage
+        # deleted it, and present at this sha. Testing disk would refuse a file
+        # that demonstrably existed, and admit one that did not.
+        if self.at_sha:
+            if rel not in tracked:
+                raise ToolError(
+                    f"{rel!r} is not in the tree at {self.at_sha[:12]}. It may "
+                    "have been added later, or never existed. Do not assume a "
+                    "path from a naming convention — list the directory instead."
+                )
+            return
+
         if not resolved.exists():
             raise ToolError(
                 f"{rel!r} does not exist in this repository. Do not assume a "
                 "path from a naming convention — list the directory instead."
             )
-        if rel not in self._tracked():
+        if rel not in tracked:
             raise ToolError(
                 f"{rel!r} exists but is not tracked by git, so it cannot be read. "
                 "Untracked and ignored files hold credentials and generated "
@@ -185,7 +213,13 @@ class RepoReader:
         rel = self._relative(resolved)
         self._require_readable(rel, resolved)
 
-        body = resolved.read_text(errors="replace").splitlines()
+        if self.at_sha:
+            try:
+                body = self.git.show_file(self.at_sha, rel).splitlines()
+            except GitError as e:
+                raise ToolError(str(e)) from e
+        else:
+            body = resolved.read_text(errors="replace").splitlines()
         first = max(start or 1, 1)
         last = min(end or len(body), len(body))
         chosen = body[first - 1 : last] if first <= last else []
@@ -243,9 +277,14 @@ class RepoReader:
         #
         # Not every git is built with PCRE, so fall back rather than fail: `-E`
         # at least gives alternation and quantifiers.
+        # Searching a commit rather than the tree puts the ref before `--`, and
+        # git then prefixes every hit with `<ref>:`. Stripped below, so a
+        # pinned reader and a live one return the same `path:line:text`.
+        ref = [self.at_sha] if self.at_sha else []
         for flavour in ("-P", "-E"):
             proc = self.git._run(
-                "grep", "-n", "-I", "--no-color", flavour, "-e", pattern, "--", target,
+                "grep", "-n", "-I", "--no-color", flavour, "-e", pattern,
+                *ref, "--", target,
                 check=False,
             )
             if proc.returncode in (0, 1):
@@ -261,6 +300,9 @@ class RepoReader:
                 f"search failed: {proc.stderr.strip() or 'invalid pattern'}"
             )
         hits = [line for line in proc.stdout.splitlines() if line.strip()]
+        if self.at_sha:
+            prefix = self.at_sha + ":"
+            hits = [h[len(prefix):] if h.startswith(prefix) else h for h in hits]
         hits, clipped = self._clip(hits)
         if clipped:
             hits = hits + ["... truncated; narrow the pattern or the path"]

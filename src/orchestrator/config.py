@@ -278,11 +278,12 @@ class ReviewerConfig(_EndpointConfig):
     provider: Literal["openai"] = "openai"
     model: str
     api_key_env: str = "OPENAI_API_KEY"
-    # Deprecated by OpenAI for GPT-5.6 and later, which use
-    # `prompt_cache_options.ttl` instead. Kept for older model families, unset
-    # by default: measured against gpt-5.6-sol it changed nothing, and what
-    # actually mattered was the explicit breakpoint (see `reviewer.review`).
-    prompt_cache_retention: str | None = None
+    # No `prompt_cache_retention`. It was a chat-completions field, unset by
+    # default and measured to change nothing against gpt-5.6-sol; the reviewer
+    # now calls the Responses API, where the lifetime comes from
+    # `prompt_cache_options.ttl` — fixed at 30m and currently the only value
+    # the provider supports. Nothing here for an operator to choose, so the
+    # setting is gone rather than accepted and ignored.
     request_timeout_seconds: float = 600.0
     max_retries: int = 2
     # See `PlannerConfig.transport_retry_seconds`; same reasoning,

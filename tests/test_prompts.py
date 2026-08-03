@@ -960,7 +960,7 @@ class TestReviewerToolGuidance:
             diff="--- a\n+++ b\n",
             plan=a_plan("PLAN"),
             completed=[],
-        )[0]["content"]
+        )[0]["content"][0]["text"]
 
     def test_absent_without_repo_access(self):
         assert "Looking at the repository" not in self._system(False)
