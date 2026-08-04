@@ -68,6 +68,23 @@ def _attempt(state: RunState) -> int:
     return state.get("verify_attempt", 0) + state.get("rework_attempt", 0)
 
 
+def _stage_diff(state: RunState, rt: Runtime) -> str:
+    """The stage's cumulative diff, as the reviewer is shown it.
+
+    Empty rather than raising: this feeds a section of a prompt that is
+    optional by design, and a revision drawn without it is the behaviour that
+    shipped for the whole run before it existed. Failing the planner call over
+    a diff it did not previously have would be a worse outcome than the one it
+    fixes.
+    """
+    if not state.get("stage_start_sha"):
+        return ""
+    try:
+        return rt.git.diff(state["stage_start_sha"], ignore_line_endings=True)
+    except GitError:  # pragma: no cover - defensive
+        return ""
+
+
 # --- plan ----------------------------------------------------------------
 
 
@@ -163,6 +180,10 @@ def plan(state: RunState, rt: Runtime) -> dict:
         ),
         deferred=state.get("deferred") or [],
         stage_costs=recent_stage_costs(rt.project.project_dir),
+        # Only when a stage is under revision: deriving a new one has no branch
+        # and nothing to reconcile. Read from the same sha the reviewer's diff
+        # is taken from, because the point of showing it is that the two agree.
+        stage_diff=_stage_diff(state, rt) if stage else None,
     )
 
     rt.log(f"[plan] {'revising ' + stage.id if stage else 'deriving next stage'}")

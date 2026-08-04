@@ -699,6 +699,7 @@ def build_planner_messages(
     deferred: list[dict] | None = None,
     stage_costs: list[dict] | None = None,
     agent_context: str | None = None,
+    stage_diff: str | None = None,
 ) -> list[dict[str, str]]:
     """Chat messages for the planner.
 
@@ -854,6 +855,36 @@ def build_planner_messages(
                         else "How it failed"
                     ),
                 )
+            )
+
+        # After the diagnosis, because it is evidence for the choice rather
+        # than the choice itself, and a diff placed ahead of the failure pushes
+        # the failure down behind material the planner reads second.
+        #
+        # Here because the planner's own reads cannot supply it. Its tools show
+        # the working tree, in which a failed `extend` attempt's work is
+        # indistinguishable from code that was always there — so it wrote a
+        # revision saying a header and two examples "are already present and
+        # must remain byte-identical", which is true of the tree and false of
+        # the diff. The reviewer judges the cumulative diff from the stage's
+        # start, where all three are additions by this stage, and blocked it
+        # for an instruction that contradicts its own scope. Both were reading
+        # correctly from different baselines. The executor has had this diff
+        # since rework stopped resetting the tree; this is the participant that
+        # writes the instruction the other two are held to.
+        if stage_diff and stage_diff.strip():
+            current.append(
+                "## What this stage has already put on its branch\n\n"
+                "This is the whole of what the stage has changed since it "
+                "started, and it is what the reviewer is shown — not the delta "
+                "since the last attempt. **None of it is baseline.** Reading a "
+                "file will show you these lines as ordinary existing code; "
+                "they are this stage's own doing, and an instruction that "
+                "calls them pre-existing describes a tree the reviewer cannot "
+                "see and will be blocked for contradicting the diff.\n\n"
+                "Write the revision against this, and let its scope cover "
+                "everything below that you intend to keep.\n\n"
+                f"```diff\n{stage_diff.strip()}\n```"
             )
 
         current.append(

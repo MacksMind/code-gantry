@@ -313,6 +313,15 @@ def append_outcome(
 
     First in the entry order, ahead of the planner's notes, because it is the
     only part that is a claim about the past.
+
+    It carried a `**reviewed** after the diff was written` byline for a while,
+    on the reasoning that a reader has to tell a report from a prediction and
+    the two sit next to each other in this file. They do — but the heading
+    already says it, and so does the planner's own `observed while planning`
+    line on every entry of the other kind. What was left said only that a
+    review happens after the thing it reviews, which is true of every review
+    ever written. It was a fact about this file's history rather than about
+    the entry under it, and the entry is not the place to keep one.
     """
     if not addendum_path or not (summary or "").strip():
         return None
@@ -323,7 +332,6 @@ def append_outcome(
     body = decode_escapes(summary.strip())
     with target.open("a") as fh:
         fh.write(f"## What `{stage_id}` landed\n\n")
-        fh.write("- **reviewed** after the diff was written\n\n")
         fh.write(f"{body}\n\n")
     return target
 

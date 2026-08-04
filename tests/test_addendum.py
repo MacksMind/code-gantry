@@ -298,13 +298,27 @@ class TestWhatLanded:
         assert "## What `drop-whitelists` landed" in text
         assert "reads the persisted value back" in text
 
-    def test_it_says_when_it_was_written(self, tmp_path):
-        # The distinction the file exists to make. A reader has to be able to
-        # tell a report from a prediction, and the two sit next to each other.
+    def test_the_heading_carries_the_report_or_prediction_distinction(self, tmp_path):
+        # The distinction the file exists to make, pinned where it actually
+        # lives. A byline under the heading said it a third time — after the
+        # heading and after the planner's own `observed while planning` — and
+        # what it said reduced to "a review happens after the diff", which is
+        # true of every review. The heading names the stage and asserts it
+        # landed; nothing else is needed to tell the two entry kinds apart.
         text = append_outcome(
             tmp_path, "log.md", stage_id="s", summary="did the thing"
         ).read_text()
-        assert "**reviewed** after the diff was written" in text
+        assert "## What `s` landed" in text
+        assert "reviewed" not in text
+
+    def test_the_record_is_not_padded_with_a_byline(self, tmp_path):
+        # Heading, blank line, the reviewer's words. This file is fed live to
+        # the planner on every call, so a line that carries nothing is billed
+        # on every call for carrying nothing.
+        text = append_outcome(
+            tmp_path, "log.md", stage_id="s", summary="did the thing"
+        ).read_text()
+        assert text.rstrip().endswith("## What `s` landed\n\ndid the thing")
 
     def test_a_stage_with_no_review_writes_nothing(self, tmp_path):
         # Nothing landed, so there is nothing to report.

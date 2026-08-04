@@ -167,6 +167,18 @@ def with_stage(state, rt, **over):
     return state
 
 
+def _text_of(messages):
+    """Every text block of a built prompt, as the model receives it."""
+    out = []
+    for message in messages:
+        content = message["content"]
+        if isinstance(content, list):
+            out.extend(block.get("text", "") for block in content)
+        else:
+            out.append(content)
+    return "\n\n".join(out)
+
+
 def _digest(rt, state):
     """The fingerprint verify records when the full suite passes."""
     from orchestrator.verify import diff_digest
@@ -229,6 +241,38 @@ class TestPlanDerivation:
         cfg, rt, state = make(repo, tmp_path, planner=planner)
         out = nodes.plan(state, rt)
         assert out["run_usage"]["planner_prompt_tokens"] == 500
+
+
+class TestTheBranchWorkReachesThePlanner:
+    """A value computed by git, carried through the node, into a paid prompt.
+
+    The endpoints both worked in isolation: `Git.diff` returns the stage's
+    cumulative diff and the prompt renders whatever it is handed. What was
+    missing was the wire between them, and a revision written without it
+    described the branch as baseline and was blocked for contradicting the
+    diff the reviewer judged. That is the journey this pins, not either end.
+    """
+
+    def _plan_with_a_stage_in_flight(self, repo, tmp_path, run_git):
+        planner = StubPlanner([PlannerOutcome("blocked", "r", "e")])
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        with_stage(state, rt)
+        (repo / "app.py").write_text("def hello():\n    return SENTINEL\n")
+        run_git(repo, "commit", "-aqm", "the failed attempt")
+        state["last_failure"] = {"layer": "review", "summary": "rework", "detail": "d"}
+        nodes.plan(state, rt)
+        return planner.calls[0]
+
+    def test_the_stage_s_own_diff_reaches_the_prompt(self, repo, tmp_path, run_git):
+        messages = self._plan_with_a_stage_in_flight(repo, tmp_path, run_git)
+        assert "SENTINEL" in _text_of(messages)
+
+    def test_a_derivation_with_no_stage_in_flight_carries_none(self, repo, tmp_path):
+        planner = StubPlanner([PlannerOutcome("project_complete", "r", "e")])
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        (repo / "app.py").write_text("def hello():\n    return SENTINEL\n")
+        nodes.plan(state, rt)
+        assert "SENTINEL" not in _text_of(planner.calls[0])
 
 
 class TestPlannerBudgets:

@@ -816,6 +816,85 @@ class TestThePlannerSeesTheDiagnosisNotOnlyTheConsequence:
         assert "Add Personalization" not in text
 
 
+class TestThePlannerSeesWhatTheStageHasAlreadyDone:
+    """A revision is written against a baseline; it must be the reviewer's.
+
+    Observed live, and diagnosed by the reviewer itself. On an `extend`
+    revision the work of the failed attempt stays on the branch, so every file
+    the planner reads through its tools shows that work as ordinary existing
+    code. It wrote the revision in those terms — the header and two examples
+    "are already present and must remain byte-identical, add only the missing
+    one" — which is a true statement about the tree.
+
+    The reviewer is shown the cumulative diff from `stage_start_sha`, where
+    those same lines are additions attributed to this stage. So the instruction
+    asserted as pre-existing what the diff attributed to the stage, and its
+    "one example only" scope constraint contradicted the diff it was judged
+    against. The verdict was `blocked`, correctly, and the next revision had
+    the same information and made the same mistake.
+
+    The executor has had this diff since rework stopped resetting the tree. The
+    reviewer has always had it. The planner — the one participant that *writes*
+    the instruction the other two are held to — was the only one that had to go
+    find it, and what it found by reading files looked like baseline.
+    """
+
+    DIFF = "--- a/spec/x_spec.rb\n+++ b/spec/x_spec.rb\n+  let(:seo_header) { 'h' }"
+
+    def _messages(self, diff=DIFF, stage=True):
+        return build_planner_messages(
+            cfg=_cfg(),
+            plan=a_plan(),
+            completed=[],
+            current_stage=(
+                SimpleNamespace(
+                    id="s", instruction="do it", edit_files=["spec/**"],
+                    constraints=None,
+                )
+                if stage
+                else None
+            ),
+            failure={"layer": "review", "summary": "rework", "detail": "d"},
+            stage_diff=diff,
+        )
+
+    def test_the_branch_work_is_rendered_on_a_revision(self):
+        assert "let(:seo_header)" in all_text(self._messages())
+
+    def test_it_is_named_as_this_stage_s_own_doing(self):
+        # The whole failure was the planner treating it as pre-existing. The
+        # section has to say whose work it is, not merely show it.
+        text = all_text(self._messages())
+        assert "this stage" in text.lower()
+
+    def test_it_says_the_reviewer_judges_the_same_diff(self):
+        # Without this the planner has the diff and no reason to write in its
+        # vocabulary, which is the half of the bug that showing it does not fix.
+        assert "reviewer" in all_text(self._messages()).lower()
+
+    def test_nothing_is_rendered_when_the_branch_is_empty(self):
+        # Revision 0 of a restart, and every first attempt: an empty section
+        # in a paid prompt invites the planner to explain the absence.
+        text = all_text(self._messages(diff=""))
+        assert "let(:seo_header)" not in text
+
+    def test_nothing_is_rendered_when_deriving_a_new_stage(self):
+        # No stage under revision means no branch and no baseline to reconcile.
+        assert "let(:seo_header)" not in all_text(self._messages(stage=False))
+
+    def test_it_sits_outside_the_cached_prefix(self):
+        # It changes on every attempt of every stage. Inside the breakpoint it
+        # would invalidate the plan and the layout along with it.
+        assert "let(:seo_header)" not in leading_text(self._messages())
+
+    def test_the_diagnosis_still_leads_it(self):
+        # The failure is what the planner acts on; the diff is the evidence for
+        # `extend` versus `restart`. Reversed, a large diff pushes the
+        # diagnosis down the prompt behind material the planner reads second.
+        text = all_text(self._messages())
+        assert text.index("rework") < text.index("let(:seo_header)")
+
+
 class TestTheReviewerReadsTheLiveRecord:
     """What has been done, and how much of it is worth paying for every call.
 
