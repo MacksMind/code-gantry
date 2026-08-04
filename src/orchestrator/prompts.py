@@ -205,7 +205,13 @@ def build_executor_prompt(
             f"{listed}\n\n"
             "Editing anything outside this list fails the stage. If the task "
             "appears to require a file that is not listed, stop and say so "
-            "rather than editing it."
+            "rather than editing it.\n\n"
+            "**A file listed here that does not exist yet has already been "
+            "created for you, empty.** So writing its contents as a quoted "
+            "block rather than as an edit leaves that empty file behind, and "
+            "the empty file is what gets committed. Create its contents the "
+            "way this editor creates a file, and before you finish, confirm "
+            "the file is not empty."
         )
 
     if stage.read_files:

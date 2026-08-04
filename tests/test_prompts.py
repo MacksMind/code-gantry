@@ -1013,3 +1013,49 @@ class TestReviewerToolGuidance:
 
     def test_it_is_told_to_read_before_approving_on_an_unseen_file(self):
         assert "read the file" in self._system(True)
+
+
+class TestExecutorPromptCarriesNoProjectVocabulary:
+    """The same rule as the reviewer's, on the prompt that had no test.
+
+    This one ships to every project's executor and was one edit away from
+    carrying "a spec with no examples" — a framework's vocabulary, in a string
+    the planner never sees and cannot correct.
+
+    Only the static scaffolding is checked. `instruction`, `constraints` and
+    `acceptance` are the planner's, about one repository, and are supposed to
+    name its files.
+    """
+
+    def test_the_scaffolding_names_no_framework(self):
+        from orchestrator.config import Stage, parse_config
+        from orchestrator.prompts import build_executor_prompt
+
+        cfg = parse_config(
+            {
+                "target_repo": ".",
+                "base_ref": "main",
+                "project_branch": "proj",
+                "plan_root": "PLAN.md",
+                "test_command": "true",
+                "executor": {"model": "m"},
+                "planner": {"model": "claude-opus-5"},
+                "reviewer": {"model": "gpt-5.6-sol"},
+            }
+        )
+        stage = Stage(
+            id="s",
+            instruction="INSTRUCTION",
+            edit_files=["EDIT"],
+            read_files=["READ"],
+            forbidden_patterns=["FORBIDDEN"],
+            require_new_tests=True,
+        )
+        text = build_executor_prompt(
+            stage, cfg, feedback=["FEEDBACK"], failure_layer="residue"
+        ).lower()
+        for word in (
+            "rails", "ruby", "gemfile", "rspec", "attr_accessible",
+            ".erb", "activerecord", "bundler", "app/", "spec/", "example",
+        ):
+            assert word not in text, f"{word!r} is project knowledge in a prompt"

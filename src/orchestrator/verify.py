@@ -750,10 +750,47 @@ def _layer_new_tests(ctx: _Context, outcome: VerifyOutcome):
         return None
 
     changed = ctx.git.diff_names(ctx.stage_start_sha)
-    if any(matches_any(p, ctx.cfg.test_file_patterns) for p in changed):
+    touched = [p for p in changed if matches_any(p, ctx.cfg.test_file_patterns)]
+
+    # Content, not just a path. The editor creates any file it is handed, so a
+    # stage naming a not-yet-existing spec in `edit_files` gets that file
+    # whether or not the model's reply was applied — and a reply that returned
+    # the spec body as a plain fenced block instead of an edit leaves it at zero
+    # bytes. Observed: the scoped suite passed in five seconds because there
+    # were no examples to run, this gate passed because the diff really had
+    # added a test file, and the reviewer was the only thing between an empty
+    # file and a landed stage.
+    #
+    # A path in the diff that is missing from the worktree was deleted, which is
+    # not what this gate is about; it simply does not count towards the
+    # requirement.
+    root = Path(ctx.cfg.target_repo)
+    substantial = []
+    for path in touched:
+        try:
+            if (root / path).read_text().strip():
+                substantial.append(path)
+        except (OSError, UnicodeDecodeError):
+            # Unreadable or binary — not this gate's business to adjudicate,
+            # and a binary fixture is content by any reading.
+            substantial.append(path)
+    if substantial:
         return None
 
     patterns = ", ".join(ctx.cfg.test_file_patterns)
+    if touched:
+        listed = ", ".join(touched)
+        return _fail(
+            Layer.NEW_TESTS,
+            Route.EXECUTOR,
+            "the stage's test file is empty",
+            f"This stage requires tests. It touched {listed}, but that file is "
+            "empty, so it asserts nothing and the suite passes it in no time at "
+            "all.\n\nThe editor creates a file named in your scope before you "
+            "edit it, so an empty one means your reply was not applied as an "
+            "edit. Write the file's contents as a proper edit rather than as a "
+            "quoted block, and check the file is not empty before you finish.",
+        )
     return _fail(
         Layer.NEW_TESTS,
         Route.EXECUTOR,

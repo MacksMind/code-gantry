@@ -752,6 +752,42 @@ class TestRequireNewTests:
         cfg, stage = build(repo, {"require_new_tests": True})
         assert verify(repo, cfg, stage, sha).passed
 
+    def test_an_empty_new_test_file_does_not_count(self, repo):
+        # Observed: a stage declared one not-yet-existing spec in `edit_files`.
+        # The editor creates any file it is handed, the model returned the spec
+        # body as a plain fenced block instead of an edit, and the empty file it
+        # had already created was committed. The scoped suite was green in five
+        # seconds because there were no examples, and this gate passed because
+        # the diff really did add a test file. Only the reviewer could see it,
+        # which cost a review turn, two executor attempts and an intervention.
+        sha = Git(repo).head_sha()
+        edit(repo, "src/thing.py", "def f(): pass\n")
+        edit(repo, "src/test_thing.py", "")
+        cfg, stage = build(repo, {"require_new_tests": True})
+        out = verify(repo, cfg, stage, sha)
+        assert out.failed_layer is Layer.NEW_TESTS
+        assert out.route is Route.EXECUTOR
+
+    def test_a_whitespace_only_test_file_does_not_count(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo, "src/thing.py", "def f(): pass\n")
+        edit(repo, "src/test_thing.py", "\n\n   \n")
+        cfg, stage = build(repo, {"require_new_tests": True})
+        assert verify(repo, cfg, stage, sha).failed_layer is Layer.NEW_TESTS
+
+    def test_a_deleted_test_file_is_not_mistaken_for_an_empty_one(self, repo):
+        # A path in the diff that is gone from the worktree must not be read as
+        # a zero-byte file — the stage still has to add content somewhere, but
+        # the deletion itself is not what this gate is about.
+        (repo / "src").mkdir()
+        (repo / "src" / "test_old.py").write_text("def test_a(): pass\n")
+        Git(repo).commit_all("seed tests")
+        sha = Git(repo).head_sha()
+        (repo / "src" / "test_old.py").unlink()
+        edit(repo, "src/test_new.py", "def test_b(): pass\n")
+        cfg, stage = build(repo, {"require_new_tests": True})
+        assert verify(repo, cfg, stage, sha).passed
+
     def test_off_by_default(self, repo):
         sha = Git(repo).head_sha()
         edit(repo, "src/thing.py", "x\n")
