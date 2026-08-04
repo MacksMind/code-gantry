@@ -68,6 +68,17 @@ def _attempt(state: RunState) -> int:
     return state.get("verify_attempt", 0) + state.get("rework_attempt", 0)
 
 
+def _conventions(state: RunState, rt: Runtime) -> str:
+    """The repository's agent-facing documents, at the run's fixed commit.
+
+    One resolution for all three participants. The planner had this from the
+    start; the executor and the reviewer did not, which meant the rule, the
+    hand that could break it, and the gate that should catch it were reading
+    three different things.
+    """
+    return rt.agent_context(state.get("plan_sha") or state.get("base_sha") or "")
+
+
 def _stage_diff(state: RunState, rt: Runtime) -> str:
     """The stage's cumulative diff, as the reviewer is shown it.
 
@@ -583,6 +594,7 @@ def execute(state: RunState, rt: Runtime) -> dict:
             failure_layer=state.get("failure_layer"),
             cumulative_diff=cumulative_diff,
             excerpts=excerpts,
+            agent_context=_conventions(state, rt),
         )
         rt.write_artifact(
             state["stage_index"], stage.id, state.get("revision", 0), attempt,
@@ -857,6 +869,7 @@ def review(state: RunState, rt: Runtime) -> dict:
         plan=rt.plan,
         completed=state.get("completed") or [],
         progress_log=rt.live_progress_log,
+        agent_context=_conventions(state, rt),
     )
 
     rt.log(f"[review] {stage.id}: calling reviewer")

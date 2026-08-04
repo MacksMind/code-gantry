@@ -176,6 +176,7 @@ def build_executor_prompt(
     failure_layer: str | None = None,
     cumulative_diff: str | None = None,
     excerpts: list[tuple[str, str]] | None = None,
+    agent_context: str | None = None,
 ) -> str:
     """The message handed to the executor.
 
@@ -213,6 +214,30 @@ def build_executor_prompt(
             f"{stage.constraints}\n"
             "A change that violates these will be rejected even if it is "
             "otherwise correct."
+        )
+
+    # After the stage's own constraints, because those are specific to this
+    # work and these are standing. Obligations cluster rather than being split
+    # by the reference material further down.
+    #
+    # The frame matters as much as the text. This document is written for
+    # whoever works in the repository, human or otherwise, so it contains setup
+    # steps, test commands and deploy procedure alongside the rules about how
+    # code should look. The executor runs nothing, and an unframed list of
+    # commands is how a model ends up narrating a command it never ran and
+    # reasoning from the output it imagined.
+    if agent_context and agent_context.strip():
+        parts.append(
+            "## How this repository is worked in\n\n"
+            "Conventions its maintainers keep, read once at the commit this "
+            "run started from. **These are facts about the repository, not "
+            "work to do** — nothing here is part of your task, and where a "
+            "passage describes running something, note that you cannot run "
+            "commands and must not act as though you had. Follow the rules "
+            "about how code in this repository is written; they apply on top "
+            "of the stage's own constraints, and a change that breaks one will "
+            "be rejected.\n\n"
+            + agent_context.strip()
         )
 
     if stage.acceptance:
@@ -550,6 +575,27 @@ def _review_system_prompt(cfg: ProjectConfig | None) -> str:
     return REVIEW_SYSTEM_PROMPT
 
 
+def _conventions_block(agent_context: str | None) -> str:
+    """The repository's own agent-facing documents, for the reviewer.
+
+    Framed as what the repository requires rather than as background, because
+    this is a gate: a convention it is shown but not told to enforce buys
+    nothing. Empty string when there is none, so a project without one gets no
+    heading rather than an empty promise.
+    """
+    if not agent_context or not agent_context.strip():
+        return ""
+    return (
+        "## How this repository is worked in\n\n"
+        "Conventions its maintainers keep, read at the commit this run started "
+        "from. They bind the diff you are judging as firmly as the stage's own "
+        "constraints do: a change that breaks one is a defect even where the "
+        "stage said nothing about it. Where a passage describes procedure "
+        "rather than how code should be written, it is context and not a "
+        "criterion.\n\n" + agent_context.strip() + "\n\n"
+    )
+
+
 def build_review_messages(
     stage: Stage,
     cfg: ProjectConfig,
@@ -557,6 +603,7 @@ def build_review_messages(
     plan: PlanTree,
     completed: list[StageResult],
     progress_log: str | None = None,
+    agent_context: str | None = None,
 ) -> list[dict[str, str]]:
     """Chat messages for the reviewer, stable payload first.
 
@@ -608,7 +655,16 @@ def build_review_messages(
                     # rendered here: the snapshot's copy is stale, and two
                     # copies of one document with one of them wrong is worse
                     # than either alone. The live one follows the breakpoint.
-                    "text": _plan_block(_without_addendum(plan, _addendum(cfg)), None),
+                    # Conventions lead the plan, and sit inside the breakpoint
+                    # with it. Both are fixed for the run, so this is the one
+                    # placement that is paid for once rather than per stage —
+                    # and this model does not fall back to the longest matching
+                    # prefix, so static content after the mark misses every
+                    # time. Before the plan because it describes the repository
+                    # the plan is about, which is the order the planner reads
+                    # them in too.
+                    "text": _conventions_block(agent_context)
+                    + _plan_block(_without_addendum(plan, _addendum(cfg)), None),
                     "prompt_cache_breakpoint": {"mode": "explicit"},
                 }
             ],

@@ -357,6 +357,41 @@ class TestAnUnresolvableExcerptReachesThePlanner:
         assert "MOVED_BY_A_PRIOR_ATTEMPT" not in section
 
 
+class TestTheConventionsReachBothOtherParticipants:
+    """Runtime → node → prompt, for the two that never had it.
+
+    Both ends worked already: `agent_context` reads the documents, and the
+    prompts render whatever they are handed. The wire between them is what was
+    missing, and it is missing in the same way for each — which is why this
+    pins the journey rather than either end.
+    """
+
+    def _cfg_files(self, repo, run_git):
+        (repo / "AGENTS.md").write_text("# How this repo works\n\nSCOPE_BY_TENANT\n")
+        run_git(repo, "add", "-A")
+        run_git(repo, "commit", "-qm", "conventions")
+
+    def test_the_executor_prompt_gets_them(self, repo, tmp_path, run_git):
+        self._cfg_files(repo, run_git)
+        executor = StubExecutor(repo=repo, edits=[("app.py", "changed\n")])
+        cfg, rt, state = make(repo, tmp_path, executor=executor)
+        state["plan_sha"] = rt.git.rev_parse("proj")
+        with_stage(state, rt)
+        nodes.execute(state, rt)
+        assert "SCOPE_BY_TENANT" in executor.prompts[-1]
+
+    def test_the_reviewer_prompt_gets_them(self, repo, tmp_path, run_git):
+        self._cfg_files(repo, run_git)
+        reviewer = StubReviewer()
+        cfg, rt, state = make(repo, tmp_path, reviewer=reviewer)
+        state["plan_sha"] = rt.git.rev_parse("proj")
+        with_stage(state, rt)
+        (repo / "app.py").write_text("changed\n")
+        run_git(repo, "commit", "-aqm", "stage work")
+        nodes.review(state, rt)
+        assert "SCOPE_BY_TENANT" in _text_of(reviewer.messages[-1])
+
+
 class TestPlannerBudgets:
     def test_exhausted_interventions_escalate(self, repo, tmp_path):
         cfg, rt, state = make(repo, tmp_path, limits={"max_planner_interventions": 2})

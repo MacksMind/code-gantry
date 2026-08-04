@@ -1121,6 +1121,127 @@ class TestReviewerToolGuidance:
         assert "read the file" in self._system(True)
 
 
+class TestEveryParticipantSeesTheRepositoryConventions:
+    """The document that says how this repository is worked in.
+
+    It reached the planner only. The executor — the participant that actually
+    writes the code and can violate a convention — never saw it, and neither
+    did the reviewer, which is the gate that would catch one. A gate that
+    cannot reach what decides its verdict restates the stage instruction in its
+    own voice, and that was live: an executor recased a SQL keyword against a
+    convention documented in the repository, and the only reason the reviewer
+    caught it was that the stage happened to pin the exact output string.
+
+    Passed as text rather than as a file the executor is told to read, because
+    it is resolved at the run's commit. Handing over a worktree path instead
+    would reintroduce the drift every other document here is read at a sha to
+    avoid.
+    """
+
+    CONVENTIONS = "## Shop scoping\n\nAlways scope by the current tenant."
+
+    def test_the_executor_prompt_carries_it(self):
+        from orchestrator.config import Stage, parse_config
+        from orchestrator.prompts import build_executor_prompt
+
+        cfg = parse_config(
+            {
+                "target_repo": ".", "base_ref": "main", "project_branch": "p",
+                "plan_root": "PLAN.md", "test_command": "true",
+                "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
+                "reviewer": {"model": "gpt-5.6-sol"},
+            }
+        )
+        stage = Stage(id="s", instruction="do it", edit_files=["a"])
+        text = build_executor_prompt(stage, cfg, agent_context=self.CONVENTIONS)
+        assert "Always scope by the current tenant" in text
+
+    def test_the_executor_is_told_they_are_facts_not_work(self):
+        # The same distinction the planner is given. A document describing the
+        # repository, dropped into a prompt without a frame, reads as a list of
+        # things to go and do — and this one contains setup and deploy prose
+        # the executor cannot act on at all, since it runs no commands.
+        from orchestrator.config import Stage, parse_config
+        from orchestrator.prompts import build_executor_prompt
+
+        cfg = parse_config(
+            {
+                "target_repo": ".", "base_ref": "main", "project_branch": "p",
+                "plan_root": "PLAN.md", "test_command": "true",
+                "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
+                "reviewer": {"model": "gpt-5.6-sol"},
+            }
+        )
+        stage = Stage(id="s", instruction="do it", edit_files=["a"])
+        text = build_executor_prompt(stage, cfg, agent_context=self.CONVENTIONS)
+        assert "not work to do" in text
+        assert "cannot run" in text
+
+    def test_the_reviewer_prompt_carries_it(self):
+        messages = build_review_messages(
+            stage=SimpleNamespace(
+                id="s", instruction="i", constraints=None, acceptance=None
+            ),
+            cfg=_review_cfg(),
+            diff="--- a\n+++ b",
+            plan=_plan_with_log(),
+            completed=[],
+            agent_context=self.CONVENTIONS,
+        )
+        assert "Always scope by the current tenant" in all_text(messages)
+
+    def test_the_reviewer_gets_it_inside_the_cached_prefix(self):
+        # Fixed for the whole run, so it belongs with the plan ahead of the
+        # breakpoint. GPT-5.6 caches at an explicit breakpoint and does not
+        # fall back to the longest matching prefix, so anything static placed
+        # after it is re-billed on every stage for no reason.
+        messages = build_review_messages(
+            stage=SimpleNamespace(
+                id="s", instruction="i", constraints=None, acceptance=None
+            ),
+            cfg=_review_cfg(),
+            diff="--- a\n+++ b",
+            plan=_plan_with_log(),
+            completed=[],
+            agent_context=self.CONVENTIONS,
+        )
+        cached = next(
+            block
+            for message in messages
+            for block in message["content"]
+            if isinstance(block, dict) and "prompt_cache_breakpoint" in block
+        )
+        assert "Always scope by the current tenant" in cached["text"]
+
+    def test_neither_prompt_invents_a_section_when_there_is_none(self):
+        # A project without such a document is an ordinary case, and an empty
+        # heading promising conventions is worse than no heading.
+        from orchestrator.config import Stage, parse_config
+        from orchestrator.prompts import build_executor_prompt
+
+        cfg = parse_config(
+            {
+                "target_repo": ".", "base_ref": "main", "project_branch": "p",
+                "plan_root": "PLAN.md", "test_command": "true",
+                "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
+                "reviewer": {"model": "gpt-5.6-sol"},
+            }
+        )
+        stage = Stage(id="s", instruction="do it", edit_files=["a"])
+        assert "conventions" not in build_executor_prompt(stage, cfg).lower()
+
+        messages = build_review_messages(
+            stage=SimpleNamespace(
+                id="s", instruction="i", constraints=None, acceptance=None
+            ),
+            cfg=_review_cfg(),
+            diff="--- a\n+++ b",
+            plan=_plan_with_log(),
+            completed=[],
+        )
+        assert "conventions its maintainers" not in all_text(messages).lower()
+
+
 class TestThePlannerIsToldToStateTheEndState:
     """Instruction *form*, measured rather than argued.
 
