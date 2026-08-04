@@ -50,6 +50,8 @@ AIDER_FLAGS = [
     "--chat-history-file",
     "--input-history-file",
     "--llm-history-file",
+    "--cache-prompts",
+    "--cache-keepalive-pings",
 ]
 
 # A command, not a browser name: Python's webbrowser module treats an entry
@@ -124,6 +126,65 @@ def _absolute(path: Path | str) -> str:
 
 
 _TOKENS_SENT = re.compile(r"Tokens:\s*([\d,.]+)([km]?)\s+sent", re.IGNORECASE)
+_COST_SESSION = re.compile(
+    r"Cost:\s*\$[\d.]+\s*message,\s*\$([\d.]+)\s*session", re.IGNORECASE
+)
+_CACHE_TOKENS = re.compile(
+    r"([\d,.]+)([km]?)\s+cache\s+(write|hit)", re.IGNORECASE
+)
+
+
+def _scaled(amount: str, scale: str) -> float:
+    try:
+        value = float(amount.replace(",", ""))
+    except ValueError:  # pragma: no cover - defensive
+        return 0.0
+    return value * {"k": 1_000, "m": 1_000_000}.get(scale.lower(), 1)
+
+
+def cost_from_log(log: str) -> float:
+    """What the attempt spent, from Aider's own report.
+
+    Nothing priced the executor before this, because nothing needed to: a local
+    model is free, and the measured economics the design rests on — the planner
+    at 91% of tokens against the executor's 2.2% of prompt volume — took that
+    for granted. A hosted executor invalidates both figures and no existing
+    record would show it.
+
+    Absent for an unpriced model rather than wrong: Aider returns the tokens
+    report alone unless litellm knows `input_cost_per_token`, which is why no
+    log in this project has ever carried a `Cost:` line. Zero therefore means
+    "cost nothing", which for a local endpoint is the truth. An operator who
+    wants a notional figure can put pricing in `model_metadata_file`, which is
+    already passed through.
+
+    The session figure, and the largest one. Both numbers Aider prints are
+    cumulative within an invocation, so the session total after the last
+    exchange is what the attempt cost.
+    """
+    return max(
+        (float(m) for m in _COST_SESSION.findall(log or "")),
+        default=0.0,
+    )
+
+
+def cache_tokens_from_log(log: str) -> dict[str, int]:
+    """Cache writes and hits, when the provider reported any.
+
+    This is what makes prompt caching a measurement rather than a belief. Aider
+    adds these fields to the tokens line only when the provider actually
+    cached, so their absence is a real answer: either caching is off, or it is
+    on and achieving nothing.
+
+    Summed rather than maxed, unlike the context figure. That one is a
+    high-water mark of a single context; these accumulate across the exchanges
+    of an attempt, and what an operator wants is the total written and the
+    total reused.
+    """
+    totals = {"write": 0, "hit": 0}
+    for amount, scale, kind in _CACHE_TOKENS.findall(log or ""):
+        totals[kind.lower()] += int(_scaled(amount, scale))
+    return totals
 
 
 def context_tokens_from_log(log: str) -> int:
@@ -157,6 +218,12 @@ class ExecutionResult:
     timed_out: bool = False
     # Peak context Aider reported for this attempt, or 0 if it never said.
     context_tokens: int = 0
+    # What the attempt spent, when the model was priced. Zero for a local
+    # endpoint, which is the truth rather than a missing reading.
+    cost_usd: float = 0.0
+    # Cache writes and hits, when the provider reported any. The evidence that
+    # `cache_prompts` is doing something, rather than the assumption that it is.
+    cache_tokens: dict = field(default_factory=lambda: {"write": 0, "hit": 0})
     results: list[CommandResult] = field(default_factory=list)
     # Aider ran and exited cleanly, but produced no edit because it could not
     # parse the model's reply. A different failure from a crash, and one the
@@ -242,6 +309,13 @@ def build_aider_argv(
         argv += ["--lint-cmd", ex.lint_command]
 
     argv += ["--map-tokens", str(ex.map_tokens)]
+
+    # Keepalive only alongside caching: pinging every five minutes to hold open
+    # a cache that was never enabled is pure cost for nothing.
+    if ex.cache_prompts:
+        argv += ["--cache-prompts"]
+        if ex.cache_keepalive_pings:
+            argv += ["--cache-keepalive-pings", str(ex.cache_keepalive_pings)]
 
     for glob in stage.edit_files:
         argv += ["--file", glob]
@@ -373,6 +447,8 @@ def _classify_execution(result) -> ExecutionResult:
         results=[result],
         unapplied_edit=unapplied,
         context_tokens=context_tokens_from_log(result.output),
+        cost_usd=cost_from_log(result.output),
+        cache_tokens=cache_tokens_from_log(result.output),
     )
 
 

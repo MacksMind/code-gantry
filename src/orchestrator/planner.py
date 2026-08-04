@@ -1210,6 +1210,7 @@ def append_stage_cost(
     merge_sha: str,
     files: int,
     context_tokens: int,
+    cost_usd: float = 0.0,
 ) -> Path:
     """Record what a landed stage cost the executor, durably.
 
@@ -1229,8 +1230,14 @@ def append_stage_cost(
     path = project_dir / STAGE_COSTS_FILENAME
     line = (
         f"{STAGE_COST_PREFIX}`{merge_sha}` `{stage_id}` — "
-        f"{files} file(s), {context_tokens:,} executor tokens\n"
+        f"{files} file(s), {context_tokens:,} executor tokens"
     )
+    # Only when there is one. A local endpoint costs nothing, and a trailing
+    # "$0.00" on every line of a file the planner reads on each call is noise
+    # that says the same thing as its absence.
+    if cost_usd:
+        line += f", ${cost_usd:,.4f}".rstrip("0").rstrip(".")
+    line += "\n"
     with path.open("a") as fh:
         fh.write(line)
     return path

@@ -74,6 +74,24 @@ class TestResetScopes:
     def test_stage_reset_clears_the_branch(self):
         assert fresh_stage_fields()["stage_branch"] is None
 
+    def test_stage_reset_clears_what_the_executor_measured(self):
+        """Both figures, and the context one is a fix rather than an addition.
+
+        It was never cleared. `execute` writes it only when Aider reported a
+        token line, so a stage whose attempts never printed one kept the
+        previous stage's number — and `advance` copies whatever is in state
+        onto the landed `StageResult` and into `stage-costs.md`, keyed by a
+        merge sha the figure has nothing to do with. That file is fed to the
+        planner to size the next batch, so the failure is silent and lands
+        exactly where it does damage.
+
+        Cost is added here with it rather than after it, because a per-stage
+        total that is never reset is a per-run total wearing the wrong label.
+        """
+        fields = fresh_stage_fields()
+        assert fields["executor_context_tokens"] == 0
+        assert fields["executor_cost_usd"] == 0.0
+
     def test_stage_reset_does_not_touch_revision(self):
         # revision belongs to the stage being replaced; plan sets it.
         assert "revision" not in fresh_stage_fields()

@@ -1037,6 +1037,111 @@ class TestTheExecutorsContextCostIsMeasured:
         assert context_tokens_from_log("no usage here") == 0
 
 
+class TestExecutorCostIsCaptured:
+    """What the executor costs, for the first time.
+
+    Nothing priced it because nothing needed to: a local model on a Spark is
+    free, and the economics the architecture rests on — planner at 91% of
+    tokens, executor at 2.2% of prompt volume — assumed that. The moment the
+    executor is a hosted model those figures are wrong and there is no line in
+    `stage-costs.md` that would say so.
+
+    Aider already reports it, and only when it can: `base_coder` returns early
+    with the tokens report alone unless `input_cost_per_token` is known for the
+    model. That is why no log in this project has ever carried a `Cost:` line,
+    and why one will appear the day the model changes without anything else
+    being touched.
+
+    The session figure, not the message figure. Both are printed and both are
+    cumulative within an invocation — `total_cost` and `message_cost` are each
+    `+=` — so the largest session value is what the attempt actually spent.
+    """
+
+    def test_the_session_total_is_taken(self):
+        from orchestrator.executor import cost_from_log
+
+        log = "Tokens: 12k sent, 1.1k received.\nCost: $0.03 message, $0.11 session."
+        assert cost_from_log(log) == 0.11
+
+    def test_the_largest_session_figure_wins(self):
+        # One report per exchange, and a reflection produces several. The last
+        # one is the total, but ordering in a captured log is not guaranteed.
+        from orchestrator.executor import cost_from_log
+
+        log = (
+            "Cost: $0.03 message, $0.03 session.\n"
+            "Cost: $0.04 message, $0.07 session.\n"
+        )
+        assert cost_from_log(log) == 0.07
+
+    def test_sub_cent_precision_survives(self):
+        # `format_cost` widens the decimals below $0.01, so a naive two-place
+        # parse would read a real cost as zero.
+        from orchestrator.executor import cost_from_log
+
+        assert cost_from_log("Cost: $0.00021 message, $0.00042 session.") == 0.00042
+
+    def test_a_log_without_pricing_reports_nothing(self):
+        # The local model's case, and it must read as "free", not "unknown" —
+        # a stage that spent nothing should not be indistinguishable from one
+        # whose figure was lost.
+        from orchestrator.executor import cost_from_log
+
+        assert cost_from_log("Tokens: 225k sent, 1.8k received.") == 0.0
+
+    def test_cache_activity_is_captured_too(self):
+        # How the cache strategy is judged rather than assumed. Aider adds
+        # these to the tokens line only when the provider actually cached.
+        from orchestrator.executor import cache_tokens_from_log
+
+        log = "Tokens: 12k sent, 8.0k cache write, 4.0k cache hit, 1.1k received."
+        assert cache_tokens_from_log(log) == {"write": 8000, "hit": 4000}
+
+    def test_no_cache_activity_reads_as_zero(self):
+        from orchestrator.executor import cache_tokens_from_log
+
+        assert cache_tokens_from_log("Tokens: 12k sent, 1.1k received.") == {
+            "write": 0,
+            "hit": 0,
+        }
+
+
+class TestPromptCachingIsOperatorControlled:
+    """Off by default, because it is a property of the endpoint.
+
+    Aider's own default is `--no-cache-prompts`. Against a local endpoint that
+    prices nothing and caches nothing, turning it on buys nothing and adds a
+    keepalive ping loop; against a hosted model it is most of the saving. So
+    the orchestrator declares neither — the operator does, in the config that
+    already carries every other fact about where the executor runs.
+    """
+
+    def test_it_is_absent_unless_asked_for(self):
+        cfg, stage = cfg_with(executor={"model": "m"})
+        argv = build_aider_argv(stage, cfg, "p")
+        assert "--cache-prompts" not in argv
+        assert "--cache-keepalive-pings" not in argv
+
+    def test_it_is_passed_when_configured(self):
+        cfg, stage = cfg_with(executor={"model": "m", "cache_prompts": True})
+        assert "--cache-prompts" in build_aider_argv(stage, cfg, "p")
+
+    def test_keepalive_is_passed_when_set(self):
+        # A stage's attempts are separated by a scoped suite and sometimes a
+        # full one, which is minutes — long enough for a five-minute cache
+        # window to lapse between the attempts that would have reused it.
+        cfg, stage = cfg_with(
+            executor={"model": "m", "cache_prompts": True, "cache_keepalive_pings": 3}
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert argv[argv.index("--cache-keepalive-pings") + 1] == "3"
+
+    def test_keepalive_alone_does_nothing(self):
+        # Pinging to keep a cache warm that was never enabled is pure cost.
+        cfg, stage = cfg_with(executor={"model": "m", "cache_keepalive_pings": 3})
+        assert "--cache-keepalive-pings" not in build_aider_argv(stage, cfg, "p")
+
+
 class TestConventionsReachAiderAsReadOnlyFiles:
     """Through `--read`, and never through `--message`.
 

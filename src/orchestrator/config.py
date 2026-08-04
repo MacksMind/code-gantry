@@ -191,6 +191,18 @@ class ExecutorConfig(_EndpointConfig):
     # Repo map off by default: stages declare the files they need, and an
     # unscoped map swamps a local model's context before the task is stated.
     map_tokens: int = 0
+    # Aider's own default is off, and so is this. Caching is a property of the
+    # endpoint rather than of the work: against a local server that prices
+    # nothing and caches nothing it buys nothing and adds a keepalive ping
+    # loop; against a hosted model it is most of the saving. The operator knows
+    # which they have — this file already carries every other fact about where
+    # the executor runs.
+    cache_prompts: bool = False
+    # Aider pings at five-minute intervals to hold the cache open. A stage's
+    # attempts are separated by a scoped suite and sometimes a full one, which
+    # is long enough for a window to lapse between the two attempts that would
+    # have shared it. Meaningless without `cache_prompts`, and ignored there.
+    cache_keepalive_pings: int = 0
     # Ceiling on the total size of a stage's `read_files`, in lines. Unset means
     # no ceiling, which is the old behaviour.
     #

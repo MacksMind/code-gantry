@@ -627,6 +627,13 @@ def execute(state: RunState, rt: Runtime) -> dict:
     # 60k of context loaded is exactly the datum that should shrink the next
     # stage, and it is the one most likely to be discarded.
     measured = {"executor_context_tokens": result.context_tokens} if result.context_tokens else {}
+    # Accumulated, not replaced. Each attempt is its own Aider session with its
+    # own running total, so a stage that took four attempts paid for four and
+    # the figure worth recording is the stage's, not the last attempt's.
+    if result.cost_usd:
+        measured["executor_cost_usd"] = (
+            state.get("executor_cost_usd", 0.0) + result.cost_usd
+        )
     # Same reasoning, and the same gap it closes. The planner chooses
     # `read_files` and the tool silently truncates the tail of that choice to
     # fit `max_read_lines`; logging it tells the operator and leaves the
@@ -1269,6 +1276,7 @@ def advance(state: RunState, rt: Runtime) -> dict:
         "flake_reruns_review_gate": state.get("flake_reruns_review_gate", 0),
         "instruction": stage.instruction or "",
         "executor_context_tokens": state.get("executor_context_tokens", 0),
+        "executor_cost_usd": state.get("executor_cost_usd", 0.0),
         "withheld_reads": list(state.get("withheld_reads") or []),
         "base_sha": start_sha,
         "merge_sha": merge_sha or rt.git.head_sha(),
@@ -1290,13 +1298,14 @@ def advance(state: RunState, rt: Runtime) -> dict:
     # Recorded after the squash, keyed by the sha that survives it. The run's
     # own state carries this too, but only until the run ends; this is the copy
     # a later run can calibrate against.
-    if result.get("executor_context_tokens"):
+    if result.get("executor_context_tokens") or result.get("executor_cost_usd"):
         append_stage_cost(
             rt.project.project_dir,
             stage_id=stage.id,
             merge_sha=result["merge_sha"],
             files=len(stage.edit_files),
-            context_tokens=result["executor_context_tokens"],
+            context_tokens=result.get("executor_context_tokens", 0),
+            cost_usd=result.get("executor_cost_usd", 0.0),
         )
     rt.log(f"[advance] {stage.id} landed as {result['merge_sha'][:12]}")
 

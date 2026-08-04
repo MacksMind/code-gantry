@@ -86,9 +86,16 @@ class StubExecutor:
         self.prompts.append(prompt)
         self.history_dirs.append(history_dir)
         self._apply()
+        # Through the same parser the real executor uses, not a field set by
+        # hand: the value's journey starts in Aider's output, and a stub that
+        # skipped that would pin the half of the trip that never broke.
+        from orchestrator.executor import cache_tokens_from_log, cost_from_log
+
         return ExecutionResult(
             ok=self.ok, log=self.log, timed_out=self.timed_out,
             dropped_reads=list(self.dropped_reads),
+            cost_usd=cost_from_log(self.log),
+            cache_tokens=cache_tokens_from_log(self.log),
         )
 
     def run_script_stage(self, stage):
@@ -382,6 +389,35 @@ class TestTheConventionsReachTheReviewer:
         run_git(repo, "commit", "-aqm", "stage work")
         nodes.review(state, rt)
         assert "SCOPE_BY_TENANT" in _text_of(reviewer.messages[-1])
+
+
+class TestTheExecutorsCostSurvivesTheJourney:
+    """Aider's log → ExecutionResult → state → the durable record.
+
+    Four defects in this project have been values computed correctly and lost
+    in transit, every one of them passing its unit tests on both ends. This is
+    a new value crossing three boundaries, and the last of them writes a file
+    that outlives the run and is fed back to the planner.
+    """
+
+    def test_it_accumulates_across_a_stage_s_attempts(self, repo, tmp_path):
+        # Each attempt is its own Aider session with its own running total, so
+        # replacing would report a four-attempt stage at the price of one.
+        executor = StubExecutor(repo=repo, edits=[("app.py", "a\n"), ("app.py", "b\n")])
+        executor.log = "Cost: $0.02 message, $0.05 session."
+        cfg, rt, state = make(repo, tmp_path, executor=executor)
+        with_stage(state, rt)
+        state.update(nodes.execute(state, rt))
+        state.update(nodes.execute(state, rt))
+        assert state["executor_cost_usd"] == 0.10
+
+    def test_a_free_executor_records_nothing(self, repo, tmp_path):
+        executor = StubExecutor(repo=repo, edits=[("app.py", "a\n")])
+        executor.log = "Tokens: 12k sent, 1.1k received."
+        cfg, rt, state = make(repo, tmp_path, executor=executor)
+        with_stage(state, rt)
+        out = nodes.execute(state, rt)
+        assert out.get("executor_cost_usd", 0.0) == 0.0
 
 
 class TestPlannerBudgets:

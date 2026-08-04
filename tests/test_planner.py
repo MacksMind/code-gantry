@@ -869,6 +869,29 @@ class TestStageCostsSurviveTheRun:
         assert "0285803b159a" in text
         assert "10" in text and "13,000" in text
 
+    def test_a_priced_executor_adds_its_cost_to_the_line(self, tmp_path):
+        from orchestrator.planner import append_stage_cost
+
+        append_stage_cost(tmp_path, "s", "0285803b159a", 3, 13_000, cost_usd=0.42)
+        assert "$0.42" in (tmp_path / "stage-costs.md").read_text()
+
+    def test_a_free_executor_adds_nothing(self, tmp_path):
+        # A local endpoint costs nothing, and "$0.00" on every line of a file
+        # the planner reads on every call says the same thing as its absence
+        # while taking tokens to do it.
+        from orchestrator.planner import append_stage_cost
+
+        append_stage_cost(tmp_path, "s", "0285803b159a", 3, 13_000)
+        assert "$" not in (tmp_path / "stage-costs.md").read_text()
+
+    def test_sub_cent_costs_are_not_rounded_to_nothing(self, tmp_path):
+        # A cheap model on a small stage lands well under a cent, and a
+        # two-place format would record a run's whole executor spend as zero.
+        from orchestrator.planner import append_stage_cost
+
+        append_stage_cost(tmp_path, "s", "0285803b159a", 1, 900, cost_usd=0.0004)
+        assert "$0.0004" in (tmp_path / "stage-costs.md").read_text()
+
     def test_costs_are_read_back_in_order(self, tmp_path):
         # Its own file rather than a section of status.md, which is a
         # hundreds-of-kilobytes narrative the planner sees only the tail of.

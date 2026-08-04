@@ -69,6 +69,11 @@ class StageResult(TypedDict, total=False):
     # Surfaced to the planner so it sizes the next stage from what this
     # executor actually carried rather than from a file count.
     executor_context_tokens: int
+    # What this stage's executor attempts cost, summed across them, when the
+    # model was priced. Zero for a local endpoint — which is the truth, not a
+    # missing reading. Accumulated rather than replaced: a stage that took four
+    # attempts paid for four, and the figure an operator wants is the stage's.
+    executor_cost_usd: float
     # Reference files the stage declared and the executor never received,
     # because they did not fit `max_read_lines`. Told to the planner so it can
     # choose what to drop, rather than having the tail of its list cut for it.
@@ -188,6 +193,7 @@ class RunState(TypedDict, total=False):
     # finding once per attempt.
     pending_observations: list[dict]
     executor_context_tokens: int
+    executor_cost_usd: float
     withheld_reads: list[str]
 
     planner_interventions: int
@@ -309,6 +315,14 @@ def fresh_stage_fields() -> dict:
         "flake_reruns_review_gate": 0,
         "test_seconds": 0.0,
         "last_diff_digest": "",
+        # Never cleared until now, and `advance` copies it onto the landed
+        # StageResult and into `stage-costs.md`. `execute` writes it only when
+        # Aider reported a token line, so a stage whose attempts never printed
+        # one carried the previous stage's figure into a record keyed by a
+        # merge sha it had nothing to do with — and that file is what the
+        # planner sizes the next batch against.
+        "executor_context_tokens": 0,
+        "executor_cost_usd": 0.0,
         # A new stage has a new tree; nothing has been proven about it yet.
         "full_suite_digest": "",
         "last_failure": None,
