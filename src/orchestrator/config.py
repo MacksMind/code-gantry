@@ -48,6 +48,9 @@ PLANNER_WRITABLE_FIELDS = frozenset(
         "instruction",
         "edit_files",
         "read_files",
+        # A path and two integers. Declarative in the strongest sense: there is
+        # nothing here a planner could turn into an instruction to run.
+        "read_excerpts",
         "constraints",
         "acceptance",
         "forbidden_patterns",
@@ -349,6 +352,24 @@ class Limits(_Strict):
     wall_clock_hours: float = 14.0
 
 
+class Excerpt(_Strict):
+    """A numbered slice of a file, carried forward for the executor.
+
+    The planner reads in slices — median forty-one lines, measured over 1,583
+    calls — and then hands the executor whole-file globs it may not be able to
+    have. This is the same information travelling the rest of the way.
+
+    `note` is the planner's own reason for including it. The instruction can
+    say the same thing, but a label attached to the lines survives the executor
+    skimming, which the instruction does not.
+    """
+
+    path: str
+    start: int = 1
+    end: int = 0  # 0 means "to the end of the file"
+    note: str = ""
+
+
 class Stage(_Strict):
     """One unit of work — the shippable unit.
 
@@ -363,6 +384,16 @@ class Stage(_Strict):
     instruction: str | None = None
     edit_files: list[str] = []
     read_files: list[str] = []
+    # Lines the planner already read and the executor will need. `read_files`
+    # is whole files, so a file over `max_read_lines` is not trimmed to the part
+    # that matters — it is dropped and reported as withheld, and the executor
+    # gets nothing from it. Measured over two runs: the planner read
+    # `order_controller.rb` twenty-seven times in slices of fifteen to
+    # thirty-three lines, and that file cannot be a reference file at all.
+    #
+    # Declarative by construction — a path and two integers. Nothing here is
+    # executed, and the orchestrator does the reading.
+    read_excerpts: list[Excerpt] = []
     constraints: str | None = None
     acceptance: str | None = None
     forbidden_patterns: list[str] = []
@@ -545,7 +576,6 @@ class ProjectConfig(_Strict):
 
     stage_defaults: StageDefaults = StageDefaults()
 
-    rework_strategy: Literal["fresh", "continue"] = "fresh"
     # A reviewer leaves comments on the work in front of it. It does not ask for
     # the work again, and an author who cannot see their own diff is not in a
     # position to amend it — so a rejected attempt stays on the branch and the

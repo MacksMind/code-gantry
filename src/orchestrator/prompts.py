@@ -150,6 +150,7 @@ def build_executor_prompt(
     feedback: list[str] | None = None,
     failure_layer: str | None = None,
     cumulative_diff: str | None = None,
+    excerpts: list[tuple[str, str]] | None = None,
 ) -> str:
     """The message handed to the executor.
 
@@ -218,6 +219,18 @@ def build_executor_prompt(
     if stage.read_files:
         listed = "\n".join(f"- {glob}" for glob in stage.read_files)
         parts.append(f"## Context you may read but not change\n\n{listed}")
+
+    if excerpts:
+        blocks = [
+            f"### `{label}`\n\n```\n{text}\n```" for label, text in excerpts
+        ]
+        parts.append(
+            "## Lines from files you may read but not change\n\n"
+            "Quoted from the repository as it stands, with line numbers, "
+            "because whoever drew this stage had already read them. Treat them "
+            "as current — you do not need to look them up again.\n\n"
+            + "\n\n".join(blocks)
+        )
 
     if stage.forbidden_patterns:
         listed = "\n".join(f"- /{p}/" for p in stage.forbidden_patterns)

@@ -15,7 +15,12 @@ import pytest
 
 from orchestrator.commands import CommandRunner
 from orchestrator.config import Stage, parse_config
-from orchestrator.executor import PLACEHOLDER_API_KEY, Executor, build_aider_argv
+from orchestrator.executor import (
+    PLACEHOLDER_API_KEY,
+    Executor,
+    build_aider_argv,
+    resolve_excerpts,
+)
 
 
 BASE_STAGE = {"id": "s1", "instruction": "do it", "edit_files": ["app/**", "src/*.py"]}
@@ -203,6 +208,57 @@ class TestReadContextBudget:
         argv = build_aider_argv(stage, cfg, "p")
         kept = [argv[i + 1] for i, a in enumerate(argv) if a == "--read"]
         assert kept == ["small.rb", "mid.rb"]
+
+    def test_an_excerpt_reaches_a_file_the_budget_would_drop(self, tmp_path):
+        # The point of the field. `read_files` is whole files, so one past the
+        # budget contributes nothing at all; a range of it contributes the part
+        # that mattered, which is what the planner had already read.
+        self._repo(tmp_path, {"huge.rb": 2000})
+        cfg, stage = cfg_with(
+            target_repo=str(tmp_path),
+            stage_overrides={
+                "read_files": ["huge.rb"],
+                "read_excerpts": [
+                    {"path": "huge.rb", "start": 40, "end": 44, "note": "why"}
+                ],
+            },
+            executor={"model": "m", "max_read_lines": 400},
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert "--read" not in argv  # the whole file is still too big
+        got = resolve_excerpts(stage, cfg)
+        assert len(got) == 1
+        label, text = got[0]
+        assert label == "huge.rb:40-44 — why"
+        assert text.splitlines()[0].startswith("   40  ")
+        assert len(text.splitlines()) == 5
+
+    def test_excerpts_are_charged_against_the_same_budget(self, tmp_path):
+        self._repo(tmp_path, {"huge.rb": 2000})
+        cfg, stage = cfg_with(
+            target_repo=str(tmp_path),
+            stage_overrides={
+                "read_excerpts": [{"path": "huge.rb", "start": 1, "end": 900}]
+            },
+            executor={"model": "m", "max_read_lines": 10},
+        )
+        # Clipped, not dropped: a clipped range still carries its beginning.
+        assert len(resolve_excerpts(stage, cfg)[0][1].splitlines()) == 10
+
+    def test_an_unreadable_excerpt_is_skipped_rather_than_fatal(self, tmp_path):
+        self._repo(tmp_path, {"a.rb": 10})
+        cfg, stage = cfg_with(
+            target_repo=str(tmp_path),
+            stage_overrides={
+                "read_excerpts": [
+                    {"path": "gone.rb", "start": 1, "end": 5},
+                    {"path": "a.rb", "start": 1, "end": 2},
+                ]
+            },
+            executor={"model": "m", "max_read_lines": 400},
+        )
+        # An excerpt is help. Help that fails must not fail the stage.
+        assert [lbl for lbl, _ in resolve_excerpts(stage, cfg)] == ["a.rb:1-2"]
 
     def test_a_budget_smaller_than_everything_drops_everything(self, tmp_path):
         self._repo(tmp_path, {"a.rb": 900, "b.rb": 900})

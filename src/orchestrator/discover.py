@@ -166,9 +166,6 @@ def draft_config(repo: Path, plan_rel: str) -> tuple[str, list[str]]:
     lines.append("  command_timeout_seconds: 3600")
     lines.append("  wall_clock_hours: 14")
     lines.append("")
-    lines.append("rework_strategy: fresh")
-    lines.append("rework_reset: true")
-    lines.append("")
 
     for note in _stack_notes(repo):
         notes.append(note)

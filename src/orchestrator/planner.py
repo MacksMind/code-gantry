@@ -40,6 +40,20 @@ Verdict = Literal["next_stage", "revise", "project_complete", "blocked"]
 RevisionMode = Literal["extend", "restart"]
 
 
+class PlannedExcerpt(BaseModel):
+    """A range of a file the planner has read, passed on to the executor."""
+
+    path: str = Field(description="Repository-relative path to a tracked file.")
+    start: int = Field(default=1, description="First line, 1-based, inclusive.")
+    end: int = Field(
+        default=0, description="Last line, inclusive. 0 means to end of file."
+    )
+    note: str = Field(
+        default="",
+        description="What this range is for, in a few words.",
+    )
+
+
 class PlannedStage(BaseModel):
     """A stage spec, restricted to declarative fields.
 
@@ -89,6 +103,22 @@ class PlannedStage(BaseModel):
         description=(
             "Globs the executor may read for context but not edit — base "
             "classes, route tables, configuration it must respect."
+        ),
+    )
+    read_excerpts: list[PlannedExcerpt] = Field(
+        default_factory=list,
+        description=(
+            "Lines you have already read that the executor will need, quoted "
+            "to it verbatim.\n\n"
+            "You read a region to draw the stage; without this the executor "
+            "has to find the same region again before it can act on it. "
+            "Passing the lines on removes that round trip, and it works from "
+            "what you actually saw rather than from what it locates on its "
+            "own.\n\n"
+            "Give the narrowest range that carries the point, and say in "
+            "`note` what it is for — 'the list this must match', 'the "
+            "validation it has to satisfy'. Ranges are read at the time the "
+            "stage runs, so quote them from the file rather than from memory."
         ),
     )
     constraints: str = Field(

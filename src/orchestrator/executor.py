@@ -374,6 +374,56 @@ def _read_lines(path: str, cfg: ProjectConfig) -> int | None:
         return None
 
 
+def resolve_excerpts(stage, cfg: ProjectConfig) -> list[tuple[str, str]]:
+    """Read each declared range, returning (label, numbered text) pairs.
+
+    Numbered, for the same reason the planner's own reads are: a line the
+    executor is told to match is checkable against a number and not against a
+    recollection.
+
+    Charged against `max_read_lines`, the same budget whole reference files
+    come out of — this exists so a large file can contribute the part that
+    matters, not so it can contribute more than a small one. Ranges are clipped
+    rather than dropped, because a clipped range still carries its beginning,
+    where a dropped file carries nothing.
+
+    A range that cannot be read is skipped rather than raised on. The stage's
+    instruction is the authority on what to do; an excerpt is help, and help
+    that fails should not fail the stage.
+    """
+    budget = cfg.executor.max_read_lines
+    remaining = budget if budget is not None else None
+    out: list[tuple[str, str]] = []
+
+    for ex in getattr(stage, "read_excerpts", []) or []:
+        if remaining is not None and remaining <= 0:
+            break
+        target = Path(cfg.target_repo) / ex.path
+        try:
+            body = target.read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        first = max(ex.start or 1, 1)
+        last = min(ex.end or len(body), len(body))
+        if first > last:
+            continue
+        chosen = body[first - 1 : last]
+        if remaining is not None and len(chosen) > remaining:
+            chosen = chosen[:remaining]
+        if not chosen:
+            continue
+        if remaining is not None:
+            remaining -= len(chosen)
+        label = f"{ex.path}:{first}-{first + len(chosen) - 1}"
+        if ex.note:
+            label += f" — {ex.note}"
+        numbered = "\n".join(
+            f"{first + i:>5}  {line}" for i, line in enumerate(chosen)
+        )
+        out.append((label, numbered))
+    return out
+
+
 def _within_read_budget(read_files: list[str], cfg: ProjectConfig) -> list[str]:
     """Trim reference files to `max_read_lines`, largest first.
 

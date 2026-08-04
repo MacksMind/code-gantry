@@ -24,6 +24,7 @@ from datetime import datetime
 from orchestrator.addendum import append_notes, append_observations
 from orchestrator.commands import truncate_middle
 from orchestrator.config import Stage, validate_stage
+from orchestrator.executor import resolve_excerpts
 from orchestrator.flake import adjudicate, append_flakes, predates_stage
 from orchestrator.gitops import GitError
 from orchestrator.globs import matches_any
@@ -516,6 +517,7 @@ def execute(state: RunState, rt: Runtime) -> dict:
             feedback=feedback,
             failure_layer=state.get("failure_layer"),
             cumulative_diff=cumulative_diff,
+            excerpts=resolve_excerpts(stage, rt.cfg),
         )
         rt.write_artifact(
             state["stage_index"], stage.id, state.get("revision", 0), attempt,

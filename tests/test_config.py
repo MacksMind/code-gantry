@@ -234,11 +234,18 @@ class TestPlannerPartition:
         # already reads, with no command anywhere in it. It is the mirror of
         # `forbidden_patterns`, which was always in the allowlist for the same
         # reason.
+        #
+        # `read_excerpts` is too, and more plainly than either: a path and two
+        # integers. It names lines the orchestrator reads and quotes; there is
+        # no string in it that anything executes, and the widest damage a wrong
+        # one can do is show the executor the wrong part of a file it was
+        # already allowed to read.
         assert PLANNER_WRITABLE_FIELDS == {
             "id",
             "instruction",
             "edit_files",
             "read_files",
+            "read_excerpts",
             "constraints",
             "acceptance",
             "forbidden_patterns",
