@@ -16,9 +16,11 @@ import pytest
 from orchestrator.commands import CommandRunner
 from orchestrator.config import Stage, parse_config
 from orchestrator.executor import (
+    AIDER_FLAGS,
     PLACEHOLDER_API_KEY,
     Executor,
     ExcerptError,
+    attached_by_mention,
     build_aider_argv,
     resolve_excerpts,
     shield_path_mentions,
@@ -1347,6 +1349,88 @@ class TestPathMentionsAreShielded:
         ).run_agent_stage(stage, "the bug is in `app.py` somewhere")
         recorded = json.loads(fake_aider.read_text())
         assert "the bug is in `./app.py` somewhere" in recorded["argv"]
+
+
+class TestARepliedMentionCostsTheReply:
+    """Aider discards a reply's edits if that reply also names a file.
+
+    `check_for_file_mentions` runs on the model's answer at `base_coder.py:1561`
+    and returns at `:1567` when it attached something; `apply_updates()` is at
+    `:1585` and is never reached. So a reply carrying a correct edit *and* a
+    path loses the edit, reflects to ask about the file, and the second reply
+    answers a question about files rather than editing anything.
+
+    Measured: the model emitted three SEARCH/REPLACE blocks and the transcript
+    records zero `Applied edit to` lines. Across the run history every one of
+    the 29 attempts reported as producing no changes was preceded by an attach.
+
+    Aider asks for it. `coders/shell.py` instructs the model to "suggest any
+    shell commands the user might want to run", with "if you added a test,
+    suggest how to run it" among the examples — so on a stage that requires
+    tests, the reply that follows instructions is the reply that gets thrown
+    away. `--no-suggest-shell-commands` removes that section, and the command
+    was never run anyway: that confirm is `explicit_yes_required`, which
+    `--yes-always` answers *no*.
+
+    None of it reaches stdout, which is why it stayed invisible for 344
+    attempts. The confirmation is a prompt_toolkit call; only the chat history
+    Aider writes for us records it.
+    """
+
+    CHAT = (
+        "> Added app/models/x.rb to the chat.  \n"
+        "> Tokens: 16k sent, 7.5k received.  \n"
+        "> bin/rspec  \n"
+        "> Add file to the chat? (Y)es/(N)o/(D)on't ask again [Yes]: y  \n"
+    )
+
+    def test_the_attached_file_is_recovered_from_the_chat_history(self):
+        assert attached_by_mention(self.CHAT) == ["bin/rspec"]
+
+    def test_a_declined_mention_is_not_an_attachment(self):
+        # Nothing was added, so Aider does not return early and the edits
+        # apply. Counting it would report a loss that did not happen.
+        declined = self.CHAT.replace("[Yes]: y", "[Yes]: n")
+        assert attached_by_mention(declined) == []
+
+    def test_an_ordinary_session_reports_nothing(self):
+        assert attached_by_mention("> Added app/models/x.rb to the chat.  \n") == []
+
+    def test_each_file_is_reported_once(self):
+        assert attached_by_mention(self.CHAT + self.CHAT) == ["bin/rspec"]
+
+    def test_the_shell_command_suggestion_is_turned_off(self):
+        # The clause that generates the mention, removed rather than argued
+        # with. A rule asking the model for restraint would be the weaker fix,
+        # and this instruction is not ours to argue with — it is Aider's.
+        cfg, stage = cfg_with()
+        assert "--no-suggest-shell-commands" in build_aider_argv(stage, cfg, "p")
+
+    def test_the_flag_is_pinned_for_preflight(self):
+        # preflight greps `aider --help` for everything in AIDER_FLAGS, so a
+        # release that renames this one fails validation instead of quietly
+        # restoring the behaviour it suppresses.
+        assert "--no-suggest-shell-commands" in AIDER_FLAGS
+
+    def test_the_execution_reports_what_was_attached(self, repo, fake_aider, tmp_path):
+        history = tmp_path / "hist"
+        history.mkdir()
+        (history / "aider-chat.md").write_text(self.CHAT)
+        cfg, stage = cfg_with(target_repo=str(repo))
+        result = Executor(cfg, CommandRunner(cwd=repo, timeout=60)).run_agent_stage(
+            stage, "p", history_dir=history
+        )
+        assert result.attached_files == ["bin/rspec"]
+
+    def test_a_missing_history_is_not_an_error(self, repo, fake_aider, tmp_path):
+        # `history_dir` is optional and several callers pass none. This must
+        # not be the thing that fails an attempt that otherwise worked.
+        cfg, stage = cfg_with(target_repo=str(repo))
+        result = Executor(cfg, CommandRunner(cwd=repo, timeout=60)).run_agent_stage(
+            stage, "p"
+        )
+        assert result.ok
+        assert result.attached_files == []
 
 
 class TestExcerptsResolveAtACommit:

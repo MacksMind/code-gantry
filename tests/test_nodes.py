@@ -2050,6 +2050,64 @@ class TestResumingIsConsumedNotRemembered:
         assert again["next_hop"] == "plan"
 
 
+class TestAReplyThatNamedAFileLostItsEdits:
+    """The same class as an unapplied edit, one cause further out.
+
+    Aider scans the model's answer for path-shaped words, and when it attaches
+    one it returns before `apply_updates()` — so a reply that carried a correct
+    edit *and* mentioned a file produces an empty tree with a clean exit code.
+    Nothing in the executor's own report distinguishes that from a model that
+    sat on its hands, so the loop told it "you produced no changes at all" and
+    it obligingly wrote the same reply again.
+
+    That is the mistake `unapplied_edit` was added to stop being made about a
+    different cause: precision matters here, because the wrong diagnosis invites
+    the model to repeat what already worked, louder.
+    """
+
+    def test_an_empty_tree_after_an_attach_says_why(self, repo, tmp_path):
+        executor = StubExecutor(repo=repo, edits=[])
+        executor.run_agent_stage = lambda *a, **k: ExecutionResult(
+            ok=True, log="the model replied", attached_files=["bin/rspec"]
+        )
+        cfg, rt, state = make(repo, tmp_path, executor=executor)
+        state = with_stage(state, rt)
+        out = nodes.execute(state, rt)
+
+        assert out["next_hop"] == "execute"
+        feedback = " ".join(out["review_feedback"])
+        assert "bin/rspec" in feedback
+        assert "produced no changes at all" not in feedback
+
+    def test_a_changed_tree_after_an_attach_is_not_a_loss(self, repo, tmp_path):
+        # Aider attaches on the *first* reply of a reflection and applies edits
+        # on a later one, so an attach with work on the tree means the loop
+        # recovered. Reporting it would fail an attempt that succeeded.
+        executor = StubExecutor(repo=repo, edits=[("app.py", "landed\n")])
+
+        def attached_then_edited(stage, prompt, history_dir=None):
+            executor._apply()
+            return ExecutionResult(
+                ok=True, log="the model replied", attached_files=["bin/rspec"]
+            )
+
+        executor.run_agent_stage = attached_then_edited
+        cfg, rt, state = make(repo, tmp_path, executor=executor)
+        state = with_stage(state, rt)
+        assert nodes.execute(state, rt)["next_hop"] == "verify"
+
+    def test_an_empty_tree_with_no_attach_is_unchanged(self, repo, tmp_path):
+        # The genuine do-nothing case still reaches verify, which owns the
+        # "produced no changes" verdict. This guard must not take it over.
+        executor = StubExecutor(repo=repo, edits=[])
+        executor.run_agent_stage = lambda *a, **k: ExecutionResult(
+            ok=True, log="the model replied"
+        )
+        cfg, rt, state = make(repo, tmp_path, executor=executor)
+        state = with_stage(state, rt)
+        assert nodes.execute(state, rt)["next_hop"] == "verify"
+
+
 class TestAnUnappliedEditOnAChangedTree:
     """The editor reports blocks it could not apply — including redundant ones.
 

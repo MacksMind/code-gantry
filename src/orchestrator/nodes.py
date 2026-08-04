@@ -656,6 +656,49 @@ def execute(state: RunState, rt: Runtime) -> dict:
     if result.dropped_reads:
         measured["withheld_reads"] = list(result.dropped_reads)
 
+    if result.attached_files:
+        rt.log(
+            f"[execute] {stage.id}: the editor attached "
+            f"{', '.join(result.attached_files)} because something named "
+            "them — a reply that names a file loses that reply's edits"
+        )
+
+    # Aider scans the model's answer for path-shaped words and, having attached
+    # one, returns before it applies anything that answer contained. The exit
+    # code is clean and the tree is untouched, which is indistinguishable from
+    # a model that did nothing — so the loop said "you produced no changes at
+    # all", and the model wrote the same correct reply again.
+    #
+    # Measured: three SEARCH/REPLACE blocks emitted, zero applied, and every
+    # one of the 29 no-change attempts in the run history preceded by an
+    # attach. Same shape as `unapplied_edit` below and the same reason to be
+    # precise about it: a wrong diagnosis invites the model to repeat what
+    # already worked, louder.
+    #
+    # An attach with work on the tree is not a loss — Aider attaches on one
+    # reply of a reflection and can apply edits on a later one — so this asks
+    # the tree, exactly as the unapplied-edit case does.
+    if result.ok and result.attached_files and not rt.git.diff_names(
+        state["stage_start_sha"]
+    ):
+        listed = ", ".join(result.attached_files)
+        return _retry_or_plan(
+            state,
+            rt,
+            layer="scope",
+            summary="the editor discarded the reply it attached a file for",
+            feedback=(
+                "The previous attempt wrote an edit and the editor threw it "
+                f"away. It attached {listed} because your reply named it, and "
+                "it stops processing a reply as soon as it does that — so "
+                "nothing you wrote was applied.\n\n"
+                "The work itself was not the problem. Send the same change "
+                "again, and name no files outside the ones already listed for "
+                "you: no paths in prose, and no suggested commands."
+            ),
+            detail=_clip(result.log),
+        )
+
     if result.ok:
         return {"next_hop": "verify", **measured}
 

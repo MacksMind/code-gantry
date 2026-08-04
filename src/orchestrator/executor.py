@@ -46,6 +46,7 @@ AIDER_FLAGS = [
     "--no-gitignore",
     "--no-show-model-warnings",
     "--no-detect-urls",
+    "--no-suggest-shell-commands",
     "--edit-format",
     "--model-metadata-file",
     "--chat-history-file",
@@ -237,6 +238,10 @@ class ExecutionResult:
     # shown less than it declared must say so, or the next person debugging it
     # is reading a prompt the executor never received.
     dropped_reads: list[str] = field(default_factory=list)
+    # Files Aider attached because the message or the model's reply named them.
+    # An attach on the reply costs that reply its edits, and nothing else in
+    # this result distinguishes that from a model that produced nothing.
+    attached_files: list[str] = field(default_factory=list)
 
 
 # Aider's own normalisation, lifted from `get_file_mentions` in the installed
@@ -314,6 +319,35 @@ def shield_path_mentions(
     return "\n".join(out)
 
 
+_ATTACH_QUESTION = "Add file to the chat?"
+
+
+def attached_by_mention(chat_history: str) -> list[str]:
+    """Files Aider attached because something named them, in order, deduped.
+
+    Read from the chat history because it is the only record: the confirmation
+    is a prompt_toolkit call that never reaches the captured stdout, and the
+    scan on the *message* discards its own return value, so unlike the scan on
+    the reply it does not even leave an "I added these files" line behind. 344
+    attempts went by without this being visible anywhere an operator looked.
+
+    Only an accepted attach counts. A declined one adds nothing, so Aider does
+    not take the early return and the reply's edits apply normally — counting
+    it would report a loss that did not happen.
+    """
+    found: list[str] = []
+    lines = chat_history.splitlines()
+    for i, line in enumerate(lines):
+        if _ATTACH_QUESTION not in line or not line.rstrip().endswith(": y"):
+            continue
+        if i == 0:
+            continue
+        named = lines[i - 1].lstrip("> ").strip()
+        if named and named not in found:
+            found.append(named)
+    return found
+
+
 def build_aider_argv(
     stage: Stage,
     cfg: ProjectConfig,
@@ -371,6 +405,19 @@ def build_aider_argv(
         #
         # NO_BROWSER does not help: that stops a browser opening, not a fetch.
         "--no-detect-urls",
+        # Aider's own system prompt asks the model to "suggest any shell
+        # commands the user might want to run", listing "if you added a test,
+        # suggest how to run it" among the examples (`coders/shell.py`). On a
+        # stage that requires tests the model complies, names the test runner,
+        # and Aider's scan of that reply attaches the runner and returns before
+        # applying the edits the same reply carried. The suggestion is declined
+        # anyway — that confirm is `explicit_yes_required`, which --yes-always
+        # answers no — and the run's own --test-cmd already runs the suite.
+        #
+        # Removed rather than argued with. A line in our prompt asking the
+        # model not to suggest commands would be asking for restraint against
+        # an instruction that is not ours, and would lose.
+        "--no-suggest-shell-commands",
     ]
 
     if ex.edit_format:
@@ -507,7 +554,24 @@ class Executor:
         )
         outcome = _classify_execution(result)
         outcome.dropped_reads = [p for p in stage.read_files if p not in kept]
+        outcome.attached_files = self._attachments(history_dir)
         return outcome
+
+    def _attachments(self, history_dir: Path | None) -> list[str]:
+        """What Aider attached, from the chat history it wrote for us.
+
+        Best effort by design. `history_dir` is optional, the file may not
+        exist if Aider died early, and none of that should fail an attempt that
+        otherwise worked — this reports on the attempt, it does not judge it.
+        """
+        if history_dir is None:
+            return []
+        try:
+            return attached_by_mention(
+                (history_dir / "aider-chat.md").read_text(errors="replace")
+            )
+        except OSError:
+            return []
 
     def run_script_stage(self, stage: Stage) -> ExecutionResult:
         result = self.runner.run(stage.command or "")
