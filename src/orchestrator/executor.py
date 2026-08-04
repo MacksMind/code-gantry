@@ -467,6 +467,14 @@ def resolve_excerpts(
         if remaining is not None:
             remaining -= len(chosen)
         label = f"{ex.path}:{first}-{first + len(chosen) - 1}"
+        # Say so when the range is not the range that was asked for. The
+        # executor is the participant that would otherwise act on a partial
+        # quotation believing it whole, and since the planner no longer writes
+        # code there is nothing else in the prompt to contradict it. Kept in
+        # the label rather than a log line because the label travels with the
+        # lines into the prompt, and the operator's copy is the artifact.
+        if len(chosen) < last - first + 1:
+            label += f" (clipped from {first}-{last} by max_read_lines)"
         if ex.note:
             label += f" — {ex.note}"
         numbered = "\n".join(

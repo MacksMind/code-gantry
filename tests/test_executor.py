@@ -1073,6 +1073,41 @@ class TestExcerptsResolveAtACommit:
             resolve_excerpts(stage, cfg, git=Git(repo), sha=sha)
         assert "gone.rb" in str(excinfo.value)
 
+    def test_a_clipped_range_says_so_in_its_own_label(self, repo, run_git):
+        # The other way an excerpt fails to arrive. An unreadable one now fails
+        # the stage; a budget-clipped one still gets through, and used to get
+        # through silently — the executor was handed the first N lines of a
+        # range under a label claiming the whole of it. That was survivable
+        # while the instruction also carried the code. It is not now: the
+        # excerpt is the code, so a partial one has to announce itself to the
+        # only participant that could be misled by it.
+        (repo / "app.py").write_text("".join(f"line{i}\n" for i in range(1, 21)))
+        run_git(repo, "commit", "-aqm", "twenty lines")
+        sha = run_git(repo, "rev-parse", "HEAD")
+
+        cfg, stage = cfg_with(
+            target_repo=str(repo),
+            stage_overrides={
+                "read_excerpts": [{"path": "app.py", "start": 1, "end": 20}]
+            },
+            executor={"model": "m", "max_read_lines": 5},
+        )
+        label, text = resolve_excerpts(stage, cfg, git=Git(repo), sha=sha)[0]
+        assert len(text.splitlines()) == 5
+        assert "clipped" in label
+        assert "20" in label  # what was asked for, not only what arrived
+
+    def test_a_range_that_fits_carries_no_clip_note(self, repo, run_git):
+        # The note has to mean something when it appears.
+        sha = run_git(repo, "rev-parse", "HEAD")
+        cfg, stage = cfg_with(
+            target_repo=str(repo),
+            stage_overrides={"read_excerpts": [{"path": "app.py", "start": 1, "end": 2}]},
+            executor={"model": "m", "max_read_lines": 400},
+        )
+        label, _ = resolve_excerpts(stage, cfg, git=Git(repo), sha=sha)[0]
+        assert "clipped" not in label
+
     def test_a_symlink_is_not_passed_off_as_its_target_s_name(self, repo, run_git):
         # `git show <sha>:<path>` on a symlink returns the link's target — a
         # path, not the file it names. Read as content that is a "file" whose
