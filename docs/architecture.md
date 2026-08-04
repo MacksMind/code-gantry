@@ -831,6 +831,21 @@ behind, what is actually there.
    *this* stage's context.
 5. **The cumulative stage diff.**
 
+**The history is thin, deliberately.** A landed stage is described to the
+planner by four separate channels — this history, the live progress log,
+`stage-costs.md`, and the status tail — and for a long time this one
+reproduced what three of them already said: the stage's full instruction
+verbatim, the reviewer's verdict summary, and the executor's context cost.
+Measured on one run at 45 stages that was 296,783 characters, resent on every
+tool iteration and growing by ~6,600 per landing.
+
+It now carries only what nothing else records: which stages this run landed,
+their revision counts, the reference files the executor never received, and
+the ids that tie the other three channels together — 4,278 characters for the
+same 45 stages. The instruction lives in git as the squash commit's subject;
+what the stage *did* is the reviewer's record in the progress log, fed live;
+the cost is in `stage-costs.md`, which spans every run rather than one.
+
 **This order is the caching strategy, not presentation.** Items 1 and 2 are
 large and append-only; items 3 through 5 change per stage. Providers cache on
 matching prompt *prefixes*, so the stable payload goes first. Note that history

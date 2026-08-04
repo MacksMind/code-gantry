@@ -202,6 +202,23 @@ measured on stages that already passed review once, and tool-use counts on
 identical inputs varied from 0 to 21 between two runs — so a single sample
 showing a model "reading where it mattered" is a story, not a finding.
 
+**Ask what else already carries it, not whether the content is good.** The
+planner is fed four channels that each describe a landed stage — the
+completed-stage history, the live progress log, `stage-costs.md`, and the
+status tail — and the history block was reproducing what three of them already
+said. 296,783 characters at 45 stages, ~1,650 an entry, resent on each of ~15
+tool iterations and growing ~6,600 characters per landing; together with the
+log, over half of what a planner call paid for was spent reading its own prior
+output. Removing what had another home left 4,278 characters, 99% smaller.
+
+The trap is that every field in it was individually defensible, and the first
+fix proposed was to swap the instruction for a better-written summary — which
+would have reintroduced the fault with nicer prose, because that summary is in
+the progress log and the log is fed live on every call. Before adding anything
+to a prompt, or improving something already in one, find out whether it is
+already arriving by another route. `status.md` is the one channel that was
+built with this in mind; it is hard-capped at 4,000 characters.
+
 **An optional field is answered with nothing.** `observations` gives the
 reviewer somewhere to report a real problem this stage did not cause. It came
 back empty **278 times out of 278**, across two prompt revisions written
