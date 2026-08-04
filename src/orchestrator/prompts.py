@@ -477,19 +477,26 @@ def _history_block(
         line = f"### Stage {entry.get('index')}: {entry.get('id')}"
         if entry.get("revisions"):
             line += f" (took {entry['revisions'] + 1} revisions)"
-        line += "\n\n" + (entry.get("instruction") or "").strip()
         if entry.get("merge_sha"):
             line += f"\n\nLanded as `{entry['merge_sha'][:12]}`."
-        # What the executor actually had to hold. The only honest basis for
-        # sizing the next stage: a file count says nothing, since two stages
-        # that each edited one file have differed here by more than threefold.
-        # Absent for script stages and for runs that predate the measurement,
-        # and omitted rather than rendered as a zero the planner might read as
-        # free.
-        if entry.get("executor_context_tokens"):
-            line += (
-                f"\nExecutor context: {entry['executor_context_tokens']:,} tokens."
-            )
+        # No instruction, no reviewer summary, no context cost — each of those
+        # is carried better somewhere else, and this block was reproducing all
+        # three. Measured at 45 stages: 74,000 tokens, ~1,650 an entry, resent
+        # on each of ~15 tool iterations per call, and growing by ~6,600
+        # characters per landing.
+        #
+        # The instruction is the planner's own prior output, echoed back — and
+        # git already has it, as the squash commit's subject and the stage
+        # artifact. What the stage *did* now goes to the progress log, written
+        # by the reviewer after reading the diff, and the log is fed live on
+        # every call. The context cost goes to `stage-costs.md`, which
+        # `_costs_block` renders and which spans every run rather than only
+        # this one.
+        #
+        # What is left is what has no other home: which stages this run landed,
+        # what they cost in revisions, and the ids that let the planner tie the
+        # other three channels together.
+        #
         # The stage asked for these and the executor never saw them: they did
         # not fit the read budget, so the tail of the list was cut. Said here
         # because the choice of what to drop is the planner's to make — it
@@ -500,8 +507,6 @@ def _history_block(
                 f"{', '.join(entry['withheld_reads'])} — over `max_read_lines`. "
                 "Declare fewer or smaller `read_files` and the rest arrive."
             )
-        if entry.get("review_summary"):
-            line += f"\nReviewer: {entry['review_summary']}"
         entries.append(line)
 
     # A truncated list that does not say so reads as the whole record, and

@@ -213,13 +213,15 @@ class TestARunsHistoryIsNotTheProjectsHistory:
         history = text.split("## Completed stages", 1)[1]
         assert "docs/proj/progress_log.md" in history
 
-    def test_a_populated_history_is_unchanged(self):
+    def test_a_populated_history_does_not_get_the_empty_case(self):
         text = all_text(
             build_planner_messages(
                 _cfg(), a_plan(), [{"index": 0, "id": "s1", "instruction": "did it"}]
             )
         )
-        assert "did it" in text
+        history = text.split("## Completed stages", 1)[1]
+        assert "s1" in history
+        assert "None **in this run**" not in history
 
 
 class TestTheProgressLogIsNamedAsTheRecordOfWhatIsDone:
@@ -597,36 +599,61 @@ class TestThePlannerPrefixAlsoSurvivesALanding:
         assert "earlier" in text
 
 
-class TestTheHistoryShowsWhatStagesCostTheExecutor:
-    """So the planner can size the next stage from evidence, not a file count.
+class TestTheHistoryCarriesOnlyWhatHasNoOtherHome:
+    """Four channels were carrying overlapping versions of the same stage.
 
-    Batching guidance had to invent a number — "up to roughly ten files" —
-    because nothing told the planner what a stage actually costs. It is the
-    wrong unit: two stages that each edited one file differed 3.4x in context,
-    14k against 47k, and ten of the first is a different proposition from ten
-    of the second.
+    The planner is fed its completed-stage history, the live progress log,
+    `stage-costs.md` and the status tail — and this block was reproducing what
+    three of them already said. Measured at 45 stages: 74,000 tokens, ~1,650 an
+    entry, resent on each of ~15 tool iterations, growing ~6,600 characters per
+    landing. Over half of what a planner call paid for was reading itself.
 
-    Aider reports the figure every attempt. Once it reaches the history, the
-    planner is calibrating against this executor on these files rather than
-    against a guess someone wrote down once.
+    So the instruction goes (git has the commit subject, and what the stage
+    *did* is the reviewer's record in the progress log, fed live); the reviewer
+    summary goes (superseded by that record); the context cost goes
+    (`stage-costs.md` renders it via `_costs_block`, across every run rather
+    than only this one). What survives is what nothing else records.
     """
 
     def _history(self, completed):
         text = all_text(build_planner_messages(_cfg(), a_plan(), completed))
         return text.split("## Completed stages", 1)[1]
 
-    def test_the_context_cost_is_shown(self):
+    def test_the_instruction_is_not_echoed_back(self):
         history = self._history(
-            [{"index": 0, "id": "s1", "instruction": "did it",
-              "executor_context_tokens": 47_000}]
+            [{"index": 0, "id": "s1", "instruction": "PLANNER OWN WORDS"}]
         )
-        assert "47" in history
+        assert "PLANNER OWN WORDS" not in history
 
-    def test_a_stage_without_a_figure_says_nothing_about_it(self):
-        # Script stages and older runs have none; an absent number must not
-        # render as a zero the planner could read as "free".
-        history = self._history([{"index": 0, "id": "s1", "instruction": "did it"}])
-        assert "context" not in history.lower()
+    def test_the_reviewer_summary_is_not_repeated_here(self):
+        # It is in the progress log now, and the log is fed on every call.
+        history = self._history(
+            [{"index": 0, "id": "s1", "review_summary": "VERDICT RATIONALE"}]
+        )
+        assert "VERDICT RATIONALE" not in history
+
+    def test_the_context_cost_is_not_repeated_here(self):
+        history = self._history(
+            [{"index": 0, "id": "s1", "executor_context_tokens": 47_000}]
+        )
+        assert "47" not in history
+
+    def test_what_landed_is_still_identifiable(self):
+        history = self._history(
+            [{"index": 3, "id": "convert-thing", "merge_sha": "abc123def456789"}]
+        )
+        assert "convert-thing" in history
+        assert "abc123def456" in history
+
+    def test_revisions_survive_because_nothing_else_records_them(self):
+        history = self._history([{"index": 0, "id": "s1", "revisions": 2}])
+        assert "3 revisions" in history
+
+    def test_withheld_reads_survive_for_the_same_reason(self):
+        history = self._history(
+            [{"index": 0, "id": "s1", "withheld_reads": ["big/file.rb"]}]
+        )
+        assert "big/file.rb" in history
 
 
 class TestTheReviewerIsToldWhatTheEditorDoes:
