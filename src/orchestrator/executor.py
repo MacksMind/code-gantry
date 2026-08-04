@@ -20,12 +20,13 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from orchestrator.commands import CommandResult, CommandRunner
 from orchestrator.config import ProjectConfig, Stage
-from orchestrator.gitops import GitError
+from orchestrator.gitops import Git, GitError
 from orchestrator.globs import matches_any
 
 # The flags we build. preflight checks each of these against `aider --help`
@@ -238,11 +239,87 @@ class ExecutionResult:
     dropped_reads: list[str] = field(default_factory=list)
 
 
+# Aider's own normalisation, lifted from `get_file_mentions` in the installed
+# 0.86.2 source rather than recalled. Both are applied to a whitespace-delimited
+# word before it is compared against a repository path: sentence punctuation
+# comes off the end, quotes and emphasis off both ends.
+_MENTION_TAIL = ",.!;:?"
+_MENTION_WRAP = "\"'`*_"
+
+
+def _shield_word(word: str, candidates: set[str]) -> str:
+    """One word, with its punctuation put back around the rewritten path."""
+    if not word:
+        return word
+    body = word.rstrip(_MENTION_TAIL)
+    tail = word[len(body) :]
+    inner = body.lstrip(_MENTION_WRAP)
+    lead = body[: len(body) - len(inner)]
+    core = inner.rstrip(_MENTION_WRAP)
+    trail = inner[len(core) :]
+    if core not in candidates:
+        return word
+    return f"{lead}./{core}{trail}{tail}"
+
+
+def shield_path_mentions(
+    text: str, tracked: Iterable[str], exempt: Iterable[str] = ()
+) -> str:
+    """Rewrite words Aider would read as a file request into words it will not.
+
+    Keeping the conventions document out of `--message` fixed the document that
+    broke a run. It did not fix the mechanism, because the mechanism is not
+    about that document: the planner writes prose, prose names files, and
+    `check_for_file_mentions` runs on the message regardless of who wrote it.
+    Measured across this project's run history, 1,713 files were attached this
+    way — roughly 30.8M tokens — led by a 453,480-byte lint-exclusion list that
+    attached on all 117 executor inputs naming it, taking one stage from ~20k
+    tokens a message to 137k.
+
+    Nothing showed it. `base_coder.py:919` calls the scan on the message and
+    discards its return, so unlike the reply scan it emits no "I added these
+    files" line into the history, and nothing tells the planner that naming a
+    file has a price. A guard is the only thing that can see it.
+
+    `./` is the whole trick. Aider compares the word against the repo-relative
+    path verbatim, so the prefix defeats the comparison, while the executor
+    reads the same file it always did and the sentence is otherwise untouched.
+    Two things are deliberately left alone: fenced blocks, which are quoted from
+    the repository rather than authored and whose contents the executor is told
+    to treat as current; and a bare unique basename, which Aider also matches
+    but which `./` cannot fix without either naming a file that does not exist
+    or expanding the path the planner chose. That residual is real and small —
+    on the same history the full-path form outnumbered it 71 inputs to 5.
+    """
+    candidates = set(tracked) - set(exempt)
+    if not candidates:
+        return text
+
+    out: list[str] = []
+    fenced = False
+    for line in text.split("\n"):
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            out.append(line)
+            continue
+        if fenced:
+            out.append(line)
+            continue
+        out.append(
+            "".join(
+                piece if i % 2 else _shield_word(piece, candidates)
+                for i, piece in enumerate(re.split(r"(\s+)", line))
+            )
+        )
+    return "\n".join(out)
+
+
 def build_aider_argv(
     stage: Stage,
     cfg: ProjectConfig,
     prompt: str,
     history_dir: Path | None = None,
+    tracked: list[str] | None = None,
 ) -> list[str]:
     """Assemble the Aider invocation.
 
@@ -258,10 +335,20 @@ def build_aider_argv(
     conversation a per-attempt artifact worth reading afterwards.
     """
     ex = cfg.executor
+    message = prompt
+    if tracked:
+        # Files already handed to Aider are excluded from
+        # `get_addable_relative_files`, so it cannot re-add them and marking
+        # them up would only clutter the sentence naming the stage's own work.
+        scoped = list(stage.edit_files) + list(stage.read_files)
+        exempt = [p for p in tracked if matches_any(p, scoped)]
+        exempt += _existing_agent_context(cfg)
+        message = shield_path_mentions(prompt, tracked, exempt)
+
     argv = [
         "aider",
         "--message",
-        prompt,
+        message,
         "--yes-always",
         "--no-stream",
         "--model",
@@ -359,9 +446,26 @@ def build_aider_argv(
 
 
 class Executor:
-    def __init__(self, cfg: ProjectConfig, runner: CommandRunner):
+    def __init__(
+        self, cfg: ProjectConfig, runner: CommandRunner, git: Git | None = None
+    ):
         self.cfg = cfg
         self.runner = runner
+        self.git = git
+
+    def _tracked_paths(self) -> list[str] | None:
+        """What the repository currently tracks, for the mention shield.
+
+        Degrades to no shielding rather than failing the stage: this guard
+        exists to save tokens, and a run whose git cannot list its own files
+        has a larger problem than an over-attached prompt.
+        """
+        if self.git is None:
+            return None
+        try:
+            return self.git.tracked_paths_now()
+        except GitError:
+            return None
 
     def gather_context(
         self, stage: Stage
@@ -384,7 +488,13 @@ class Executor:
     ) -> ExecutionResult:
         try:
             env = self._executor_env()
-            argv = build_aider_argv(stage, self.cfg, prompt, history_dir=history_dir)
+            argv = build_aider_argv(
+                stage,
+                self.cfg,
+                prompt,
+                history_dir=history_dir,
+                tracked=self._tracked_paths(),
+            )
         except KeyError as e:
             # A missing key or endpoint variable. Failing here beats letting
             # Aider fail opaquely on auth, or calling the wrong endpoint.

@@ -354,13 +354,16 @@ def build_runtime(
         timeout=cfg.limits.command_timeout_seconds,
         log=logger,
     )
+    git = Git(cfg.target_repo)
     return Runtime(
         cfg=cfg,
         project=project,
         paths=paths,
-        git=Git(cfg.target_repo),
+        git=git,
         runner=runner,
-        executor=Executor(cfg, runner),
+        # The executor takes git only to list tracked paths, which is what tells
+        # the mention shield what counts as a path in the prompt it is handed.
+        executor=Executor(cfg, runner, git=git),
         planner=planner,
         reviewer=reviewer,
         log=logger,

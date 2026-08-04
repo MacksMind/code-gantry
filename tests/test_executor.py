@@ -21,6 +21,7 @@ from orchestrator.executor import (
     ExcerptError,
     build_aider_argv,
     resolve_excerpts,
+    shield_path_mentions,
 )
 from orchestrator.gitops import Git
 
@@ -1232,6 +1233,120 @@ class TestConventionsReachAiderAsReadOnlyFiles:
         reads = [argv[i + 1] for i, a in enumerate(argv) if a == "--read"]
         assert "ref.rb" in reads
         assert "AGENTS.md" in reads
+
+
+class TestPathMentionsAreShielded:
+    """A path the message merely *names* must not become a file Aider reads.
+
+    Keeping the conventions out of `--message` fixed the document that broke a
+    run; it did not fix the mechanism. The planner writes prose, prose names
+    files, and `check_for_file_mentions` runs on the message either way. It
+    attached `.rubocop_todo.yml` — 453,480 bytes — on every one of the 117
+    executor inputs that named it, taking one stage from ~20k tokens a message
+    to 137k. Measured across the project's run history: 1,713 attachments,
+    ~30.8M tokens, led by that file, `config/routes.rb` and `db/structure.sql`.
+
+    It is invisible from both ends. `base_coder.py:919` discards the return of
+    the input scan, so unlike the reply scan it emits no "I added these files"
+    line into the history, and nothing tells the planner that naming a file
+    costs anything.
+
+    So the message is shielded on the way out instead: a word that would
+    resolve to a tracked path gets `./`, which the executor reads as the same
+    file and Aider's matcher does not. Aider compares against the repo-relative
+    path verbatim (`normalized_rel_fname in normalized_words`), having stripped
+    trailing `,.!;:?` and surrounding `"'`*_` — so the prefix survives to defeat
+    the comparison and nothing else about the sentence changes.
+    """
+
+    def test_a_backticked_path_becomes_unmatchable(self):
+        out = shield_path_mentions("see `.rubocop_todo.yml` first", [".rubocop_todo.yml"])
+        assert out == "see `./.rubocop_todo.yml` first"
+
+    def test_trailing_punctuation_is_preserved(self):
+        # Aider rstrips these before comparing, so they do not protect a path
+        # and must not be lost when one is rewritten.
+        out = shield_path_mentions("edit `config/routes.rb`.", ["config/routes.rb"])
+        assert out == "edit `./config/routes.rb`."
+
+    def test_bold_and_italic_wrappers_are_preserved(self):
+        out = shield_path_mentions("**`db/structure.sql`** is truth", ["db/structure.sql"])
+        assert out == "**`./db/structure.sql`** is truth"
+
+    def test_rewriting_is_idempotent(self):
+        # The shield runs on every attempt of every stage. A prefix applied
+        # twice would walk the path out of the repository.
+        once = shield_path_mentions("see `app.py`", ["app.py"])
+        assert shield_path_mentions(once, ["app.py"]) == once
+
+    def test_a_word_that_is_not_a_tracked_path_is_untouched(self):
+        text = "rename the model and update app.pyc and the docs"
+        assert shield_path_mentions(text, ["app.py"]) == text
+
+    def test_a_path_carrying_a_line_range_is_left_alone(self):
+        # Already immune — the range makes the word differ from the path, which
+        # is why `read_excerpts` labels have never attached anything. Rewriting
+        # it would be churn on the one form that was already safe.
+        text = "quoted from `db/structure.sql:1752-1775` above"
+        assert shield_path_mentions(text, ["db/structure.sql"]) == text
+
+    def test_fenced_blocks_are_left_alone(self):
+        # Excerpts, context-command output and the cumulative diff all arrive
+        # fenced, and they are quoted from the repository rather than authored.
+        # Rewriting inside one would corrupt the only copy of the code the
+        # executor is told to treat as current.
+        text = "before\n```\nexclude: app.py\n```\nafter app.py"
+        out = shield_path_mentions(text, ["app.py"])
+        assert "exclude: app.py" in out
+        assert out.endswith("after ./app.py")
+
+    def test_files_already_supplied_to_aider_are_exempt(self):
+        # `--file` and `--read` paths are in the chat already, so Aider excludes
+        # them from `get_addable_relative_files` and cannot re-add them. Marking
+        # them up would be noise in the sentence that names the stage's own work.
+        out = shield_path_mentions(
+            "change `app.py` and read `lib.py`", ["app.py", "lib.py"], exempt=["app.py"]
+        )
+        assert out == "change `app.py` and read `./lib.py`"
+
+    def test_a_bare_basename_is_a_recorded_residual(self):
+        # Aider also matches a unique basename, so this one still attaches. It
+        # is left alone deliberately: `./routes.rb` would name a file that does
+        # not exist, and expanding it to the full path rewrites more of the
+        # sentence than the fault justifies. Measured on the run history, the
+        # full-path form outnumbers this one 71 inputs to 5.
+        text = "the whitelist in routes.rb"
+        assert shield_path_mentions(text, ["config/routes.rb"]) == text
+
+    def test_runs_of_whitespace_survive(self):
+        out = shield_path_mentions("a  `app.py`\tb", ["app.py"])
+        assert out == "a  `./app.py`\tb"
+
+    def test_the_message_is_shielded_before_it_reaches_aider(self):
+        cfg, stage = cfg_with()
+        argv = build_aider_argv(
+            stage, cfg, "look at `lib/x.rb`", tracked=["lib/x.rb"]
+        )
+        assert argv[argv.index("--message") + 1] == "look at `./lib/x.rb`"
+
+    def test_without_a_tracked_list_the_message_is_passed_through(self):
+        # The shield needs the repository to know what a path is. Callers that
+        # have no git — every argv test below this one — must not silently get
+        # a different message than they built.
+        cfg, stage = cfg_with()
+        argv = build_aider_argv(stage, cfg, "look at `lib/x.rb`")
+        assert argv[argv.index("--message") + 1] == "look at `lib/x.rb`"
+
+    def test_the_executor_shields_from_the_live_repository(self, repo, fake_aider):
+        # End to end, because the tracked list crosses from git through the
+        # Executor into argv, and each end passing its own unit test is exactly
+        # how four earlier values were lost in transit.
+        cfg, stage = cfg_with(target_repo=str(repo))
+        Executor(
+            cfg, CommandRunner(cwd=repo, timeout=60), git=Git(repo)
+        ).run_agent_stage(stage, "the bug is in `app.py` somewhere")
+        recorded = json.loads(fake_aider.read_text())
+        assert "the bug is in `./app.py` somewhere" in recorded["argv"]
 
 
 class TestExcerptsResolveAtACommit:
