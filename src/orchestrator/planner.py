@@ -119,6 +119,14 @@ class PlannedStage(BaseModel):
             "`note` what it is for — 'the list this must match', 'the "
             "validation it has to satisfy'. Ranges are read at the time the "
             "stage runs, so quote them from the file rather than from memory."
+            "\n\n"
+            "**One budget covers this and `read_files` together, for the whole "
+            "stage.** Excerpts compete with each other and with the reference "
+            "files, and past the limit they are cut off. So this is not a way "
+            "to make a wide stage viable: a stage needing excerpts from a "
+            "dozen files is a stage that wants splitting, and quoting a little "
+            "of each is the worst of both — every file present, none of them "
+            "usefully."
         ),
     )
     constraints: str = Field(

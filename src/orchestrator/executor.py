@@ -392,7 +392,16 @@ def resolve_excerpts(stage, cfg: ProjectConfig) -> list[tuple[str, str]]:
     that fails should not fail the stage.
     """
     budget = cfg.executor.max_read_lines
-    remaining = budget if budget is not None else None
+    remaining = None
+    if budget is not None:
+        # One budget for all reference material, not one each. Excerpts exist
+        # so a file too large to send whole can still contribute the part that
+        # matters — not so a stage can carry twice what the operator allowed by
+        # splitting it across two fields. Reference files are counted first
+        # because they were already chosen and trimmed by the time we get here.
+        kept = _within_read_budget(stage.read_files, cfg)
+        spent = sum(n for n in (_read_lines(p, cfg) for p in kept) if n)
+        remaining = max(budget - spent, 0)
     out: list[tuple[str, str]] = []
 
     for ex in getattr(stage, "read_excerpts", []) or []:

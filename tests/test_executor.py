@@ -233,6 +233,22 @@ class TestReadContextBudget:
         assert text.splitlines()[0].startswith("   40  ")
         assert len(text.splitlines()) == 5
 
+    def test_reference_files_and_excerpts_share_one_budget(self, tmp_path):
+        # Not one budget each. Excerpts exist so a file too large to send whole
+        # can still contribute the part that matters — not so a stage can carry
+        # twice what the operator allowed by splitting it across two fields.
+        self._repo(tmp_path, {"ref.rb": 90, "other.rb": 500})
+        cfg, stage = cfg_with(
+            target_repo=str(tmp_path),
+            stage_overrides={
+                "read_files": ["ref.rb"],
+                "read_excerpts": [{"path": "other.rb", "start": 1, "end": 500}],
+            },
+            executor={"model": "m", "max_read_lines": 100},
+        )
+        # ref.rb takes 90 of the 100, so the excerpt gets the remaining 10.
+        assert len(resolve_excerpts(stage, cfg)[0][1].splitlines()) == 10
+
     def test_excerpts_are_charged_against_the_same_budget(self, tmp_path):
         self._repo(tmp_path, {"huge.rb": 2000})
         cfg, stage = cfg_with(
