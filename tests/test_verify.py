@@ -775,6 +775,27 @@ class TestRequireNewTests:
         cfg, stage = build(repo, {"require_new_tests": True})
         assert verify(repo, cfg, stage, sha).failed_layer is Layer.NEW_TESTS
 
+    def test_an_empty_test_file_fails_even_when_tests_are_not_required(self, repo):
+        # `require_new_tests` says whether a stage *must* write tests. It has
+        # nothing to say about whether a file it did write is worth anything.
+        # Observed: the check was added behind that flag, and one stage later a
+        # stage whose entire output was a spec file left it at zero bytes with
+        # the flag unset — so the gate never ran and the reviewer paid for it.
+        sha = Git(repo).head_sha()
+        edit(repo, "src/test_thing.py", "")
+        cfg, stage = build(repo, {"require_new_tests": False})
+        out = verify(repo, cfg, stage, sha)
+        assert out.failed_layer is Layer.NEW_TESTS
+        assert out.route is Route.EXECUTOR
+
+    def test_a_stage_writing_no_tests_at_all_is_still_fine_when_not_required(
+        self, repo
+    ):
+        sha = Git(repo).head_sha()
+        edit(repo, "src/thing.py", "def f(): pass\n")
+        cfg, stage = build(repo, {"require_new_tests": False})
+        assert verify(repo, cfg, stage, sha).passed
+
     def test_several_empty_test_files_read_as_plural(self, repo):
         # The first live firing listed three files and said "but that file is
         # empty". The executor reads this; it should not have to work out

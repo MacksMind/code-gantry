@@ -746,9 +746,14 @@ def _layer_checks(ctx: _Context, outcome: VerifyOutcome):
 
 
 def _layer_new_tests(ctx: _Context, outcome: VerifyOutcome):
-    if not ctx.stage.require_new_tests:
-        return None
-
+    # Two rules, and only the second is conditional. Whether a stage *must*
+    # write tests is the operator's and the planner's business; whether a test
+    # file it did write is worth anything is not a matter of opinion, and an
+    # empty one is worthless however the stage was configured.
+    #
+    # This was originally written entirely behind the flag. One stage later, a
+    # stage whose whole output was a spec file left it at zero bytes with the
+    # flag unset, so the gate never ran and a review turn paid for it.
     changed = ctx.git.diff_names(ctx.stage_start_sha)
     touched = [p for p in changed if matches_any(p, ctx.cfg.test_file_patterns)]
 
@@ -786,7 +791,7 @@ def _layer_new_tests(ctx: _Context, outcome: VerifyOutcome):
             Route.EXECUTOR,
             "the stage's test files are empty" if plural
             else "the stage's test file is empty",
-            f"This stage requires tests. It touched {listed}, but "
+            f"This stage touched {listed}, but "
             + ("every one of them is empty" if plural else "that file is empty")
             + ", so they assert nothing and the suite passes them in no time at "
             "all.\n\nThe editor creates a file named in your scope before you "
@@ -794,6 +799,10 @@ def _layer_new_tests(ctx: _Context, outcome: VerifyOutcome):
             "edit. Write the file's contents as a proper edit rather than as a "
             "quoted block, and check the file is not empty before you finish.",
         )
+    if not ctx.stage.require_new_tests:
+        # Nothing empty, and nothing required. A stage that legitimately writes
+        # no tests reaches here and is none of this gate's business.
+        return None
     return _fail(
         Layer.NEW_TESTS,
         Route.EXECUTOR,
