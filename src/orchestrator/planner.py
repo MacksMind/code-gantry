@@ -658,7 +658,7 @@ class AnthropicPlanner:
                         # allocation — and the cost of hitting it is a whole
                         # derivation discarded.
                         max_tokens=32_000,
-                        output_config={"effort": "high"},
+                        output_config=_output_config(self.cfg),
                         system=_system_blocks(self.cfg.cache_ttl, self.cfg.guidance),
                         messages=_with_loop_breakpoint(conversation),
                         output_format=PlannerResponse,
@@ -1117,6 +1117,16 @@ def _with_loop_breakpoint(conversation: list[dict]) -> list[dict]:
     blocks = list(content)
     blocks[-1] = {**blocks[-1], "cache_control": cache_control()}
     return conversation[:-1] + [{**last, "content": blocks}]
+
+
+def _output_config(cfg) -> dict:
+    """The effort setting, as the Messages API wants it.
+
+    Its own function so the value has a seam to test at rather than being a
+    literal buried in a call the tests would have to reach through a stub to
+    see. It was `{"effort": "high"}` inline, and nothing pinned it.
+    """
+    return {"effort": cfg.effort}
 
 
 def _system_blocks(

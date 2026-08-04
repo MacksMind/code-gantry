@@ -41,6 +41,19 @@ from orchestrator.retry import Backoff, with_transport_retry
 Verdict = Literal["approved", "rework", "blocked"]
 
 
+
+def _reasoning_param(cfg) -> dict:
+    """The reasoning setting, or nothing at all.
+
+    Nothing is the default and the important case: the reviewer has never sent
+    this parameter, so it has always run at the provider's own choice. Emitting
+    one unconditionally would change what the gate does on every project that
+    never asked for it, which is not a change to make on the way past.
+    """
+    effort = getattr(cfg, "effort", None)
+    return {"reasoning": {"effort": effort}} if effort else {}
+
+
 class Issue(BaseModel):
     severity: Literal["major", "minor"]
     file: str
@@ -198,7 +211,10 @@ class OpenAIReviewer:
         back. The breakpoint itself is placed in `prompts.build_review_messages`;
         this is the request-side opt-in that makes it count.
         """
-        extra: dict = {"prompt_cache_options": {"mode": "explicit"}}
+        extra: dict = {
+            "prompt_cache_options": {"mode": "explicit"},
+            **_reasoning_param(self.cfg),
+        }
         if cache_key:
             extra["prompt_cache_key"] = cache_key
 

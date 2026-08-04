@@ -1231,3 +1231,49 @@ class TestATruncatedAnswerIsLegible:
         text = _call_failure(RuntimeError("connection reset by peer"))
         assert "connection reset by peer" in text
         assert "truncated" not in text
+
+
+class TestReasoningEffortIsOperatorControlled:
+    """Three roles, three providers, one knob each — and none of it was config.
+
+    The planner's was hard-coded `high`; the reviewer had none at all, so it ran
+    at whatever the provider defaults to; the executor never passed one. That is
+    the same defect as a stage-size default baked into the system prompt: a
+    tuning decision about one deployment, unreachable by the operator who owns
+    the deployment.
+
+    Literals are the SDKs' own. `OutputConfigParam.effort` is
+    `Literal["low","medium","high","xhigh","max"]` in the installed anthropic
+    package, and `ReasoningEffort` in the installed openai package carries
+    `max`. Both are generated from the providers' specs and sit on disk, which
+    beats recalling them.
+    """
+
+    def test_the_planner_default_is_unchanged_behaviour(self):
+        from orchestrator.config import PlannerConfig
+
+        assert PlannerConfig(model="m").effort == "high"
+
+    def test_the_planner_effort_reaches_the_call(self):
+        from orchestrator.config import PlannerConfig
+        from orchestrator.planner import _output_config
+
+        assert _output_config(PlannerConfig(model="m", effort="xhigh")) == {
+            "effort": "xhigh"
+        }
+
+    def test_the_reviewer_sends_nothing_unless_asked(self):
+        # It has always run at the provider default. Inventing one here would
+        # change the gate's behaviour on every project that never chose.
+        from orchestrator.config import ReviewerConfig
+        from orchestrator.reviewer import _reasoning_param
+
+        assert _reasoning_param(ReviewerConfig(model="m")) == {}
+
+    def test_the_reviewer_effort_reaches_the_call(self):
+        from orchestrator.config import ReviewerConfig
+        from orchestrator.reviewer import _reasoning_param
+
+        assert _reasoning_param(ReviewerConfig(model="m", effort="max")) == {
+            "reasoning": {"effort": "max"}
+        }

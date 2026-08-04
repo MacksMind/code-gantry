@@ -50,6 +50,7 @@ AIDER_FLAGS = [
     "--chat-history-file",
     "--input-history-file",
     "--llm-history-file",
+    "--reasoning-effort",
     "--cache-prompts",
     "--cache-keepalive-pings",
 ]
@@ -312,6 +313,9 @@ def build_aider_argv(
 
     # Keepalive only alongside caching: pinging every five minutes to hold open
     # a cache that was never enabled is pure cost for nothing.
+    if ex.reasoning_effort:
+        argv += ["--reasoning-effort", ex.reasoning_effort]
+
     if ex.cache_prompts:
         argv += ["--cache-prompts"]
         if ex.cache_keepalive_pings:

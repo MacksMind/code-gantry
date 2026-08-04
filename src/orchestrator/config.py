@@ -197,6 +197,10 @@ class ExecutorConfig(_EndpointConfig):
     # loop; against a hosted model it is most of the saving. The operator knows
     # which they have — this file already carries every other fact about where
     # the executor runs.
+    # Passed to Aider as `--reasoning-effort`, which it forwards as the API
+    # parameter of the same name. Unset by default: a local model that does not
+    # reason has nothing to do with it, and Aider omits the flag entirely.
+    reasoning_effort: str | None = None
     cache_prompts: bool = False
     # Aider pings at five-minute intervals to hold the cache open. A stage's
     # attempts are separated by a scoped suite and sometimes a full one, which
@@ -238,6 +242,12 @@ class PlannerConfig(_EndpointConfig):
     provider: Literal["anthropic"] = "anthropic"
     model: str
     api_key_env: str = "ANTHROPIC_API_KEY"
+    # Was hard-coded `high`, which is a tuning decision about a deployment
+    # sitting in code the operator who owns the deployment cannot reach.
+    # `high` remains the default so nothing changes for a project that never
+    # chose. Values are the installed SDK's — OutputConfigParam.effort is
+    # Literal["low","medium","high","xhigh","max"].
+    effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
     # Anthropic's ephemeral cache lasts about five minutes by default. Between
     # two planner calls sits a whole stage — an executor attempt, a scoped
     # suite, a review, a full suite — which on a large project is comfortably
@@ -293,6 +303,14 @@ class ReviewerConfig(_EndpointConfig):
     provider: Literal["openai"] = "openai"
     model: str
     api_key_env: str = "OPENAI_API_KEY"
+    # Unset by default, which is what it has always been: the reviewer never
+    # sent a reasoning parameter, so it ran at whatever the provider chose.
+    # Picking a default here would silently change the gate's behaviour on
+    # every project that never asked. Values from the installed openai
+    # package's ReasoningEffort.
+    effort: (
+        Literal["minimal", "none", "low", "medium", "high", "xhigh", "max"] | None
+    ) = None
     # No `prompt_cache_retention`. It was a chat-completions field, unset by
     # default and measured to change nothing against gpt-5.6-sol; the reviewer
     # now calls the Responses API, where the lifetime comes from
