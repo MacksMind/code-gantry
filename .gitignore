@@ -24,6 +24,10 @@ projects/*/status.md
 projects/*/plan-snapshot/
 projects/*/flakes.md
 projects/*/stage-costs.md
+# Where a `run` launched with nohup lands its stdout. It cannot go under
+# `runs/`, which is already ignored, because the run id — and so the directory —
+# does not exist until after the process starts.
+projects/*/*.out
 
 # Run configs may carry sensitive paths; keep them out of history.
 *.local.yaml

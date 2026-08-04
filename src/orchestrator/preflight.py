@@ -19,12 +19,14 @@ import json
 import os
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime
 
 from orchestrator.apistatus import classify
 from orchestrator.approval import approval_problem
 from orchestrator.commands import CommandResult, CommandRunner, truncate_middle
 from orchestrator.config import ProjectConfig
 from orchestrator.executor import AIDER_FLAGS
+from orchestrator.flake import FlakeVerdict, adjudicate, append_flakes
 from orchestrator.gitops import Git, GitError
 from orchestrator.plandoc import resolve_plan_tree
 
@@ -94,7 +96,11 @@ def run_preflight(
     checks.extend(_endpoint_checks(cfg))
     if check_endpoint:
         checks.extend(check_executor_endpoint(cfg))
-    checks.extend(_environment_checks(cfg, runner, run_tests=run_tests))
+    checks.extend(
+        _environment_checks(
+            cfg, runner, run_tests=run_tests, project_dir=project_dir
+        )
+    )
 
     if check_aider:
         checks.extend(check_aider_flags(runner))
@@ -289,7 +295,7 @@ def _plan_checks(cfg: ProjectConfig, git: Git) -> list[Check]:
 
 
 def _environment_checks(
-    cfg: ProjectConfig, runner: CommandRunner, *, run_tests: bool
+    cfg: ProjectConfig, runner: CommandRunner, *, run_tests: bool, project_dir=None
 ) -> list[Check]:
     checks = []
 
@@ -330,6 +336,7 @@ def _environment_checks(
     # came back red is red under both labels, and reporting the twin as a pass
     # would manufacture evidence of green from a run that failed.
     already_run: dict[str, CommandResult] = {}
+    excused: dict[str, FlakeVerdict] = {}
     for label, command in (
         ("test_command", cfg.test_command),
         ("full_test_command", cfg.full_test_command),
@@ -339,18 +346,65 @@ def _environment_checks(
         seen = command in already_run
         result = already_run.get(command) or runner.run(command)
         already_run[command] = result
-        detail = (
-            "same command as above; not run twice" if seen and result.ok
-            else "" if result.ok
-            else "a target repo that is already red makes every subsequent "
-            f"verdict meaningless\n{_excerpt(result.output)}"
-        )
+
+        # The same adjudication the merge gate uses, for the same reason. A
+        # large legacy suite is rarely order-independent, and preflight ran the
+        # whole thing with no gate at all — so it failed the run on a file the
+        # pipeline would have re-run alone and forgiven. Observed on a spec that
+        # had already been excused twenty-one times.
+        #
+        # Adjudicated once per command, not per label: the second label reuses
+        # the verdict for the same reason it reuses the result.
+        verdict = excused.get(command)
+        if not result.ok and verdict is None and not seen:
+            verdict = adjudicate(
+                output=result.output, command=command, cfg=cfg, runner=runner
+            )
+            excused[command] = verdict
+        flaked = bool(verdict and verdict.flaked)
+
+        if flaked and project_dir is not None:
+            # Into the same file the merge gate writes to. That file earns its
+            # keep by being countable — the spec that motivated this was
+            # identifiable as noise because it already had twenty-one entries —
+            # so an excusal made here and not written down undercounts the next
+            # one. `preflight` stands in for the stage id, since there is no
+            # stage yet.
+            append_flakes(
+                _project_root(project_dir),
+                "preflight",
+                verdict.files,
+                verdict.seeds,
+                datetime.now().astimezone().isoformat(timespec="seconds"),
+            )
+
+        if flaked:
+            files = ", ".join(verdict.files) or "(unnamed)"
+            detail = (
+                "red as a whole, green file by file — excused as a suite flake "
+                f"rather than a red repository: {files}. The merge gate applies "
+                "the same rule, so a run started here would not have been "
+                "stopped by this."
+            )
+        elif seen and result.ok:
+            detail = "same command as above; not run twice"
+        elif result.ok:
+            detail = ""
+        else:
+            detail = (
+                "a target repo that is already red makes every subsequent "
+                f"verdict meaningless\n{_excerpt(result.output)}"
+            )
+
         checks.append(
             Check(
                 f"{label} passes on a clean tree",
-                result.ok,
+                result.ok or flaked,
                 detail,
-                fatal=not (seen and result.ok),
+                # A flake is reported and not enforced: it is real information
+                # about the suite, and hiding it would make the next one
+                # invisible. `ok` with a detail prints as a pass that says why.
+                fatal=not (flaked or (seen and result.ok)),
             )
         )
 
@@ -663,16 +717,28 @@ def _build_reviewer(cfg: ProjectConfig):
     return make_reviewer(cfg.reviewer)
 
 
+def _project_root(project_dir):
+    """The project directory, from either a `ProjectPaths` or the path itself.
+
+    Imported here rather than at module scope: `runtime` imports this module, so
+    a top-level import would close the cycle.
+    """
+    from orchestrator.runtime import ProjectPaths
+
+    return (
+        project_dir.project_dir
+        if isinstance(project_dir, ProjectPaths)
+        else project_dir
+    )
+
+
 def _approval_check(cfg: ProjectConfig, project_dir) -> Check:
     from orchestrator.runtime import ProjectPaths
 
     config_path = (
         project_dir.config if isinstance(project_dir, ProjectPaths) else project_dir
     )
-    directory = (
-        project_dir.project_dir if isinstance(project_dir, ProjectPaths) else project_dir
-    )
-    problem = approval_problem(directory, config_path)
+    problem = approval_problem(_project_root(project_dir), config_path)
     return Check("config is approved", problem is None, problem or "")
 
 

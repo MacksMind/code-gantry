@@ -276,6 +276,81 @@ class TestFailureOutputKeepsTheVerdict:
         assert "9 examples, 3 failures" in failed[0].detail
 
 
+class TestPreflightExcusesAFlakeTheRunWouldExcuse:
+    """Preflight failed the run on a file the pipeline forgives every time.
+
+    Observed: `run` was launched, preflight ran the suite, and one feature spec
+    failed under fourteen parallel workers sharing four browsers. That file
+    passes standalone and had been excused as a flake twenty-one times — the
+    most-excused file in the project. The pipeline's flake gate re-runs a
+    failing file alone and excuses it; preflight ran the same suite with no such
+    gate, so it failed hard on precisely the failure the run itself treats as
+    noise, and the operator had to skip preflight's tests to get started.
+
+    Both use `flake.adjudicate`, and preflight already holds everything it
+    needs to call it.
+    """
+
+    def _cfg(self, repo, scoped_ok: bool):
+        return parse_config(
+            {
+                "target_repo": str(repo),
+                "base_ref": "main",
+                "project_branch": "proj",
+                "plan_root": "PLAN.md",
+                "test_command": (
+                    "echo 'rspec ./spec/features/a_spec.rb:40'; "
+                    "echo '9 examples, 1 failure'; exit 1"
+                ),
+                "scoped_test_command": (
+                    "echo {paths}" if scoped_ok else "echo {paths}; exit 1"
+                ),
+                "failed_file_pattern": r"^rspec \./(\S+?\.rb)",
+                "executor": {"model": "m"},
+                "planner": {"model": "claude-opus-5"},
+                "reviewer": {"model": "gpt-5.6-sol"},
+            }
+        )
+
+    def _check(self, repo, scoped_ok: bool):
+        checks = run_preflight(
+            self._cfg(repo, scoped_ok),
+            check_aider=False, check_models=False,
+            check_approval=False, check_endpoint=False,
+        )
+        return next(c for c in checks if "test_command passes" in c.name)
+
+    def test_a_file_that_passes_alone_does_not_block_the_run(self, repo):
+        check = self._check(repo, scoped_ok=True)
+        assert check.ok
+        assert not check.blocking
+        assert "spec/features/a_spec.rb" in check.detail
+
+    def test_the_excusal_is_recorded_where_the_count_lives(self, repo, tmp_path):
+        # `flakes.md` earns its keep by being countable — the spec that caused
+        # this was identifiable as noise because it had twenty-one entries. An
+        # excusal preflight makes and does not write down undercounts the next
+        # one.
+        project_dir = tmp_path / "proj"
+        checks = run_preflight(
+            self._cfg(repo, scoped_ok=True),
+            project_dir=project_dir,
+            check_aider=False, check_models=False,
+            check_approval=False, check_endpoint=False,
+        )
+        assert any(c.ok for c in checks if "test_command passes" in c.name)
+        recorded = (project_dir / "flakes.md").read_text()
+        assert "spec/features/a_spec.rb" in recorded
+        assert "preflight" in recorded
+
+    def test_a_file_that_fails_alone_still_blocks(self, repo):
+        # The whole point of adjudicating rather than ignoring: a real red
+        # suite must still stop the run before it spends a planner call.
+        check = self._check(repo, scoped_ok=False)
+        assert not check.ok
+        assert check.blocking
+
+
 class TestSuitesAreNotRunTwice:
     """`validate` runs test_command and full_test_command.
 
