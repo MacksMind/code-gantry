@@ -51,6 +51,7 @@ AIDER_FLAGS = [
     "--input-history-file",
     "--llm-history-file",
     "--reasoning-effort",
+    "--no-check-model-accepts-settings",
     "--cache-prompts",
     "--cache-keepalive-pings",
 ]
@@ -314,7 +315,16 @@ def build_aider_argv(
     # Keepalive only alongside caching: pinging every five minutes to hold open
     # a cache that was never enabled is pure cost for nothing.
     if ex.reasoning_effort:
-        argv += ["--reasoning-effort", ex.reasoning_effort]
+        # And tell Aider not to second-guess it. Aider checks its own model
+        # metadata for `supports_reasoning_effort` and silently drops the flag
+        # when the answer is no — which it was for a model whose provider
+        # accepts the setting on a live call and names the valid values in the
+        # error for an invalid one. Stale metadata is the wrong authority once
+        # the operator has stated a value.
+        argv += [
+            "--reasoning-effort", ex.reasoning_effort,
+            "--no-check-model-accepts-settings",
+        ]
 
     if ex.cache_prompts:
         argv += ["--cache-prompts"]

@@ -1136,6 +1136,28 @@ class TestPromptCachingIsOperatorControlled:
         argv = build_aider_argv(stage, cfg, "p")
         assert argv[argv.index("--cache-keepalive-pings") + 1] == "3"
 
+    def test_an_explicit_effort_overrides_aiders_own_capability_check(self):
+        """Aider drops the flag when its metadata says the model refuses it.
+
+        It said exactly that for `gpt-5.6-luna` — "does not support
+        'reasoning_effort', ignoring" — and the provider's own API disagrees:
+        a live call with `xhigh` is accepted, and the error for an unsupported
+        value names the supported set. So the check was reading stale metadata
+        and silently discarding the operator's setting.
+
+        Bypassed only when an effort is actually configured. Aider's check is a
+        reasonable default for someone who set nothing; it is the wrong
+        authority once the operator has stated a value that the provider
+        accepts.
+        """
+        cfg, stage = cfg_with(executor={"model": "m", "reasoning_effort": "xhigh"})
+        argv = build_aider_argv(stage, cfg, "p")
+        assert "--no-check-model-accepts-settings" in argv
+
+    def test_the_bypass_is_absent_when_no_effort_is_set(self):
+        cfg, stage = cfg_with(executor={"model": "m"})
+        assert "--no-check-model-accepts-settings" not in build_aider_argv(stage, cfg, "p")
+
     def test_keepalive_alone_does_nothing(self):
         # Pinging to keep a cache warm that was never enabled is pure cost.
         cfg, stage = cfg_with(executor={"model": "m", "cache_keepalive_pings": 3})
