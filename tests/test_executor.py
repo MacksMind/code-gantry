@@ -1037,6 +1037,76 @@ class TestTheExecutorsContextCostIsMeasured:
         assert context_tokens_from_log("no usage here") == 0
 
 
+class TestConventionsReachAiderAsReadOnlyFiles:
+    """Through `--read`, and never through `--message`.
+
+    They went into the prompt first, and it broke the run inside four minutes.
+    Aider scans the user message for anything that looks like a path and offers
+    to attach it; `--yes-always` answers yes. The repository's agent-facing
+    document is dense with paths, so a single stage attached `config/routes.rb`,
+    `db/structure.sql`, `docker-compose.yml` and more, reaching 258,854 tokens
+    against a 229,376 limit. Aider exited in three seconds having written
+    nothing, verify correctly reported no changes, and the loop repeated.
+
+    `check_for_file_mentions` is called on the user message and on the model's
+    reply, and nowhere else — files supplied through `--read` are rendered as
+    context and never scanned. There is no flag to disable the behaviour;
+    `--detect-urls` covers URLs only. Read from the installed 0.86.2 source
+    rather than recalled.
+    """
+
+    def _cfg(self, tmp_path, **over):
+        (tmp_path / "AGENTS.md").write_text("# conventions\n" * 20)
+        (tmp_path / "CLAUDE.md").write_text("@AGENTS.md\n")
+        return cfg_with(target_repo=str(tmp_path), **over)
+
+    def test_the_documents_are_passed_as_read_only(self, tmp_path):
+        cfg, stage = self._cfg(tmp_path, executor={"model": "m"})
+        argv = build_aider_argv(stage, cfg, "p")
+        reads = [argv[i + 1] for i, a in enumerate(argv) if a == "--read"]
+        assert "AGENTS.md" in reads
+
+    def test_they_are_never_named_in_the_message(self, tmp_path):
+        # The whole point. A path in the message is a path Aider will attach.
+        cfg, stage = self._cfg(tmp_path, executor={"model": "m"})
+        argv = build_aider_argv(stage, cfg, "the prompt text")
+        assert argv[argv.index("--message") + 1] == "the prompt text"
+
+    def test_a_document_that_does_not_exist_is_skipped(self, tmp_path):
+        # The defaults name two files and most projects have one. Passing a
+        # missing path makes Aider warn and, worse, offer to create it.
+        (tmp_path / "AGENTS.md").write_text("# conventions\n")
+        cfg, stage = cfg_with(target_repo=str(tmp_path), executor={"model": "m"})
+        argv = build_aider_argv(stage, cfg, "p")
+        reads = [argv[i + 1] for i, a in enumerate(argv) if a == "--read"]
+        assert reads == ["AGENTS.md"]
+
+    def test_an_operator_who_declares_none_gets_none(self, tmp_path):
+        # `[]` means the operator looked and decided there is no such file.
+        (tmp_path / "AGENTS.md").write_text("# conventions\n")
+        cfg, stage = cfg_with(
+            target_repo=str(tmp_path), agent_context=[], executor={"model": "m"}
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert "--read" not in argv
+
+    def test_they_do_not_displace_the_stage_s_own_reference_files(self, tmp_path):
+        # Charged first would let a large conventions file evict the file the
+        # stage actually needs. The stage's choices are budgeted; these are the
+        # operator's standing context and sit outside that accounting.
+        (tmp_path / "AGENTS.md").write_text("x\n" * 500)
+        (tmp_path / "ref.rb").write_text("y\n" * 100)
+        cfg, stage = cfg_with(
+            target_repo=str(tmp_path),
+            stage_overrides={"read_files": ["ref.rb"]},
+            executor={"model": "m", "max_read_lines": 200},
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        reads = [argv[i + 1] for i, a in enumerate(argv) if a == "--read"]
+        assert "ref.rb" in reads
+        assert "AGENTS.md" in reads
+
+
 class TestExcerptsResolveAtACommit:
     """One baseline for the three participants, not three.
 

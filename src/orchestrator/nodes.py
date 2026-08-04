@@ -594,7 +594,6 @@ def execute(state: RunState, rt: Runtime) -> dict:
             failure_layer=state.get("failure_layer"),
             cumulative_diff=cumulative_diff,
             excerpts=excerpts,
-            agent_context=_conventions(state, rt),
         )
         rt.write_artifact(
             state["stage_index"], stage.id, state.get("revision", 0), attempt,

@@ -245,6 +245,24 @@ def build_aider_argv(
 
     for glob in stage.edit_files:
         argv += ["--file", glob]
+    # Conventions first, and through `--read` rather than the prompt. Aider
+    # scans the *user message* for anything path-shaped and offers to attach
+    # it, which `--yes-always` accepts; the repository's agent-facing document
+    # is dense with paths, so putting its text in `--message` attached
+    # `config/routes.rb`, `db/structure.sql` and the rest — 258,854 tokens
+    # against a 229,376 limit, the request refused, and every attempt exiting
+    # in three seconds having written nothing. `check_for_file_mentions` runs
+    # on the message and on the model's reply and nowhere else, so a file
+    # supplied here is rendered as context and never scanned. There is no flag
+    # to turn the behaviour off — `--detect-urls` covers URLs only.
+    #
+    # Outside `max_read_lines`, unlike the stage's own reference files. That
+    # budget exists to stop the planner's per-stage choices swamping the task;
+    # these are the operator's standing context, the same on every stage, and
+    # letting a large one evict the file the stage actually needs would trade
+    # the wrong thing away.
+    for path in _existing_agent_context(cfg):
+        argv += ["--read", path]
     for glob in _within_read_budget(stage.read_files, cfg):
         argv += ["--read", glob]
 
@@ -373,6 +391,22 @@ def _read_lines(path: str, cfg: ProjectConfig) -> int | None:
         return sum(1 for _ in target.open("rb"))
     except OSError:  # pragma: no cover - unreadable file behaves as uncountable
         return None
+
+
+def _existing_agent_context(cfg: ProjectConfig) -> list[str]:
+    """The agent-facing documents that are actually present.
+
+    The defaults name two and most projects keep one, so an unconditional pass
+    would hand Aider a path that does not resolve — which it reports as a
+    warning and then offers to create, a prompt `--yes-always` would accept.
+
+    Not deduplicated by content the way the planner's copy is. That dedup
+    exists because both documents are rendered into one prompt; here they are
+    file arguments, and Aider is the thing that decides what to do with two
+    paths naming the same bytes.
+    """
+    root = Path(cfg.target_repo)
+    return [p for p in cfg.effective_agent_context if (root / p).is_file()]
 
 
 class ExcerptError(Exception):

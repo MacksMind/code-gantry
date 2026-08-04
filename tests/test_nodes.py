@@ -357,28 +357,20 @@ class TestAnUnresolvableExcerptReachesThePlanner:
         assert "MOVED_BY_A_PRIOR_ATTEMPT" not in section
 
 
-class TestTheConventionsReachBothOtherParticipants:
+class TestTheConventionsReachTheReviewer:
     """Runtime → node → prompt, for the two that never had it.
 
-    Both ends worked already: `agent_context` reads the documents, and the
-    prompts render whatever they are handed. The wire between them is what was
-    missing, and it is missing in the same way for each — which is why this
-    pins the journey rather than either end.
+    Both ends worked already: `agent_context` reads the documents at the run's
+    commit, and the prompt renders whatever it is handed. The wire between them
+    is what was missing. The executor reaches the same documents as `--read`
+    file arguments rather than through state, so its coverage is in the
+    executor's own tests; this is the hop that crosses a schema boundary.
     """
 
     def _cfg_files(self, repo, run_git):
         (repo / "AGENTS.md").write_text("# How this repo works\n\nSCOPE_BY_TENANT\n")
         run_git(repo, "add", "-A")
         run_git(repo, "commit", "-qm", "conventions")
-
-    def test_the_executor_prompt_gets_them(self, repo, tmp_path, run_git):
-        self._cfg_files(repo, run_git)
-        executor = StubExecutor(repo=repo, edits=[("app.py", "changed\n")])
-        cfg, rt, state = make(repo, tmp_path, executor=executor)
-        state["plan_sha"] = rt.git.rev_parse("proj")
-        with_stage(state, rt)
-        nodes.execute(state, rt)
-        assert "SCOPE_BY_TENANT" in executor.prompts[-1]
 
     def test_the_reviewer_prompt_gets_them(self, repo, tmp_path, run_git):
         self._cfg_files(repo, run_git)

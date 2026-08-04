@@ -176,7 +176,6 @@ def build_executor_prompt(
     failure_layer: str | None = None,
     cumulative_diff: str | None = None,
     excerpts: list[tuple[str, str]] | None = None,
-    agent_context: str | None = None,
 ) -> str:
     """The message handed to the executor.
 
@@ -214,30 +213,6 @@ def build_executor_prompt(
             f"{stage.constraints}\n"
             "A change that violates these will be rejected even if it is "
             "otherwise correct."
-        )
-
-    # After the stage's own constraints, because those are specific to this
-    # work and these are standing. Obligations cluster rather than being split
-    # by the reference material further down.
-    #
-    # The frame matters as much as the text. This document is written for
-    # whoever works in the repository, human or otherwise, so it contains setup
-    # steps, test commands and deploy procedure alongside the rules about how
-    # code should look. The executor runs nothing, and an unframed list of
-    # commands is how a model ends up narrating a command it never ran and
-    # reasoning from the output it imagined.
-    if agent_context and agent_context.strip():
-        parts.append(
-            "## How this repository is worked in\n\n"
-            "Conventions its maintainers keep, read once at the commit this "
-            "run started from. **These are facts about the repository, not "
-            "work to do** — nothing here is part of your task, and where a "
-            "passage describes running something, note that you cannot run "
-            "commands and must not act as though you had. Follow the rules "
-            "about how code in this repository is written; they apply on top "
-            "of the stage's own constraints, and a change that breaks one will "
-            "be rejected.\n\n"
-            + agent_context.strip()
         )
 
     if stage.acceptance:

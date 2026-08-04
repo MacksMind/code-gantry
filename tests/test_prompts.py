@@ -1124,58 +1124,19 @@ class TestReviewerToolGuidance:
 class TestEveryParticipantSeesTheRepositoryConventions:
     """The document that says how this repository is worked in.
 
-    It reached the planner only. The executor — the participant that actually
-    writes the code and can violate a convention — never saw it, and neither
-    did the reviewer, which is the gate that would catch one. A gate that
-    cannot reach what decides its verdict restates the stage instruction in its
-    own voice, and that was live: an executor recased a SQL keyword against a
-    convention documented in the repository, and the only reason the reviewer
-    caught it was that the stage happened to pin the exact output string.
+    It reached the planner only. The reviewer — the gate that would catch a
+    violation — never saw it, and a gate that cannot reach what decides its
+    verdict restates the stage instruction in its own voice. That was live: an
+    executor recased a SQL keyword against a convention documented in the
+    repository, and the only reason the reviewer caught it was that the stage
+    happened to pin the exact output string.
 
-    Passed as text rather than as a file the executor is told to read, because
-    it is resolved at the run's commit. Handing over a worktree path instead
-    would reintroduce the drift every other document here is read at a sha to
-    avoid.
+    The executor gets the same documents by a different route — `--read`, not
+    the prompt — because Aider attaches every path named in its message. That
+    is `TestConventionsReachAiderAsReadOnlyFiles` in the executor's tests.
     """
 
     CONVENTIONS = "## Shop scoping\n\nAlways scope by the current tenant."
-
-    def test_the_executor_prompt_carries_it(self):
-        from orchestrator.config import Stage, parse_config
-        from orchestrator.prompts import build_executor_prompt
-
-        cfg = parse_config(
-            {
-                "target_repo": ".", "base_ref": "main", "project_branch": "p",
-                "plan_root": "PLAN.md", "test_command": "true",
-                "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
-                "reviewer": {"model": "gpt-5.6-sol"},
-            }
-        )
-        stage = Stage(id="s", instruction="do it", edit_files=["a"])
-        text = build_executor_prompt(stage, cfg, agent_context=self.CONVENTIONS)
-        assert "Always scope by the current tenant" in text
-
-    def test_the_executor_is_told_they_are_facts_not_work(self):
-        # The same distinction the planner is given. A document describing the
-        # repository, dropped into a prompt without a frame, reads as a list of
-        # things to go and do — and this one contains setup and deploy prose
-        # the executor cannot act on at all, since it runs no commands.
-        from orchestrator.config import Stage, parse_config
-        from orchestrator.prompts import build_executor_prompt
-
-        cfg = parse_config(
-            {
-                "target_repo": ".", "base_ref": "main", "project_branch": "p",
-                "plan_root": "PLAN.md", "test_command": "true",
-                "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
-                "reviewer": {"model": "gpt-5.6-sol"},
-            }
-        )
-        stage = Stage(id="s", instruction="do it", edit_files=["a"])
-        text = build_executor_prompt(stage, cfg, agent_context=self.CONVENTIONS)
-        assert "not work to do" in text
-        assert "cannot run" in text
 
     def test_the_reviewer_prompt_carries_it(self):
         messages = build_review_messages(
