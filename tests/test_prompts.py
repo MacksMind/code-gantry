@@ -1267,6 +1267,27 @@ class TestThePlannerIsToldToStateTheEndState:
         # write the surrounding code.
         assert "A required literal is not an exception" in self._system()
 
+    def test_stage_size_is_not_defaulted_from_one_deployment(self):
+        """The framework states the mechanism; the run states the numbers.
+
+        This bullet used to carry a default — prefer many small stages, seventy
+        files is closer to seventy stages — and said outright that it was "a
+        statement about the executor rather than about the work", "tuned to a
+        local model with modest headroom". That is one deployment's tuning
+        shipped in the framework's system prompt to every project, which is the
+        rule about project knowledge belonging in config, one level up from
+        where it usually breaks.
+
+        The cost was visible: this project's guidance spent some fifty lines
+        countermanding it. What replaces it is the mechanism — a stage lands
+        completely or not at all, so a failure reverts the whole batch — plus a
+        channel that exists everywhere and is measured rather than assumed.
+        """
+        text = self._system()
+        assert "stage-costs.md" in text
+        assert "modest headroom" not in text
+        assert "one file per stage" not in text
+
     def test_the_guidance_carries_no_project_vocabulary(self):
         # Same rule as the reviewer's. This string ships to every project's
         # planner, and a paragraph of advice illustrated with one stack's

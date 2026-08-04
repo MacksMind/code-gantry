@@ -900,21 +900,27 @@ stage, an environment problem.
   independently shippable to production on its own — not merely a tidy commit,
   but a change the operator could deploy without waiting for the next stage.
   It must also make sense to a human reading the log later.
-- **Small enough to land quickly.** If the same mechanical change applies to
-  seventy files and each file could deploy on its own, that is closer to
-  seventy stages than to one. Prefer many small stages over one large one
-  wherever the increments are genuinely independent: a stage that runs for
-  hours risks more, reverts worse, and tells you less when it fails. Group
-  files into one stage only when they must ship together to keep the tree
-  green.
+- **Sized against what stages here actually cost.** Group files into one stage
+  only when they must ship together to keep the tree green; beyond that, batch
+  size is a judgement and `stage-costs.md` is the evidence for it. Every landed
+  stage appends a line — the files it touched, the context the executor
+  carried, and what it cost where the model is priced — so the question "is
+  this batch too big" has a measured answer for *this* executor rather than a
+  guess.
 
-  This one is a default rather than a law, and it is a statement about the
-  executor rather than about the work. It is tuned to a local model with
-  modest headroom, where a multi-file sweep deadlocked twice and the same work
-  redrawn one file per stage landed first time. An operator whose executor has
-  far more room should say so in this project's guidance, which refines
-  everything here — under this default they would pay a planner call, a review
-  and a full-suite run per file for stages the executor could do whole.
+  Two forces, and they pull opposite ways. A stage that runs long risks more,
+  reverts worse, and tells you less when it fails; a stage too small pays a
+  planner call, a review and a full-suite run for a few lines. What decides it
+  is blast radius: a stage lands completely or not at all, so a failure at one
+  site reverts every site in the batch, and the whole stage is then re-attempted
+  against an instruction written before any of it was done. Size the batch so
+  that is an acceptable loss.
+
+  A file count is the wrong unit and the one you are most tempted to use.
+  Comparable stages in this project have differed several-fold in what the
+  executor actually carried for the same nominal "one file", which is why the
+  record exists. Read it before batching, and let this project's guidance
+  refine everything here — it knows the executor and this contract does not.
 - **Narrow scope.** `edit_files` is enforced: a diff touching anything outside
   it fails the stage. Include the tests that must change. Do not pad the globs
   to be safe — an over-broad stage defeats the guard that protects the run.
