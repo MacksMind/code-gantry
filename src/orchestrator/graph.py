@@ -38,7 +38,10 @@ NODES: dict[str, Callable] = {
 EDGES: dict[str, list[str]] = {
     "plan": ["precheck", "verify", "finalize", "escalate"],
     "precheck": ["execute", "plan", "escalate"],
-    "execute": ["verify", "execute", "plan"],
+    # Not `execute` — the node routes to `verify` when it ran and to `plan`
+    # when a context command failed, and never back to itself. A retry is the
+    # graph re-entering `execute` from `verify` or `review`, not a self-loop.
+    "execute": ["verify", "plan"],
     "verify": ["review", "advance", "execute", "plan", "escalate"],
     "review": ["advance", "execute", "plan"],
     "advance": ["plan"],

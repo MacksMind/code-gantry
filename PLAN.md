@@ -1,4 +1,17 @@
-# Refactor Orchestrator — Build Spec
+# Refactor Orchestrator — Architecture
+
+This describes the system as built, and mostly answers *why* rather than *what*.
+[README.md](README.md) is how to use it and [CLAUDE.md](CLAUDE.md) is what to
+know before changing it; this is the one that explains why the shape is the
+shape.
+
+It began as a specification written before any code existed, and much of it
+survived contact unchanged — but not all, and where the two diverged the code
+won and this document was corrected. Nearly every design note here carries the
+observation that produced it, usually a failure. Those are the expensive part:
+the decisions are easy to re-derive and the incidents are not, and a reader
+deciding whether to change something needs to know what the current shape is
+paying for.
 
 ## What this is
 
@@ -96,8 +109,12 @@ Declarative — the planner may author and revise these:
 
 - `instruction` — the task text the executor receives
 - `edit_files`, `read_files` — globs, for executor scoping and the scope guard
+- `read_excerpts` — a path and two line numbers, read and quoted by the
+  orchestrator; declarative in the strongest sense available, since there is no
+  string in it that anything executes
 - `constraints`, `acceptance` — prose the reviewer judges against
-- `forbidden_patterns` — regexes, matched in-process, never shelled out
+- `forbidden_patterns`, `must_not_remain` — regexes, matched in-process against
+  added lines and file contents respectively, never shelled out
 
 Executable — operator-declared in the config, never model-authored:
 
@@ -445,10 +462,17 @@ precheck  → plan       (a precondition failed — an ordering error the planne
 precheck  → escalate   (setup failed — a broken environment, not a planning defect)
 
 execute   → verify
+execute   → plan       (a context command failed, so the prompt would have been
+                        built from missing information)
 
+verify    → review     (every layer passed, and the stage wants review)
+verify    → advance    (every layer passed, and it does not)
 verify    → escalate   (setup or branch-identity failure — no retry consumed)
-verify    → plan       (scope violation — the fix likely lies outside declared scope)
-verify    → execute    (patterns, tests, checks, or new-tests failed; retries remain)
+verify    → plan       (a scope violation, or an identical diff twice: the fix
+                        lies outside declared scope, or outside anything another
+                        attempt can reach)
+verify    → execute    (patterns, residue, tests, checks or new-tests failed;
+                        retries remain)
 verify    → plan       (same, retries exhausted)
 
 review    → advance    (reviewer approved and full suite green)
@@ -615,7 +639,16 @@ not be thrown away because one unexpected spec file was touched. Instead:
 Reverting the whole stage is never the right move, and reverting nothing would
 let out-of-scope edits ride along into a later attempt that happened to pass.
 
-**3. Forbidden patterns.** Each regex matched against the diff's **added lines
+**3. Progress.** This attempt's diff is not byte-identical to the last one.
+
+Routes to `plan`, immediately, without consuming a retry. An attempt that
+reproduces the previous diff exactly proves the feedback changed nothing, and
+another attempt against the same instruction will change nothing either — the
+stage needs redrawing, not retrying. It sits here rather than lower down
+because "is this the same answer as last time" makes every question below it
+moot, and answering it costs a hash.
+
+**4. Forbidden patterns.** Each regex matched against the diff's **added lines
 only**. Free, deterministic, before any test suite.
 
 The point is catching scope and compatibility violations mechanically rather
@@ -629,7 +662,21 @@ construct would otherwise flag itself the moment it succeeded, and a stage
 replacing a bare form with a qualified one needs the bare form forbidden on the
 way in while still deleting it on the way out.
 
-**4. Tests.** The stage's `test_command` if set, otherwise the global one.
+**5. Residue.** Each `must_not_remain` regex matched against the **contents** of
+the files the stage owns.
+
+The exact complement of layer 4, and the two read almost identically in prose
+while being opposites in a diff. `forbidden_patterns` asks what the stage
+*introduced*; `must_not_remain` asks what *survived*. A stage whose whole
+purpose is removing a construct cannot be checked by the first — succeeding
+looks the same as never starting — and is checked precisely by the second.
+
+Its characteristic false positive is worth knowing: an executor that removes
+something and leaves a comment explaining what used to be there has written the
+forbidden token back into the file. That is good practice colliding with a
+state check, and it has cost real attempts.
+
+**6. Tests.** The stage's `test_command` if set, otherwise the global one.
 Per-stage commands should be *scoped* — the specific specs the stage touches —
 because this runs on every attempt, and a large suite multiplied by retries
 dominates wall clock. On a Rails upgrade the prework tail scopes well; the
@@ -641,7 +688,7 @@ increment `flake_reruns` and continue; the stage is marked flaky in the report.
 Suites with browser-driven or timing-sensitive tests otherwise burn their
 entire retry budget on noise.
 
-**5. Checks.** Each command in `checks` must exit zero. The hook for
+**7. Checks.** Each command in `checks` must exit zero. The hook for
 verification a test suite does not provide: a route-table snapshot diff, an
 endpoint scanner, an asset build, a boot check.
 
@@ -650,12 +697,25 @@ still silently alter behavior no spec covers — and on a legacy codebase, the
 areas with the thinnest coverage are exactly the ones a refactor is most likely
 to disturb.
 
-**6. New tests.** If `require_new_tests` is set, the diff must *touch* at least
-one test file. Touched rather than added, deliberately: adding cases to an
-existing spec is legitimate test-first work, and demanding a brand-new file
-pushes the executor into creating redundant ones. What counts as a test file
-comes from `test_file_patterns`, so a project that names them unconventionally
-can say so. See "Greenfield and test-first stages".
+**8. New tests.** Two rules, and only the second is conditional.
+
+Any test file the stage touched must not be empty — always, whatever the stage
+was configured to require. The editor creates a file the moment it is named in
+scope, so a reply that was never applied as an edit leaves a zero-byte file
+behind, and that file passes every other gate honestly: the suite is green in
+seconds because there is nothing in it to run, and the diff really did add a
+test file. Only reading the contents catches it.
+
+And if `require_new_tests` is set, the diff must *touch* at least one test file.
+Touched rather than added, deliberately: adding cases to an existing spec is
+legitimate test-first work, and demanding a brand-new file pushes the executor
+into creating redundant ones. What counts as a test file comes from
+`test_file_patterns`, so a project that names them unconventionally can say so.
+See "Greenfield and test-first stages".
+
+The split matters because the flag answers whether a stage *must* write tests,
+which is a planning decision — not whether a file it did write is worth
+anything, which is not.
 
 **Feedback, not exit codes.** Every failing layer produces something the
 executor can act on — the matched forbidden lines, the failing test names, the
@@ -765,6 +825,14 @@ executable fields unrepresentable.
 }
 ```
 
+The planner reads the repository through the same bounded tools the reviewer
+does, and reads *narrowly*: measured over 1,583 calls across two runs, the
+median read is 41 lines and fewer than 1% reach the per-call cap. It read one
+1,935-line file twenty-seven times in ranges of fifteen to thirty-three lines.
+`read_excerpts` exists because that knowledge used to stop there — the stage it
+then wrote handed the executor whole-file globs, and the executor had to find
+the same region again before it could act on it.
+
 - `next_stage` — a new stage spec. `revision` resets to 0.
 - `revise` — a revised spec for the *same* stage id. `revision` increments,
   `attempt` resets. Same stage in the report, so it reads "stage 14, revision
@@ -844,28 +912,40 @@ escalates.
 
 ## Rework prompt construction
 
-Start a **fresh** Aider invocation rather than continuing the prior
-conversation. Pass:
+Each attempt is a **fresh** Aider invocation rather than a continuation of the
+prior conversation, carrying:
 
-1. The stage instruction (current revision).
-2. The specific failure — reviewer issues, failing test names, matched
-   forbidden lines.
-3. A note that a previous attempt was rejected.
+1. The stage instruction, at its current revision.
+2. The specific failure — reviewer issues, failing test names, matched lines.
+3. **The diff the stage has accumulated so far**, framed as the work being
+   amended rather than as a description of what to do.
+4. An opening that reflects which gate sent it back.
 
-Do not carry forward the failed attempt's Aider conversation history. It keeps
-the prompt focused, avoids the local model anchoring on its own earlier
+The failed attempt's Aider conversation history is not carried forward. That
+keeps the prompt focused, avoids the local model anchoring on its own earlier
 reasoning, and keeps context small — which matters on bandwidth-constrained
 local inference.
 
-By default, `git reset --hard <stage_start_sha>` before the rework attempt, so
-each attempt produces one clean single-purpose diff. Without the reset the
-stage's final diff contains the rejected attempt *and* its correction, which is
-exactly the unreviewable history a thin shippable unit is supposed to avoid.
+Point 3 is what makes editing forward reasonable: a reviewer leaves comments on
+the work in front of it and does not ask for the work again, and an author who
+cannot see their own diff is in no position to amend it. Point 4 matters more
+than it sounds. The opening said "a previous attempt was rejected, do not repeat
+the rejected approach" on every path for a long time, and across one 35-stage
+run in which the reviewer rejected nothing, it fired about a dozen times and was
+wrong every time — on seven of them instructing the executor to do the opposite
+of what the feedback below it asked for. A gate failure means the work stands
+and something specific is missing; only a review rejection means start over.
 
-Both are config flags — `rework_strategy: fresh | continue` and `rework_reset:
-true | false` — so the alternatives can be tested without a rewrite.
-`rework_reset: false` is right where a rework is genuinely additive to a
-partially-correct attempt.
+`rework_reset: true` restores the older behaviour of `git reset --hard
+<stage_start_sha>` before each attempt. It defaulted to on, for one clean
+single-purpose diff per attempt — but stages land by squash merge, so the diff
+anyone ever sees is the net one regardless, and the cost showed up the first
+time a rejection said the behaviour and scope were correct and only an
+explanatory comment contradicted the code. Resetting rebuilt a correct file from
+nothing in order to change one sentence. Worth knowing what the flag now buys:
+with it on, an attempt starts from the baseline carrying nothing forward but the
+feedback sentence, so the retries become independent samples rather than
+iterations — close to setting `max_rework_retries` to zero, and slower.
 
 ## Greenfield and test-first stages
 
@@ -936,9 +1016,6 @@ reviewer:
 
 limits:
   # see Budgets
-
-rework_strategy: fresh
-rework_reset: true
 ```
 
 API keys are read from environment variables named here. Never put a key in the
@@ -986,60 +1063,58 @@ stops paying off.
 Notify on completion, gating, and escalation. Unattended operation's
 characteristic failure is a run that quietly stopped hours ago.
 
-## Safety requirements
+## Safety properties
 
-- Refuse to start unless the config hash matches an approved one.
-- Refuse to start if the target repo has uncommitted changes.
-- Record `base_sha` at run start and include it in the report, so the whole
+These are the guarantees, and each is enforced somewhere specific rather than
+by convention. Where a guarantee could be stated as a rule *or* made
+unrepresentable, it is made unrepresentable — a rule is a thing a future edit
+can forget.
+
+- It refuses to start unless the config hash matches an approved one, and
+  refuses to start on a dirty target repo.
+- `base_sha` is recorded at run start and appears in the report, so the whole
   project branch can be reset with one command.
-- Commit only to the project branch and its child branches. Never `git push`.
-  Never modify `base_ref` or any other branch. The outer merge is the
-  operator's action, deliberately.
-- The orchestrator never runs a shell command originating from model output.
-  Every command it executes is declared by the operator in an approved config.
-  Enforce this in the planner's output schema, not by convention.
-- Enforce the denylist in `validate` regardless of operator approval.
-- Enforce `command_timeout_seconds` on every declared command, not only on the
+- It commits only to the project branch and its children, never modifies
+  `base_ref` or any other branch, and **no method exists that could push.** The
+  outer merge is the operator's action, deliberately.
+- **It never runs a shell command originating from model output.** Every command
+  it executes is declared by the operator in an approved config. This lives in
+  the planner's output schema rather than in a check: there is no field for a
+  command, so there is nothing to filter — and the allowlist filters the
+  response anyway, because two enforcements of the property that matters most
+  is the right number.
+- The denylist applies regardless of operator approval.
+- `command_timeout_seconds` bounds every declared command, not only the
   executor subprocess.
-- Set `gc.auto=0` in the target repo for the run's duration.
-- Assert branch identity as a verify layer after every stage.
+- `gc.auto=0` for the run's duration, so the reflog can recover a discarded
+  attempt.
+- Branch identity is asserted as a verify layer on every stage, and a failure
+  goes straight to a human: a containment breach does not negotiate.
 
-## Build order
+## What the layering is built on
 
-1. Project scaffolding, `pyproject.toml`, config schema, loading, and
-   `validate` — including the denylist and per-stage well-formedness checks.
-2. **The declared-command runner:** subprocess execution with timeout, output
-   capture, and structured results. Setup, tests, checks, preconditions,
-   context commands, and script stages all go through it, as does the layered
-   `verify` sequence built on top. The most testable piece in the system, and
-   everything else depends on it — build it before anything that needs a model.
-3. Git operations: project and child branch management, namespacing,
-   `stage_start_sha`, working-tree diffs, squash merge, branch-identity
-   assertion, `gc.auto` handling.
-4. `init` — repo discovery with provenance comments; `approve` — hash
-   recording. Both testable against a fixture repo with no models involved.
-5. Aider subprocess wrapper with file scoping, timeout, and log capture.
-6. Reviewer client: plan-snapshot assembly, prefix ordering for caching,
-   structured-output parsing, defensive fallback to `blocked`.
-7. Planner client: same, plus the declarative-only output schema and
-   `status.md` appending.
-8. LangGraph state machine wiring it together, with checkpointing, the
-   escalation tiers, the failure-aware resume path, and config reload. Compute
-   LangGraph's `recursion_limit` from the stage and retry budgets rather than
-   leaving it at the default 25 super-steps — this graph loops far more than
-   that, and exhausting the limit surfaces as an opaque framework error instead
-   of an escalation, which is the one failure mode this tool must not have.
-9. CLI, logging, report generation, notification.
-10. Tests: unit tests for config validation, denylist matching, prompt
-    construction, verdict parsing, scope-guard glob matching, forbidden-pattern
-    matching against added lines only, and planner-schema rejection of
-    executable fields. An integration test running a multi-stage project against
-    a fixture repo with stubbed planner and reviewer, covering one `agent`
-    stage, one `script` stage, one escalation resumed to completion, one planner
-    revision in each mode, and one escalation from each tier.
+The dependency order is still visible in the code and worth knowing, because it
+explains why some things are easy to test and others are not.
 
-Aider's flag names are verified by `validate` parsing `aider --help`, not by
-trusting this document — its CLI surface changes between releases, and the check
-belongs somewhere it runs before every unattended pass.
+Everything that touches the outside world goes through **one declared-command
+runner** — setup, tests, checks, preconditions, context commands, and script
+stages alike — and the layered `verify` sequence is built on top of it. That is
+why `verify` is exercised end to end in the test suite without a model
+anywhere: its inputs are a git repository and a subprocess, both real in the
+tests. **Git operations** sit at the same level, and `init` and `approve` above
+them, which is why those are testable against a fixture repo with nothing
+stubbed.
 
-Commit at each step.
+The three model clients sit above that, and the graph above them. Only the
+three model calls are stubbed in the suite; the graph, the checkpointer, the
+merges and the subprocess runner are all real.
+
+One number is computed rather than configured: LangGraph's `recursion_limit`
+comes from the stage and retry budgets, because this graph loops far more than
+the default twenty-five super-steps allows and exhausting it surfaces as an
+opaque framework error rather than an escalation — the one failure mode this
+tool must not have.
+
+Aider's flag names are verified by `validate` parsing `aider --help` rather than
+by trusting this document. Its CLI surface changes between releases, and the
+check belongs somewhere that runs before every unattended pass.

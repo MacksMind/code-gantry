@@ -14,7 +14,7 @@ class TestEdgeTable:
         assert EDGES == {
             "plan": ["precheck", "verify", "finalize", "escalate"],
             "precheck": ["execute", "plan", "escalate"],
-            "execute": ["verify", "execute", "plan"],
+            "execute": ["verify", "plan"],
             "verify": ["review", "advance", "execute", "plan", "escalate"],
             "review": ["advance", "execute", "plan"],
             "advance": ["plan"],
