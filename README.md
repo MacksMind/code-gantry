@@ -116,9 +116,18 @@ property; everything else is mechanism.
 
 | Role | May write | May not |
 |---|---|---|
-| **Executor** (local, via Aider) | Product code inside the stage's `edit_files` | Anything outside it; any command |
-| **Planner** (Anthropic) | Stage specs — declarative fields only — plan revisions, the status log | Product code; **any executable field** |
-| **Reviewer** (OpenAI) | Nothing | Everything |
+| **Executor** (via Aider) | Product code inside the stage's `edit_files` | Anything outside it; any command; **any code the planner authored for it** |
+| **Planner** | Stage specs — declarative fields only — plan revisions, the status log | Product code; **any executable field**; **any fenced code block in an instruction** |
+| **Reviewer** | Nothing | Everything |
+
+**The planner does not write code either**, which is the same partition one
+field along and the harder half to see: a replacement block names nothing
+executable and is still the planner writing the diff. Quoting goes through
+`read_excerpts` — a path and a line range, read at the stage's starting
+commit — because *a reference can only point at code that already exists*, so
+an after-image is unexpressible rather than merely discouraged.
+`validate_stage` rejects a fenced block in an instruction; inline backticks are
+left alone, since naming an identifier is a property.
 
 The planner and reviewer both **read** the repository through the same bounded
 tools — read a file, list files, search — under separate per-role line and call
@@ -269,6 +278,31 @@ orchestrator can't do escalates, you do it, and `resume` verifies it.
 repository-state failure, so your fix is checked rather than discarded; at the
 planner for a planning failure. The clean-tree requirement is start-only, since
 your fix is normally uncommitted.
+
+## What each role is given to read
+
+Three documents, three audiences, and the split is by what a reader can act on.
+
+| | Conventions (`agent_context`) | Operations (`operations_context`) |
+|---|---|---|
+| Planner | ✓ | ✓ |
+| Executor | ✓ (as `--read`) | — |
+| Reviewer | ✓ | — |
+
+Conventions — how code here has to look — bind anything that writes or judges
+code. Operations — build, test, deploy — belong to the planner alone: it is the
+role that decides what is *possible*, and the one that read five plan items as
+blocked because nobody had told it the container reinstalls the bundle on a
+Gemfile edit. The executor runs no commands, so a page of them invites it to
+narrate one it never ran.
+
+The executor receives its copy as a `--read` file rather than as prompt text.
+Aider scans the message — and its own reply — for anything path-shaped and
+attaches it, with `--yes-always` answering. A conventions document is dense with
+paths, so putting its text in the message once attached `config/routes.rb`,
+`db/structure.sql` and `docker-compose.yml`, reaching 258,854 tokens against a
+229,376 limit and killing every attempt in three seconds. Files supplied through
+`--read` are never scanned.
 
 ## Plan documents
 

@@ -934,6 +934,49 @@ not an exit code. Which tests failed and what files they live in is what
 distinguishes "widen this stage by two files" from "we skipped a prerequisite,
 insert a stage before this one."
 
+
+### What each role reads, and what it costs
+
+The repository's own agent-facing documents are split by audience rather than
+by file. `agent_context` is conventions — how code here has to look — and goes
+to all three roles: the planner draws against it, the executor writes code that
+must obey it, and the reviewer judges whether the code did. `operations_context`
+is build, test and deploy, and goes to the planner alone. That asymmetry is the
+point: the planner is the role deciding what is *possible*, and the one that
+read five plan items as blocked because nothing had told it the container
+reinstalls the bundle on a Gemfile edit; the executor runs no commands, so a
+page of them invites it to narrate one it never ran.
+
+The executor's copy arrives as a `--read` file, not as prompt text, and the
+distinction is not stylistic. Aider scans the user message — and the model's own
+reply — for anything path-shaped and attaches the file, with `--yes-always`
+answering; there is no flag to turn it off. A conventions document is dense with
+paths, so its text in the message once attached `config/routes.rb`,
+`db/structure.sql` and `docker-compose.yml`, reaching 258,854 tokens against a
+229,376 limit. Files given through `--read` are never scanned.
+
+Reasoning effort is per-role config rather than a constant in each client:
+`planner.effort` and `reviewer.effort` name the provider's own literals, and
+`executor.reasoning_effort` reaches Aider as `--reasoning-effort`. The ceiling
+is a property of the *endpoint*, not the model — chat/completions refuses `max`
+for both GPT-5.6 models while `/v1/responses` accepts it for both — and Aider
+calls `litellm.completion`, so the executor tops out at `xhigh` while the
+reviewer, which uses the Responses API directly, can ask for `max`. Aider also
+consults its own metadata and drops the flag for a model it believes cannot
+take it, which the live API contradicts, so an explicit effort carries
+`--no-check-model-accepts-settings` with it.
+
+And the executor is priced now. It never was, because a local model is free and
+the measured economics — the planner at 91% of tokens against the executor's
+2.2% of prompt volume — assumed that. `stage-costs.md` carries dollars beside
+the context figure, taken from Aider's own report, which appears only when
+litellm knows the model's input cost. Two blind spots worth knowing: a zero
+means "not priced" as often as "free", and Aider's cache accounting reads
+Anthropic's and DeepSeek's usage fields but never OpenAI's
+`prompt_tokens_details.cached_tokens`, so a zero there is the instrument rather
+than the cache. Measured at the API instead, an identical 16k prefix caches at
+99.9% with nothing configured.
+
 ## Escalation tiers
 
 Three tiers. The design goal is that a run stops only for a good reason.

@@ -275,6 +275,50 @@ docstring made this argument first, about shas and timestamps: embedding them
 in append-only prose turns them into "claims about history that history had
 invalidated".
 
+**A tool reads more than you hand it.** Aider scans the user message *and its
+own reply* for anything path-shaped and attaches the file, with `--yes-always`
+answering; there is no flag to disable it, and `--detect-urls` covers URLs
+only. Putting a conventions document — dense with paths — into the message
+attached `config/routes.rb`, `db/structure.sql` and the rest, reaching 258,854
+tokens against a 229,376 limit, so every attempt died in three seconds having
+written nothing and the run looped. Files supplied through `--read` are never
+scanned, which is where they go now. The general lesson is that the shipped
+tool's behaviour is discovered by reading its source, not by reasoning about
+what a sensible tool would do: this one was found by grepping
+`check_for_file_mentions`, after two wrong theories.
+
+**The same command in both places, spelled the same way.** `rubocop -A` exits
+zero *after* rewriting files. Run it one way inside the executor's loop and
+another way at the gate and the exit code stops describing the artifacts — one
+place reporting clean while the other has changed the tree underneath it. It
+also drains the gate: correcting inside the session means the model handles
+what has no autocorrection while the file is still in front of it, and verify
+finds nothing left to do. Measured cost of not doing this: two consecutive
+stages, one cop each with no autocorrection, three or four attempts apiece and
+one planner intervention, to communicate a one-line change.
+
+**Collapse before you truncate.** `truncate_middle` keeps the head and tail
+because "command output is informative at both ends" — true of most commands,
+false of a progress reporter, which puts its dots first and its findings after.
+Measured: 1,575 unbroken dots were 66% of the feedback handed to an executor,
+ahead of the two lines that said what to fix. The latent half is worse than the
+noise, because a longer run would have kept the dots as head and dropped the
+offences as middle. The ordering is why `clip_for_model` exists rather than two
+calls at each site — and the duplication it replaced, `_clip` written twice in
+`nodes.py` and `verify.py`, is how the decision got made twice in the first
+place.
+
+**The executor is not free any more.** The economics the design rests on —
+planner at 91% of tokens, executor at 2.2% of prompt volume — were measured
+against a local model on a Spark. A hosted executor invalidates both, so
+`stage-costs.md` now carries dollars beside the context figure. Aider reports
+cost only when litellm knows `input_cost_per_token`, so a zero means "not
+priced" as often as it means "free"; and its cache accounting reads Anthropic's
+and DeepSeek's fields but never OpenAI's `prompt_tokens_details.cached_tokens`,
+so a silent zero there is the instrument, not the cache. Measured directly at
+the API: an identical 16k prefix caches at 99.9% on chat/completions with
+nothing configured.
+
 ## Where things live
 
 `nodes.py` holds the loop's decisions — which failures route to the executor,
