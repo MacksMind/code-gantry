@@ -305,3 +305,74 @@ class TestOutputIsKeptWholeForParsing:
         runner = CommandRunner(cwd=repo, timeout=60, max_output_chars=5_000)
         result = runner.run("for i in $(seq 1 5000); do echo 'x'; done")
         assert len(result.output) <= 5_200
+
+
+class TestOutputPreparedForAModel:
+    """Progress reporters put the noise first and the finding after.
+
+    Measured on a live stage: the feedback handed to the executor was 2,393
+    characters, of which a single unbroken run of 1,575 dots was 66%. The two
+    lines that said what to fix — a RuboCop offence and its source line — sat
+    behind it. That stage then survived two executor attempts, a progress
+    failure, a planner revision and another attempt without the offence being
+    touched.
+
+    The latent half is worse than the noise. `truncate_middle` keeps the head
+    and tail because "command output is informative at both ends", which is
+    true of most commands and false of a progress reporter: RuboCop and RSpec
+    both emit their dots first and their failures after. This output happened
+    to fit under the cap; one with more offences would have kept the dots as
+    head and dropped the offences as middle. So collapsing has to happen
+    *before* truncation, not after, and that ordering is the point of having
+    one function rather than two calls at each site.
+    """
+
+    def test_a_long_run_is_collapsed(self):
+        from orchestrator.commands import collapse_progress_runs
+
+        out = collapse_progress_runs("Inspecting\n" + "." * 1575 + "\nOffenses:")
+        assert "." * 1575 not in out
+        assert "Inspecting" in out and "Offenses:" in out
+
+    def test_it_says_how_much_it_dropped(self):
+        # Lossy about the characters, honest about the quantity: a reader can
+        # still tell a 1,575-dot run from a 40-dot one.
+        from orchestrator.commands import collapse_progress_runs
+
+        assert "1575" in collapse_progress_runs("." * 1575).replace(",", "")
+
+    def test_short_runs_are_left_alone(self):
+        # `...F...` is the whole result of a small suite. Collapsing that would
+        # destroy the signal rather than the noise.
+        from orchestrator.commands import collapse_progress_runs
+
+        text = "....F....\n1 failure"
+        assert collapse_progress_runs(text) == text
+
+    def test_it_names_no_tool_and_no_language(self):
+        # This ships to every project. A rule written around dots, `F`/`E`, or
+        # RuboCop is a Ruby hint in a framework string.
+        import inspect
+        from orchestrator.commands import collapse_progress_runs
+
+        source = inspect.getsource(collapse_progress_runs).lower()
+        for word in ("rubocop", "rspec", "ruby", "pytest", "eslint"):
+            assert word not in source, f"{word!r} is project knowledge"
+
+    def test_collapsing_happens_before_truncation(self):
+        """The ordering bug, pinned.
+
+        With the run intact the dots are the head and survive truncation while
+        the finding, sitting after them, is dropped as the middle.
+        """
+        from orchestrator.commands import clip_for_model
+
+        text = "start\n" + "." * 5000 + "\nOFFENCE_HERE\n" + "tail\n"
+        out = clip_for_model(text, 400)
+        assert "OFFENCE_HERE" in out
+
+    def test_it_still_bounds_the_result(self):
+        from orchestrator.commands import clip_for_model
+
+        assert len(clip_for_model("x " * 50_000, 500)) <= 600
+

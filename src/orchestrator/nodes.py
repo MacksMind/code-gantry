@@ -22,7 +22,7 @@ import time
 from datetime import datetime
 
 from orchestrator.addendum import append_notes, append_observations, append_outcome
-from orchestrator.commands import truncate_middle
+from orchestrator.commands import clip_for_model
 from orchestrator.config import Stage, validate_stage
 from orchestrator.executor import ExcerptError, resolve_excerpts
 from orchestrator.flake import adjudicate, append_flakes, predates_stage
@@ -56,7 +56,7 @@ FEEDBACK_OUTPUT_CHARS = 4_000
 
 
 def _clip(text: str) -> str:
-    return truncate_middle(text or "", FEEDBACK_OUTPUT_CHARS)
+    return clip_for_model(text, FEEDBACK_OUTPUT_CHARS)
 
 
 def current_stage(state: RunState, rt: Runtime) -> Stage | None:

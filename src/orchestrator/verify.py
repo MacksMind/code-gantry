@@ -27,7 +27,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from enum import Enum
 
-from orchestrator.commands import CommandResult, CommandRunner, truncate_middle
+from orchestrator.commands import CommandResult, CommandRunner, clip_for_model
 from orchestrator.config import ProjectConfig, Stage
 from orchestrator.flake import adjudicate
 from orchestrator.gitops import Git, GitError
@@ -830,4 +830,4 @@ def _path_hints(output: str) -> list[str]:
 
 
 def _clip(text: str) -> str:
-    return truncate_middle(text, FEEDBACK_OUTPUT_CHARS)
+    return clip_for_model(text, FEEDBACK_OUTPUT_CHARS)

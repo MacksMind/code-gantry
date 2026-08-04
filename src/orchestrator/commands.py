@@ -10,6 +10,7 @@ path exists in the other direction.
 from __future__ import annotations
 
 import os
+import re
 import signal
 import subprocess
 import time
@@ -32,6 +33,47 @@ from typing import Callable, Sequence
 # and a stage the reviewer had approved was reset over someone else's flaky
 # spec.
 DEFAULT_MAX_OUTPUT_CHARS = 5_000_000
+
+
+# Long enough that no meaningful line reaches it, short enough to catch a
+# progress bar early. A suite reporting `....F....` says something with every
+# character; a thousand identical ones say only "still going".
+_PROGRESS_RUN = re.compile(r"(.)\1{39,}")
+
+
+def collapse_progress_runs(text: str) -> str:
+    """Replace a long run of one repeated character with a note of its length.
+
+    Command-line tools draw progress as a stream of identical characters and
+    print the finding afterwards. Measured on a live stage: 1,575 unbroken dots
+    were 66% of the feedback the executor received, ahead of the two lines that
+    said what to fix — and that offence then survived four passes untouched.
+
+    Deliberately written about repetition rather than about any tool's
+    alphabet. A rule naming dots, or `F` and `E`, or a linter, would be one
+    ecosystem's vocabulary compiled into a framework that ships to every
+    project.
+
+    Honest rather than merely shorter: the count survives, so a reader can tell
+    a long run from a short one, and nothing that varies is discarded.
+    """
+    return _PROGRESS_RUN.sub(
+        lambda m: f"{m.group(1) * 3}[{len(m.group(0)):,} repeated characters]",
+        text or "",
+    )
+
+
+def clip_for_model(text: str, max_chars: int) -> str:
+    """Command output made fit to hand to a model.
+
+    One function because the order matters and was getting decided twice.
+    `truncate_middle` keeps the head and tail on the reasoning that output is
+    informative at both ends — true of most commands, false of a progress
+    reporter, which puts its noise first and its findings after. Truncate an
+    uncollapsed run and the dots are the head that survives while the offences
+    are the middle that goes.
+    """
+    return truncate_middle(collapse_progress_runs(text), max_chars)
 
 
 def truncate_middle(text: str, max_chars: int) -> str:

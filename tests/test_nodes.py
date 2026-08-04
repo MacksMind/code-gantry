@@ -1677,14 +1677,31 @@ class TestExecutorFeedbackIsBounded:
     """
 
     def test_a_huge_executor_log_is_clipped_into_feedback(self, repo, tmp_path):
+        # Varied text, because that is what a transcript is. It used to be one
+        # character repeated 200,000 times, which the progress-run collapse now
+        # reduces to a single note — bounding it, but by the wrong mechanism,
+        # so the test stopped exercising truncation while still passing its
+        # first assertion. The degenerate case is covered below.
         executor = StubExecutor(repo=repo, ok=False)
-        executor.log = "X" * 200_000
+        executor.log = "".join(f"line {i} of aider transcript\n" for i in range(8_000))
         cfg, rt, state = make(repo, tmp_path, executor=executor)
         state = with_stage(state, rt)
         out = nodes.execute(state, rt)
         joined = "".join(out.get("review_feedback") or [])
         assert len(joined) < 20_000, "feedback must be bounded"
         assert "truncated" in joined
+
+    def test_a_degenerate_run_is_bounded_by_collapsing(self, repo, tmp_path):
+        # The other way output gets large: a progress bar rather than prose.
+        # Collapsed rather than truncated, which keeps whatever follows it.
+        executor = StubExecutor(repo=repo, ok=False)
+        executor.log = "." * 200_000 + "\nTHE_ACTUAL_ERROR"
+        cfg, rt, state = make(repo, tmp_path, executor=executor)
+        state = with_stage(state, rt)
+        out = nodes.execute(state, rt)
+        joined = "".join(out.get("review_feedback") or [])
+        assert len(joined) < 20_000, "feedback must be bounded"
+        assert "THE_ACTUAL_ERROR" in joined
 
     def test_the_artifact_keeps_the_whole_log(self, repo, tmp_path):
         # Bounded where it is used, whole where it is read afterwards.
