@@ -514,19 +514,25 @@ class TestExecute:
         nodes.execute(state, rt)
         assert "Wrong verb on the route." in ex.prompts[0]
 
-    def test_a_review_rejection_tells_the_executor_the_approach_was_rejected(
+    def test_a_review_rejection_asks_for_a_replacement_not_an_addition(
         self, repo, tmp_path
     ):
-        # `rework_reset` puts the branch back to the baseline first, so there is
-        # nothing of the previous attempt left and starting over is the whole
-        # point.
+        # This said "do not repeat the rejected approach", which made sense when
+        # `rework_reset` was on and the branch went back to the baseline first.
+        # With the work now left in place and shown to the executor, that told
+        # it to discard the very diff it was handed as the thing to amend — and
+        # the observed result was a reviewer rejecting a rework for leaving the
+        # original assertion in place and adding the new form beside it.
         ex = StubExecutor(repo=repo, edits=[("app.py", "x\n")])
         cfg, rt, state = make(repo, tmp_path, executor=ex)
         state = with_stage(state, rt)
         state["review_feedback"] = ["Wrong verb on the route."]
         state["failure_layer"] = "review"
         nodes.execute(state, rt)
-        assert "rejected" in ex.prompts[0]
+        prompt = ex.prompts[0]
+        assert "rejected" in prompt
+        assert "replace" in prompt
+        assert "do not repeat the rejected approach" not in prompt.lower()
 
     def test_a_gate_failure_does_not_call_the_work_rejected(self, repo, tmp_path):
         # Measured over one run of 35 stages: this opening fired about a dozen
