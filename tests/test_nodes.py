@@ -2536,3 +2536,53 @@ class TestChecksThatWrite:
         nodes.verify(state, rt)
         assert "linted" in (repo / "app.py").read_text()
         assert rt.git.uncommitted()
+
+
+class TestTheRecordReachesTheLog:
+    """The reviewer's account of the change, end to end.
+
+    Written here rather than only against `append_outcome` because this value
+    crosses two schema boundaries — `ReviewOutcome` into `RunState`, and
+    `RunState` into the addendum — and every defect of this shape in this
+    codebase has been a value computed correctly, written correctly, and
+    dropped in transit by a schema that did not declare the key.
+    """
+
+    def _reviewer(self, record):
+        return StubReviewer(
+            [ReviewOutcome(verdict="approved", summary="matches the stage",
+                           record=record)]
+        )
+
+    def test_it_is_what_the_log_gets(self, repo, tmp_path):
+        cfg, rt, state = make(
+            repo, tmp_path,
+            reviewer=self._reviewer("Widens the permit list to the two id "
+                                    "columns, so the selects now save."),
+            plan_addendum_path="docs/progress_log.md",
+        )
+        (repo / "docs").mkdir(exist_ok=True)
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("stage work\n")
+        state = {**state, **nodes.review(state, rt)}
+        nodes.advance(state, rt)
+
+        text = (repo / "docs/progress_log.md").read_text()
+        assert "so the selects now save" in text
+        # Not the verdict rationale, which is written for a different job.
+        assert "matches the stage" not in text
+
+    def test_a_reviewer_that_writes_none_falls_back_to_the_summary(
+        self, repo, tmp_path
+    ):
+        # Better a gate-shaped entry than no entry.
+        cfg, rt, state = make(
+            repo, tmp_path, reviewer=self._reviewer(""),
+            plan_addendum_path="docs/progress_log.md",
+        )
+        (repo / "docs").mkdir(exist_ok=True)
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("stage work\n")
+        state = {**state, **nodes.review(state, rt)}
+        nodes.advance(state, rt)
+        assert "matches the stage" in (repo / "docs/progress_log.md").read_text()

@@ -79,6 +79,7 @@ class StageResult(TypedDict, total=False):
     test_seconds: float
     review_verdict: str | None
     review_summary: str | None
+    review_record: str | None
     review_issues: list[dict]
     verify_failures: list[str]
     planner_notes: list[str]
@@ -199,6 +200,7 @@ class RunState(TypedDict, total=False):
     review_feedback: list[str]
     review_verdict: str | None
     review_summary: str | None
+    review_record: str | None
 
     stage_usage: dict[str, int]
     run_usage: dict[str, int]
@@ -262,6 +264,7 @@ def new_state(
         review_feedback=[],
         review_verdict=None,
         review_summary=None,
+        review_record=None,
         stage_usage=_zero_usage(),
         run_usage=_zero_usage(),
         status="running",
@@ -315,6 +318,7 @@ def fresh_stage_fields() -> dict:
         "review_feedback": [],
         "review_verdict": None,
         "review_summary": None,
+        "review_record": None,
         "planner_notes": [],
         # Belongs to the attempt that was truncated. Carried into the next
         # stage it would report a withholding that stage never suffered, and
@@ -380,6 +384,7 @@ def fresh_revision_fields() -> dict:
         "review_feedback": [],
         "review_verdict": None,
         "review_summary": None,
+        "review_record": None,
     }
 
 

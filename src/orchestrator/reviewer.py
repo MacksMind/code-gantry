@@ -66,6 +66,16 @@ class ReviewVerdict(BaseModel):
 
     verdict: Verdict
     summary: str
+    # What the diff does, written for the progress log rather than for the
+    # verdict. Required, and that is the whole difference from `observations`,
+    # which is optional and has been returned empty 278 times out of 278: an
+    # optional field invites nothing, and this one is always answerable.
+    #
+    # Separate from `summary` because `summary` justifies a routing decision
+    # and reads like it — every one opens by confirming the diff matches the
+    # stage and closes on what was not done. That is the right shape for a gate
+    # and the wrong shape for a record someone reads a year later.
+    record: str
     issues: list[Issue]
     observations: list[Observation] = []
 
@@ -90,6 +100,8 @@ class TokenUsage:
 class ReviewOutcome:
     verdict: Verdict
     summary: str
+    # What the diff does, for the progress log. See `ReviewVerdict.record`.
+    record: str = ""
     issues: list[Issue] = field(default_factory=list)
     usage: TokenUsage = field(default_factory=TokenUsage)
     # True when the `blocked` verdict is ours rather than the model's, so the
@@ -109,6 +121,7 @@ class ReviewOutcome:
         return {
             "verdict": self.verdict,
             "summary": self.summary,
+            "record": self.record,
             "issues": [i.model_dump() for i in self.issues],
             "observations": [o.model_dump() for o in self.observations],
             "tool_calls": list(self.tool_calls),
@@ -304,6 +317,7 @@ class OpenAIReviewer:
         return ReviewOutcome(
             verdict=parsed.verdict,
             summary=parsed.summary,
+            record=getattr(parsed, "record", "") or "",
             issues=list(parsed.issues),
             observations=list(getattr(parsed, "observations", None) or []),
             usage=usage,

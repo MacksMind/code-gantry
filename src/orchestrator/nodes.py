@@ -845,6 +845,7 @@ def review(state: RunState, rt: Runtime) -> dict:
         "stage_usage": stage_usage,
         "review_verdict": outcome.verdict,
         "review_summary": outcome.summary,
+        "review_record": outcome.record,
         # Replaced, not accumulated. Every review of a stage sees the whole
         # cumulative diff, so the newest set supersedes the last rather than
         # adding to it — otherwise a stage reworked twice reports each finding
@@ -1103,7 +1104,10 @@ def advance(state: RunState, rt: Runtime) -> dict:
         rt.cfg.target_repo,
         rt.cfg.plan_addendum_path,
         stage_id=stage.id,
-        summary=state.get("review_summary") or "",
+        # The dedicated record, falling back to the verdict rationale for a
+        # reviewer that has not been asked for one. Better a gate-shaped entry
+        # than none.
+        summary=state.get("review_record") or state.get("review_summary") or "",
     )
     if landed is not None:
         rt.log(f"[advance] recorded what {stage.id} landed, in the reviewer's words")
@@ -1195,6 +1199,7 @@ def advance(state: RunState, rt: Runtime) -> dict:
         "test_seconds": state.get("test_seconds", 0.0),
         "review_verdict": state.get("review_verdict"),
         "review_summary": state.get("review_summary"),
+        "review_record": state.get("review_record"),
         "verify_failures": [],
         "planner_notes": list(state.get("planner_notes") or []),
         "config_hash": state.get("config_hash", ""),

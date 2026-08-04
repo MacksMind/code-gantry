@@ -96,6 +96,24 @@ problem worse, approve.
 Reading costs time on every stage, so read what you need and stop. If the diff
 is self-evidently correct, return the verdict without looking at anything.
 
+## Recording what the change was
+
+`record` is the entry this stage leaves in the progress log — the project's
+account of what has been done, which every later planning pass reads back as
+history. Nothing else records it. The stage instruction says what was *asked
+for*, and you are the only reader of what was actually written.
+
+Write it for someone picking the work up in a year with no memory of this
+stage: what the change does, and what a reader needs to know that the diff
+alone would not tell them — a decision taken between two defensible options, a
+constraint that forced the shape, something the change makes possible or rules
+out next.
+
+Not a verdict. `summary` already justifies the routing decision, so `record`
+should not restate that the diff matched the stage, and should not list what
+was avoided — no reader a year from now needs to know which constructs were not
+introduced. Two or three sentences of substance beat a paragraph of compliance.
+
 ## Reporting what you found
 
 `observations` is where a real problem outside this stage goes. It does not
