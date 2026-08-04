@@ -194,6 +194,16 @@ class Runtime:
             skipped=tree.skipped,
         )
 
+    def operations_context(self, sha: str) -> str:
+        """The operational documents, for the planner alone.
+
+        Same reader as `agent_context` and deliberately a separate
+        entry point rather than a flag: the two audiences differ, and a
+        boolean at the call site is how the executor ends up with the
+        half it cannot act on.
+        """
+        return self._read_docs(sha, self.cfg.effective_operations_context)
+
     def agent_context(self, sha: str) -> str:
         """Conventions the repository documents for whoever works in it.
 
@@ -213,9 +223,12 @@ class Runtime:
         `AGENTS.md`, and git stores the resolved text, so both paths come back
         byte-identical — the default would otherwise bill the same file twice.
         """
+        return self._read_docs(sha, self.cfg.effective_agent_context)
+
+    def _read_docs(self, sha: str, paths: list[str]) -> str:
         blocks: list[str] = []
         seen: set[str] = set()
-        for path in self.cfg.effective_agent_context:
+        for path in paths:
             try:
                 # A symlink's blob is its target path, so reading it as content
                 # yields a document whose whole body is a filename. Follow it

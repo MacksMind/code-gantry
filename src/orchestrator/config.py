@@ -644,10 +644,32 @@ class ProjectConfig(_Strict):
     # starting over, and only an operator watching a particular project can say
     # how often that is the case.
     rework_reset: bool = False
+    # Read by the planner only; see `effective_operations_context`.
+    operations_context: list[str] | None = None
 
     @property
     def plan_root_path(self) -> Path:
         return self.target_repo / self.plan_root
+
+    @property
+    def effective_operations_context(self) -> list[str]:
+        """Documents only the planner is given.
+
+        The conventions half of a repository's agent-facing docs goes to all
+        three participants: the planner draws against it, the executor writes
+        code that has to obey it, and the reviewer judges whether the code did.
+        The operational half — build, test, deploy, the container's behaviour —
+        is the planner's alone. It is what tells it that a Gemfile edit
+        reinstalls the bundle, which is the fact the whole mechanism was built
+        for; and it is exactly what the executor must not be handed, because it
+        runs no commands and a page of them invites it to narrate ones it never
+        ran.
+
+        No default. A project that keeps one document for both audiences names
+        it in `agent_context` and leaves this empty, which is what every
+        project did before the split existed.
+        """
+        return list(self.operations_context or [])
 
     @property
     def effective_agent_context(self) -> list[str]:

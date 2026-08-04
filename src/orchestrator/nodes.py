@@ -76,7 +76,23 @@ def _conventions(state: RunState, rt: Runtime) -> str:
     hand that could break it, and the gate that should catch it were reading
     three different things.
     """
-    return rt.agent_context(state.get("plan_sha") or state.get("base_sha") or "")
+    return rt.agent_context(_doc_sha(state))
+
+
+def _doc_sha(state: RunState) -> str:
+    return state.get("plan_sha") or state.get("base_sha") or ""
+
+
+def _planner_context(state: RunState, rt: Runtime) -> str:
+    """Conventions plus operations — the planner is the only one that gets both.
+
+    The executor writes code and must obey the conventions; it runs nothing, so
+    the operational half is noise it can act on wrongly. The reviewer judges
+    code against conventions for the same reason. The planner is the participant
+    that decides what is *possible*, which is what the operational half answers.
+    """
+    parts = [rt.agent_context(_doc_sha(state)), rt.operations_context(_doc_sha(state))]
+    return "\n\n".join(p for p in parts if p.strip())
 
 
 def _stage_diff(state: RunState, rt: Runtime) -> str:
@@ -190,9 +206,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
         interventions_max=limits.max_planner_interventions,
         status_tail=_status_tail(rt),
         layout=rt.layout(state.get("plan_sha") or state.get("base_sha") or ""),
-        agent_context=rt.agent_context(
-            state.get("plan_sha") or state.get("base_sha") or ""
-        ),
+        agent_context=_planner_context(state, rt),
         deferred=state.get("deferred") or [],
         stage_costs=recent_stage_costs(rt.project.project_dir),
         # Only when a stage is under revision: deriving a new one has no branch

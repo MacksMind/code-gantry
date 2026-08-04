@@ -379,6 +379,36 @@ class TestTheConventionsReachTheReviewer:
         run_git(repo, "add", "-A")
         run_git(repo, "commit", "-qm", "conventions")
 
+    def test_only_the_planner_gets_the_operational_half(self, repo, tmp_path, run_git):
+        """The split, enforced where it matters.
+
+        The conventions half binds anything that writes or judges code. The
+        operational half — build, test, deploy — is the planner's alone: it
+        decides what is possible, and it is the participant that reads a plan
+        item as blocked when it does not know the container reinstalls the
+        bundle on a Gemfile edit. Handing the same pages to an executor that
+        runs no commands is what invites it to narrate one it never ran.
+        """
+        (repo / "AGENTS.md").write_text("SCOPE_BY_TENANT\n")
+        (repo / "OPERATIONS.md").write_text("RUN_BIN_RSPEC\n")
+        run_git(repo, "add", "-A")
+        run_git(repo, "commit", "-qm", "split docs")
+        executor = StubExecutor(repo=repo, edits=[("app.py", "changed\n")])
+        cfg, rt, state = make(
+            repo, tmp_path, executor=executor, operations_context=["OPERATIONS.md"]
+        )
+        state["plan_sha"] = rt.git.rev_parse("proj")
+        with_stage(state, rt)
+
+        nodes.execute(state, rt)
+        assert "RUN_BIN_RSPEC" not in executor.prompts[-1]
+
+        planner = rt.planner
+        nodes.plan(state, rt)
+        text = _text_of(planner.calls[-1])
+        assert "SCOPE_BY_TENANT" in text
+        assert "RUN_BIN_RSPEC" in text
+
     def test_the_reviewer_prompt_gets_them(self, repo, tmp_path, run_git):
         self._cfg_files(repo, run_git)
         reviewer = StubReviewer()
