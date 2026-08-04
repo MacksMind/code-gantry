@@ -33,6 +33,61 @@ Requires Python 3.11+, `git`, and — for agent stages — `aider` on PATH.
 There is **no static stage list**. The planner derives each stage from the plan
 document as the run proceeds.
 
+## The loop
+
+Every arrow that is not the happy path is a failure with somewhere specific to
+go. That is most of the diagram, and it is the point: the design goal is that a
+run stops for a good reason or not at all, so each way a stage can go wrong has
+a named destination rather than an exit code.
+
+```mermaid
+flowchart TD
+    START([run · resume]) --> plan
+
+    plan{{plan<br/><i>derive or revise a stage</i>}}
+    plan -->|new stage, or a revision<br/>that discards the branch| precheck
+    plan -->|a revision that keeps the branch —<br/>the work stands, so ask the gates| verify
+    plan -->|project complete| finalize
+    plan -->|instruction is unfixable,<br/>or budget spent| escalate
+
+    precheck[precheck<br/><i>preconditions · setup · cut child branch</i>]
+    precheck --> execute
+    precheck -->|precondition unmet —<br/>an ordering error| plan
+    precheck -->|setup failed| escalate
+
+    execute[execute<br/><i>Aider, confined to edit_files</i>] --> verify
+
+    verify{{verify<br/><i>nine layers, cheapest first, short-circuiting</i>}}
+    verify -->|all passed| review
+    verify -->|patterns · residue · tests ·<br/>checks · new_tests| execute
+    verify -->|scope · progress ·<br/>retries exhausted| plan
+    verify -->|setup · branch identity| escalate
+
+    review{{review<br/><i>then the full suite, only if approved</i>}}
+    review -->|approved and suite green| advance
+    review -->|rework| execute
+    review -->|blocked, or reworks exhausted| plan
+
+    advance[advance<br/><i>squash-merge · plan notes · observations</i>] --> plan
+
+    finalize[finalize<br/><i>full suite · report</i>] --> DONE([end])
+    finalize -->|suite red| escalate
+    escalate[escalate<br/><i>write the report and stop</i>] --> DONE
+
+    classDef human fill:#f9d5d5,stroke:#b33
+    class escalate human
+```
+
+`resume` re-enters at whichever of `plan`, `precheck` or `verify` matches how the
+run stopped — see [Escalation tiers](#escalation-tiers).
+
+Three properties are easier to see here than to state. **Only three nodes reach
+`escalate`**, and `review` is not one of them: a rejected stage is a planning
+problem with a planning fix. **`advance` has exactly one exit**, so there is no
+path that lands a stage and then does something other than plan the next one.
+And **every cycle passes through a bounded counter** — executor attempts,
+reworks, or planner interventions — so no loop in the diagram can run forever.
+
 ## Lifecycle
 
 ```bash
@@ -63,6 +118,15 @@ property; everything else is mechanism.
 | **Executor** (local, via Aider) | Product code inside the stage's `edit_files` | Anything outside it; any command |
 | **Planner** (Anthropic) | Stage specs — declarative fields only — plan revisions, the status log | Product code; **any executable field** |
 | **Reviewer** (OpenAI) | Nothing | Everything |
+
+The planner and reviewer both **read** the repository through the same bounded
+tools — read a file, list files, search — under separate per-role line and call
+budgets. The reviewer got them because a diff does not always carry the fact that
+settles it: a stage deleting a declaration is safe exactly when something
+elsewhere still covers what it did, and that file is not in the diff. A gate that
+cannot reach its evidence produces verdicts indistinguishable from judgement,
+and the artifact reads the same either way — so the run log records what each
+role *looked at*, not only what it decided.
 
 **The planner may never author a command.** It is enforced twice: its
 structured-output schema has no field for one, and its response is filtered
@@ -108,11 +172,22 @@ Ordered cheapest-first, short-circuiting. Routing is three-way:
 |---|---|---|
 | 0 | `setup_command` | **Human** — a broken environment isn't a planning defect |
 | 1 | Branch identity — HEAD where expected, nothing rewritten | **Human** — a containment breach doesn't negotiate |
-| 2 | Scope guard — nothing changed outside `edit_files` | **Planner** — widen the stage, or revert just those paths |
-| 3 | `forbidden_patterns` against **added lines only** | Executor retry |
-| 4 | `test_command` (re-run once before consuming a retry) | Executor retry |
-| 5 | `checks` — each must exit zero | Executor retry |
-| 6 | `require_new_tests` — the diff touches a test file | Executor retry |
+| 2 | Scope — the diff is non-empty, touches no plan document, and stays inside `edit_files` | Executor if it produced nothing; **Planner** otherwise — widen the stage, or revert just those paths |
+| 3 | Progress — this diff is not byte-identical to the last one | **Planner** — feedback changed nothing, so another attempt buys nothing |
+| 4 | `forbidden_patterns` against **added lines only** | Executor retry |
+| 5 | `must_not_remain` against **file contents** | Executor retry |
+| 6 | `test_command` (re-run once before consuming a retry) | Executor retry |
+| 7 | `checks` — each must exit zero | Executor retry |
+| 8 | `require_new_tests` — a test file was touched, and what it touched is not empty | Executor retry |
+
+Layers 4 and 5 read almost identically in prose and are opposites in a diff.
+`forbidden_patterns` asks what the stage **introduced**; `must_not_remain` asks
+what **survived**. A stage told to delete something needs the second, and the
+first will never notice.
+
+The emptiness half of layer 8 applies whether or not the stage was required to
+write tests — `require_new_tests` governs whether a stage *must* write them, not
+whether a file it did write is worth anything.
 
 A scope violation **never discards the branch.** The child branch is already the
 quarantine, so containment doesn't require destroying work: the planner gets the
@@ -131,8 +206,13 @@ lands — linear in stages, not in attempts.
 Reviewer verdicts:
 
 - **approved** → full suite, then merge.
-- **rework** → back to the executor with the issues. The tree resets to the stage
-  baseline first by default, so each attempt is one clean single-purpose diff.
+- **rework** → back to the executor with the issues *and the diff the stage has
+  accumulated so far*, for the three tries `max_rework_retries` allows. A
+  reviewer leaves comments on the work in front of it; it does not ask for the
+  work again. Set `rework_reset: true` to discard the attempt and start from the
+  stage baseline instead — but know what that turns the retries into, since an
+  attempt that begins from nothing carries nothing forward but the feedback
+  sentence.
 - **blocked** → the instruction itself is wrong. Routes to the **planner**, not a
   human: with a planner in the loop, that's a planning problem with a planning
   fix.
@@ -140,28 +220,35 @@ Reviewer verdicts:
 ### When the suite is red for reasons the stage didn't cause
 
 Legacy suites are rarely order-independent, and a stage should not be blamed for
-that. When a broad suite fails, the orchestrator re-runs **only the examples that
-failed**, on their own — which tests order dependence directly, instead of
-re-rolling every other example in the suite and hoping.
+that. When a broad suite fails, the orchestrator re-runs **the files that failed,
+on their own**. A file that passes whole *and* standalone is green: that tests
+order dependence directly, instead of re-rolling every other example in the suite
+and hoping.
 
 ```yaml
-flake_rerun_examples: true        # default
-failed_example_pattern: …         # regex; group 1 is a re-runnable locator
-flake_rerun_max_examples: 5
+flake_rerun_failed_files: true    # default
+failed_file_pattern: …            # regex; group 1 is a re-runnable path
+flake_rerun_max_files: 5
+seed_pattern: …                   # regex; group 1 is the ordering seed
 ```
 
-The locators come from the test runner's own stdout and are substituted into
-`scoped_test_command`. Two guards keep this from laundering real failures:
+The paths come from the test runner's own stdout and are substituted into
+`scoped_test_command`. One guard keeps this from laundering real failures:
+past `flake_rerun_max_files`, a red suite is a broken stage rather than a flake,
+and the re-run is skipped — thirty files do not flake simultaneously.
 
-- **Ownership.** A failure in a file the stage edited, or named in `test_paths`,
-  is never excused — order dependence in a file the stage just touched is as
-  likely to be new as pre-existing.
-- **Volume.** Past `flake_rerun_max_examples`, a red suite is a broken stage, not
-  a flake, and the re-run is skipped.
+There is deliberately **no ownership rule**. An earlier design refused to excuse
+a file the stage had edited, reasoning that the stage might have introduced the
+order dependence. But a file that passes whole and standalone has been proven
+green *including* the stage's edits to it, so whatever makes it fail in the group
+is a property of the suite — to be fixed as its own work rather than charged to
+whichever stage was in flight.
 
-Anything excused is named in `report.md`, because a count with no names is not a
-work list. Runners whose output the pattern can't read fall back to re-running
-the whole suite once.
+Every excusal is appended to `projects/<slug>/flakes.md` with the file, the
+timestamp and the ordering seed that produced it. It earns its keep by being
+countable: one line is noise, twenty lines naming the same file is a work item.
+Preflight adjudicates the same way, so a run is not refused at the door by the
+one failure the merge gate would have forgiven.
 
 ## Escalation tiers
 
