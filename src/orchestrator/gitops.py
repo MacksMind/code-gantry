@@ -41,6 +41,14 @@ class Git:
             cwd=str(self.repo),
             capture_output=True,
             text=True,
+            # A repository is not obliged to be UTF-8. Without this, one
+            # Windows-1252 curly quote in one tracked file crashes the process
+            # the moment any git command's output includes it — which happened
+            # on a planner search, mid-run, with a traceback instead of a
+            # report. `git grep -I` is no defence: it skips binary files, and a
+            # file with no NUL byte is not binary however it is encoded.
+            # `CommandRunner` has carried this same guard all along.
+            errors="replace",
         )
         if check and proc.returncode != 0:
             raise GitError(

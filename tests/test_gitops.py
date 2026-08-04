@@ -12,6 +12,36 @@ import pytest
 from orchestrator.gitops import Git, GitError
 
 
+class TestOutputThatIsNotUtf8:
+    """A stray byte in a tracked file must not kill the run.
+
+    Observed: the planner searched the repository, `git grep` matched a line in
+    `db/migrate/103_fix_special_characters.rb` — a migration about fixing
+    special characters, which contains a Windows-1252 curly quote — and
+    `subprocess.run(..., text=True)` decoded stdout as strict UTF-8 and raised.
+    That is not an escalation, it is a crash: the run died mid-planner-call with
+    a traceback and no report.
+
+    `git grep -I` does not help. It skips *binary* files, and a file with no NUL
+    byte is not binary however it is encoded.
+    """
+
+    def _repo_with_a_bad_byte(self, repo):
+        (repo / "legacy.rb").write_bytes(b"# smart \x94quote\x94 here\nputs 1\n")
+        Git(repo).commit_all("add a file that is not utf-8")
+        return Git(repo)
+
+    def test_show_file_survives_it(self, repo):
+        git = self._repo_with_a_bad_byte(repo)
+        assert "quote" in git.show_file(git.head_sha(), "legacy.rb")
+
+    def test_a_grep_over_it_survives(self, repo):
+        git = self._repo_with_a_bad_byte(repo)
+        # Whatever comes back, it must come back rather than raise.
+        proc = git._run("grep", "-n", "-I", "-e", "quote", check=False)
+        assert proc.returncode in (0, 1)
+
+
 class TestInspection:
     def test_detects_a_repo(self, repo):
         assert Git(repo).is_repo()
