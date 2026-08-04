@@ -1,7 +1,7 @@
 # Refactor Orchestrator — Architecture
 
 This describes the system as built, and mostly answers *why* rather than *what*.
-[README.md](README.md) is how to use it and [CLAUDE.md](CLAUDE.md) is what to
+[README.md](../README.md) is how to use it and [CLAUDE.md](../CLAUDE.md) is what to
 know before changing it; this is the one that explains why the shape is the
 shape.
 

@@ -1,7 +1,8 @@
 # Working on this codebase
 
-[README.md](README.md) is how to use the orchestrator. [PLAN.md](PLAN.md) is the
-design authority on why it works this way. Neither is repeated here.
+[README.md](README.md) is how to use the orchestrator.
+[docs/architecture.md](docs/architecture.md) is the design authority on why it
+works this way. Neither is repeated here.
 
 This file is for whoever is *changing* the code. It records the invariants that
 are easy to break without noticing, and the rules that were learned by breaking

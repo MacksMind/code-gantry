@@ -9,8 +9,8 @@ should execute in one unattended pass, producing a branch of granular,
 individually green, individually reviewed commits you can examine and deploy from
 on your own schedule.
 
-[PLAN.md](PLAN.md) is the design document and the authority on *why* things work
-this way. This file is how to use it.
+[docs/architecture.md](docs/architecture.md) describes the system as built and is
+the authority on *why* it works this way. This file is how to use it.
 
 ## Install
 
