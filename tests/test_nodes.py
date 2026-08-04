@@ -545,6 +545,29 @@ class TestExecute:
         assert "rejected" not in prompt
         assert "Two occurrences were never edited." in prompt
 
+    def test_a_retry_is_shown_what_the_stage_has_changed_so_far(
+        self, repo, tmp_path
+    ):
+        # Editing forward is only reasonable if the executor can see what it is
+        # editing forward from. Reviewers leave comments on work; they do not
+        # ask for the work again, and an author who cannot see their own diff
+        # is not in a position to amend it.
+        ex = StubExecutor(repo=repo, edits=[("app.py", "second pass\n")])
+        cfg, rt, state = make(repo, tmp_path, executor=ex)
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("work from the first attempt\n")
+        state["review_feedback"] = ["The comment contradicts the code."]
+        state["failure_layer"] = "review"
+        nodes.execute(state, rt)
+        assert "work from the first attempt" in ex.prompts[0]
+
+    def test_a_first_attempt_is_shown_no_diff(self, repo, tmp_path):
+        ex = StubExecutor(repo=repo, edits=[("app.py", "x\n")])
+        cfg, rt, state = make(repo, tmp_path, executor=ex)
+        state = with_stage(state, rt)
+        nodes.execute(state, rt)
+        assert "changed so far" not in ex.prompts[0]
+
     def test_a_first_attempt_has_no_opening_at_all(self, repo, tmp_path):
         ex = StubExecutor(repo=repo, edits=[("app.py", "x\n")])
         cfg, rt, state = make(repo, tmp_path, executor=ex)
@@ -872,9 +895,22 @@ class TestPlanDocumentsFollowTheProjectBranch:
         assert out["next_hop"] == "plan"
         assert "max_rework_retries" in out["last_failure"]["summary"]
 
-    def test_rework_resets_the_tree_by_default(self, repo, tmp_path):
+    def test_rework_keeps_the_work_by_default(self, repo, tmp_path):
+        # A reviewer leaves comments on the work in front of it; it does not
+        # ask for the work again. Discarding a rejected attempt was the default
+        # until a rejection arrived saying the behaviour and scope were correct
+        # and only an explanatory comment was wrong — resetting rebuilt a
+        # correct spec from nothing to change one sentence.
         reviewer = StubReviewer([ReviewOutcome(verdict="rework", summary="no")])
         cfg, rt, state = make(repo, tmp_path, reviewer=reviewer)
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("rejected\n")
+        nodes.review(state, rt)
+        assert (repo / "app.py").read_text() == "rejected\n"
+
+    def test_rework_still_resets_when_the_operator_asks(self, repo, tmp_path):
+        reviewer = StubReviewer([ReviewOutcome(verdict="rework", summary="no")])
+        cfg, rt, state = make(repo, tmp_path, reviewer=reviewer, rework_reset=True)
         state = with_stage(state, rt)
         (repo / "app.py").write_text("rejected\n")
         nodes.review(state, rt)

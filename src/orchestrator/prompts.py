@@ -149,6 +149,7 @@ def build_executor_prompt(
     context: list[tuple[str, str]] | None = None,
     feedback: list[str] | None = None,
     failure_layer: str | None = None,
+    cumulative_diff: str | None = None,
 ) -> str:
     """The message handed to the executor.
 
@@ -237,6 +238,16 @@ def build_executor_prompt(
         ]
         parts.append(
             "## Context gathered from the repository\n\n" + "\n\n".join(blocks)
+        )
+
+    if cumulative_diff:
+        parts.append(
+            "## What this stage has changed so far\n\n"
+            "Everything below is already committed on this branch. It is the "
+            "work you are amending, not a description of what to do — read it "
+            "before you edit, and leave the parts the feedback does not name "
+            "alone.\n\n"
+            f"```diff\n{cumulative_diff.strip()}\n```"
         )
 
     if feedback:

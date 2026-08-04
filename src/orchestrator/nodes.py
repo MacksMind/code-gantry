@@ -498,12 +498,24 @@ def execute(state: RunState, rt: Runtime) -> dict:
                 f"{failed[0].summary()}\n{_clip(failed[0].output)}",
             )
 
+        # What the stage has already done, so a retry can amend it rather than
+        # reconstruct it. Only when there is something there: on a first attempt
+        # this is empty, and on a rework with `rework_reset` it has just been
+        # thrown away, so in both cases the section is absent rather than empty.
+        cumulative_diff = ""
+        if state.get("stage_start_sha"):
+            try:
+                cumulative_diff = rt.git.diff(state["stage_start_sha"])
+            except GitError:  # pragma: no cover - defensive
+                cumulative_diff = ""
+
         prompt = build_executor_prompt(
             stage,
             rt.cfg,
             context=context,
             feedback=feedback,
             failure_layer=state.get("failure_layer"),
+            cumulative_diff=cumulative_diff,
         )
         rt.write_artifact(
             state["stage_index"], stage.id, state.get("revision", 0), attempt,

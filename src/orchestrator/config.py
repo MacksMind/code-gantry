@@ -546,7 +546,25 @@ class ProjectConfig(_Strict):
     stage_defaults: StageDefaults = StageDefaults()
 
     rework_strategy: Literal["fresh", "continue"] = "fresh"
-    rework_reset: bool = True
+    # A reviewer leaves comments on the work in front of it. It does not ask for
+    # the work again, and an author who cannot see their own diff is not in a
+    # position to amend it — so a rejected attempt stays on the branch and the
+    # executor is shown what the stage has changed so far, for the three tries
+    # `max_rework_retries` allows.
+    #
+    # This defaulted to True on the reasoning that each attempt should produce
+    # one clean single-purpose diff. Stages land by squash merge, so that buys
+    # less than it sounds like: the diff anyone ever sees is the net one either
+    # way. What it costs became clear when a rejection said the behaviour and
+    # scope were correct and only an explanatory comment contradicted the code —
+    # resetting rebuilt a correct spec from nothing in order to change one
+    # sentence, using a model that had failed four times that morning to
+    # reproduce ten lines byte-for-byte.
+    #
+    # Kept as an option because a stage whose approach is wrong is better off
+    # starting over, and only an operator watching a particular project can say
+    # how often that is the case.
+    rework_reset: bool = False
 
     @property
     def plan_root_path(self) -> Path:
