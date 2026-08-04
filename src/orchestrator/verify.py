@@ -780,12 +780,15 @@ def _layer_new_tests(ctx: _Context, outcome: VerifyOutcome):
     patterns = ", ".join(ctx.cfg.test_file_patterns)
     if touched:
         listed = ", ".join(touched)
+        plural = len(touched) > 1
         return _fail(
             Layer.NEW_TESTS,
             Route.EXECUTOR,
-            "the stage's test file is empty",
-            f"This stage requires tests. It touched {listed}, but that file is "
-            "empty, so it asserts nothing and the suite passes it in no time at "
+            "the stage's test files are empty" if plural
+            else "the stage's test file is empty",
+            f"This stage requires tests. It touched {listed}, but "
+            + ("every one of them is empty" if plural else "that file is empty")
+            + ", so they assert nothing and the suite passes them in no time at "
             "all.\n\nThe editor creates a file named in your scope before you "
             "edit it, so an empty one means your reply was not applied as an "
             "edit. Write the file's contents as a proper edit rather than as a "

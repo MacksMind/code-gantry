@@ -775,6 +775,20 @@ class TestRequireNewTests:
         cfg, stage = build(repo, {"require_new_tests": True})
         assert verify(repo, cfg, stage, sha).failed_layer is Layer.NEW_TESTS
 
+    def test_several_empty_test_files_read_as_plural(self, repo):
+        # The first live firing listed three files and said "but that file is
+        # empty". The executor reads this; it should not have to work out
+        # whether "that file" means one of them or all of them.
+        sha = Git(repo).head_sha()
+        edit(repo, "src/thing.py", "def f(): pass\n")
+        edit(repo, "src/test_a.py", "")
+        edit(repo, "src/test_b.py", "")
+        cfg, stage = build(repo, {"require_new_tests": True})
+        out = verify(repo, cfg, stage, sha)
+        assert out.failed_layer is Layer.NEW_TESTS
+        assert "every one of them is empty" in out.feedback
+        assert "that file is empty" not in out.feedback
+
     def test_a_deleted_test_file_is_not_mistaken_for_an_empty_one(self, repo):
         # A path in the diff that is gone from the worktree must not be read as
         # a zero-byte file — the stage still has to add content somewhere, but
