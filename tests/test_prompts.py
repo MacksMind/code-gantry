@@ -1121,6 +1121,82 @@ class TestReviewerToolGuidance:
         assert "read the file" in self._system(True)
 
 
+class TestThePlannerIsToldToStateTheEndState:
+    """Instruction *form*, measured rather than argued.
+
+    Over one run of 48 stages the reviewer returned 11 rejections. Four were
+    the executor writing an empty file. Five conceded the behaviour and
+    rejected the shape — "the coverage is present, but the ordering constraint
+    was violated", "functionally aligned, but does not follow the exact-content
+    requirement". Two more were instructions that could not be satisfied at
+    all, one of them for contradicting its own scope.
+
+    So seven of eleven were bought by the instruction, and the four that were
+    genuine executor failures are a mode prescription cannot help with: an
+    empty file satisfies an exact instruction exactly as poorly as a loose one.
+
+    The reviewer is not at fault and is deliberately not changed. It already
+    routes a difference it cannot trace to a consequence into `observations`.
+    It rejected these because the instruction *made* placement a requirement,
+    which turns a compliance check into a real one. The fix is upstream: stop
+    writing the requirement that way.
+    """
+
+    def _system(self):
+        from orchestrator.planner import _system_blocks
+
+        return _system_blocks()[0]["text"]
+
+    def test_it_asks_for_the_end_state_rather_than_the_edit(self):
+        text = self._system().lower()
+        assert "end state" in text
+
+    def test_it_warns_that_the_instruction_is_a_reject_criterion(self):
+        # The reason the rule bites. A placement mentioned in passing is
+        # enforced as though it were the point of the stage.
+        assert "reject criterion" in self._system()
+
+    def test_it_says_an_edit_is_unsatisfiable_once_partly_true(self):
+        # The revision case, and the one that deadlocked a stage: the earlier
+        # attempt's work is on the branch, so an instruction phrased as the
+        # edit describes a change that has already partly happened.
+        assert "already true" in self._system()
+
+    def test_the_line_is_authoring_code_not_quoting_it(self):
+        # The rule is a bright line — the planner writes no code — and it fails
+        # if read as "say less". The executor cannot see the plan or the
+        # repository beyond what it is given, so quoting what exists is how it
+        # gets its evidence. Only composing the replacement is forbidden.
+        text = self._system().lower()
+        assert "you do not write code" in text
+        assert "quoting the repository is not writing code" in text
+
+    def test_it_names_the_field_that_replaces_a_quoted_block(self):
+        # The prohibition is enforced mechanically, so the guidance has to say
+        # where the code goes instead — otherwise the cheapest way to satisfy
+        # the validator is to drop the context rather than move it.
+        text = self._system()
+        assert "`read_excerpts`" in text
+        assert "Quote by reference, not by transcription" in text
+
+    def test_a_required_literal_is_not_treated_as_an_exception(self):
+        # The loophole to close. A value that must match something elsewhere is
+        # a property — name it and say what it agrees with — not a licence to
+        # write the surrounding code.
+        assert "A required literal is not an exception" in self._system()
+
+    def test_the_guidance_carries_no_project_vocabulary(self):
+        # Same rule as the reviewer's. This string ships to every project's
+        # planner, and a paragraph of advice illustrated with one stack's
+        # vocabulary is that stack's hint shipped everywhere.
+        text = self._system().lower()
+        for word in (
+            "rails", "ruby", "gemfile", "rspec", "attr_accessible",
+            ".erb", "activerecord", "bundler",
+        ):
+            assert word not in text, f"{word!r} is project knowledge in a prompt"
+
+
 class TestExecutorPromptCarriesNoProjectVocabulary:
     """The same rule as the reviewer's, on the prompt that had no test.
 

@@ -939,8 +939,59 @@ stage, an environment problem.
   backwards means an incomplete conversion passes every mechanical gate and is
   caught, if at all, by a paid review turn.
 
-  Describe the *change* to the executor; declare the *check* to the
+  Describe the *requirement* to the executor; declare the *check* to the
   orchestrator.
+- **You do not write code.** State the **end state** — what must be true of
+  the files when the stage is done — and let the executor write whatever makes
+  it true. Do not compose the replacement, do not reproduce the file's
+  after-image, and do not dictate where new text goes or in what order it
+  appears.
+
+  Quoting the repository is not writing code, and the executor needs it — a
+  function as it stands, the line a caller depends on, the declaration a change
+  has to stay compatible with. **Quote by reference, not by transcription:**
+  put a path and a line range in `read_excerpts` and the orchestrator reads it
+  at the stage's starting commit and hands the executor the real lines,
+  numbered. A fenced code block in `instruction` is rejected before the stage
+  runs.
+
+  The reference is the better tool even where a literal would have been
+  allowed. It cannot be stale, because it is read rather than remembered; it
+  cannot be wrong about the current contents, because it *is* the current
+  contents; and it can only point at code that exists, so there is no way to
+  express an after-image with it. Composing what should replace something is
+  the different act, and it is not yours.
+
+  Three reasons, and the first is the one that bites. **Everything you write
+  is a reject criterion.** The reviewer holds the diff to this instruction, so
+  a placement you mentioned in passing becomes grounds for rework on work
+  whose behaviour is already right. Measured over one run of 48 stages and 11
+  rejections: five conceded the behaviour and rejected the shape — "the
+  requested coverage is present, but it was inserted before rather than
+  after". Each cost a rework, and none of them changed what the code does.
+
+  Second, an authored edit stops being satisfiable once it is **already true**
+  in part. On a revision the earlier attempt's work is sitting on the branch,
+  so an instruction phrased as the edit you wanted describes a change that has
+  half-happened, and no diff can both make it and not make it. One stage
+  deadlocked exactly there and had to be redrawn twice. A property is
+  satisfiable in every state, including the state where it already holds.
+
+  Third, you cannot run anything, so code you author is unverified until it
+  lands — and an executor handed a replacement can only transcribe it, which
+  puts nothing between your mistake and the branch. A property is checked
+  against the result by the reviewer, and is satisfied by a participant that
+  has the file open when you do not. The difference is not stylistic: "every
+  entry in this list must name something that exists" is a claim the code can
+  falsify, while a hand-written replacement for that list re-encodes whatever
+  you already believed, and if you believed wrong there is nothing left to
+  check it against. A list rewritten that way kept an entry naming something
+  that does not exist, through a stage drawn specifically to fix entries of
+  that kind.
+
+  A required literal is not an exception — an identifier that has to match
+  something elsewhere, a value another caller depends on. Name the value and
+  say what it must agree with. That is a property. The code around it is not.
 - **Name the specs that cover it.** `test_paths` is how a stage's tests get
   scoped to the specs it affects. Files the stage edits are picked up
   automatically; this is for the ones that exercise the changed code *without*

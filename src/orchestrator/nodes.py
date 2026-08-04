@@ -24,7 +24,7 @@ from datetime import datetime
 from orchestrator.addendum import append_notes, append_observations, append_outcome
 from orchestrator.commands import truncate_middle
 from orchestrator.config import Stage, validate_stage
-from orchestrator.executor import resolve_excerpts
+from orchestrator.executor import ExcerptError, resolve_excerpts
 from orchestrator.flake import adjudicate, append_flakes, predates_stage
 from orchestrator.gitops import GitError
 from orchestrator.globs import matches_any
@@ -531,6 +531,25 @@ def execute(state: RunState, rt: Runtime) -> dict:
             except GitError:  # pragma: no cover - defensive
                 cumulative_diff = ""
 
+        # Read at the stage's start, not from the tree. The planner chose these
+        # ranges against that commit, and on a rework the tree has already
+        # moved under them. A range that will not resolve goes to the planner:
+        # with no code in the instruction the excerpt is the code, so this is a
+        # stage that cannot be attempted, and the participant that chose the
+        # range is the one that can fix it.
+        try:
+            excerpts = resolve_excerpts(
+                stage, rt.cfg, git=rt.git, sha=state.get("stage_start_sha") or ""
+            )
+        except ExcerptError as exc:
+            return _planner_failure(
+                state,
+                "precondition",
+                "a declared excerpt could not be read, so the executor prompt "
+                "would have been built without code the instruction refers to",
+                str(exc),
+            )
+
         prompt = build_executor_prompt(
             stage,
             rt.cfg,
@@ -538,7 +557,7 @@ def execute(state: RunState, rt: Runtime) -> dict:
             feedback=feedback,
             failure_layer=state.get("failure_layer"),
             cumulative_diff=cumulative_diff,
-            excerpts=resolve_excerpts(stage, rt.cfg),
+            excerpts=excerpts,
         )
         rt.write_artifact(
             state["stage_index"], stage.id, state.get("revision", 0), attempt,

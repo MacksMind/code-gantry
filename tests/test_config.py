@@ -385,6 +385,57 @@ class TestPlannerPartition:
         assert stage.test_paths == ["spec/models"]
 
 
+class TestThePlannerMayNotAuthorCode:
+    """The partition, one field further along.
+
+    `PLANNER_WRITABLE_FIELDS` already stops the planner naming anything
+    executable. It never stopped it *writing the code* — an instruction reading
+    "replace this block with exactly this block" is authored code travelling in
+    a declarative field, and the executor handed one can only transcribe it.
+
+    Three costs, all measured on one run of 48 stages. Five of eleven
+    rejections conceded the behaviour and rejected the shape, because every
+    line of an instruction is a reject criterion. One stage deadlocked because
+    an authored edit stops being satisfiable once part of it is already true.
+    And a hand-written replacement re-encodes whatever the planner believed:
+    one rewrote a whitelist and kept an entry naming something that did not
+    exist, in a stage drawn to fix entries of exactly that kind.
+
+    A reference can only point at code that already exists, so `read_excerpts`
+    cannot express an after-image. That is what makes this a property of the
+    format rather than a matter of compliance.
+    """
+
+    def test_a_fenced_block_in_the_instruction_is_a_problem(self):
+        cfg = parse_config(minimal())
+        stage = a_stage(instruction="Do it:\n\n```ruby\nx = 1\n```\n")
+        assert any("read_excerpts" in p for p in validate_stage(stage, cfg))
+
+    def test_the_fence_need_not_name_a_language(self):
+        cfg = parse_config(minimal())
+        stage = a_stage(instruction="Do it:\n\n```\nx = 1\n```\n")
+        assert validate_stage(stage, cfg) != []
+
+    def test_inline_backticks_are_left_alone(self):
+        # Naming an identifier is a property, not authored code, and the
+        # guidance tells the planner to do it. A rule that caught this would be
+        # unusable and would be routed around rather than followed.
+        cfg = parse_config(minimal())
+        stage = a_stage(
+            instruction="`SORTABLE_FIELDS` must name only fields that exist; "
+            "see `models/thing` around the declaration."
+        )
+        assert validate_stage(stage, cfg) == []
+
+    def test_the_message_says_where_the_code_should_go_instead(self):
+        # A prohibition with no alternative gets satisfied by deleting the
+        # context the executor needed rather than by moving it.
+        cfg = parse_config(minimal())
+        stage = a_stage(instruction="```\nx = 1\n```")
+        problems = validate_stage(stage, cfg)
+        assert any("read_excerpts" in p for p in problems)
+
+
 class TestValidateStage:
     def test_a_good_stage_has_no_problems(self):
         cfg = parse_config(minimal())

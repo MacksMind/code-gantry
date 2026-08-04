@@ -275,6 +275,45 @@ class TestTheBranchWorkReachesThePlanner:
         assert "SENTINEL" not in _text_of(planner.calls[0])
 
 
+class TestAnUnresolvableExcerptReachesThePlanner:
+    """The journey, not the endpoints — the rule this file exists for.
+
+    `resolve_excerpts` raises and `_planner_failure` routes; both are covered
+    on their own. What is not covered by either is that `execute` reads the
+    range at the stage's start sha and turns a failure into a redraw rather
+    than a traceback. With the instruction carrying no code, an excerpt that
+    does not resolve is a stage that cannot be attempted, and the participant
+    that can fix it is the one that chose the range.
+    """
+
+    def test_it_routes_to_the_planner_rather_than_raising(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        with_stage(state, rt, read_excerpts=[{"path": "gone.rb", "start": 1, "end": 5}])
+        out = nodes.execute(state, rt)
+        assert out["next_hop"] == "plan"
+        assert "gone.rb" in json.dumps(out.get("last_failure") or {})
+
+    def test_a_range_is_read_at_the_stage_start_sha(self, repo, tmp_path, run_git):
+        # The executor's own prior attempt moves lines. A range chosen against
+        # the stage's start and read against the tree is silently the wrong
+        # code — and the prompt is where that would land, so assert there.
+        executor = StubExecutor(repo=repo, edits=[("app.py", "changed\n")])
+        cfg, rt, state = make(repo, tmp_path, executor=executor)
+        with_stage(state, rt, read_excerpts=[{"path": "app.py", "start": 1, "end": 1}])
+        (repo / "app.py").write_text("MOVED_BY_A_PRIOR_ATTEMPT\n")
+        run_git(repo, "commit", "-aqm", "prior attempt")
+
+        nodes.execute(state, rt)
+        # The excerpt section only. The cumulative-diff section of the same
+        # prompt carries the prior attempt on purpose, so asserting over the
+        # whole prompt would fail for a correct reason.
+        prompt = executor.prompts[-1]
+        after = prompt.split("## Lines from files you may read but not change")[1]
+        section = after.split("\n## ")[0]
+        assert "def hello" in section  # the line as it stood when the stage began
+        assert "MOVED_BY_A_PRIOR_ATTEMPT" not in section
+
+
 class TestPlannerBudgets:
     def test_exhausted_interventions_escalate(self, repo, tmp_path):
         cfg, rt, state = make(repo, tmp_path, limits={"max_planner_interventions": 2})

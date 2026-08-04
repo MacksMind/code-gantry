@@ -20,6 +20,29 @@ a field to `Stage` means deciding, deliberately, which side of that line it sits
 on — and a field the planner may not set should be impossible for it to return,
 not merely discouraged.
 
+**And the planner may not author code.** The same partition one field along,
+and the harder half to see, because authored code travels perfectly well inside
+a declarative field: "replace this block with exactly this block" names nothing
+executable and is still the planner writing the diff. Measured over one run of
+48 stages and 11 rejections — five conceded the behaviour and rejected the
+*shape*, because every line of an instruction is a reject criterion; one stage
+deadlocked because an authored edit stops being satisfiable once part of it is
+already true on the branch; and one hand-rewrote a whitelist, faithfully
+preserving an entry that named a column the table did not have, inside a stage
+drawn to fix entries of exactly that kind. A planner that cannot run anything
+cannot check what it writes, and an executor handed a replacement can only
+transcribe it.
+
+The fix is a format that cannot express the mistake, not a rule asking for
+restraint: quoting goes through `read_excerpts` — a path and a range, read at
+`stage_start_sha` — and **a reference can only point at code that already
+exists**, so there is no way to write an after-image with one. A fenced block
+in `instruction` is rejected by `validate_stage`; inline backticks are left
+alone, because naming an identifier is a property and a rule that caught it
+would be routed around rather than followed. The corollary is that an excerpt
+is no longer help: it is the only code the executor gets, so a range that will
+not resolve now fails the stage to the planner instead of being skipped.
+
 **`completed` is append-only.** It is the cacheable prefix of both paid prompts.
 Renumbering, reordering, or rewriting an entry in place silently multiplies the
 cost of every subsequent call, and the damage is invisible in behaviour.

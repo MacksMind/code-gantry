@@ -18,9 +18,11 @@ from orchestrator.config import Stage, parse_config
 from orchestrator.executor import (
     PLACEHOLDER_API_KEY,
     Executor,
+    ExcerptError,
     build_aider_argv,
     resolve_excerpts,
 )
+from orchestrator.gitops import Git
 
 
 BASE_STAGE = {"id": "s1", "instruction": "do it", "edit_files": ["app/**", "src/*.py"]}
@@ -261,7 +263,7 @@ class TestReadContextBudget:
         # Clipped, not dropped: a clipped range still carries its beginning.
         assert len(resolve_excerpts(stage, cfg)[0][1].splitlines()) == 10
 
-    def test_an_unreadable_excerpt_is_skipped_rather_than_fatal(self, tmp_path):
+    def test_an_unreadable_excerpt_fails_loudly(self, tmp_path):
         self._repo(tmp_path, {"a.rb": 10})
         cfg, stage = cfg_with(
             target_repo=str(tmp_path),
@@ -273,8 +275,15 @@ class TestReadContextBudget:
             },
             executor={"model": "m", "max_read_lines": 400},
         )
-        # An excerpt is help. Help that fails must not fail the stage.
-        assert [lbl for lbl, _ in resolve_excerpts(stage, cfg)] == ["a.rb:1-2"]
+        # It used to be skipped, on the reasoning that an excerpt is help and
+        # help that fails should not fail the stage. That held while the
+        # instruction also carried the literal. It does not now: the planner
+        # writes no code, so the excerpt *is* the code, and skipping one hands
+        # the executor an instruction referring to lines it was never shown.
+        with pytest.raises(ExcerptError) as excinfo:
+            resolve_excerpts(stage, cfg)
+        assert "gone.rb" in str(excinfo.value)
+
 
     def test_a_budget_smaller_than_everything_drops_everything(self, tmp_path):
         self._repo(tmp_path, {"a.rb": 900, "b.rb": 900})
@@ -1026,3 +1035,55 @@ class TestTheExecutorsContextCostIsMeasured:
         from orchestrator.executor import context_tokens_from_log
 
         assert context_tokens_from_log("no usage here") == 0
+
+
+class TestExcerptsResolveAtACommit:
+    """One baseline for the three participants, not three.
+
+    The reviewer judges the cumulative diff from `stage_start_sha`; the planner
+    is now shown the same diff; and an excerpt read from the working tree would
+    be the odd one out. It matters most on a rework, where the executor's own
+    prior attempt has already moved the lines the planner picked — a range
+    chosen against one state and read against another silently yields the wrong
+    code, and with no literal in the instruction there is nothing to notice it.
+    """
+
+    def _stage_at(self, repo, excerpts):
+        return cfg_with(
+            target_repo=str(repo),
+            stage_overrides={"read_excerpts": excerpts},
+            executor={"model": "m", "max_read_lines": 400},
+        )
+
+    def test_it_reads_the_commit_not_the_working_tree(self, repo, run_git):
+        (repo / "app.py").write_text("FROM_COMMIT\n")
+        run_git(repo, "commit", "-aqm", "pin it")
+        sha = run_git(repo, "rev-parse", "HEAD")
+        (repo / "app.py").write_text("FROM_TREE\n")
+
+        cfg, stage = self._stage_at(repo, [{"path": "app.py", "start": 1, "end": 1}])
+        text = resolve_excerpts(stage, cfg, git=Git(repo), sha=sha)[0][1]
+        assert "FROM_COMMIT" in text
+        assert "FROM_TREE" not in text
+
+    def test_a_path_absent_at_that_commit_fails_loudly(self, repo, run_git):
+        sha = run_git(repo, "rev-parse", "HEAD")
+        cfg, stage = self._stage_at(repo, [{"path": "gone.rb", "start": 1, "end": 5}])
+        with pytest.raises(ExcerptError) as excinfo:
+            resolve_excerpts(stage, cfg, git=Git(repo), sha=sha)
+        assert "gone.rb" in str(excinfo.value)
+
+    def test_a_symlink_is_not_passed_off_as_its_target_s_name(self, repo, run_git):
+        # `git show <sha>:<path>` on a symlink returns the link's target — a
+        # path, not the file it names. Read as content that is a "file" whose
+        # entire body is a filename, and as an excerpt it would be a numbered
+        # line of nonsense presented as the code to edit.
+        (repo / "link.py").symlink_to("app.py")
+        run_git(repo, "add", "-A")
+        run_git(repo, "commit", "-qm", "link")
+        sha = run_git(repo, "rev-parse", "HEAD")
+
+        cfg, stage = self._stage_at(repo, [{"path": "link.py", "start": 1, "end": 1}])
+        with pytest.raises(ExcerptError) as excinfo:
+            resolve_excerpts(stage, cfg, git=Git(repo), sha=sha)
+        assert "symlink" in str(excinfo.value).lower()

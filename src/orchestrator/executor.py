@@ -25,6 +25,7 @@ from pathlib import Path
 
 from orchestrator.commands import CommandResult, CommandRunner
 from orchestrator.config import ProjectConfig, Stage
+from orchestrator.gitops import GitError
 from orchestrator.globs import matches_any
 
 # The flags we build. preflight checks each of these against `aider --help`
@@ -374,22 +375,42 @@ def _read_lines(path: str, cfg: ProjectConfig) -> int | None:
         return None
 
 
-def resolve_excerpts(stage, cfg: ProjectConfig) -> list[tuple[str, str]]:
+class ExcerptError(Exception):
+    """A declared range could not be read.
+
+    Loud, and it did not used to be. The old policy skipped an unreadable range
+    on the reasoning that the instruction is the authority and an excerpt is
+    only help — which held exactly as long as the instruction also carried the
+    code. It no longer does: the planner authors none, so the excerpt *is* the
+    code, and skipping one hands the executor an instruction referring to lines
+    it was never shown. A payload that fails must fail the stage.
+    """
+
+
+def resolve_excerpts(
+    stage,
+    cfg: ProjectConfig,
+    git=None,
+    sha: str = "",
+) -> list[tuple[str, str]]:
     """Read each declared range, returning (label, numbered text) pairs.
 
     Numbered, for the same reason the planner's own reads are: a line the
     executor is told to match is checkable against a number and not against a
     recollection.
 
+    Read at `sha` when one is given, and the caller in the loop always gives
+    one. Line numbers are the least stable identifier there is, and the state a
+    range was chosen against is not the state it is read against: on a rework
+    the executor's own prior attempt has already moved the lines. Reading at the
+    stage's start sha puts the executor on the same baseline as the reviewer's
+    diff and the planner's revision block, so all three describe one tree.
+
     Charged against `max_read_lines`, the same budget whole reference files
     come out of — this exists so a large file can contribute the part that
     matters, not so it can contribute more than a small one. Ranges are clipped
     rather than dropped, because a clipped range still carries its beginning,
     where a dropped file carries nothing.
-
-    A range that cannot be read is skipped rather than raised on. The stage's
-    instruction is the authority on what to do; an excerpt is help, and help
-    that fails should not fail the stage.
     """
     budget = cfg.executor.max_read_lines
     remaining = None
@@ -407,11 +428,33 @@ def resolve_excerpts(stage, cfg: ProjectConfig) -> list[tuple[str, str]]:
     for ex in getattr(stage, "read_excerpts", []) or []:
         if remaining is not None and remaining <= 0:
             break
-        target = Path(cfg.target_repo) / ex.path
-        try:
-            body = target.read_text(errors="replace").splitlines()
-        except OSError:
-            continue
+        if git is not None and sha:
+            # `git show <sha>:<path>` on a symlink returns the link's *target* —
+            # a path, not the file it names — so an excerpt of one would be a
+            # numbered line of nonsense presented as the code to edit. Ask
+            # before reading rather than guessing from the content.
+            if git.is_symlink(sha, ex.path):
+                raise ExcerptError(
+                    f"{ex.path!r} is a symlink at {sha[:12]}; an excerpt of it "
+                    "would carry the link's target, not the file. Point the "
+                    "range at the file it resolves to."
+                )
+            try:
+                body = git.show_file(sha, ex.path).splitlines()
+            except GitError as exc:
+                raise ExcerptError(
+                    f"cannot read {ex.path!r} at {sha[:12]} for an excerpt of "
+                    f"lines {ex.start}-{ex.end or 'end'}: {exc}"
+                ) from exc
+        else:
+            target = Path(cfg.target_repo) / ex.path
+            try:
+                body = target.read_text(errors="replace").splitlines()
+            except OSError as exc:
+                raise ExcerptError(
+                    f"cannot read {ex.path!r} for an excerpt of lines "
+                    f"{ex.start}-{ex.end or 'end'}: {exc}"
+                ) from exc
         first = max(ex.start or 1, 1)
         last = min(ex.end or len(body), len(body))
         if first > last:

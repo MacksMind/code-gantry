@@ -789,6 +789,24 @@ def validate_stage(stage: Stage, cfg: ProjectConfig) -> list[str]:
 
     if stage.kind == "agent" and not stage.instruction:
         problems.append(f"{where}: agent stages require an instruction")
+
+    # The partition, one field further along. `PLANNER_WRITABLE_FIELDS` stops
+    # the planner naming anything executable; it never stopped it writing the
+    # code, and an instruction reading "replace this block with exactly this
+    # block" is authored code travelling in a declarative field.
+    #
+    # A fence is the whole test, deliberately. Inline backticks are how a
+    # property names an identifier — "every entry must name something that
+    # exists" — and catching those would make the rule unusable and get it
+    # routed around. A fenced block is the shape that carries a replacement.
+    if stage.instruction and "```" in stage.instruction:
+        problems.append(
+            f"{where}: the instruction contains a fenced code block. The "
+            "planner states the end state; the executor writes the code. Put "
+            "existing code in `read_excerpts` as a path and a line range — a "
+            "reference can only point at what is already there, which is what "
+            "keeps an instruction from becoming a transcription job"
+        )
     if stage.kind == "script" and not stage.command:
         problems.append(f"{where}: script stages require a command")
     if stage.kind == "agent" and stage.command:

@@ -109,9 +109,12 @@ Declarative — the planner may author and revise these:
 
 - `instruction` — the task text the executor receives
 - `edit_files`, `read_files` — globs, for executor scoping and the scope guard
-- `read_excerpts` — a path and two line numbers, read and quoted by the
-  orchestrator; declarative in the strongest sense available, since there is no
-  string in it that anything executes
+- `read_excerpts` — a path and two line numbers, read at the stage's starting
+  commit and quoted by the orchestrator; declarative in the strongest sense
+  available, since there is no string in it that anything executes, and it can
+  only point at code that already exists. That last property is what makes it
+  the *only* way the planner puts code in front of the executor: a fenced block
+  in `instruction` is rejected by `validate_stage` before the stage runs
 - `constraints`, `acceptance` — prose the reviewer judges against
 - `forbidden_patterns`, `must_not_remain` — regexes, matched in-process against
   added lines and file contents respectively, never shelled out
@@ -878,6 +881,21 @@ median read is 41 lines and fewer than 1% reach the per-call cap. It read one
 `read_excerpts` exists because that knowledge used to stop there — the stage it
 then wrote handed the executor whole-file globs, and the executor had to find
 the same region again before it could act on it.
+
+It carries a second job now, and the two fit together. The planner used to
+paste code into the instruction: the current text of a file, and the exact text
+that should replace it. Measured over one run of 48 stages, five of eleven
+rejections conceded that the behaviour was right and rejected the shape,
+because every line of an instruction is a reject criterion; one stage deadlocked
+because an authored edit stops being satisfiable once part of it is already
+true on the branch; and one rewrote a whitelist by hand, preserving an entry
+that named a column the table did not have, in a stage drawn to fix entries of
+exactly that kind. A reference has none of those failure modes — it is read
+rather than remembered, so it cannot be stale, and it cannot express an
+after-image at all. Excerpts are therefore read at `stage_start_sha`, the same
+baseline the reviewer's diff and the planner's revision block use, and a range
+that will not resolve fails the stage to the planner rather than being skipped:
+with no code in the instruction, the excerpt *is* the code.
 
 - `next_stage` — a new stage spec. `revision` resets to 0.
 - `revise` — a revised spec for the *same* stage id. `revision` increments,
