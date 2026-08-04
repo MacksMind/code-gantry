@@ -14,7 +14,7 @@ and does not belong in the middle of doing it.
 
 from pathlib import Path
 
-from orchestrator.addendum import append_notes
+from orchestrator.addendum import append_notes, append_outcome
 
 
 def note(observation="8 of 9 controllers are clean", **over):
@@ -268,3 +268,52 @@ class TestTheFindingIsItsOwnLine:
 
     def test_an_empty_finding_renders_no_bullet(self, tmp_path):
         assert "**found**" not in write(tmp_path, [note(finding="   ")]).read_text()
+
+
+class TestWhatLanded:
+    """The one entry in this file that is a claim about the past.
+
+    Everything else here is written before the work. The planner's notes are
+    produced when a stage is *derived* and held until it lands; the reviewer's
+    observations are about code the stage did not touch. Nothing recorded what
+    the stage actually did — and the planner reads this log back as history on
+    every later derivation, so an intention published on landing became the
+    account of record.
+
+    Observed: an entry saying a controller "now permits" two fields "with a
+    two-shop controller-spec example reading the values back from the
+    database", written before a line of it existed. The stage happened to
+    deliver it. The log had no way to know that.
+    """
+
+    def test_it_records_the_reviewers_words(self, tmp_path):
+        target = append_outcome(
+            tmp_path,
+            "log.md",
+            stage_id="drop-whitelists",
+            summary="Removes the three declarations and adds a spec that reads "
+            "the persisted value back.",
+        )
+        text = target.read_text()
+        assert "## What `drop-whitelists` landed" in text
+        assert "reads the persisted value back" in text
+
+    def test_it_says_when_it_was_written(self, tmp_path):
+        # The distinction the file exists to make. A reader has to be able to
+        # tell a report from a prediction, and the two sit next to each other.
+        text = append_outcome(
+            tmp_path, "log.md", stage_id="s", summary="did the thing"
+        ).read_text()
+        assert "**reviewed** after the diff was written" in text
+
+    def test_a_stage_with_no_review_writes_nothing(self, tmp_path):
+        # Nothing landed, so there is nothing to report.
+        assert append_outcome(tmp_path, "log.md", stage_id="s", summary="") is None
+        assert append_outcome(tmp_path, "log.md", stage_id="s", summary="  ") is None
+
+    def test_planner_notes_no_longer_claim_to_be_observations_of_landing(
+        self, tmp_path
+    ):
+        text = write(tmp_path, [note(finding="something")]).read_text()
+        assert "**observed** while planning" in text
+        assert "while landing" not in text

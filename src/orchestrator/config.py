@@ -576,6 +576,25 @@ class ProjectConfig(_Strict):
 
     stage_defaults: StageDefaults = StageDefaults()
 
+    # Whether to commit what a `checks` command changed. Most linters only
+    # report, and for those this is a no-op — there is nothing uncommitted to
+    # find. It exists for the ones that also fix: `rubocop -A`, `eslint --fix`,
+    # `gofmt -w`.
+    #
+    # Defaulting on, because the failure it prevents is not a style question.
+    # The executor commits its own work before verify starts, so nothing else
+    # in the loop commits what a check wrote. Left in the tree it survives the
+    # stage: swept up silently if the stage lands, and orphaned if the stage is
+    # blocked or reworked away — at which point the *next* stage's precheck
+    # refuses to cut a branch over changes it cannot attribute, and the run
+    # stops. That happened, and it would have recurred on every blocked stage.
+    #
+    # Turn it off for a check that writes something which should not be part of
+    # the stage — a coverage report a `.gitignore` has missed, say. The tree
+    # will then be dirty when the stage ends, which is a problem this cannot
+    # solve on the operator's behalf.
+    checks_commit_changes: bool = True
+
     # A reviewer leaves comments on the work in front of it. It does not ask for
     # the work again, and an author who cannot see their own diff is not in a
     # position to amend it — so a rejected attempt stays on the branch and the

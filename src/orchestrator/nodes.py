@@ -21,7 +21,7 @@ import json
 import time
 from datetime import datetime
 
-from orchestrator.addendum import append_notes, append_observations
+from orchestrator.addendum import append_notes, append_observations, append_outcome
 from orchestrator.commands import truncate_middle
 from orchestrator.config import Stage, validate_stage
 from orchestrator.executor import resolve_excerpts
@@ -664,6 +664,34 @@ def verify(state: RunState, rt: Runtime) -> dict:
     if outcome.flaky_files:
         _record_flakes(rt, stage.id, outcome.flaky_files, outcome.flaky_seeds)
 
+    # A check may write. `checks` is arbitrary operator-declared shell, and an
+    # autocorrecting linter is the obvious case — it is run precisely so the
+    # executor does not spend an attempt on a line break. The executor commits
+    # its own work before verify starts, so nothing else in the loop commits
+    # what a check changed.
+    #
+    # Left uncommitted, it survives the stage. If the stage lands, `advance`
+    # sweeps it up and no one notices; if the stage is blocked, reworked away,
+    # or the run stops, it is orphaned in the tree and the *next* stage's
+    # precheck refuses to cut a branch over changes it cannot attribute. That
+    # escalation stopped a run, and it would have recurred on every blocked
+    # stage.
+    #
+    # Committing here puts it on the child branch, where it is squashed on
+    # landing and discarded with the branch otherwise — which is what the
+    # branch-as-quarantine design already promises for everything else.
+    if (
+        rt.cfg.checks_commit_changes
+        and state.get("stage_branch")
+        and rt.git.uncommitted()
+    ):
+        touched = rt.git.uncommitted()
+        rt.git.commit_all(f"[{stage.id}] verification checks")
+        rt.log(
+            f"[verify] {stage.id}: checks changed {len(touched)} file(s); "
+            "committed to the stage branch"
+        )
+
     accumulated = {
         # Consumed here. `resuming` means "this is the first step after a
         # resume", and every reader treats it that way — but nothing cleared
@@ -1068,6 +1096,17 @@ def advance(state: RunState, rt: Runtime) -> dict:
             return rt.git.show_file(plan_sha, path)
         except GitError:
             return None
+
+    # What landed, first, and from the reviewer — the only participant that saw
+    # the diff. Everything after this in the file was written before the work.
+    landed = append_outcome(
+        rt.cfg.target_repo,
+        rt.cfg.plan_addendum_path,
+        stage_id=stage.id,
+        summary=state.get("review_summary") or "",
+    )
+    if landed is not None:
+        rt.log(f"[advance] recorded what {stage.id} landed, in the reviewer's words")
 
     written = append_notes(
         rt.cfg.target_repo,

@@ -2452,7 +2452,10 @@ class TestReviewerObservationsReachTheLog:
         state = {**state, **nodes.review(state, rt)}
         nodes.advance(state, rt)
 
-        assert not (repo / "docs/progress_log.md").exists()
+        # The log exists, because a landed stage always records what it did.
+        # What must not appear is an observation heading with nothing under it.
+        text = (repo / "docs/progress_log.md").read_text()
+        assert "**observed** by the reviewer" not in text
 
     def test_a_rework_cycle_does_not_report_the_same_finding_twice(
         self, repo, tmp_path
@@ -2501,3 +2504,35 @@ class TestReviewerObservationsReachTheLog:
         # No advance: the stage was abandoned.
         assert not (repo / "docs/progress_log.md").exists()
         assert state["pending_observations"][0]["file"] == "a.rb"
+
+
+class TestChecksThatWrite:
+    """A check may fix as well as report, and something has to commit that.
+
+    `rubocop -A`, `eslint --fix`, `gofmt -w`. The executor commits its own work
+    before verify starts, so nothing else in the loop commits what a check
+    changed. Left uncommitted it survives the stage — swept up silently if the
+    stage lands, orphaned if the stage is blocked or reworked away, at which
+    point the next stage's precheck refuses to cut a branch over changes it
+    cannot attribute. That stopped a run.
+    """
+
+    LINTER = "printf 'linted\\n' >> app.py"
+
+    def test_a_check_that_writes_is_committed_to_the_stage_branch(
+        self, repo, tmp_path
+    ):
+        cfg, rt, state = make(repo, tmp_path)
+        state = with_stage(state, rt, checks=[self.LINTER])
+        (repo / "app.py").write_text("stage work\n")
+        nodes.verify(state, rt)
+        assert "linted" in (repo / "app.py").read_text()
+        assert not rt.git.uncommitted()
+
+    def test_it_can_be_switched_off(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path, checks_commit_changes=False)
+        state = with_stage(state, rt, checks=[self.LINTER])
+        (repo / "app.py").write_text("stage work\n")
+        nodes.verify(state, rt)
+        assert "linted" in (repo / "app.py").read_text()
+        assert rt.git.uncommitted()

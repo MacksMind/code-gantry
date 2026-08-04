@@ -196,7 +196,17 @@ def _entry(note: dict, stage_id: str, read_plan=None, plan_sha: str = "") -> str
             # the commit it was read from and something else afterwards.
             title += f" @ `{plan_sha[:12]}`"
 
-    lines = [f"## {title}", "", f"- **observed** while landing `{stage_id}`"]
+    # "while planning", not "while landing", and the distinction is the whole
+    # point. The planner produces these when it *derives* the stage — before
+    # the executor has run — and `advance` holds them until the stage lands.
+    # They are what reading the plan against the code revealed, which is
+    # genuinely worth recording, and they are not an account of what the work
+    # did. Labelling them "while landing" made a prediction read as a report:
+    # one entry said a controller "now permits" two fields "with a two-shop
+    # controller-spec example reading the values back", written before a line
+    # of it existed. The stage happened to deliver it. The log had no way to
+    # know that, and the next planner call read it back as history.
+    lines = [f"## {title}", "", f"- **observed** while planning `{stage_id}`"]
     if problem:
         lines.append(f"- **citation** unresolved: {problem}")
     if anchor:
@@ -276,6 +286,45 @@ def append_observations(
         for note in observations:
             fh.write(_observation(note, stage_id))
             fh.write("\n")
+    return target
+
+
+def append_outcome(
+    repo: Path,
+    addendum_path: str | None,
+    *,
+    stage_id: str,
+    summary: str,
+) -> Path | None:
+    """Record what the stage actually did, in the reviewer's words.
+
+    This exists because everything else in this file is written before the
+    work. The planner's notes are drafted while the stage is derived; the
+    reviewer's observations are about code the stage did not touch. Nothing
+    recorded what landed — and the planner reads this log back as history on
+    every subsequent derivation, so an intention published on landing became
+    the account of record.
+
+    The reviewer's summary is the right source and needs no new model call: it
+    is written after reading the diff, by the only participant that saw it,
+    and it already describes the change rather than the request. It is
+    unavailable on a stage that never landed, which is correct — there is
+    nothing to report.
+
+    First in the entry order, ahead of the planner's notes, because it is the
+    only part that is a claim about the past.
+    """
+    if not addendum_path or not (summary or "").strip():
+        return None
+
+    target = _target(repo, addendum_path)
+    _ensure_header(target)
+
+    body = decode_escapes(summary.strip())
+    with target.open("a") as fh:
+        fh.write(f"## What `{stage_id}` landed\n\n")
+        fh.write("- **reviewed** after the diff was written\n\n")
+        fh.write(f"{body}\n\n")
     return target
 
 
