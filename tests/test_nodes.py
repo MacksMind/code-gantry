@@ -207,15 +207,58 @@ class TestPlanDerivation:
         assert out["next_hop"] == "escalate"
         assert "contradicts" in out["escalation_reason"]
 
-    def test_an_invalid_spec_escalates_rather_than_running(self, repo, tmp_path):
-        # No edit_files means the scope guard is meaningless.
+    def test_an_invalid_spec_goes_back_to_the_planner(self, repo, tmp_path):
+        # It used to escalate on the first occurrence, which the code's own
+        # comment argued against — "a malformed spec is the planner's error to
+        # fix". A malformed spec is the definition of a stage drawn wrongly,
+        # which is the planner's tier, not a human's. It became urgent when
+        # `validate_stage` started rejecting a fenced code block in the
+        # instruction: that rule asks a model to break a strong habit, and one
+        # slip stopping an unattended overnight run is a bad trade.
         planner = StubPlanner(
             [PlannerOutcome("next_stage", "r", "e", stage_fields={"id": "x", "instruction": "i"})]
         )
         cfg, rt, state = make(repo, tmp_path, planner=planner)
         out = nodes.plan(state, rt)
+        assert out["next_hop"] == "plan"
+        assert "edit_files" in json.dumps(out["last_failure"])
+
+    def test_it_counts_against_the_no_landing_budget(self, repo, tmp_path):
+        # What bounds the loop. Without this the run would redraw an invalid
+        # stage forever, which is worse than the escalation it replaces.
+        planner = StubPlanner(
+            [PlannerOutcome("next_stage", "r", "e", stage_fields={"id": "x", "instruction": "i"})]
+        )
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        out = nodes.plan(state, rt)
+        assert out["interventions_since_landing"] == 1
+
+    def test_it_escalates_once_the_budget_is_gone(self, repo, tmp_path):
+        # The guard that bounds it only fired while a stage was in flight, so
+        # on the derive path — where a rejected spec leaves no stage — it was
+        # unreachable and the loop had nothing stopping it.
+        planner = StubPlanner(
+            [PlannerOutcome("next_stage", "r", "e", stage_fields={"id": "x", "instruction": "i"})]
+        )
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        state["interventions_since_landing"] = 3
+        out = nodes.plan(state, rt)
         assert out["next_hop"] == "escalate"
-        assert "edit_files" in out["escalation_reason"]
+
+    def test_the_problems_reach_the_next_planner_call(self, repo, tmp_path):
+        # The journey. A rejection recorded in state but not rendered into the
+        # prompt would buy three identical redraws and then escalate anyway,
+        # for three times the cost of escalating immediately.
+        planner = StubPlanner(
+            [
+                PlannerOutcome("next_stage", "r", "e", stage_fields={"id": "x", "instruction": "i"}),
+                PlannerOutcome("project_complete", "r", "e"),
+            ]
+        )
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        state.update(nodes.plan(state, rt))
+        nodes.plan(state, rt)
+        assert "edit_files" in _text_of(planner.calls[1])
 
     def test_operator_stage_defaults_are_applied(self, repo, tmp_path):
         planner = StubPlanner(

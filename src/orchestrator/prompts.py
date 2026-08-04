@@ -806,6 +806,25 @@ def build_planner_messages(
         )
 
     if current_stage is None:
+        # A rejected spec leaves no stage behind, so this is the only place the
+        # planner can be told about one. Without it the redraw is another
+        # derivation with no knowledge of what was wrong — three identical
+        # attempts and then the escalation this replaced, at three times the
+        # cost of escalating immediately.
+        if failure and (failure.get("layer") if isinstance(failure, dict) else None) == "validation":
+            current.append(
+                _failure_block(
+                    failure,
+                    heading="Your last stage spec was rejected before it ran",
+                    preamble=(
+                        "This is a check on the spec itself, not on any work — "
+                        "nothing was attempted and nothing was cut. Draw the "
+                        "stage again with these fixed. They are mechanical, so "
+                        "a redraw that does not address them will be rejected "
+                        "the same way."
+                    ),
+                )
+            )
         current.append(
             "## Your task now: derive the next stage\n\n"
             "Given the plan and the stages already completed, produce the next "

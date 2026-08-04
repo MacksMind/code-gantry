@@ -36,7 +36,12 @@ NODES: dict[str, Callable] = {
 # Where each node may send the run. Declarative so it is checkable against the
 # spec rather than buried in lambdas.
 EDGES: dict[str, list[str]] = {
-    "plan": ["precheck", "verify", "finalize", "escalate"],
+    # Reaches itself, and it is the only node that does. A stage spec that
+    # fails validation is redrawn rather than escalated — a malformed spec is
+    # the definition of a stage drawn wrongly, which is the planner's tier.
+    # Bounded by `max_interventions_without_landing` like every other way the
+    # planner can fail to make progress.
+    "plan": ["precheck", "verify", "finalize", "escalate", "plan"],
     "precheck": ["execute", "plan", "escalate"],
     # Not `execute` — the node routes to `verify` when it ran and to `plan`
     # when a context command failed, and never back to itself. A retry is the

@@ -458,6 +458,10 @@ plan      → verify     (revised by extend — the stage's work stands, so the
                         question is whether it now passes, not what the
                         executor would write over it a second time)
 plan      → finalize   (verdict: project_complete)
+plan      → plan       (the spec it just produced failed validation — redraw.
+                        Nothing was cut and no stage exists, so this is not a
+                        revision; it is the same derivation, attempted again
+                        with the problems named)
 plan      → escalate   (verdict: blocked, or planner budget exhausted)
 
 precheck  → execute    (preconditions and setup pass)
@@ -505,7 +509,17 @@ top and throw away the human's fix. Getting this wrong produces a loop that
 looks like progress and never makes any.
 
 Note what is largely *absent*: paths straight to `escalate`. That is the
-point.
+point — and one of them was removed rather than designed away. A stage spec
+that failed validation escalated on the first occurrence, under a comment
+arguing it was "the planner's error to fix". A malformed spec is precisely a
+stage drawn wrongly, which is the planner's tier; the escalation cost a human
+for something one more planner call resolves. It became worth changing when
+validation started rejecting authored code in an instruction, since that rule
+asks a model to break a habit and a single slip would stop an unattended run.
+The redraw is bounded by the same counter as every other way the planner fails
+to make progress — which had to be widened to see it, having been conditioned
+on a stage being in flight and so unreachable for the one failure that leaves
+none.
 
 ### State schema
 

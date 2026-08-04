@@ -12,7 +12,9 @@ class TestEdgeTable:
     def test_edges_match_the_spec(self):
         # PLAN.md's edge list, transcribed. Drift from the spec shows up here.
         assert EDGES == {
-            "plan": ["precheck", "verify", "finalize", "escalate"],
+            # `plan` reaches itself: a spec that fails validation is redrawn
+            # rather than escalated, and the redraw is another planner call.
+            "plan": ["precheck", "verify", "finalize", "escalate", "plan"],
             "precheck": ["execute", "plan", "escalate"],
             "execute": ["verify", "plan"],
             "verify": ["review", "advance", "execute", "plan", "escalate"],

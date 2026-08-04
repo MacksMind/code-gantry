@@ -48,6 +48,7 @@ flowchart TD
     plan -->|new stage, or a revision<br/>that discards the branch| precheck
     plan -->|a revision that keeps the branch —<br/>the work stands, so ask the gates| verify
     plan -->|project complete| finalize
+    plan -->|its own spec failed validation —<br/>redraw, nothing was cut| plan
     plan -->|instruction is unfixable,<br/>or budget spent| escalate
 
     precheck[precheck<br/><i>preconditions · setup · cut child branch</i>]

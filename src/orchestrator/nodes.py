@@ -94,9 +94,13 @@ def plan(state: RunState, rt: Runtime) -> dict:
     limits = rt.cfg.limits
 
     stuck = state.get("interventions_since_landing", 0)
+    # Not conditioned on a stage being in flight any more. It was, and that made
+    # it unreachable for the one way the planner can fail without leaving a
+    # stage behind: a spec rejected by validation, which now redraws rather than
+    # escalating. `advance` zeroes this on every landing, so on an ordinary
+    # derivation it is 0 and the check is inert either way.
     if (
-        stage is not None
-        and limits.max_interventions_without_landing
+        limits.max_interventions_without_landing
         and stuck >= limits.max_interventions_without_landing
     ):
         return _escalate(
@@ -286,15 +290,36 @@ def plan(state: RunState, rt: Runtime) -> dict:
     new_stage = rt.cfg.stage_from_planner(outcome.stage_fields or {})
     problems = validate_stage(new_stage, rt.cfg)
     if problems:
-        # A malformed spec is the planner's error to fix, but it does not get
-        # to burn the budget on it indefinitely — the intervention still counts.
+        # A malformed spec is the planner's error to fix, and this used to
+        # escalate to a human on the first occurrence — which the comment here
+        # already argued against and the code did anyway. A stage that fails
+        # validation is the definition of a stage drawn wrongly, which is the
+        # planner's tier of the three.
+        #
+        # It became worth fixing when `validate_stage` started rejecting a
+        # fenced code block in the instruction. That rule asks a model to break
+        # a strong habit, and one slip stopping an unattended overnight run is
+        # a bad trade for a redraw that costs one planner call.
+        #
+        # `current` is deliberately not set: the stage does not exist, nothing
+        # was cut for it, and anything keying off a stage in flight must not
+        # see one. The counter is what bounds this — the redraw is a planner
+        # pass that landed nothing, which is exactly what
+        # `max_interventions_without_landing` counts.
+        rt.log(
+            f"[plan] rejected its own stage spec ({len(problems)} problem(s)); "
+            "redrawing"
+        )
         return {
             **base,
-            **_escalate(
-                "planner",
-                "The planner produced a stage that failed validation:\n"
-                + "\n".join(f"- {p}" for p in problems),
+            "planner_interventions": state.get("planner_interventions", 0) + 1,
+            "interventions_since_landing": stuck + 1,
+            "last_failure": _failure_detail(
+                "validation",
+                "the stage spec it produced did not pass validation",
+                "\n".join(f"- {p}" for p in problems),
             ),
+            "next_hop": "plan",
         }
 
     if outcome.verdict == "revise":
