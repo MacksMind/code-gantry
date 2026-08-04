@@ -697,6 +697,20 @@ still silently alter behavior no spec covers — and on a legacy codebase, the
 areas with the thinnest coverage are exactly the ones a refactor is most likely
 to disturb.
 
+**A check may also write.** The useful linters fix as well as report, and an
+autocorrecting one is worth running precisely so the executor does not spend an
+attempt on a line break. But the executor commits its own work before verify
+starts, so nothing else in the loop commits what a check changed — and left
+uncommitted it is swept up silently when the stage lands and orphaned when it
+does not, at which point the next stage's precheck refuses to cut a branch over
+changes it cannot attribute. `checks_commit_changes` commits it to the child
+branch instead, where it is squashed on landing or discarded with the branch.
+
+Note the ordering this implies: checks run *after* the tests, so a fix applied
+here is not covered by the suite run that just passed. What covers it is the
+full suite at the merge gate, which runs after review and before anything
+lands.
+
 **8. New tests.** Two rules, and only the second is conditional.
 
 Any test file the stage touched must not be empty — always, whatever the stage
@@ -760,16 +774,33 @@ discipline:
 ```json
 {
   "verdict": "approved" | "rework" | "blocked",
-  "summary": "one-line assessment",
+  "summary": "one-line assessment, justifying the verdict",
+  "record": "what the change does, for the progress log",
   "issues": [
     {
       "severity": "major" | "minor",
       "file": "path/to/file.rb",
       "description": "what's wrong and why it matters"
     }
+  ],
+  "observations": [
+    { "file": "...", "finding": "...", "detail": "..." }
   ]
 }
 ```
+
+`record` is required, and `observations` is not, which is the whole difference
+between them: the optional one came back empty 278 times out of 278 across two
+prompt revisions, while a field that is always answerable is always answered.
+It is separate from `summary` because `summary` justifies a routing decision
+and reads like one — every instance opens by confirming the diff matches the
+stage and closes on what was not introduced, which is the right shape for a
+gate and the wrong shape for something read a year later.
+
+The reviewer writes it because it is the only participant that has seen the
+diff. Nothing else in the loop records what a stage actually did: the stage
+instruction says what was asked for, and the planner's notes are composed
+before the executor runs.
 
 - `approved` — proceed to the full-suite half of the gate.
 - `rework` — loop back to `execute` with the issues as feedback.

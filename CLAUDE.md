@@ -73,6 +73,21 @@ not judgement, and the artifact reads the same either way. Recording what a
 gate *looked at*, not only what it decided, is what makes the difference
 visible afterwards.
 
+**A record of the work must be written after the work.** The progress log is
+what every later planning pass reads back as history, and for a long time its
+entries were produced by the planner *while deriving the stage* — before the
+executor had run — held, and published on landing under "observed while
+landing". One said a controller "now permits" two fields "with a two-shop
+controller-spec example reading the values back from the database", written
+before a line of it existed. The stage happened to deliver it. The log had no
+way to know that, and a stale premise published on landing becomes the account
+of record for every call afterwards. Those notes are still worth having — the
+moment you read the plan against the code is exactly when you find the plan is
+wrong — but they say "observed while planning" now, and what the stage *did* is
+recorded separately by the reviewer, which is the only participant that has
+seen the diff. Anything written before the work is a prediction, whatever tense
+it uses.
+
 ## Rules that cost time when broken
 
 **Project knowledge belongs in config, never in code.** This includes
@@ -186,6 +201,39 @@ evidence. The same discipline applies to sampling: a replay's rejection rate is
 measured on stages that already passed review once, and tool-use counts on
 identical inputs varied from 0 to 21 between two runs — so a single sample
 showing a model "reading where it mattered" is a story, not a finding.
+
+**An optional field is answered with nothing.** `observations` gives the
+reviewer somewhere to report a real problem this stage did not cause. It came
+back empty **278 times out of 278**, across two prompt revisions written
+specifically to encourage it. Over the same period the planner filled the same
+log 630 times from a field it is always expected to produce. The difference is
+not diligence, it is that an optional field with a conditional trigger can
+always be declined in good conscience, and a required one with an
+always-answerable question cannot. If output is wanted every time, make it
+required and ask something that is true every time — "what does this change
+do", not "did you notice anything else".
+
+**A check may write, and only the child branch should carry it.** `checks` is
+arbitrary operator-declared shell, and the useful ones often fix as well as
+report: `rubocop -A`, `eslint --fix`, `gofmt -w`. The executor commits its own
+work *before* verify starts, so nothing else in the loop commits what a check
+changed. Left uncommitted it is swept up silently when the stage lands and
+orphaned when it does not — and then the *next* stage's precheck refuses to cut
+a branch over changes it cannot attribute, which stops the run on a stage that
+has nothing wrong with it. `checks_commit_changes` puts it on the child branch,
+where the quarantine already promises it is squashed on landing or discarded
+with the branch.
+
+**Prefer the fact to the label.** Twice in one session the tempting fix was to
+have a model *declare* something the repository already knows — a stage naming
+the plan item it advances, so the folding pass could tick a checklist. But a
+declaration is a claim made before the work and is exactly the class of thing
+that produced the prediction problem above, while the squash commit already
+carries the stage id, the instruction's first line, and the diff. `git blame`
+on the log answers it from facts that cannot be wrong. The addendum's own
+docstring made this argument first, about shas and timestamps: embedding them
+in append-only prose turns them into "claims about history that history had
+invalidated".
 
 ## Where things live
 
