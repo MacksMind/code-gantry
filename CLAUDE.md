@@ -319,6 +319,39 @@ so a silent zero there is the instrument, not the cache. Measured directly at
 the API: an identical 16k prefix caches at 99.9% on chat/completions with
 nothing configured.
 
+**A figure in a document must name the artifact it came from.** Two cost
+numbers reached `docs/architecture.md` — "$15.13 a run", "$2.80" — in the same
+session that built the code which computes them. Neither matches any
+`report.md`; the tool has only ever emitted four dollar figures and those are
+not among them. They were written from recollection while the real numbers were
+one command away, they read as measured because everything around them was, and
+they were then reasoned from in a later comparison. The rule is not "check your
+arithmetic": the arithmetic was never done. It is that a number describing this
+system is a *reading*, and a reading with no instrument behind it should be
+deleted rather than approximated.
+
+**A category drawn around the mechanism excludes the case drawn around the
+meaning.** The transport retry was built for a dropped Wi-Fi and its category
+was written as *the request never arrived* — `APIConnectionError`, and the
+docstring said so. A 529 `overloaded_error` then ended a 29-stage run at 09:43
+with the work intact: the request arrived, and the provider said come back
+later. Same outage, same correct response, outside the category because the
+category described the plumbing rather than what the failure meant. The
+question to ask of any such set is not "is this complete" — it looked complete
+— but "what is this a set *of*", and whether the name would still hold if the
+same event reached us by a different route.
+
+The fix is also a small lesson in the rule below it. The obvious
+implementation is a list of exception classes, and it is wrong: 529 is
+`OverloadedError` on the Anthropic SDK and `InternalServerError` on OpenAI's,
+so a class list is right in exactly one of the two files that need it. Both
+SDKs decide by status code in their own `_should_retry`, and so does
+`is_transient_status` — which the tests pin *against the installed SDKs*, so a
+provider that changes its mind fails a test here rather than stopping a run at
+3am. 429 is included, which would be unsafe as an SDK `max_retries` honouring
+`retry-after`, and is safe here only because the wait is bounded by our wall
+clock.
+
 **Test the layer you are actually going to call.** Reaching `max` on the
 executor needed litellm's Responses bridge, and a metadata file with
 `mode: responses` triggered it perfectly — in litellm. Through Aider it did

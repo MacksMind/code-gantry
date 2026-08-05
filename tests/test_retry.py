@@ -20,7 +20,12 @@ decisions the model made, and asking again does not change them.
 
 import pytest
 
-from orchestrator.retry import Backoff, delays, with_transport_retry
+from orchestrator.retry import (
+    Backoff,
+    delays,
+    is_transient_status,
+    with_transport_retry,
+)
 
 
 class Boom(Exception):
@@ -183,6 +188,59 @@ class TestItSaysWhatItIsDoing:
             log=log,
         )
         assert lines == []
+
+
+class TestWhichFailuresAreWorthWaitingOut:
+    """The status code decides, not the exception class.
+
+    Extended after a 529 ended a 29-stage run: the original set was the
+    exceptions meaning "the request never arrived", and an overloaded provider
+    is a request that arrived and was told to come back later. The same
+    outage, one layer up.
+
+    Filtered by code rather than by class because the class is not portable —
+    the installed SDKs disagree about 529, calling it `OverloadedError` on one
+    and `InternalServerError` on the other, and the enumeration that looked
+    obvious would have been half right.
+    """
+
+    def test_a_failure_that_never_arrived_is_transient(self):
+        # No status at all: nothing answered, so there is nothing to read.
+        assert is_transient_status(None) is True
+
+    def test_an_overloaded_provider_is_transient(self):
+        assert is_transient_status(529) is True
+
+    def test_a_server_error_is_transient(self):
+        assert all(is_transient_status(s) for s in (500, 502, 503))
+
+    def test_a_rate_limit_is_transient(self):
+        # Bounded by our own wall clock, which is what makes this safe here
+        # and unsafe as an SDK `max_retries`.
+        assert is_transient_status(429) is True
+
+    def test_a_request_we_got_wrong_is_not(self):
+        # These say the same thing in fifteen minutes.
+        assert not any(is_transient_status(s) for s in (400, 401, 403, 404, 422))
+
+    def test_it_matches_what_the_installed_sdks_retry(self):
+        # The SDKs' own `_should_retry` is the authority on this, and it is on
+        # disk. Pinning against it means a provider that changes its mind is a
+        # test failure here rather than a run that stops at 3am.
+        import httpx
+
+        from anthropic import _base_client as anthropic_base
+        from openai import _base_client as openai_base
+
+        for base in (anthropic_base, openai_base):
+            client = base.BaseClient
+            for status in (400, 401, 403, 404, 422, 429, 500, 503, 529):
+                response = httpx.Response(
+                    status, request=httpx.Request("POST", "https://x/y")
+                )
+                assert client._should_retry(client, response) is is_transient_status(
+                    status
+                ), f"{base.__name__} disagrees about {status}"
 
 
 def _raising(kind, message="boom"):

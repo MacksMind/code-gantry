@@ -36,7 +36,7 @@ from pydantic import BaseModel
 
 from orchestrator.config import ReviewerConfig
 from orchestrator.plannertools import dispatch, openai_tool_schemas
-from orchestrator.retry import Backoff, with_transport_retry
+from orchestrator.retry import Backoff, is_transient_status, with_transport_retry
 
 Verdict = Literal["approved", "rework", "blocked"]
 
@@ -159,17 +159,31 @@ def _blocked(reason: str) -> ReviewOutcome:
 
 
 def _transport_errors() -> tuple[type[BaseException], ...]:
-    """Exception types meaning the request never arrived.
+    """Exception types a transient failure can arrive as.
 
     `APITimeoutError` subclasses `APIConnectionError`, so one entry covers
     both. Resolved lazily and degrading to no retrying, matching how the
     SDK is imported everywhere else here.
+
+    `APIStatusError` covers everything the server did answer, and needs
+    `_is_transient` behind it to separate "come back later" from "your
+    request was wrong".
     """
     try:
-        from openai import APIConnectionError
+        from openai import APIConnectionError, APIStatusError
     except ImportError:  # pragma: no cover - the SDK is a hard dependency
         return ()
-    return (APIConnectionError,)
+    return (APIConnectionError, APIStatusError)
+
+
+def _is_transient(failure: BaseException) -> bool:
+    """Whether waiting could plausibly change the answer.
+
+    By status rather than by class. This SDK raises `InternalServerError` for
+    the 529 that the planner's raises `OverloadedError` for, so the obvious
+    class-list implementation is wrong in exactly one of the two files.
+    """
+    return is_transient_status(getattr(failure, "status_code", None))
 
 
 class OpenAIReviewer:
@@ -236,6 +250,7 @@ class OpenAIReviewer:
                         **extra,
                     ),
                     retry_on=_transport_errors(),
+                    retry_if=_is_transient,
                     backoff=Backoff(
                         budget_seconds=self.cfg.transport_retry_seconds,
                         max_delay_seconds=self.cfg.transport_retry_max_delay_seconds,

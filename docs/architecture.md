@@ -1037,12 +1037,22 @@ they are billed above base (6.25e-06 against 5e-06 on Opus), which meant
 threading `cache_write_tokens` through `RunState`: both clients had computed it
 per call for as long as they had existed, and it stopped at the artifact.
 
-Measured on one project, this settles an argument the leaderboards cannot. The
-planner spends $15.13 a run with 80% of it on input despite 93% caching; the
-reviewer $2.80 at 68% input. Effort buys *output* tokens, so doubling reasoning
-moves those bills 20% and 32% — not the 2× that a benchmark's cost axis
-implies, because a benchmark task is short and output-dominated while these runs
-resend an enormous cached prefix on every call. The ratio does not transfer.
+Measured on one project, this settles an argument the leaderboards cannot. Over
+a 29-stage run the planner cost $136.32 and the reviewer $13.67, both at 92%
+cached prompt — about $5 a landed stage, corroborated at $4.92 by a separate
+six-stage run. Priced against the same rate table, **output is 18% of the
+planner's bill and 13% of the reviewer's**; the rest is prompt, most of it
+cached. Effort buys output tokens, so doubling reasoning moves those bills by
+roughly those fractions, not the 2× a benchmark's cost axis implies — a
+benchmark task is short and output-dominated, while these runs resend an
+enormous cached prefix on every call. The ratio does not transfer.
+
+The per-role figures come from the run report, which is the only place they
+exist. An earlier revision of this paragraph carried two numbers that no
+artifact supports; they were written from recollection during the session that
+built the pricing code, which is the failure that code was meant to end. A cost
+figure in this document should be traceable to a `report.md`, and if it cannot
+be, it should be deleted rather than rounded.
 
 ## Escalation tiers
 
@@ -1071,6 +1081,31 @@ Three tiers. The design goal is that a run stops only for a good reason.
    planner will spend its whole global budget failing to route around one, so
    the escalation must say "precondition X never passed" rather than presenting
    it as a planning failure.
+
+### Below all three: waiting out the provider
+
+A failure that never reached a model is not an escalation of any tier, and
+`retry.py` absorbs it before the tiers see it. The waiting sits above the SDK
+rather than inside it, because both SDKs clamp every wait at eight seconds —
+covering fifteen minutes there costs 116 retries at best and 154 at worst, the
+same `max_retries` would spend all 154 on a genuine API error, and their
+retries log at DEBUG where `run.log` never sees them. A silent fifteen-minute
+wait and a hung process look identical from outside, which is how the first
+outage was found: a human noticed. So the wait is bounded by wall clock
+(`transport_retry_seconds`, 900 by default), costs about ten attempts rather
+than a hundred and fifty, and says what it is doing on every one.
+
+What counts as worth waiting out is decided by **status code, not exception
+class**. The original set was the exceptions meaning the request never
+arrived; a 529 then ended a 29-stage run, and a request that arrives and is
+told to come back later is the same outage one layer up. `is_transient_status`
+now covers 429 and every 5xx — the SDKs' own rule — and rejects 4xx, which
+will say the same thing in fifteen minutes and should reach an operator
+immediately. The code rather than the class because the two SDKs disagree:
+Anthropic raises `OverloadedError` for 529, OpenAI raises
+`InternalServerError`. 429 is included here and would not be safe as an SDK
+`max_retries`, since honouring a `retry-after` header can mean hours; bounded
+by our own clock it cannot.
 
 `max_planner_interventions` is a **global** budget across the run, not
 per-stage. Per-stage caps let a pathological project consume unbounded paid

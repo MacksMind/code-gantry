@@ -1116,6 +1116,82 @@ class TestOutagesAreWaitedOutNotEscalated:
         assert out.verdict == "blocked"
         assert len(client.calls) == 1
 
+    def _status_error(self, status, kind="overloaded_error"):
+        """The exception the installed SDK actually raises for a status code.
+
+        Constructed through `_make_status_error` rather than by naming a class,
+        because the class is not the same on both providers: 529 is
+        `OverloadedError` on Anthropic and `InternalServerError` on OpenAI.
+        Naming one would have passed here and been wrong in the reviewer.
+        """
+        import httpx
+        from anthropic import Anthropic
+
+        return Anthropic(api_key="x")._make_status_error(
+            "Overloaded",
+            body={"type": "error", "error": {"type": kind}},
+            response=httpx.Response(
+                status, request=httpx.Request("POST", "https://x/y")
+            ),
+        )
+
+    def test_an_overloaded_provider_is_waited_out(self):
+        # The failure this was extended for. A 529 ended a 29-stage run at
+        # 09:43 with the work intact and nothing wrong with it — the provider
+        # had simply said "come back later", which is what an outage is.
+        parsed = PlannerResponse(
+            verdict="project_complete", reasoning="r", status_entry="e"
+        )
+        client = SequenceClient([self._status_error(529), response(parsed=parsed)])
+        out = AnthropicPlanner(
+            cfg(transport_retry_seconds=0.01), client=client
+        ).plan(MESSAGES)
+        assert out.verdict == "project_complete", out.reasoning
+        assert len(client.calls) == 2
+
+    def test_a_server_error_is_waited_out(self):
+        parsed = PlannerResponse(
+            verdict="project_complete", reasoning="r", status_entry="e"
+        )
+        client = SequenceClient([self._status_error(500), response(parsed=parsed)])
+        out = AnthropicPlanner(
+            cfg(transport_retry_seconds=0.01), client=client
+        ).plan(MESSAGES)
+        assert out.verdict == "project_complete"
+
+    def test_a_rate_limit_is_waited_out(self):
+        # Safe here in a way it is not inside the SDK: the wait is bounded by
+        # our wall clock, so honouring a long `retry-after` cannot run for
+        # hours — it escalates when the budget is spent, like any other outage.
+        parsed = PlannerResponse(
+            verdict="project_complete", reasoning="r", status_entry="e"
+        )
+        client = SequenceClient([self._status_error(429), response(parsed=parsed)])
+        out = AnthropicPlanner(
+            cfg(transport_retry_seconds=0.01), client=client
+        ).plan(MESSAGES)
+        assert out.verdict == "project_complete"
+
+    def test_a_bad_request_is_not_retried(self):
+        # The other half, and the one that keeps this honest. A 400 is a
+        # statement about the request we sent: it will say the same thing in
+        # fifteen minutes, and retrying hides a legible error behind the wait.
+        client = StubClient(self._status_error(400, kind="invalid_request_error"))
+        out = AnthropicPlanner(
+            cfg(transport_retry_seconds=900), client=client
+        ).plan(MESSAGES)
+        assert out.verdict == "blocked"
+        assert len(client.calls) == 1
+
+    def test_an_authentication_error_is_not_retried(self):
+        # Waiting out a wrong key is fifteen minutes spent to be told it twice.
+        client = StubClient(self._status_error(401, kind="authentication_error"))
+        out = AnthropicPlanner(
+            cfg(transport_retry_seconds=900), client=client
+        ).plan(MESSAGES)
+        assert out.verdict == "blocked"
+        assert len(client.calls) == 1
+
     def test_a_model_decision_is_not_retried(self):
         # A refusal is an answer. Waiting fifteen minutes to be told it again
         # would hide the answer behind the whole budget.

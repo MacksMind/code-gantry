@@ -25,6 +25,17 @@ imports rather than to this module.
 Observed twice on one run: a laptop's Wi-Fi dropped, the planner and reviewer
 both failed within two seconds of each other, and a fourteen-hour run ended
 needing a human to notice and type `resume`.
+
+"Never arrived" turned out to be too narrow by one case. A third run ended on
+`Error code: 529 - overloaded_error` after 29 landed stages, with the work
+intact and nothing wrong with it: the request arrived, and the provider said
+come back later. That is the same outage one layer up, and the only reason it
+escalated is that the original set was drawn around the transport rather than
+around what the failure means. `is_transient_status` widens it to the codes the
+SDKs themselves retry — which is also why the filter is a status code and not a
+list of classes. The installed SDKs disagree about 529: Anthropic raises
+`OverloadedError`, OpenAI raises `InternalServerError`. Enumerating classes
+reads as the obvious implementation and would have been right on one provider.
 """
 
 from __future__ import annotations
@@ -74,6 +85,24 @@ def delays(backoff: Backoff) -> list[float]:
     return out
 
 
+def is_transient_status(status: int | None) -> bool:
+    """Whether an HTTP status is worth waiting out.
+
+    `None` means nothing answered — a dropped socket, a DNS failure, a read
+    timeout — and there is no status to read, so it is transient by definition.
+
+    Otherwise this is the SDKs' own `_should_retry` rule, deliberately: 429 and
+    every 5xx. A 400 or a 401 is a statement about the request we sent and will
+    say the same thing in fifteen minutes, so waiting hides a legible error
+    behind the budget. 429 is safe to include *here* and would not be safe as
+    an SDK `max_retries`, because the wait is bounded by our wall clock rather
+    than by a `retry-after` header that can name hours.
+    """
+    if status is None:
+        return True
+    return status == 429 or status >= 500
+
+
 def with_transport_retry(
     call,
     *,
@@ -81,6 +110,7 @@ def with_transport_retry(
     backoff: Backoff,
     sleep=time.sleep,
     log=None,
+    retry_if=None,
 ):
     """Run `call`, waiting out failures of the kinds in `retry_on`.
 
@@ -88,12 +118,19 @@ def with_transport_retry(
     the budget is spent, and any other exception immediately — the original
     exception either way, so the caller's message says what actually happened
     rather than naming this wrapper.
+
+    `retry_if` narrows `retry_on` for types that cover both the transient and
+    the permanent: the SDKs' status errors share one base class, so the type is
+    not enough to tell an overloaded provider from a malformed request. A
+    failure it rejects is raised immediately, exactly like an unlisted type.
     """
     schedule = delays(backoff)
     for attempt, wait in enumerate(schedule + [None]):
         try:
             return call()
         except retry_on as failure:
+            if retry_if is not None and not retry_if(failure):
+                raise
             if wait is None:
                 if log:
                     log(

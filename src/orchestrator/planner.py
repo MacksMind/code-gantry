@@ -33,8 +33,8 @@ from typing import Callable, Literal, Protocol
 from pydantic import BaseModel, Field
 
 from orchestrator.config import PlannerConfig
-from orchestrator.retry import Backoff, with_transport_retry
 from orchestrator.plannertools import dispatch, tool_schemas
+from orchestrator.retry import Backoff, is_transient_status, with_transport_retry
 
 Verdict = Literal["next_stage", "revise", "project_complete", "blocked"]
 RevisionMode = Literal["extend", "restart"]
@@ -476,20 +476,32 @@ def _blocked(reason: str) -> PlannerOutcome:
 
 
 def _transport_errors() -> tuple[type[BaseException], ...]:
-    """The exception types that mean "the request never arrived".
+    """The exception types a transient failure can arrive as.
 
     Resolved lazily and defensively: the SDK is imported lazily everywhere
     else in this module, and a version that renamed these should degrade to
     not retrying rather than to not running.
 
     `APITimeoutError` subclasses `APIConnectionError` in both SDKs, so the
-    one entry covers both.
+    one entry covers both. `APIStatusError` is the base of every code the
+    server did answer, which is why it needs `_is_transient` behind it — the
+    type alone cannot tell 529 from 400.
     """
     try:
-        from anthropic import APIConnectionError
+        from anthropic import APIConnectionError, APIStatusError
     except ImportError:  # pragma: no cover - the SDK is a hard dependency
         return ()
-    return (APIConnectionError,)
+    return (APIConnectionError, APIStatusError)
+
+
+def _is_transient(failure: BaseException) -> bool:
+    """Whether waiting could plausibly change the answer.
+
+    Reads the status off the exception rather than matching its class: 529 is
+    `OverloadedError` here and `InternalServerError` in the reviewer's SDK, and
+    a class list would have been right in one of the two places.
+    """
+    return is_transient_status(getattr(failure, "status_code", None))
 
 
 class AnthropicPlanner:
@@ -665,6 +677,7 @@ class AnthropicPlanner:
                         **({"tools": tools} if tools else {}),
                     ),
                     retry_on=_transport_errors(),
+                    retry_if=_is_transient,
                     backoff=Backoff(
                         budget_seconds=self.cfg.transport_retry_seconds,
                         max_delay_seconds=self.cfg.transport_retry_max_delay_seconds,

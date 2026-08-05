@@ -453,6 +453,48 @@ class TestOutagesAreWaitedOutNotEscalated:
         assert out.verdict == "blocked"
         assert "Connection error" in out.summary
 
+    def _status_error(self, status, kind="server_error"):
+        """Built through the installed SDK, for the reason the planner's is.
+
+        529 is `InternalServerError` here and `OverloadedError` on Anthropic,
+        so the two providers cannot share a class name — only the status code.
+        """
+        import httpx
+        from openai import OpenAI
+
+        return OpenAI(api_key="x")._make_status_error(
+            "Overloaded",
+            body={"error": {"type": kind}},
+            response=httpx.Response(
+                status, request=httpx.Request("POST", "https://x/y")
+            ),
+        )
+
+    def test_an_overloaded_provider_is_waited_out(self):
+        verdict = ReviewVerdict(verdict="approved", summary="Fine.", record="what changed", issues=[])
+        client = SequenceClient([self._status_error(529), response(parsed=verdict)])
+        out = OpenAIReviewer(
+            cfg_with(transport_retry_seconds=0.01).reviewer, client=client
+        ).review(MESSAGES)
+        assert out.verdict == "approved"
+        assert len(client.calls) == 2
+
+    def test_a_server_error_is_waited_out(self):
+        verdict = ReviewVerdict(verdict="approved", summary="Fine.", record="what changed", issues=[])
+        client = SequenceClient([self._status_error(503), response(parsed=verdict)])
+        out = OpenAIReviewer(
+            cfg_with(transport_retry_seconds=0.01).reviewer, client=client
+        ).review(MESSAGES)
+        assert out.verdict == "approved"
+
+    def test_a_bad_request_is_not_retried(self):
+        client = StubClient(self._status_error(400, kind="invalid_request_error"))
+        out = OpenAIReviewer(
+            cfg_with(transport_retry_seconds=900).reviewer, client=client
+        ).review(MESSAGES)
+        assert out.verdict == "blocked"
+        assert len(client.calls) == 1
+
     def test_a_refusal_is_not_retried(self):
         client = StubClient(response(parsed=None, refusal="I will not."))
         out = OpenAIReviewer(
