@@ -894,8 +894,21 @@ class TestTheInnerLoopFallsBackToTheTestsTheStageMayEdit:
         assert argv[argv.index("--test-cmd") + 1] == "rspec spec/models/order_spec.rb"
         assert "--auto-test" in argv
 
-    def test_a_declared_path_still_wins(self):
-        # The planner's choice is not second-guessed when it made one.
+    def test_a_declared_path_is_joined_by_the_tests_being_edited(self):
+        """Union, not fallback — and this rule was wrong once already.
+
+        It shipped as "a declared path wins", on the reasoning that the
+        planner's choice should not be second-guessed. One stage of live data
+        refuted it: the stage declared `spec/controllers/user_controller_spec.rb`
+        and edited `spec/models/user_spec.rb`, so the inner loop tested a file
+        Aider was not touching and stayed silent about the one it was.
+
+        Measured over the same run: of 17 stages that declared paths and also
+        edited a test, 11 skipped the edited file — including the worst stage
+        of the run, which reached attempt 4 editing a controller spec its
+        inner loop never ran. A test you are rewriting is the one whose result
+        you most need before the attempt ends.
+        """
         cfg, stage = cfg_with(
             stage_overrides={
                 "test_paths": ["spec/a_spec.rb"],
@@ -905,7 +918,21 @@ class TestTheInnerLoopFallsBackToTheTestsTheStageMayEdit:
             executor={"model": "m", "auto_test": True},
         )
         argv = build_aider_argv(stage, cfg, "p")
-        assert argv[argv.index("--test-cmd") + 1] == "rspec spec/a_spec.rb"
+        assert argv[argv.index("--test-cmd") + 1] == (
+            "rspec spec/a_spec.rb spec/models/order_spec.rb"
+        )
+
+    def test_a_file_named_twice_is_run_once(self):
+        cfg, stage = cfg_with(
+            stage_overrides={
+                "test_paths": ["spec/models/order_spec.rb"],
+                "edit_files": ["spec/models/order_spec.rb"],
+            },
+            scoped_test_command="rspec {paths}",
+            executor={"model": "m", "auto_test": True},
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert argv[argv.index("--test-cmd") + 1] == "rspec spec/models/order_spec.rb"
 
     def test_a_glob_is_not_expanded_into_the_suite(self):
         # `spec/**` is a legal edit_files entry and would be most of the suite.
