@@ -18,10 +18,17 @@ stopped but which way it was about to go.
 from __future__ import annotations
 
 import json
+import re
+import textwrap
 import time
 from datetime import datetime
 
-from orchestrator.addendum import append_notes, append_observations, append_outcome
+from orchestrator.addendum import (
+    append_notes,
+    append_observations,
+    append_outcome,
+    decode_escapes,
+)
 from orchestrator.commands import clip_for_model
 from orchestrator.config import Stage, validate_stage
 from orchestrator.executor import ExcerptError, resolve_excerpts
@@ -1315,7 +1322,14 @@ def advance(state: RunState, rt: Runtime) -> dict:
     try:
         rt.git.commit_all(f"[{stage.id}] wip")
         merge_sha = rt.git.squash_merge(
-            branch, rt.cfg.project_branch, f"[{stage.id}] {_first_line(stage)}"
+            branch,
+            rt.cfg.project_branch,
+            # Same text the progress log gets, and for the same reason: it is
+            # the only account written by a participant that saw the diff.
+            _commit_message(
+                stage,
+                state.get("review_record") or state.get("review_summary") or "",
+            ),
         )
     except Exception:
         if written is not None and rt.cfg.plan_addendum_path:
@@ -1636,3 +1650,62 @@ def _rework_or_plan(
 def _first_line(stage: Stage) -> str:
     text = stage.instruction or stage.command or stage.id
     return text.strip().splitlines()[0][:70]
+
+
+# git's own convention, and the width every tool that renders a log assumes.
+_BODY_WIDTH = 72
+
+
+def _commit_message(stage: Stage, record: str) -> str:
+    """The landing commit: subject, blank line, wrapped body.
+
+    It used to be `[{stage.id}] {instruction[:70]}` and nothing else — a
+    subject cut mid-word, no body, describing the stage's *intent*, since the
+    instruction is written before the work.
+
+    The subject is now the id alone. It is not a slug of some title the tooling
+    threw away: the planner authors it in that form directly, so the truncated
+    remainder was repeating in prose what the identifier already said, at the
+    cost of pushing the subject past 72 columns.
+
+    The reviewer's account of what the stage actually did is the only
+    description written by a participant that has seen the diff, and it was
+    already in hand here, going to the progress log and nowhere else. Putting
+    it in the commit is what makes `git log` on the project branch answer what
+    happened rather than what was asked for — which is the same argument the
+    addendum's docstring makes for preferring the fact to the claim.
+
+    `decode_escapes` for the reason the addendum uses it — a double-escaped
+    `\\u2014` otherwise lands in the commit looking like a bug in this tool —
+    and so that the commit body and the progress-log entry are the same bytes
+    rather than two renderings of one string that could drift.
+    """
+    subject = f"[{stage.id}]"
+    body = _wrap_body(record)
+    return f"{subject}\n\n{body}" if body else subject
+
+
+def _wrap_body(record: str) -> str:
+    """The reviewer's text as commit prose, paragraphs preserved.
+
+    Long words are never broken: these bodies are dense with paths, and a path
+    split across a line is a path nobody can grep for. An over-long line is the
+    cheaper failure.
+    """
+    text = decode_escapes((record or "").strip())
+    if not text:
+        return ""
+    out: list[str] = []
+    for para in re.split(r"\n\s*\n", text):
+        collapsed = " ".join(para.split())
+        if not collapsed:
+            continue
+        out.append(
+            textwrap.fill(
+                collapsed,
+                width=_BODY_WIDTH,
+                break_long_words=False,
+                break_on_hyphens=False,
+            )
+        )
+    return "\n\n".join(out)

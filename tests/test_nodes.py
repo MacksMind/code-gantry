@@ -2886,3 +2886,88 @@ class TestTheRecordReachesTheLog:
         state = {**state, **nodes.review(state, rt)}
         nodes.advance(state, rt)
         assert "matches the stage" in (repo / "docs/progress_log.md").read_text()
+
+
+class TestTheSquashCommitIsAProperCommitMessage:
+    """Subject, blank line, wrapped body — not a truncated one-liner.
+
+    The landing commit was `[{stage.id}] {instruction[:70]}` and nothing else:
+    a subject cut mid-word, no body, and on a project whose stage ids run to
+    forty-odd characters the visible text was down to a clause. Meanwhile the
+    reviewer's account of what the stage actually did — the only description
+    written by a participant that saw the diff — was already in hand two lines
+    above, going to the progress log and nowhere else.
+
+    So `git log` on the project branch described the *intent* of each stage,
+    truncated, and never the outcome. `git blame` on the plan is the mechanism
+    CLAUDE.md leans on for answering what a stage did from facts rather than
+    claims, and it was reading a sentence fragment.
+
+    The body goes through `decode_escapes` for the same reason the addendum
+    does, and so the commit body and the log entry are the same bytes.
+    """
+
+    def _stage(self, instruction):
+        from orchestrator.config import Stage
+
+        return Stage(id="a-fairly-long-stage-id-like-real-ones", instruction=instruction)
+
+    def test_the_subject_is_the_stage_id_alone(self):
+        # The id is authored as an identifier, not slugified from a title the
+        # tooling then discarded — so appending the instruction's first line
+        # repeated in prose what the id already said, and pushed the subject
+        # past 72 columns to do it.
+        msg = nodes._commit_message(self._stage("Do the thing\n\nmore"), "")
+        assert msg.splitlines()[0] == "[a-fairly-long-stage-id-like-real-ones]"
+
+    def test_the_subject_does_not_carry_the_instruction(self):
+        # The instruction is written before the work. Keeping it out of the
+        # subject is the same call as recording the reviewer's account in the
+        # body: the commit should say what happened, not what was asked for.
+        msg = nodes._commit_message(self._stage("Close the permit gap"), "did it")
+        assert "Close the permit gap" not in msg
+
+    def test_the_body_is_separated_by_exactly_one_blank_line(self):
+        msg = nodes._commit_message(self._stage("Subject here"), "The reviewer said this.")
+        lines = msg.splitlines()
+        assert lines[1] == "", "git needs a blank line after the subject"
+        assert lines[2] == "The reviewer said this."
+
+    def test_a_long_body_is_wrapped_rather_than_one_line(self):
+        record = (
+            "The diff removes only the unused nested package-id input and adds "
+            "focused response-body assertions that guard both its absence and the "
+            "retained top-level hidden input, preserving the positional request "
+            "style and the existing spec structure throughout the file."
+        )
+        body = nodes._commit_message(self._stage("s"), record).split("\n\n", 1)[1]
+        assert len(body.splitlines()) > 1
+        assert max(len(line) for line in body.splitlines()) <= 72
+
+    def test_paragraphs_survive_wrapping(self):
+        msg = nodes._commit_message(self._stage("s"), "First para.\n\nSecond para.")
+        body = msg.split("\n\n", 1)[1]
+        assert "First para." in body and "Second para." in body
+        assert "" in body.splitlines(), "the paragraph break is kept"
+
+    def test_a_long_path_is_not_broken_across_lines(self):
+        # Wrapping a path makes it unsearchable, and these bodies are full of
+        # them. Better an over-long line than a path that cannot be grepped.
+        record = "It changes " + "a/very/long/path/that/goes/on/" * 4 + "file.rb here."
+        body = nodes._commit_message(self._stage("s"), record).split("\n\n", 1)[1]
+        assert "a/very/long/path/that/goes/on/a/very/long" in body
+
+    def test_no_body_means_no_trailing_blank_line(self):
+        # A reviewer that returned nothing must not produce a commit whose
+        # message is a subject followed by whitespace.
+        msg = nodes._commit_message(self._stage("Just this"), "")
+        assert msg == msg.strip()
+        assert "\n" not in msg
+
+    def test_unicode_escapes_are_decoded(self):
+        # The same pass the addendum makes, so the commit body and the log
+        # entry are the same bytes. It is narrow by design: `\\n` is not a
+        # sequence it touches, in either place.
+        msg = nodes._commit_message(self._stage("s"), "an em dash \\u2014 here")
+        assert "\u2014" in msg
+        assert "u2014" not in msg.replace("\u2014", "")
