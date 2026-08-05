@@ -203,6 +203,35 @@ class TestPlanDerivation:
         assert out["next_hop"] == "precheck"
         assert out["current"]["id"] == "extract"
 
+    def test_the_derivation_time_survives_the_stage_reset(self, repo, tmp_path):
+        """The journey, not the endpoints — which is how this shipped broken.
+
+        `plan_seconds` was measured correctly in this node and recorded
+        correctly by `advance`, and read zero in production for four hours.
+        Deriving a stage returns `**base` and then `**fresh_stage_fields()`,
+        and the reset zeroed the value `base` had just set. The unit tests on
+        both halves passed throughout.
+
+        `fresh_stage_fields`' own docstring warns about exactly this, for
+        `pending_plan_notes`, and says it cost two stages to find. It is the
+        same trap one field along, so the same rule applies: cleared by
+        `advance`, which is the node that ends the stage the time belongs to.
+        """
+        planner = StubPlanner(
+            [PlannerOutcome("next_stage", "first", "e", stage_fields=planned_stage())]
+        )
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        out = nodes.plan({**state, "plan_seconds": 90.0}, rt)
+        assert out["plan_seconds"] >= 90.0, "the reset must not swallow it"
+
+    def test_landing_clears_it_for_the_next_stage(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("stage work\n")
+        out = nodes.advance({**state, "plan_seconds": 90.0}, rt)
+        assert out["completed"][-1]["plan_seconds"] == 90.0, "recorded on the stage"
+        assert out["plan_seconds"] == 0.0, "and not carried to the next"
+
     def test_project_complete_goes_to_finalize(self, repo, tmp_path):
         cfg, rt, state = make(repo, tmp_path)
         assert nodes.plan(state, rt)["next_hop"] == "finalize"
@@ -1798,11 +1827,19 @@ class TestAStageCostsItsPlanningToo:
         assert landed["plan_seconds"] == 42.0
         assert "wall_seconds" in landed, "the two halves travel together"
 
-    def test_it_resets_for_the_next_stage(self, repo, tmp_path):
-        # Carried forward it would bill the next stage for this one's planning.
+    def test_the_stage_reset_must_not_carry_it(self, repo, tmp_path):
+        """It belongs to `advance`, and this is why.
+
+        The first version of this test asserted the zero was *in*
+        `fresh_stage_fields`, which is where it was and where it was wrong:
+        `plan` spreads that reset over its own return after accumulating the
+        time, so the value was zeroed on the way out and every landed stage
+        recorded none. The test passed the whole time, because it pinned the
+        location instead of the behaviour.
+        """
         from orchestrator.state import fresh_stage_fields
 
-        assert fresh_stage_fields()["plan_seconds"] == 0.0
+        assert "plan_seconds" not in fresh_stage_fields()
 
     def test_a_stage_that_never_planned_records_zero(self, repo, tmp_path):
         cfg, rt, state = make(repo, tmp_path)

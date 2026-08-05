@@ -1415,6 +1415,10 @@ def advance(state: RunState, rt: Runtime) -> dict:
 
     return {
         **fresh_stage_fields(),
+        # Recorded on the stage above; cleared here so the next one is not
+        # billed for this one's derivation. Not in `fresh_stage_fields`, which
+        # `plan` also spreads — see its docstring.
+        "plan_seconds": 0.0,
         "completed": completed,
         "current": None,
         # Cleared here, by the only node that writes them, rather than by the

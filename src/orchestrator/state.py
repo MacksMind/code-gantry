@@ -309,6 +309,12 @@ def fresh_stage_fields() -> dict:
     Not `revision`: that belongs to the stage being replaced, and `plan` sets it
     when it derives or revises.
 
+    Not `plan_seconds`, for the same reason and found the same way: `plan`
+    spreads this reset over its own return *after* setting it, so putting the
+    zero here made every landed stage record no planning time at all while both
+    halves' unit tests passed. `advance` clears it, being the node that ends
+    the stage the time belongs to.
+
     Not `pending_plan_notes` either, and that one cost two stages to find. The
     notes are written by `advance`, which then clears them explicitly — but
     `plan` also spreads this reset over its own return value, *after* the notes
@@ -335,10 +341,6 @@ def fresh_stage_fields() -> dict:
         # planner sizes the next batch against.
         "executor_context_tokens": 0,
         "executor_cost_usd": 0.0,
-        # Planning is the other half of a stage's clock and belongs to
-        # the stage it produced. Carried forward it would bill the next
-        # stage for this one's derivation.
-        "plan_seconds": 0.0,
         # A new stage has a new tree; nothing has been proven about it yet.
         "full_suite_digest": "",
         "last_failure": None,
