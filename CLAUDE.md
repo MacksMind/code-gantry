@@ -319,6 +319,47 @@ so a silent zero there is the instrument, not the cache. Measured directly at
 the API: an identical 16k prefix caches at 99.9% on chat/completions with
 nothing configured.
 
+**Test the layer you are actually going to call.** Reaching `max` on the
+executor needed litellm's Responses bridge, and a metadata file with
+`mode: responses` triggered it perfectly — in litellm. Through Aider it did
+nothing: `register_models` puts the entry in Aider's own `local_model_metadata`
+and, in its own comment, *defers registering with litellm*, so the registry the
+bridge consults never sees it. Every attempt died in 1.9s and the run burned
+four of them plus a planner revision before it was caught. The verification had
+called `litellm.register_model` directly, which proved a fact about litellm and
+nothing about the thing in between. The working split is worth remembering
+because it is counter-intuitive: routing comes from the model string
+(`openai/responses/<model>`), pricing from the metadata file, and each is
+useless for the other's job.
+
+**A guard that changes hands has not gone away.** Moving the planner's plan
+notes out of `advance` left `written` undefined in the rollback that had
+existed to unwind them — so every landing failure would have raised
+`NameError` instead of restoring the tree, turning a recoverable stranded merge
+into a crash. `append_outcome` and `append_observations` still wrote to the same
+file, so the obligation had moved to them rather than ended. The invariant above
+says anything *added* to that sequence inherits the obligation; removal is the
+same rule read backwards, and only the full suite caught it — the targeted tests
+for the new behaviour all passed.
+
+**A test helper that stands in for a node is laxer than the node.**
+`with_stage` cuts a stage branch the way `precheck` would, and several
+end-to-end tests used it — so they never ran the clean-tree guard and, once
+notes moved there, never published a note either. Both failures surfaced as
+assertions about the *feature*, which is the confusing way for that to arrive.
+When a helper exists because a node is inconvenient to call, the tests that use
+it are not end-to-end, whatever they are named.
+
+**Publish a finding when it is found, not when the work lands.** The planner's
+notes about the plan — "the two documents contradict each other", "not
+drawable" — are true whether or not the stage succeeds, and they were being
+discarded with abandoned stages. The code had already conceded the argument for
+revisions, accumulating notes across a redraw "because a redrawn stage is the
+same piece of work and its observations about the plan are still true"; nothing
+stops that reasoning at abandonment. The reviewer's observations stay on the
+landing gate, because those describe a diff and an abandoned diff does not
+exist. Two kinds of record, one gate, and only one of them belonged behind it.
+
 ## Where things live
 
 `nodes.py` holds the loop's decisions — which failures route to the executor,

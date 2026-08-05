@@ -955,13 +955,61 @@ paths, so its text in the message once attached `config/routes.rb`,
 `db/structure.sql` and `docker-compose.yml`, reaching 258,854 tokens against a
 229,376 limit. Files given through `--read` are never scanned.
 
+That fixed the document and not the mechanism, because the mechanism was never
+about that document: the planner writes prose, prose names files, and the scan
+runs either way. Measured across one project's history, 1,713 files were
+attached this way — roughly 30.8M tokens — led by a 453,480-byte lint-exclusion
+list that attached on all 117 executor inputs naming it, taking one stage from
+~20k tokens a message to 137k. Nothing showed it: the scan on the *message*
+discards its own return value, so unlike the scan on the reply it leaves no "I
+added these files" line behind.
+
+Both channels are handled, differently, because only one is ours to write.
+
+- **The message.** `shield_path_mentions` reimplements Aider's normaliser from
+  the installed source and prefixes `./` on any word that would resolve to a
+  tracked path. Aider compares against the repo-relative path verbatim, so the
+  prefix defeats the comparison while the executor reads the same file. Fenced
+  blocks are skipped — excerpts and diffs are quoted from the repository, and
+  rewriting inside one would corrupt the only copy the executor has.
+- **The reply.** Not ours to rewrite: Aider receives it from litellm inside its
+  own process. But Aider *asks* for the content that triggers it —
+  `coders/shell.py` instructs the model to suggest shell commands, listing "if
+  you added a test, suggest how to run it" among the examples — so a stage that
+  requires tests gets a reply naming the test runner, and Aider's scan of that
+  reply attaches the runner and returns at `base_coder.py:1567`, before
+  `apply_updates()` at `:1585`. The reply's edits are discarded. Measured: three
+  SEARCH/REPLACE blocks emitted, zero applied, and every one of 29 attempts
+  reported as producing no changes was preceded by an attach.
+  `--no-suggest-shell-commands` removes the clause rather than arguing with it,
+  and what is attached anyway is now recorded on `ExecutionResult` and named in
+  the retry feedback, so a discarded reply stops looking like a model that did
+  nothing.
+
 Reasoning effort is per-role config rather than a constant in each client:
 `planner.effort` and `reviewer.effort` name the provider's own literals, and
 `executor.reasoning_effort` reaches Aider as `--reasoning-effort`. The ceiling
 is a property of the *endpoint*, not the model — chat/completions refuses `max`
 for both GPT-5.6 models while `/v1/responses` accepts it for both — and Aider
-calls `litellm.completion`, so the executor tops out at `xhigh` while the
-reviewer, which uses the Responses API directly, can ask for `max`. Aider also
+calls `litellm.completion`, so reaching `max` through Aider means routing the
+call to `/v1/responses`.
+
+Two things trigger litellm's bridge, and only one of them works from here. A
+`mode: responses` entry in `--model-metadata-file` does not: `register_models`
+puts it in Aider's own `local_model_metadata` and, in its words, defers
+registering with litellm — litellm's registry never sees it, so the bridge
+never fires and every attempt died in 1.9s on "does not support 'max'". Routing
+comes from a `responses/` infix in the model string (`openai/responses/<model>`),
+which litellm's `responses_api_bridge_check` matches. The metadata file is still
+needed, for the opposite job: that model string misses litellm's registry, so
+without it the context window and the prices are gone — and the prices are what
+make Aider report a dollar figure at all, via its
+`compute_costs_from_tokens` fallback. Routing from the model string, pricing
+from the metadata file. Verified by running Aider, not litellm; testing the
+library proved a thing about the library, and the failure was entirely in the
+layer between them.
+
+Aider also
 consults its own metadata and drops the flag for a model it believes cannot
 take it, which the live API contradicts, so an explicit effort carries
 `--no-check-model-accepts-settings` with it.
@@ -976,6 +1024,25 @@ Anthropic's and DeepSeek's usage fields but never OpenAI's
 `prompt_tokens_details.cached_tokens`, so a zero there is the instrument rather
 than the cache. Measured at the API instead, an identical 16k prefix caches at
 99.9% with nothing configured.
+
+The planner and reviewer are priced too, and not from a table anyone here
+maintains. The first design put hand-written rates in project config, which is
+the "config holds the path, not the copy" mistake with money in it — a second
+copy that drifts, and the copy is the one the report reads. Aider prices every
+attempt from `model_prices_and_context_window.json`, which litellm fetches from
+a public URL at import; the copy bundled in the package is a stale fallback.
+`pricing.py` reads the same URL, caches it, and never fails a run over it — a
+price list is a report, not a gate. Cache writes get their own bucket because
+they are billed above base (6.25e-06 against 5e-06 on Opus), which meant
+threading `cache_write_tokens` through `RunState`: both clients had computed it
+per call for as long as they had existed, and it stopped at the artifact.
+
+Measured on one project, this settles an argument the leaderboards cannot. The
+planner spends $15.13 a run with 80% of it on input despite 93% caching; the
+reviewer $2.80 at 68% input. Effort buys *output* tokens, so doubling reasoning
+moves those bills 20% and 32% — not the 2× that a benchmark's cost axis
+implies, because a benchmark task is short and output-dominated while these runs
+resend an enormous cached prefix on every call. The ratio does not transfer.
 
 ## Escalation tiers
 

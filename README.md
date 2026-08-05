@@ -172,6 +172,20 @@ since it commits before it tests — never reach the project branch. That's how
 "every commit on the project branch is green" and "Aider commits before testing"
 are both true.
 
+Two commits per stage reach the project branch, in this order:
+
+```
+[<stage-id>] plan observations from deriving this stage   # written by precheck
+[<stage-id>]                                              # the squash merge
+```
+
+The first is the planner's findings about the plan, written when the branch is
+cut rather than when the stage lands — their truth does not depend on the stage
+succeeding, and a stage that escalates used to take them with it. The second is
+the landing, and its body is the reviewer's account of what the stage did: the
+only description written by a participant that has seen the diff. `git log` on
+the project branch therefore answers what happened, not what was asked for.
+
 The outer merge to `main` is yours. The tool never pushes.
 
 ## The verify gate
@@ -335,6 +349,18 @@ what happened — which is the reason to keep it.
 reviewer's cached-token proportion drops below half: the plan snapshot and
 completed history are meant to be a stable cacheable prefix, so a low figure
 means every review is costing more than it should.
+
+Its cost section names the model **and the reasoning effort** beside each
+role's figure, and prices the tokens from the same public rate table Aider
+prices against — fetched once and cached, so the report and `stage-costs.md`
+cannot disagree about what a token costs and no rate is maintained by hand. A
+model with no entry reports `not priced` rather than `$0.00`; a priced model
+that spent nothing still reports `$0.00`, and those are different facts.
+
+Effort is recorded rather than priced because nothing in that table is keyed by
+it. Effort buys reasoning tokens, billed at the ordinary output rate, so its
+whole cost is already in the completion count — what was missing was the label
+saying which effort produced it.
 
 ## Safety
 
