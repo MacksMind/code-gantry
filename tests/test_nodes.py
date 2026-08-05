@@ -1647,13 +1647,16 @@ class TestPlanNotesSurviveFromDerivationToLanding:
         cfg, rt, state = make(
             repo, tmp_path, planner=planner, plan_addendum_path="docs/progress_log.md"
         )
+        # Through the real precheck, not the `with_stage` stand-in: publishing
+        # the note is precheck's job now, and a helper that cuts the branch
+        # itself would step over the thing under test.
         state = {**state, **nodes.plan(state, rt)}
-        state = with_stage(state, rt, **planned_stage())
+        state = {**state, **nodes.precheck(state, rt)}
         (repo / "app.py").write_text("stage work\n")
         nodes.advance(state, rt)
 
         log = repo / "docs" / "progress_log.md"
-        assert log.exists(), "the stage landed without recording what it did"
+        assert log.exists(), "the note did not survive derivation"
         text = log.read_text()
         assert "0 sites remain" in text
         # The heading is lifted from the cited document at `plan_sha`, so the
@@ -1662,8 +1665,13 @@ class TestPlanNotesSurviveFromDerivationToLanding:
         assert "## Render sweeps — `PLAN.md#L4`" in text, (
             "the quote must reach the writer and be located in the plan"
         )
-        # Inside the stage's own commit, not trailing after it.
-        assert "progress_log.md" in rt.git._out("show", "--stat", "HEAD")
+        # In its own commit *before* the stage, not inside the squash. That is
+        # the point of moving it: a stage that never lands still leaves the
+        # finding behind, so it cannot ride in the landing commit.
+        assert "progress_log.md" not in rt.git._out("show", "--stat", "HEAD")
+        assert "plan observations" in rt.git._out(
+            "log", "--format=%s", cfg.project_branch
+        )
 
 
 class TestExecutorFeedbackIsBounded:
@@ -2514,9 +2522,12 @@ class TestTheFindingSurvivesToTheAddendum:
         )
         (repo / "docs").mkdir(exist_ok=True)
         (repo / "PLAN.md").write_text("# Plan\n\n24 sites across 9 controllers.\n")
+        # Committed, because precheck refuses to cut a branch over an
+        # unattributable change — the stand-in it replaces did not care.
+        rt.git.commit_all("plan")
 
         state = {**state, **nodes.plan(state, rt)}
-        state = with_stage(state, rt)
+        state = {**state, **nodes.precheck(state, rt)}
         (repo / "app.py").write_text("stage work\n")
         nodes.advance(state, rt)
 
@@ -2528,10 +2539,16 @@ class TestTheFindingSurvivesToTheAddendum:
 class TestAFailedLandingLeavesNothingBehind:
     """Either the stage lands or the tree is as advance found it.
 
-    `advance` mutates in four steps — write the plan note, strip whitespace,
+    `advance` mutates in several steps — record what landed, strip whitespace,
     commit, squash-merge — and a failure in any of them used to leave the
     repository part-way through. Two faces of that: a staged merge stranded on
-    the project branch, and an uncommitted plan note left in the worktree.
+    the project branch, and an uncommitted plan document left in the worktree.
+
+    What is protected here is now the *reviewer's* entries only. The planner's
+    notes moved to `precheck`, which commits them before the branch is cut, so
+    they are outside this transaction deliberately — see
+    `TestPlanNotesArePublishedWhenTheStageIsCut` for why their survival must
+    not depend on the stage landing.
 
     The second is the more confusing one. The next resume re-enters at verify,
     whose scope guard sees a plan document changed during a stage and routes it
@@ -2553,11 +2570,13 @@ class TestAFailedLandingLeavesNothingBehind:
         "observation": "done",
     }
 
-    def test_a_failed_merge_unwinds_the_plan_note(self, repo, tmp_path, monkeypatch):
+    def test_a_failed_merge_unwinds_what_the_reviewer_recorded(
+        self, repo, tmp_path, monkeypatch
+    ):
         cfg, rt, state = self._cfg(repo, tmp_path)
         state = with_stage(state, rt)
         (repo / "app.py").write_text("stage work\n")
-        state = {**state, "pending_plan_notes": [self.A_NOTE]}
+        state = {**state, "review_record": "what the stage did"}
 
         def boom(*a, **kw):
             raise GitError("pre-commit hook rejected the commit")
@@ -2568,19 +2587,31 @@ class TestAFailedLandingLeavesNothingBehind:
             nodes.advance(state, rt)
 
         assert not (repo / "docs/progress_log.md").exists(), (
-            "the note was written by advance and must not outlive its failure"
+            "the record was written by advance and must not outlive its failure"
         )
 
-    def test_a_successful_landing_keeps_the_note(self, repo, tmp_path):
+    def test_a_successful_landing_keeps_the_record(self, repo, tmp_path):
+        cfg, rt, state = self._cfg(repo, tmp_path)
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("stage work\n")
+        state = {**state, "review_record": "what the stage did"}
+
+        nodes.advance(state, rt)
+        assert "what the stage did" in (repo / "docs/progress_log.md").read_text()
+
+    def test_the_planner_note_is_not_advance_s_to_write(self, repo, tmp_path):
+        # It belongs to `precheck` now. Handing one to `advance` must not
+        # resurrect the old path and put it back inside the transaction.
         cfg, rt, state = self._cfg(repo, tmp_path)
         state = with_stage(state, rt)
         (repo / "app.py").write_text("stage work\n")
         state = {**state, "pending_plan_notes": [self.A_NOTE]}
 
         nodes.advance(state, rt)
-        assert "done" in (repo / "docs/progress_log.md").read_text()
+        log = repo / "docs/progress_log.md"
+        assert not log.exists() or "done" not in log.read_text()
 
-    def test_a_landing_with_no_note_is_unaffected(self, repo, tmp_path, monkeypatch):
+    def test_a_landing_with_nothing_recorded_is_unaffected(self, repo, tmp_path, monkeypatch):
         # Nothing was written, so there is nothing to unwind and the unwind
         # must not invent a revert of a file that never existed.
         cfg, rt, state = self._cfg(repo, tmp_path)
@@ -2971,3 +3002,74 @@ class TestTheSquashCommitIsAProperCommitMessage:
         msg = nodes._commit_message(self._stage("s"), "an em dash \\u2014 here")
         assert "\u2014" in msg
         assert "u2014" not in msg.replace("\u2014", "")
+
+
+class TestPlanNotesArePublishedWhenTheStageIsCut:
+    """Not held to the landing gate, because their truth does not depend on it.
+
+    The notes say things like "the two documents contradict each other" and
+    "not drawable" — findings about the *plan*, made by reading it against the
+    code while deriving a stage. Nothing about them is contingent on the
+    executor succeeding, and a stage that escalates used to take them to the
+    grave. That is the expensive direction: a false blocker in a plan makes
+    items read as blocked, and an item that reads as blocked is never
+    attempted.
+
+    The code already conceded the point for revisions — the notes accumulated
+    across a redraw "because a redrawn stage is the same piece of work and its
+    observations about the plan are still true". Abandonment is the same
+    argument one step further.
+
+    The reviewer's observations stay on the landing gate and are deliberately
+    not moved: those are findings about a diff, and an abandoned diff does not
+    exist.
+
+    Publishing here also removes an obligation rather than adding one. The note
+    used to be written inside `advance`, which then had to unwind it by hand if
+    any later step raised — the landing transaction is smaller without it.
+    """
+
+    def _notes(self):
+        return [{"anchor": "PLAN.md#L1", "observation": "the plan says X", "finding": "found Y"}]
+
+    def test_the_note_lands_before_the_branch_is_cut(self, repo, tmp_path, run_git):
+        cfg, rt, state = make(repo, tmp_path, plan_addendum_path="docs/progress_log.md")
+        state = {**with_stage(state, rt), "pending_plan_notes": self._notes()}
+        out = nodes.precheck(state, rt)
+
+        log = repo / "docs/progress_log.md"
+        assert log.exists(), "the note is written at cut time"
+        assert "found Y" in log.read_text()
+        assert rt.git.is_clean(), "and committed, or the cut sweeps it up"
+
+    def test_the_note_commit_is_on_the_project_branch(self, repo, tmp_path, run_git):
+        # Not the stage branch, which is discarded when the stage is abandoned
+        # — which is the whole case for moving it.
+        cfg, rt, state = make(repo, tmp_path, plan_addendum_path="docs/progress_log.md")
+        state = {**with_stage(state, rt), "pending_plan_notes": self._notes()}
+        nodes.precheck(state, rt)
+        subjects = run_git(repo, "log", "--format=%s", cfg.project_branch).splitlines()
+        assert any("log.md" in s or "plan" in s.lower() for s in subjects), subjects
+
+    def test_the_stage_diff_does_not_contain_the_note(self, repo, tmp_path, run_git):
+        # It precedes stage_start_sha, so the scope guard never sees it and
+        # cannot report it as the executor editing a plan document.
+        cfg, rt, state = make(repo, tmp_path, plan_addendum_path="docs/progress_log.md")
+        state = {**with_stage(state, rt), "pending_plan_notes": self._notes()}
+        out = nodes.precheck(state, rt)
+        changed = rt.git.diff_names(out.get("stage_start_sha") or rt.git.head_sha())
+        assert "docs/progress_log.md" not in changed
+
+    def test_the_notes_are_cleared_once_written(self, repo, tmp_path, run_git):
+        # Otherwise a revision re-enters precheck and republishes everything the
+        # first cut already wrote.
+        cfg, rt, state = make(repo, tmp_path, plan_addendum_path="docs/progress_log.md")
+        state = {**with_stage(state, rt), "pending_plan_notes": self._notes()}
+        out = nodes.precheck(state, rt)
+        assert out["pending_plan_notes"] == []
+
+    def test_no_notes_means_no_commit(self, repo, tmp_path, run_git):
+        cfg, rt, state = make(repo, tmp_path, plan_addendum_path="docs/progress_log.md")
+        before = run_git(repo, "rev-parse", "HEAD").strip()
+        nodes.precheck({**with_stage(state, rt), "pending_plan_notes": []}, rt)
+        assert run_git(repo, "rev-parse", cfg.project_branch).strip() == before

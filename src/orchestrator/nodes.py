@@ -537,6 +537,30 @@ def precheck(state: RunState, rt: Runtime) -> dict:
                 ),
             }
 
+    # The planner's notes about the plan, published here rather than held to
+    # the landing gate. Their truth does not depend on the stage: they say
+    # things like "the two documents contradict each other" and "not drawable",
+    # found by reading the plan against the code while deriving the stage, and
+    # a stage that escalates used to take them with it. That is the expensive
+    # direction — a false blocker makes plan items read as blocked, and an item
+    # that reads as blocked is never attempted.
+    #
+    # The code already conceded this for revisions, accumulating notes across a
+    # redraw "because a redrawn stage is the same piece of work and its
+    # observations about the plan are still true". Abandonment is the same
+    # argument one step further.
+    #
+    # Before the cut and on the project branch, so the note precedes
+    # `stage_start_sha` and the scope guard never sees a plan document in the
+    # stage's diff. And it removes an obligation rather than adding one: this
+    # used to be written inside `advance`, which then had to unwind it by hand
+    # if any later step raised.
+    #
+    # The reviewer's observations are deliberately left on the landing gate.
+    # Those are findings about a diff, and an abandoned diff does not exist.
+    if state.get("pending_plan_notes") and rt.cfg.plan_addendum_path:
+        update.update(_publish_plan_notes(state, rt, stage))
+
     # Cut or resume the child branch. Anything on it is quarantined: nothing
     # reaches the project branch without passing the review gate.
     if not state.get("stage_branch"):
@@ -1263,20 +1287,10 @@ def advance(state: RunState, rt: Runtime) -> dict:
     if landed is not None:
         rt.log(f"[advance] recorded what {stage.id} landed, in the reviewer's words")
 
-    written = append_notes(
-        rt.cfg.target_repo,
-        rt.cfg.plan_addendum_path,
-        state.get("pending_plan_notes") or [],
-        stage_id=stage.id,
-        read_plan=read_plan,
-        plan_sha=plan_sha,
-    )
-    if written is not None:
-        rt.log(
-            f"[advance] recorded {len(state.get('pending_plan_notes') or [])} "
-            f"plan observation(s) in {written.relative_to(rt.cfg.target_repo)}"
-        )
-
+    # The planner's notes are not written here any more — `precheck` publishes
+    # them when it cuts the branch, because their truth does not depend on this
+    # stage landing. What remains is the reviewer's findings.
+    #
     # The reviewer's findings, after the planner's and into the same file. Both
     # answer "what does the plan not yet know?"; they differ in who noticed and
     # in what about. Written only on landing, so a finding from a stage that
@@ -1309,12 +1323,19 @@ def advance(state: RunState, rt: Runtime) -> dict:
             f"{', '.join(stripped)}"
         )
 
-    # The note is written to the worktree and committed a few lines below, so
-    # anything that raises in between leaves it modified and uncommitted. The
-    # next resume re-enters at verify, whose scope guard sees a plan document
-    # changed by a stage and routes it to the planner as the executor wandering
-    # into the record of its own work — a diagnosis that is wrong, and that the
-    # planner cannot act on because it did not happen.
+    # The reviewer's entries — what landed, and its out-of-scope findings — are
+    # written to the worktree and committed a few lines below, so anything that
+    # raises in between leaves them modified and uncommitted. The next resume
+    # re-enters at verify, whose scope guard sees a plan document changed by a
+    # stage and routes it to the planner as the executor wandering into the
+    # record of its own work — a diagnosis that is wrong, and that the planner
+    # cannot act on because it did not happen.
+    #
+    # The planner's notes used to be in here too and are now committed by
+    # `precheck` before the branch is cut, so they are outside this transaction
+    # on purpose and need no unwinding. What is left is everything written by
+    # the participant that saw the diff, which is exactly what this landing is
+    # allowed to lose if the landing fails.
     #
     # `squash_merge` already restores the project branch if its own commit
     # fails. This covers the other half: either the stage lands or the tree is
@@ -1332,7 +1353,7 @@ def advance(state: RunState, rt: Runtime) -> dict:
             ),
         )
     except Exception:
-        if written is not None and rt.cfg.plan_addendum_path:
+        if (landed is not None or seen is not None) and rt.cfg.plan_addendum_path:
             rt.log("[advance] landing failed; unwinding the plan note")
             rt.git.revert_paths(start_sha, [rt.cfg.plan_addendum_path])
         raise
@@ -1645,6 +1666,55 @@ def _rework_or_plan(
         ),
         "next_hop": "execute",
     }
+
+
+def _publish_plan_notes(state: RunState, rt: Runtime, stage: Stage) -> dict:
+    """Write the planner's notes to the log and commit them, on this branch.
+
+    Committed rather than left in the worktree because `precheck` is about to
+    cut a branch, and an uncommitted plan document would be swept into the
+    stage's diff and reported by the scope guard as the executor editing the
+    record of its own work — a diagnosis that is wrong and that the planner
+    cannot act on.
+
+    Cleared on the way out. The notes accumulate across a redraw, and a
+    revision re-enters `precheck`, so without clearing them the second cut
+    republishes everything the first one already wrote.
+    """
+    plan_sha = state.get("plan_sha") or state.get("base_sha") or ""
+
+    def read_plan(path: str) -> str | None:
+        try:
+            return rt.git.show_file(plan_sha, path)
+        except GitError:
+            return None
+
+    notes = state.get("pending_plan_notes") or []
+    written = append_notes(
+        rt.cfg.target_repo,
+        rt.cfg.plan_addendum_path,
+        notes,
+        stage_id=stage.id,
+        read_plan=read_plan,
+        plan_sha=plan_sha,
+    )
+    if written is None:
+        return {"pending_plan_notes": []}
+
+    # Onto the project branch explicitly. On a revision `precheck` re-enters
+    # with HEAD still on the previous attempt's stage branch, which
+    # `cut_stage_branch(fresh=True)` is about to delete — committing the note
+    # there would lose it in precisely the case this move exists to fix.
+    # `cut_stage_branch` checks out the same branch a few lines later, so this
+    # assumes nothing new about the state of the tree.
+    if rt.git.current_branch() != rt.cfg.project_branch:
+        rt.git.checkout(rt.cfg.project_branch)
+    rt.git.commit_all(f"[{stage.id}] plan observations from deriving this stage")
+    rt.log(
+        f"[precheck] recorded {len(notes)} plan observation(s) in "
+        f"{written.relative_to(rt.cfg.target_repo)}"
+    )
+    return {"pending_plan_notes": []}
 
 
 def _first_line(stage: Stage) -> str:
