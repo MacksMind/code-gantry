@@ -297,6 +297,52 @@ def build_executor_prompt(
     return "\n\n".join(parts)
 
 
+def _checks_block(cfg: ProjectConfig | None) -> str:
+    """What the machinery does to a diff after the instruction is written.
+
+    `checks` run once the executor has committed its work, and
+    `checks_commit_changes` puts whatever they rewrite onto the child branch.
+    The planner knew none of that — the word appeared nowhere in its prompt —
+    so it drew a stage forbidding any line it had not named, an autocorrecting
+    formatter collapsed two blank lines the executor's own deletions had
+    stranded, and the reviewer blocked an otherwise correct diff. One revision
+    cycle spent discovering a property of our own tooling.
+
+    Declared here for the same reason the reviewer is told the editor
+    normalises line endings: anything the shipped machinery does is the tool's
+    to state once, not something each planner should rediscover by burning a
+    rework budget. And stated as a fact about the diff rather than as a request
+    for care — a rule asking the planner to be less exact is the kind that gets
+    routed around, while "an edit strands whitespace" is checkable against the
+    branch afterwards.
+
+    The commands come from config and nothing here is written around them, so
+    a project whose formatter is a different language's is described by the
+    same paragraph. `checks` is not a planner-writable field, which is exactly
+    why the planner has to be *told* rather than left to infer it from a schema
+    it cannot reach.
+    """
+    checks = list(getattr(getattr(cfg, "stage_defaults", None), "checks", []) or [])
+    if not checks:
+        return ""
+    listed = "\n".join(f"- `{command}`" for command in checks)
+    return (
+        "## What runs after the executor finishes\n\n"
+        "These commands run on every stage, after the executor has committed "
+        "its work and before the diff is reviewed. Anything they change is "
+        "committed onto the stage branch too, so it reaches the reviewer as "
+        "part of the diff:\n\n"
+        f"{listed}\n\n"
+        "**An edit's blast radius includes the whitespace it strands.** "
+        "Removing a line can leave blank lines around it that the formatter "
+        "then deletes, so those lines change without the executor touching "
+        "them. A constraint naming the exact set of lines that may change is "
+        "therefore unsatisfiable whenever one of these rewrites formatting — "
+        "it will be violated by the tooling, not by the work. Constrain what "
+        "the code must end up doing, not which lines may differ.\n\n"
+    )
+
+
 def _addendum(cfg: ProjectConfig | None) -> str | None:
     """The configured progress log, if the project keeps one.
 
@@ -767,6 +813,7 @@ def build_planner_messages(
             + agent_context
             + "\n\n"
         )
+    leading += _checks_block(cfg)
     if layout:
         leading += "## What the repository contains\n\n" + layout + "\n\n"
     leading += _plan_block(plan, _addendum(cfg))

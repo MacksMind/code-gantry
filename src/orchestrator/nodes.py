@@ -231,6 +231,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
         state.get("run_usage"),
         planner_prompt_tokens=outcome.usage.prompt_tokens,
         planner_cached_tokens=outcome.usage.cached_tokens,
+        planner_cache_write_tokens=outcome.usage.cache_write_tokens,
         planner_completion_tokens=outcome.usage.completion_tokens,
     )
 
@@ -961,12 +962,14 @@ def review(state: RunState, rt: Runtime) -> dict:
         state.get("run_usage"),
         prompt_tokens=outcome.usage.prompt_tokens,
         cached_tokens=outcome.usage.cached_tokens,
+        cache_write_tokens=outcome.usage.cache_write_tokens,
         completion_tokens=outcome.usage.completion_tokens,
     )
     stage_usage = accumulate_usage(
         state.get("stage_usage"),
         prompt_tokens=outcome.usage.prompt_tokens,
         cached_tokens=outcome.usage.cached_tokens,
+        cache_write_tokens=outcome.usage.cache_write_tokens,
         completion_tokens=outcome.usage.completion_tokens,
     )
     rt.log(

@@ -129,6 +129,30 @@ class TestUsageAccumulation:
         assert out["prompt_tokens"] == 10
         assert out["planner_prompt_tokens"] == 20
 
+    def test_cache_writes_are_carried_for_both_roles(self):
+        # Both clients have computed this per call for as long as they have
+        # existed and it stopped at the artifact: the run totals had no key for
+        # it, so pricing the run charged writes at the base input rate instead
+        # of the 1.25x they cost. The fourth value to be computed correctly and
+        # lost in transit.
+        out = accumulate_usage(
+            None, cache_write_tokens=7, planner_cache_write_tokens=11
+        )
+        assert out["cache_write_tokens"] == 7
+        assert out["planner_cache_write_tokens"] == 11
+
+    def test_a_fresh_usage_record_declares_every_key(self):
+        # A key absent from the zero record is a key `accumulate_usage` will
+        # create on first use and the report will read as missing until then.
+        from orchestrator.state import _zero_usage
+
+        assert set(_zero_usage()) == {
+            "prompt_tokens", "cached_tokens", "cache_write_tokens",
+            "completion_tokens", "planner_prompt_tokens",
+            "planner_cached_tokens", "planner_cache_write_tokens",
+            "planner_completion_tokens",
+        }
+
 
 class TestFailureClassification:
     def test_repo_and_planning_failures_do_not_overlap(self):

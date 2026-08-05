@@ -31,3 +31,9 @@ projects/*/*.out
 
 # Run configs may carry sensitive paths; keep them out of history.
 *.local.yaml
+
+# The public rate table, refetched on demand and cached beside the run. It is
+# 1.3MB that changes whenever a provider reprices, and nothing here is the
+# source of truth for it — `pricing.load_price_map` falls back to whatever copy
+# is on disk only when the network is unreachable.
+model-prices.json

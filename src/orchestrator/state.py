@@ -91,9 +91,11 @@ class StageResult(TypedDict, total=False):
     config_hash: str
     prompt_tokens: int
     cached_tokens: int
+    cache_write_tokens: int
     completion_tokens: int
     planner_prompt_tokens: int
     planner_cached_tokens: int
+    planner_cache_write_tokens: int
     planner_completion_tokens: int
 
 
@@ -284,9 +286,18 @@ def _zero_usage() -> dict[str, int]:
     return {
         "prompt_tokens": 0,
         "cached_tokens": 0,
+        # Billed above the base input rate — 6.25e-06 against 5e-06 on Opus —
+        # so this cannot be folded into the uncached remainder without
+        # understating by a quarter of whatever was just written. Both clients
+        # have computed it per call for as long as they have existed; it
+        # stopped at the per-call artifact because the run totals had no key
+        # for it, which is the fourth value to be computed correctly, written
+        # correctly, and lost crossing a schema.
+        "cache_write_tokens": 0,
         "completion_tokens": 0,
         "planner_prompt_tokens": 0,
         "planner_cached_tokens": 0,
+        "planner_cache_write_tokens": 0,
         "planner_completion_tokens": 0,
     }
 

@@ -1203,6 +1203,91 @@ class TestEveryParticipantSeesTheRepositoryConventions:
         assert "conventions its maintainers" not in all_text(messages).lower()
 
 
+class TestThePlannerIsToldWhatTheChecksWillDo:
+    """The machinery rewrites the diff after the instruction is written.
+
+    `checks` run once the executor has committed, and `checks_commit_changes`
+    puts what they rewrite onto the child branch. The planner was told nothing
+    about any of it — the word never appeared in its prompt — so it drafted a
+    stage forbidding any line it had not named, the formatter collapsed two
+    blank lines the executor's own deletions had stranded, and the reviewer
+    blocked a diff that was otherwise correct. A whole revision cycle to
+    discover a property of our own tooling.
+
+    Same call as the line-endings note one file over: anything the shipped
+    machinery does is the tool's to declare, not the operator's to work around
+    and not the planner's to rediscover per project. The commands come from
+    config, so nothing here names a language, a linter or a file extension —
+    `test_the_block_carries_no_project_vocabulary` is what keeps that true.
+    """
+
+    def _cfg(self, checks):
+        from orchestrator.config import parse_config
+
+        return parse_config(
+            {
+                "target_repo": "/tmp/x",
+                "project_branch": "work",
+                "plan_root": "PLAN.md",
+                "test_command": "t",
+                "planner": {"model": "m"},
+                "executor": {"model": "m"},
+                "reviewer": {"model": "m"},
+                "stage_defaults": {"checks": checks},
+            }
+        )
+
+    def _text(self, checks):
+        return leading_text(
+            build_planner_messages(
+                cfg=self._cfg(checks), plan=a_plan(), completed=[], layout="-"
+            )
+        )
+
+    def test_the_configured_commands_are_named(self):
+        assert "some-linter --fix" in self._text(["some-linter --fix"])
+
+    def test_it_says_they_run_after_the_executor_finishes(self):
+        text = self._text(["some-linter --fix"]).lower()
+        assert "after" in text and "commit" in text
+
+    def test_it_states_the_blast_radius_rather_than_asking_for_care(self):
+        # The general fact, and the one that was actually violated: an edit can
+        # strand whitespace that is no longer legal, so a constraint naming an
+        # exact set of changed lines is unsatisfiable. Phrased as a property of
+        # the tooling, because a rule asking the planner to be careful would be
+        # routed around rather than followed.
+        assert "strand" in self._text(["some-linter --fix"]).lower()
+
+    def test_a_project_with_no_checks_gets_no_block(self):
+        # Nothing runs, so there is nothing to declare, and a paragraph about
+        # a step that does not happen is one more thing to reason past.
+        assert "some-linter" not in self._text([])
+        assert "may rewrite" not in self._text([])
+
+    def test_it_sits_inside_the_cached_prefix(self):
+        # Fixed for the whole run, like the plan and the layout. Behind the
+        # breakpoint it would be re-billed on every planner call.
+        messages = build_planner_messages(
+            cfg=self._cfg(["some-linter --fix"]),
+            plan=a_plan(),
+            completed=[],
+            layout="-",
+        )
+        assert "some-linter --fix" in leading_text(messages)
+
+    def test_the_block_carries_no_project_vocabulary(self):
+        # The rule that keeps this generic: the commands arrive from config,
+        # so the prose around them must not smuggle in the shape of whatever
+        # project happened to be in front of whoever wrote it.
+        text = self._text(["some-linter --fix"]).lower()
+        for name in (
+            "rubocop", "ruby", "rails", "eslint", "prettier", "gofmt",
+            "black", ".rb", "spec/", "bundle",
+        ):
+            assert name not in text, f"project vocabulary leaked: {name}"
+
+
 class TestThePlannerIsToldToStateTheEndState:
     """Instruction *form*, measured rather than argued.
 

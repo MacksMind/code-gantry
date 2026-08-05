@@ -14,7 +14,15 @@ invoice.
 
 from __future__ import annotations
 
+import os
+
 from orchestrator.config import ProjectConfig
+from orchestrator.pricing import (
+    PRICE_MAP_FILENAME,
+    entry_for,
+    load_price_map,
+    price_usage,
+)
 from orchestrator.state import RunState, outstanding_deferrals
 
 
@@ -281,6 +289,35 @@ def _wall_clock_lines(state: RunState, cfg: ProjectConfig) -> list[str]:
     return lines
 
 
+def _price_map() -> dict:
+    """The public rate table, cached beside the run's own artifacts.
+
+    `ORCHESTRATOR_PRICE_MAP` names the cache so a test can pin it and an
+    air-gapped operator can supply one; unset, it lands in the working
+    directory. Failure here is never fatal — see `load_price_map`.
+    """
+    return load_price_map(
+        os.environ.get("ORCHESTRATOR_PRICE_MAP") or PRICE_MAP_FILENAME
+    )
+
+
+def _dollars(
+    prices: dict, model: str, prompt: int, cached: int, writes: int, completion: int
+) -> str:
+    """A figure, or the reason there isn't one.
+
+    Never "$0.00" for an unpriced model. Aider's accounting reports zero for
+    "not priced" as often as for "free", which made a local endpoint and a
+    missing rate indistinguishable in the record — and this section exists to
+    settle an argument about effort, so a number that might mean two things is
+    worse than no number.
+    """
+    cost = price_usage(entry_for(prices, model), prompt, cached, writes, completion)
+    if cost is None:
+        return f"not priced (no rate for `{model}`)"
+    return f"${cost:,.2f}"
+
+
 def _cost_section(state: RunState, cfg: ProjectConfig) -> list[str]:
     completed = state.get("completed") or []
     run_usage = state.get("run_usage") or {}
@@ -296,16 +333,22 @@ def _cost_section(state: RunState, cfg: ProjectConfig) -> list[str]:
     test_seconds = sum(e.get("test_seconds", 0.0) for e in completed)
     cached_pct = (cached / prompt * 100) if prompt else 0.0
 
+    cache_writes = run_usage.get("cache_write_tokens", 0)
+    planner_writes = run_usage.get("planner_cache_write_tokens", 0)
+    prices = _price_map()
+
     lines = [
         "## Cost",
         "",
-        f"**Reviewer** ({cfg.reviewer.model})",
+        f"**Reviewer** ({cfg.reviewer.model}, effort {cfg.reviewer.effort})",
         "",
         f"- Prompt tokens: {prompt:,} ({cached:,} cached, {cached_pct:.0f}%)",
         f"- Uncached prompt tokens: {prompt - cached:,}",
         f"- Completion tokens: {completion:,}",
+        f"- Estimated cost: "
+        + _dollars(prices, cfg.reviewer.model, prompt, cached, cache_writes, completion),
         "",
-        f"**Planner** ({cfg.planner.model})",
+        f"**Planner** ({cfg.planner.model}, effort {cfg.planner.effort})",
         "",
         f"- Interventions used: {state.get('planner_interventions', 0)} of "
         f"{cfg.limits.max_planner_interventions}",
@@ -313,6 +356,11 @@ def _cost_section(state: RunState, cfg: ProjectConfig) -> list[str]:
         f"({planner_cached:,} cached, {planner_cached_pct:.0f}%)",
         f"- Uncached prompt tokens: {planner_prompt - planner_cached:,}",
         f"- Completion tokens: {planner_completion:,}",
+        f"- Estimated cost: "
+        + _dollars(
+            prices, cfg.planner.model, planner_prompt, planner_cached,
+            planner_writes, planner_completion,
+        ),
         "",
         f"Total test-suite runtime: {test_seconds:.0f}s across "
         f"{len(completed)} landed stage(s). On a large suite this, rather than "
