@@ -278,8 +278,14 @@ class PlannerConfig(_EndpointConfig):
     #
     # The two compose. `max_retries` handles sub-second blips fast; this waits
     # out real outages slowly and says so.
-    transport_retry_seconds: float = 900.0
-    transport_retry_max_delay_seconds: float | None = None
+    transport_retry_seconds: float = 3600.0
+    # Capped per wait, which matters more than the total. An hour of budget
+    # doubling from 1s makes the last sleep 26 minutes, so a provider that
+    # recovers a minute into it goes unnoticed for 25 more — an hour of
+    # coverage with half an hour of latency. At 300s the same hour buys twenty
+    # attempts and notices recovery within five minutes, and the extra
+    # attempts are free because a failed request costs nothing.
+    transport_retry_max_delay_seconds: float | None = 300.0
     # What the planner may look at, and how much of it. Absent means no tools:
     # the planner is handed the plan and a directory listing and asked to
     # reason from them, which is how it invented spec paths and mis-counted
@@ -321,8 +327,14 @@ class ReviewerConfig(_EndpointConfig):
     max_retries: int = 2
     # See `PlannerConfig.transport_retry_seconds`; same reasoning,
     # same failure — both clients died to the same disconnection.
-    transport_retry_seconds: float = 900.0
-    transport_retry_max_delay_seconds: float | None = None
+    transport_retry_seconds: float = 3600.0
+    # Capped per wait, which matters more than the total. An hour of budget
+    # doubling from 1s makes the last sleep 26 minutes, so a provider that
+    # recovers a minute into it goes unnoticed for 25 more — an hour of
+    # coverage with half an hour of latency. At 300s the same hour buys twenty
+    # attempts and notices recovery within five minutes, and the extra
+    # attempts are free because a failed request costs nothing.
+    transport_retry_max_delay_seconds: float | None = 300.0
     # How many landed stages the reviewer is shown, most recent first. None
     # keeps all of them, which is the old behaviour and the right default for a
     # project with no progress log — there the history is the only account of

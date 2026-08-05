@@ -190,6 +190,44 @@ class TestItSaysWhatItIsDoing:
         assert lines == []
 
 
+class TestTheDefaultBudgetCoversAnHour:
+    """Raised from fifteen minutes after a second provider incident.
+
+    Fifteen minutes was chosen against a dropped Wi-Fi, which comes back when
+    the laptop does. A provider incident is not that shape: two 529s arrived
+    inside an hour of each other, and an outage that outlasts the budget costs
+    a human noticing rather than a longer wait.
+
+    The per-wait cap matters more than the total. Doubling to an hour with no
+    cap makes the last sleep 26 minutes, so a provider that recovers a minute
+    into it is not noticed for 25 more — the budget would be an hour and the
+    *latency* would be half an hour. Capping each wait costs nothing, because
+    a failed request is free, and buys twenty attempts instead of twelve.
+    """
+
+    def test_the_default_covers_an_hour(self):
+        from orchestrator.config import PlannerConfig, ReviewerConfig
+
+        for role in (PlannerConfig, ReviewerConfig):
+            field = role.model_fields["transport_retry_seconds"]
+            assert field.default == 3600.0, role.__name__
+
+    def test_no_single_wait_exceeds_five_minutes(self):
+        from orchestrator.config import PlannerConfig, ReviewerConfig
+
+        for role in (PlannerConfig, ReviewerConfig):
+            cap = role.model_fields["transport_retry_max_delay_seconds"].default
+            assert cap == 300.0, role.__name__
+
+    def test_the_schedule_that_produces(self):
+        # The property, not the setting: an hour of coverage where recovery is
+        # noticed within five minutes.
+        got = delays(Backoff(budget_seconds=3600, initial_seconds=1, max_delay_seconds=300))
+        assert sum(got) == pytest.approx(3600.0)
+        assert max(got) == 300.0
+        assert len(got) >= 18, "an hour should buy more than a dozen attempts"
+
+
 class TestWhichFailuresAreWorthWaitingOut:
     """The status code decides, not the exception class.
 
