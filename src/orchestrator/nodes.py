@@ -1401,6 +1401,7 @@ def advance(state: RunState, rt: Runtime) -> dict:
             files=len(stage.edit_files),
             context_tokens=result.get("executor_context_tokens", 0),
             cost_usd=result.get("executor_cost_usd", 0.0),
+            roles=_roles_for_record(rt.cfg),
         )
     rt.log(f"[advance] {stage.id} landed as {result['merge_sha'][:12]}")
 
@@ -1724,6 +1725,25 @@ def _first_line(stage: Stage) -> str:
 
 # git's own convention, and the width every tool that renders a log assumes.
 _BODY_WIDTH = 72
+
+
+def _roles_for_record(cfg) -> tuple[tuple[str, str, str], ...]:
+    """Which models and efforts produced a stage, for `stage-costs.md`.
+
+    Read off the config at landing rather than stored per role, because the
+    config is the thing being tuned and a stage is the grain it is tuned at:
+    the executor, planner and reviewer efforts were each changed mid-project,
+    and every cost line written across those changes is otherwise identical.
+
+    The executor's effort is `reasoning_effort` and may be absent — not every
+    endpoint takes one — which is why an empty effort renders as the model
+    alone rather than a trailing slash.
+    """
+    return (
+        ("exec", cfg.executor.model, cfg.executor.reasoning_effort or ""),
+        ("plan", cfg.planner.model, cfg.planner.effort or ""),
+        ("review", cfg.reviewer.model, cfg.reviewer.effort or ""),
+    )
 
 
 def _commit_message(stage: Stage, record: str) -> str:

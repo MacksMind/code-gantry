@@ -1811,6 +1811,32 @@ class TestStageCostOutlivesTheRun:
         nodes.advance(state, rt)
         assert recent_stage_costs(rt.project.project_dir) == []
 
+    def test_the_configuration_reaches_the_file_not_just_the_writer(
+        self, repo, tmp_path
+    ):
+        # The end-to-end half. The writer takes `roles` and the config holds
+        # three of them, and the defect this class exists for is a value that
+        # is correct at both ends and lost in between — so the assertion is on
+        # the bytes in the file, reached through the node.
+        cfg, rt, state = make(repo, tmp_path)
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("stage work\n")
+        state = {**state, "executor_context_tokens": 13_000}
+
+        nodes.advance(state, rt)
+
+        line = (rt.project.project_dir / "stage-costs.md").read_text()
+        assert f"exec {rt.cfg.executor.model}" in line
+        assert f"plan {rt.cfg.planner.model}" in line
+        assert f"review {rt.cfg.reviewer.model}" in line
+        for effort in (
+            rt.cfg.planner.effort,
+            rt.cfg.reviewer.effort,
+            rt.cfg.executor.reasoning_effort,
+        ):
+            if effort:
+                assert f"@{effort}" in line
+
 
 class TestTheReadBudgetIsToldToThePlanner:
     """The planner declares `read_files`; the tool silently cuts the tail.

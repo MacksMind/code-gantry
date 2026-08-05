@@ -892,6 +892,81 @@ class TestStageCostsSurviveTheRun:
         append_stage_cost(tmp_path, "s", "0285803b159a", 1, 900, cost_usd=0.0004)
         assert "$0.0004" in (tmp_path / "stage-costs.md").read_text()
 
+    def test_the_line_records_which_models_and_efforts_produced_it(self, tmp_path):
+        # Without this a line is a cost with no configuration attached, and the
+        # configuration is the thing being tuned: three effort changes landed
+        # in one session and nothing in the record says which stages ran under
+        # which. Correlating them afterwards is the only reason to keep a
+        # per-stage cost at all.
+        from orchestrator.planner import append_stage_cost
+
+        append_stage_cost(
+            tmp_path,
+            "s",
+            "0285803b159a",
+            3,
+            13_000,
+            cost_usd=0.42,
+            roles=(
+                ("exec", "gpt-5.6-luna", "max"),
+                ("plan", "claude-opus-5", "xhigh"),
+                ("review", "gpt-5.6-sol", "high"),
+            ),
+        )
+        line = (tmp_path / "stage-costs.md").read_text()
+        assert "exec gpt-5.6-luna@max" in line
+        assert "plan claude-opus-5@xhigh" in line
+        assert "review gpt-5.6-sol@high" in line
+
+    def test_the_models_are_still_parsed_back_as_a_cost_line(self, tmp_path):
+        # The suffix must not break the reader: `recent_stage_costs` is what
+        # feeds the planner's batch sizing, and a line it cannot match is a
+        # stage that silently stops counting.
+        from orchestrator.planner import append_stage_cost, recent_stage_costs
+
+        append_stage_cost(
+            tmp_path, "s", "0285803b159a", 3, 13_000, cost_usd=0.42,
+            roles=(("exec", "gpt-5.6-luna", "max"),),
+        )
+        got = recent_stage_costs(tmp_path)
+        assert len(got) == 1
+        assert got[0]["context_tokens"] == 13_000
+        assert got[0]["merge_sha"] == "0285803b159a"
+
+    def test_lines_written_before_this_existed_still_parse(self, tmp_path):
+        # The file is append-only and spans runs, so every line already in it
+        # predates the suffix. A reader that needed it would drop the entire
+        # history the first time it ran.
+        path = tmp_path / "stage-costs.md"
+        path.write_text(
+            "- cost `aaaaaaaaaaaa` `old` — 2 file(s), 9,000 executor tokens\n"
+        )
+        from orchestrator.planner import recent_stage_costs
+
+        got = recent_stage_costs(tmp_path)
+        assert len(got) == 1 and got[0]["context_tokens"] == 9_000
+
+    def test_no_roles_adds_nothing(self, tmp_path):
+        # Same reasoning as the "$0.00" rule above: this file is read by the
+        # planner on every call, so a field with nothing to say stays absent.
+        from orchestrator.planner import append_stage_cost
+
+        append_stage_cost(tmp_path, "s", "0285803b159a", 3, 13_000)
+        assert "[" not in (tmp_path / "stage-costs.md").read_text()
+
+    def test_a_role_with_no_effort_records_just_the_model(self, tmp_path):
+        # Not every provider takes an effort, and "model/" with nothing after
+        # it reads as a missing value rather than an inapplicable one.
+        from orchestrator.planner import append_stage_cost
+
+        append_stage_cost(
+            tmp_path, "s", "0285803b159a", 3, 13_000,
+            roles=(("exec", "some-local-model", ""),),
+        )
+        text = (tmp_path / "stage-costs.md").read_text()
+        assert "exec some-local-model]" in text
+        assert "some-local-model@" not in text
+
     def test_costs_are_read_back_in_order(self, tmp_path):
         # Its own file rather than a section of status.md, which is a
         # hundreds-of-kilobytes narrative the planner sees only the tail of.

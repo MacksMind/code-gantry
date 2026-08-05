@@ -1240,6 +1240,7 @@ def append_stage_cost(
     files: int,
     context_tokens: int,
     cost_usd: float = 0.0,
+    roles: tuple[tuple[str, str, str], ...] = (),
 ) -> Path:
     """Record what a landed stage cost the executor, durably.
 
@@ -1253,6 +1254,15 @@ def append_stage_cost(
     away, so a cost recorded against either would point at nothing an hour
     later. Against the merge sha, `git show` answers what those files actually
     were, which is the difference between evidence and a number.
+
+    `roles` records which models and efforts produced the stage, as
+    `(label, model, effort)` triples. A cost with no configuration beside it
+    cannot be compared with the next one: three effort changes landed inside a
+    single session here, and every line written across them looks identical.
+    The run report names the configuration too, but per run — and the question
+    is per stage, because that is the grain the changes happen at. Absent when
+    there is nothing to say, for the same reason "$0.00" is: the planner reads
+    this file on every call.
     """
     project_dir = Path(project_dir)
     project_dir.mkdir(parents=True, exist_ok=True)
@@ -1266,6 +1276,16 @@ def append_stage_cost(
     # that says the same thing as its absence.
     if cost_usd:
         line += f", ${cost_usd:,.4f}".rstrip("0").rstrip(".")
+    # `@` rather than `/`: a routed model string is already full of slashes
+    # (`openai/responses/gpt-5.6-luna`), so a slash before the effort reads as
+    # another path segment and the field stops being greppable.
+    named = [
+        f"{label} {model}" + (f"@{effort}" if effort else "")
+        for label, model, effort in roles
+        if model
+    ]
+    if named:
+        line += f" [{', '.join(named)}]"
     line += "\n"
     with path.open("a") as fh:
         fh.write(line)
