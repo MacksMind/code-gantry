@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field
 
 from orchestrator.config import PlannerConfig
 from orchestrator.plannertools import dispatch, tool_schemas
-from orchestrator.retry import Backoff, is_transient_status, with_transport_retry
+from orchestrator.retry import Backoff, with_provider_retry
 
 Verdict = Literal["next_stage", "revise", "project_complete", "blocked"]
 RevisionMode = Literal["extend", "restart"]
@@ -494,16 +494,6 @@ def _transport_errors() -> tuple[type[BaseException], ...]:
     return (APIConnectionError, APIStatusError)
 
 
-def _is_transient(failure: BaseException) -> bool:
-    """Whether waiting could plausibly change the answer.
-
-    Reads the status off the exception rather than matching its class: 529 is
-    `OverloadedError` here and `InternalServerError` in the reviewer's SDK, and
-    a class list would have been right in one of the two places.
-    """
-    return is_transient_status(getattr(failure, "status_code", None))
-
-
 class AnthropicPlanner:
     def __init__(
         self, cfg: PlannerConfig, client=None, reader=None, semantic=None, log=None
@@ -653,7 +643,7 @@ class AnthropicPlanner:
         # ignores the refusal and keeps asking.
         for _ in range(self._max_tool_turns() + 1):
             try:
-                response = with_transport_retry(
+                response = with_provider_retry(
                     lambda: self._client.messages.parse(
                         model=self.cfg.model,
                         # Generous: thinking is on by default on current models and
@@ -677,10 +667,14 @@ class AnthropicPlanner:
                         **({"tools": tools} if tools else {}),
                     ),
                     retry_on=_transport_errors(),
-                    retry_if=_is_transient,
-                    backoff=Backoff(
+                    transient=Backoff(
                         budget_seconds=self.cfg.transport_retry_seconds,
                         max_delay_seconds=self.cfg.transport_retry_max_delay_seconds,
+                    ),
+                    spurious=Backoff(
+                        budget_seconds=self.cfg.invalid_request_retry_seconds,
+                        initial_seconds=self.cfg.invalid_request_initial_seconds,
+                        factor=self.cfg.invalid_request_factor,
                     ),
                     log=self.log,
                 )

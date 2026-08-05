@@ -23,6 +23,7 @@ import pytest
 from orchestrator.retry import (
     Backoff,
     delays,
+    is_spurious_request_status,
     is_transient_status,
     with_transport_retry,
 )
@@ -226,6 +227,69 @@ class TestTheDefaultBudgetCoversAnHour:
         assert sum(got) == pytest.approx(3600.0)
         assert max(got) == 300.0
         assert len(got) >= 18, "an hour should buy more than a dozen attempts"
+
+
+class TestASpuriousRejectionOfAValidRequest:
+    """A 400 that clears when the identical request is sent again.
+
+    Normally a 400 is a statement about the request we sent and retrying it is
+    the worst thing to do: it hides a legible error behind a wait. This is the
+    exception, and it was established rather than assumed — three arrived in
+    62 minutes, and the exact request, rebuilt from the run's own state and
+    replayed, returned 200. Roughly 3-4% of planner calls, which is a run that
+    stops every half hour and cannot be left alone.
+
+    So the budget is small and separate: two waits, two minutes then three,
+    five minutes from the first failure to escalation. A genuinely malformed
+    request still reaches a human in five minutes with its own message, which
+    is the property that makes this safe — the hour-long transient budget
+    would not have been.
+    """
+
+    def test_the_schedule_is_two_then_three_minutes(self):
+        got = delays(Backoff(budget_seconds=300, initial_seconds=120, factor=1.5))
+        assert got == [120.0, 180.0]
+
+    def test_that_is_three_attempts_and_five_minutes(self):
+        got = delays(Backoff(budget_seconds=300, initial_seconds=120, factor=1.5))
+        assert len(got) + 1 == 3, "two waits means three calls"
+        assert sum(got) == 300.0
+
+    def test_only_a_400_qualifies(self):
+        assert is_spurious_request_status(400) is True
+        for other in (401, 403, 404, 422, 429, 500, 503, 529, None):
+            assert is_spurious_request_status(other) is False, other
+
+    def test_a_rejection_that_clears_is_not_an_escalation(self):
+        calls = []
+
+        def flaky():
+            calls.append(1)
+            if len(calls) < 2:
+                raise Boom("Invalid request data")
+            return "ok"
+
+        slept, sleep = recorder()
+        out = with_transport_retry(
+            flaky,
+            retry_on=(Boom,),
+            backoff=Backoff(budget_seconds=300, initial_seconds=120, factor=1.5),
+            sleep=sleep,
+        )
+        assert out == "ok"
+        assert slept == [120.0]
+
+    def test_a_persistent_rejection_still_reaches_a_human_with_its_message(self):
+        # The property that keeps this from being the mistake it resembles.
+        slept, sleep = recorder()
+        with pytest.raises(Boom, match="Invalid request data"):
+            with_transport_retry(
+                _raising(Boom, "Invalid request data"),
+                retry_on=(Boom,),
+                backoff=Backoff(budget_seconds=300, initial_seconds=120, factor=1.5),
+                sleep=sleep,
+            )
+        assert sum(slept) == 300.0, "five minutes, then the real error"
 
 
 class TestWhichFailuresAreWorthWaitingOut:

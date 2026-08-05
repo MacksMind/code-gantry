@@ -103,6 +103,65 @@ def is_transient_status(status: int | None) -> bool:
     return status == 429 or status >= 500
 
 
+def is_spurious_request_status(status: int | None) -> bool:
+    """A 400 the provider returns for a request that is not malformed.
+
+    Everything about this is uncomfortable, so the evidence matters. Three
+    `invalid_request_error` 400s stopped one run in 62 minutes; the exact
+    request was rebuilt from the run's own state, replayed unchanged, and
+    returned 200. At roughly 3-4% of planner calls that is a stop every half
+    hour, which defeats unattended operation entirely.
+
+    Only 400. The neighbouring codes are genuine statements about the request
+    — 401 is a wrong key, 404 a wrong path, 422 an unprocessable body — and
+    every one of them says the same thing five minutes later.
+    """
+    return status == 400
+
+
+def with_provider_retry(
+    call,
+    *,
+    retry_on: tuple[type[BaseException], ...],
+    transient: Backoff,
+    spurious: Backoff,
+    status_of=lambda e: getattr(e, "status_code", None),
+    sleep=time.sleep,
+    log=None,
+):
+    """Two budgets, because the two failures deserve different patience.
+
+    An outage is waited out for an hour; a spurious rejection for five
+    minutes. Nested rather than merged so each keeps its own schedule, and in
+    this order so that a retried 400 gets a fresh transient budget underneath
+    it — a provider having a bad enough minute to reject a valid request is
+    exactly one that may also be overloaded on the next attempt.
+
+    The exception *types* still come from the caller, because they belong to
+    the SDK it imports. Only the status is read here, and both SDKs put it in
+    the same place.
+    """
+
+    def wait_out_outages():
+        return with_transport_retry(
+            call,
+            retry_on=retry_on,
+            retry_if=lambda e: is_transient_status(status_of(e)),
+            backoff=transient,
+            sleep=sleep,
+            log=log,
+        )
+
+    return with_transport_retry(
+        wait_out_outages,
+        retry_on=retry_on,
+        retry_if=lambda e: is_spurious_request_status(status_of(e)),
+        backoff=spurious,
+        sleep=sleep,
+        log=log,
+    )
+
+
 def with_transport_retry(
     call,
     *,

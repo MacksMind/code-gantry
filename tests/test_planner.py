@@ -1202,9 +1202,10 @@ class TestOutagesAreWaitedOutNotEscalated:
         import httpx
         from anthropic import Anthropic
 
+        message = "Overloaded" if kind == "overloaded_error" else "Invalid request data"
         return Anthropic(api_key="x")._make_status_error(
-            "Overloaded",
-            body={"type": "error", "error": {"type": kind}},
+            message,
+            body={"type": "error", "error": {"type": kind, "message": message}},
             response=httpx.Response(
                 status, request=httpx.Request("POST", "https://x/y")
             ),
@@ -1247,16 +1248,41 @@ class TestOutagesAreWaitedOutNotEscalated:
         ).plan(MESSAGES)
         assert out.verdict == "project_complete"
 
-    def test_a_bad_request_is_not_retried(self):
-        # The other half, and the one that keeps this honest. A 400 is a
-        # statement about the request we sent: it will say the same thing in
-        # fifteen minutes, and retrying hides a legible error behind the wait.
+    def test_a_bad_request_is_retried_a_few_times_then_blocks(self):
+        # Was "not retried at all", and the run disproved it: three 400s in 62
+        # minutes on requests that returned 200 when replayed unchanged. Three
+        # attempts over five minutes, then the real error — the short budget
+        # is what keeps a genuinely malformed request legible.
         client = StubClient(self._status_error(400, kind="invalid_request_error"))
         out = AnthropicPlanner(
-            cfg(transport_retry_seconds=900), client=client
+            cfg(
+                transport_retry_seconds=900,
+                invalid_request_retry_seconds=0.01,
+                invalid_request_initial_seconds=0.004,
+            ),
+            client=client,
         ).plan(MESSAGES)
         assert out.verdict == "blocked"
-        assert len(client.calls) == 1
+        assert "Invalid request data" in out.reasoning or "400" in out.reasoning
+        assert len(client.calls) == 3, "two waits means three calls"
+
+    def test_a_rejection_that_clears_on_the_second_try_is_not_an_escalation(self):
+        parsed = PlannerResponse(
+            verdict="project_complete", reasoning="r", status_entry="e"
+        )
+        client = SequenceClient(
+            [self._status_error(400, kind="invalid_request_error"),
+             response(parsed=parsed)]
+        )
+        out = AnthropicPlanner(
+            cfg(
+                invalid_request_retry_seconds=0.01,
+                invalid_request_initial_seconds=0.004,
+            ),
+            client=client,
+        ).plan(MESSAGES)
+        assert out.verdict == "project_complete", out.reasoning
+        assert len(client.calls) == 2
 
     def test_an_authentication_error_is_not_retried(self):
         # Waiting out a wrong key is fifteen minutes spent to be told it twice.

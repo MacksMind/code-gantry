@@ -462,9 +462,10 @@ class TestOutagesAreWaitedOutNotEscalated:
         import httpx
         from openai import OpenAI
 
+        message = "Overloaded" if kind in ("server_error", "overloaded_error") else "Invalid request data"
         return OpenAI(api_key="x")._make_status_error(
-            "Overloaded",
-            body={"error": {"type": kind}},
+            message,
+            body={"error": {"type": kind, "message": message}},
             response=httpx.Response(
                 status, request=httpx.Request("POST", "https://x/y")
             ),
@@ -487,13 +488,18 @@ class TestOutagesAreWaitedOutNotEscalated:
         ).review(MESSAGES)
         assert out.verdict == "approved"
 
-    def test_a_bad_request_is_not_retried(self):
+    def test_a_bad_request_is_retried_a_few_times_then_blocks(self):
         client = StubClient(self._status_error(400, kind="invalid_request_error"))
         out = OpenAIReviewer(
-            cfg_with(transport_retry_seconds=900).reviewer, client=client
+            cfg_with(
+                transport_retry_seconds=900,
+                invalid_request_retry_seconds=0.01,
+                invalid_request_initial_seconds=0.004,
+            ).reviewer,
+            client=client,
         ).review(MESSAGES)
         assert out.verdict == "blocked"
-        assert len(client.calls) == 1
+        assert len(client.calls) == 3, "two waits means three calls"
 
     def test_a_refusal_is_not_retried(self):
         client = StubClient(response(parsed=None, refusal="I will not."))

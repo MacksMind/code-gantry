@@ -286,6 +286,14 @@ class PlannerConfig(_EndpointConfig):
     # attempts and notices recovery within five minutes, and the extra
     # attempts are free because a failed request costs nothing.
     transport_retry_max_delay_seconds: float | None = 300.0
+    # A separate, much smaller budget for a 400 the provider returns on a
+    # request that is not malformed. Deliberately five minutes and not an
+    # hour: a genuinely bad request must still reach a human quickly with its
+    # own message, which is the only thing that keeps retrying a 400 from
+    # being the mistake it looks like. Two waits, two minutes then three.
+    invalid_request_retry_seconds: float = 300.0
+    invalid_request_initial_seconds: float = 120.0
+    invalid_request_factor: float = 1.5
     # What the planner may look at, and how much of it. Absent means no tools:
     # the planner is handed the plan and a directory listing and asked to
     # reason from them, which is how it invented spec paths and mis-counted
@@ -335,6 +343,14 @@ class ReviewerConfig(_EndpointConfig):
     # attempts and notices recovery within five minutes, and the extra
     # attempts are free because a failed request costs nothing.
     transport_retry_max_delay_seconds: float | None = 300.0
+    # A separate, much smaller budget for a 400 the provider returns on a
+    # request that is not malformed. Deliberately five minutes and not an
+    # hour: a genuinely bad request must still reach a human quickly with its
+    # own message, which is the only thing that keeps retrying a 400 from
+    # being the mistake it looks like. Two waits, two minutes then three.
+    invalid_request_retry_seconds: float = 300.0
+    invalid_request_initial_seconds: float = 120.0
+    invalid_request_factor: float = 1.5
     # How many landed stages the reviewer is shown, most recent first. None
     # keeps all of them, which is the old behaviour and the right default for a
     # project with no progress log — there the history is the only account of

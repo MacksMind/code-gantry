@@ -36,7 +36,7 @@ from pydantic import BaseModel
 
 from orchestrator.config import ReviewerConfig
 from orchestrator.plannertools import dispatch, openai_tool_schemas
-from orchestrator.retry import Backoff, is_transient_status, with_transport_retry
+from orchestrator.retry import Backoff, with_provider_retry
 
 Verdict = Literal["approved", "rework", "blocked"]
 
@@ -176,16 +176,6 @@ def _transport_errors() -> tuple[type[BaseException], ...]:
     return (APIConnectionError, APIStatusError)
 
 
-def _is_transient(failure: BaseException) -> bool:
-    """Whether waiting could plausibly change the answer.
-
-    By status rather than by class. This SDK raises `InternalServerError` for
-    the 529 that the planner's raises `OverloadedError` for, so the obvious
-    class-list implementation is wrong in exactly one of the two files.
-    """
-    return is_transient_status(getattr(failure, "status_code", None))
-
-
 class OpenAIReviewer:
     def __init__(self, cfg: ReviewerConfig, client=None, log=None, reader=None,
                  semantic=None):
@@ -241,7 +231,7 @@ class OpenAIReviewer:
         # One turn per tool round trip, plus one for the answer.
         for _ in range(self._max_tool_turns() + 1):
             try:
-                response = with_transport_retry(
+                response = with_provider_retry(
                     lambda: self._client.responses.parse(
                         model=self.cfg.model,
                         input=conversation,
@@ -250,10 +240,14 @@ class OpenAIReviewer:
                         **extra,
                     ),
                     retry_on=_transport_errors(),
-                    retry_if=_is_transient,
-                    backoff=Backoff(
+                    transient=Backoff(
                         budget_seconds=self.cfg.transport_retry_seconds,
                         max_delay_seconds=self.cfg.transport_retry_max_delay_seconds,
+                    ),
+                    spurious=Backoff(
+                        budget_seconds=self.cfg.invalid_request_retry_seconds,
+                        initial_seconds=self.cfg.invalid_request_initial_seconds,
+                        factor=self.cfg.invalid_request_factor,
                     ),
                     log=self.log,
                 )
