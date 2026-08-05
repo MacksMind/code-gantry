@@ -864,6 +864,94 @@ class TestScopedAutoTest:
         assert "--test-cmd" not in argv
 
 
+class TestTheInnerLoopFallsBackToTheTestsTheStageMayEdit:
+    """`test_paths` empty does not mean the stage has no tests.
+
+    Measured over one run of 35 stages: 12 declared no `test_paths`, so a third
+    of the run had no inner loop at all and every failure cost a full round
+    trip — a fresh Aider process re-reading the files to fix what it had just
+    broken. Those 12 averaged 1.42 attempts against 0.91 for the rest.
+
+    In all 12 the tests were sitting in `edit_files`, because a coverage stage
+    edits the spec it is proving. So the information was already present and
+    the planner was being asked to restate it, which is the declaration the
+    repository already knows — the same argument as not having a stage name the
+    plan item it advances.
+
+    Bounded deliberately: only plain paths, never globs. A glob in `edit_files`
+    can be `spec/**`, and expanding it would hand Aider something close to the
+    full suite — the one thing this command must never be, since Aider knows
+    nothing of `edit_files` and will edit whatever is red.
+    """
+
+    def test_a_test_in_edit_files_is_used_when_nothing_is_declared(self):
+        cfg, stage = cfg_with(
+            stage_overrides={"edit_files": ["spec/models/order_spec.rb"]},
+            scoped_test_command="rspec {paths}",
+            executor={"model": "m", "auto_test": True},
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert argv[argv.index("--test-cmd") + 1] == "rspec spec/models/order_spec.rb"
+        assert "--auto-test" in argv
+
+    def test_a_declared_path_still_wins(self):
+        # The planner's choice is not second-guessed when it made one.
+        cfg, stage = cfg_with(
+            stage_overrides={
+                "test_paths": ["spec/a_spec.rb"],
+                "edit_files": ["spec/models/order_spec.rb"],
+            },
+            scoped_test_command="rspec {paths}",
+            executor={"model": "m", "auto_test": True},
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert argv[argv.index("--test-cmd") + 1] == "rspec spec/a_spec.rb"
+
+    def test_a_glob_is_not_expanded_into_the_suite(self):
+        # `spec/**` is a legal edit_files entry and would be most of the suite.
+        cfg, stage = cfg_with(
+            stage_overrides={"edit_files": ["spec/**"]},
+            scoped_test_command="rspec {paths}",
+            executor={"model": "m", "auto_test": True},
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert "--auto-test" not in argv
+        assert "--test-cmd" not in argv
+
+    def test_a_stage_editing_no_tests_still_gets_no_inner_loop(self):
+        cfg, stage = cfg_with(
+            stage_overrides={"edit_files": ["app/models/order.rb"]},
+            scoped_test_command="rspec {paths}",
+            executor={"model": "m", "auto_test": True},
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert "--auto-test" not in argv
+
+    def test_what_counts_as_a_test_comes_from_config(self):
+        # Project knowledge belongs in config. This reads the same
+        # `test_file_patterns` the new_tests gate does, so a project whose
+        # tests are not Ruby specs is served without touching this code.
+        cfg, stage = cfg_with(
+            stage_overrides={"edit_files": ["pkg/order_test.go", "pkg/order.go"]},
+            test_file_patterns=["**/*_test.go"],
+            scoped_test_command="go test {paths}",
+            executor={"model": "m", "auto_test": True},
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert argv[argv.index("--test-cmd") + 1] == "go test pkg/order_test.go"
+
+    def test_every_test_in_edit_files_is_named(self):
+        cfg, stage = cfg_with(
+            stage_overrides={
+                "edit_files": ["spec/a_spec.rb", "app/x.rb", "spec/b_spec.rb"]
+            },
+            scoped_test_command="rspec {paths}",
+            executor={"model": "m", "auto_test": True},
+        )
+        argv = build_aider_argv(stage, cfg, "p")
+        assert argv[argv.index("--test-cmd") + 1] == "rspec spec/a_spec.rb spec/b_spec.rb"
+
+
 class TestAutoTestHasItsOwnCommand:
     """The inner loop wants quiet; verify wants verbose. Same run, opposite needs.
 

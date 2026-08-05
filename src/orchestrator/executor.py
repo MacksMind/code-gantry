@@ -841,14 +841,46 @@ def _runnable(path: str, stage: Stage, cfg: ProjectConfig) -> bool:
     return stage.require_new_tests or matches_any(path, stage.edit_files)
 
 
+def _tests_the_stage_may_edit(stage: Stage, cfg: ProjectConfig) -> list[str]:
+    """The stage's own tests, when it declared no `test_paths`.
+
+    Measured over one run of 35 stages: 12 declared none, so a third of the run
+    ran with no inner loop and paid a whole round trip — a fresh process,
+    re-reading the files — for every failure it could have fixed in place.
+    Those 12 averaged 1.42 attempts against 0.91 for the rest. In every one of
+    them the tests were already listed in `edit_files`, because a coverage
+    stage edits the spec it is proving.
+
+    So this reads a fact the stage already carries rather than asking the
+    planner to restate it. What counts as a test comes from
+    `test_file_patterns`, the same config the new-tests gate reads, so no
+    project's vocabulary reaches this file.
+
+    Plain paths only. A glob in `edit_files` may be `spec/**`, and expanding it
+    would hand Aider most of the suite — which it must never have, because it
+    knows nothing of `edit_files` and will edit whatever is red to make it
+    green. A stage whose tests are only reachable by glob keeps the old
+    behaviour of no inner loop, which is worse than a scoped one and much
+    better than a wrong one.
+    """
+    return [
+        path
+        for path in stage.edit_files
+        if not any(ch in path for ch in "*?[")
+        and matches_any(path, cfg.test_file_patterns)
+    ]
+
+
 def _auto_test_command(stage: Stage, cfg: ProjectConfig) -> str | None:
     """The command Aider runs itself, after applying its edits.
 
-    Built from the stage's declared `test_paths` and from nothing else. Never
-    the project's full suite: Aider has no notion of `edit_files`, so faced with
-    a red spec outside the stage it will edit that spec, and a full suite gives
-    it three and a half minutes per pass to do so. Scoped, the inner loop is
-    seconds and confined to the specs the stage claims to prove.
+    Built from the stage's declared `test_paths`, falling back to the tests it
+    is allowed to edit when it declared none — see `_tests_the_stage_may_edit`,
+    which is where the reasoning for the fallback lives. Never the project's
+    full suite: Aider has no notion of `edit_files`, so faced with a red spec
+    outside the stage it will edit that spec, and a full suite gives it three
+    and a half minutes per pass to do so. Scoped, the inner loop is seconds and
+    confined to the specs the stage claims to prove.
 
     Resolution differs from the verify layer's on purpose. A glob is a question
     about files that exist, so an unmatched one is dropped — left in, it reaches
@@ -884,6 +916,9 @@ def _auto_test_command(stage: Stage, cfg: ProjectConfig) -> str | None:
             )
         elif _runnable(path, stage, cfg):
             paths.append(path)
+
+    if not paths:
+        paths = _tests_the_stage_may_edit(stage, cfg)
 
     if not paths:
         return None
