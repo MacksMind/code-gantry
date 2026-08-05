@@ -149,6 +149,7 @@ class RunState(TypedDict, total=False):
     # Frozen when the run stops, so `status` on an old run reports the hours it
     # took rather than the hours since.
     session_seconds: float
+    plan_seconds: float
 
     last_failure: FailureDetail | None
     # The first failure since the stage was drawn or last redrawn, kept because
@@ -334,6 +335,10 @@ def fresh_stage_fields() -> dict:
         # planner sizes the next batch against.
         "executor_context_tokens": 0,
         "executor_cost_usd": 0.0,
+        # Planning is the other half of a stage's clock and belongs to
+        # the stage it produced. Carried forward it would bill the next
+        # stage for this one's derivation.
+        "plan_seconds": 0.0,
         # A new stage has a new tree; nothing has been proven about it yet.
         "full_suite_digest": "",
         "last_failure": None,

@@ -223,7 +223,9 @@ def plan(state: RunState, rt: Runtime) -> dict:
     )
 
     rt.log(f"[plan] {'revising ' + stage.id if stage else 'deriving next stage'}")
+    started = time.time()
     outcome = rt.planner.plan(messages)
+    planned_for = max(time.time() - started, 0.0)
 
     if outcome.tool_calls:
         # What it looked at, before what it decided. A stage drawn from six
@@ -296,6 +298,9 @@ def plan(state: RunState, rt: Runtime) -> dict:
         "run_usage": usage,
         "planner_notes": notes,
         "deferred": deferred,
+        # Accumulated rather than assigned: a revision is more planning for the
+        # same stage, and every path out of this node carries the total.
+        "plan_seconds": state.get("plan_seconds", 0.0) + planned_for,
         # Held until the stage lands. Accumulated across revisions, because a
         # redrawn stage is the same piece of work and its observations about
         # the plan are still true.
@@ -1376,6 +1381,9 @@ def advance(state: RunState, rt: Runtime) -> dict:
         "base_sha": start_sha,
         "merge_sha": merge_sha or rt.git.head_sha(),
         "wall_seconds": max(time.time() - (state.get("stage_started_at") or 0), 0.0),
+        # From precheck to here. `plan_seconds` is the derivation that
+        # preceded it, which no per-stage figure counted before.
+        "plan_seconds": state.get("plan_seconds", 0.0),
         "test_seconds": state.get("test_seconds", 0.0),
         "review_verdict": state.get("review_verdict"),
         "review_summary": state.get("review_summary"),

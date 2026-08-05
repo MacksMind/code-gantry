@@ -564,12 +564,23 @@ class TestReportOnRealRun:
         ])
         cfg, project, paths, final = drive(repo, tmp_path, planner=planner)
         # One stage took some measurable time; at 60 stages of that, a budget of
-        # a few seconds cannot possibly hold.
-        final = {**final, "session_seconds": 600.0}
+        # a few seconds cannot possibly hold. The time comes from the stage
+        # itself — derivation plus the stage — and `session_seconds` is set to
+        # something absurd here to prove it is no longer the source: it resets
+        # on every resume while `completed` spans the run, and dividing one by
+        # the other reported a minute a stage for stages taking eleven.
+        final = {
+            **final,
+            "session_seconds": 1.0,
+            "completed": [
+                {**final["completed"][0], "wall_seconds": 400.0, "plan_seconds": 200.0}
+            ],
+        }
         cfg.limits.max_stages = 60
         cfg.limits.wall_clock_hours = 1
         report = build_report(final, cfg)
         assert "limits disagree" in report or "disagree about how" in report
+        assert "0.17h per landed stage" in report, report
 
     def test_a_wall_clock_stop_escalates_with_an_honest_reason(
         self, repo, tmp_path, fake_aider

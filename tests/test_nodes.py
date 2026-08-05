@@ -1776,6 +1776,42 @@ class TestStuckWithoutLanding:
         assert landed["interventions_since_landing"] == 0
 
 
+class TestAStageCostsItsPlanningToo:
+    """`wall_seconds` starts at precheck, so deriving the stage is free.
+
+    It is not. Derivations on one project ran five to seven minutes against a
+    mean stage time of 10.6, so roughly 40% of the clock sat outside every
+    per-stage figure — and a projection built on stage time alone understates
+    by that much. `plan_seconds` is the matching half, accumulated across
+    revisions because a redrawn stage is the same piece of work.
+    """
+
+    def test_planning_time_lands_on_the_stage(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("stage work\n")
+        state = {**state, "plan_seconds": 42.0}
+
+        out = nodes.advance(state, rt)
+
+        landed = out["completed"][-1]
+        assert landed["plan_seconds"] == 42.0
+        assert "wall_seconds" in landed, "the two halves travel together"
+
+    def test_it_resets_for_the_next_stage(self, repo, tmp_path):
+        # Carried forward it would bill the next stage for this one's planning.
+        from orchestrator.state import fresh_stage_fields
+
+        assert fresh_stage_fields()["plan_seconds"] == 0.0
+
+    def test_a_stage_that_never_planned_records_zero(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("stage work\n")
+        out = nodes.advance(state, rt)
+        assert out["completed"][-1]["plan_seconds"] == 0.0
+
+
 class TestStageCostOutlivesTheRun:
     """Driven through advance, because the halves passing proves nothing.
 

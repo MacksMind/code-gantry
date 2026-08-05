@@ -273,8 +273,17 @@ def _wall_clock_lines(state: RunState, cfg: ProjectConfig) -> list[str]:
         "",
     ]
 
-    if completed and elapsed_hours:
-        per_stage = elapsed_hours / len(completed)
+    if completed:
+        # From the stages themselves, not from the session clock. `elapsed`
+        # resets on every resume while `completed` spans the whole run, so
+        # dividing one by the other billed 30 stages against five minutes and
+        # reported a minute a stage. These two sum what each stage actually
+        # took — derivation plus the stage itself — and survive a kill, because
+        # they are written per landing rather than accumulated in a counter.
+        measured = sum(
+            e.get("wall_seconds", 0.0) + e.get("plan_seconds", 0.0) for e in completed
+        )
+        per_stage = measured / len(completed) / 3600.0
         projected = per_stage * cfg.limits.max_stages
         if projected > budget:
             lines.append(
