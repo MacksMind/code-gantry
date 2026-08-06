@@ -80,6 +80,7 @@ def stub_planner(monkeypatch, notes, *, reader=object()):
                 status_entry="e",
                 plan_notes=notes,
                 tool_calls=["search(render text: in .) -> 1 line(s)"],
+                reads_answered=1,
             )
 
     stub = Stub()
@@ -195,6 +196,36 @@ class TestAnUnverifiedVerdictIsRefused:
                 status_entry="e",
                 plan_notes=[],
                 tool_calls=[],
+            ),
+        )
+        result = CliRunner().invoke(cli.main, ["reconcile", "demo"])
+        assert result.exit_code != 0
+        assert "without reading anything" in result.output
+
+    def test_calls_that_were_all_refused_do_not_count_as_reading(
+        self, project, monkeypatch
+    ):
+        """A denial is a record of looking, not a record of having looked.
+
+        Once refusals joined the ledger, `tool_calls` stopped being a proxy for
+        "it read something": a planner that asked twice for paths that are not
+        there now has a non-empty log and has seen nothing. The guard counts
+        answered calls for exactly that reason.
+        """
+        stub = stub_planner(monkeypatch, [])
+        monkeypatch.setattr(
+            type(stub),
+            "plan",
+            lambda self, messages: PlannerOutcome(
+                verdict="project_complete",
+                reasoning="looks fine",
+                status_entry="e",
+                plan_notes=[],
+                tool_calls=[
+                    "read_file(app/ghost.rb) -> refused: does not exist",
+                    "read_file(app/other_ghost.rb) -> refused: does not exist",
+                ],
+                reads_answered=0,
             ),
         )
         result = CliRunner().invoke(cli.main, ["reconcile", "demo"])

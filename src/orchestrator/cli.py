@@ -184,7 +184,7 @@ def reconcile(slug: str, dry_run: bool) -> None:
     # An answer reached without looking is not an answer, whichever way it
     # went. Recording "checked, nothing found" would be worse than recording
     # nothing: it reads as evidence and stops anyone looking again.
-    if not outcome.tool_calls:
+    if not outcome.reads_answered:
         raise click.ClickException(
             "the planner answered without reading anything, so its verdict is "
             "worth nothing either way. Nothing was written."
@@ -192,7 +192,7 @@ def reconcile(slug: str, dry_run: bool) -> None:
 
     if not outcome.plan_notes:
         click.echo(
-            f"\nnothing to add, after {len(outcome.tool_calls)} read(s); "
+            f"\nnothing to add, after {outcome.reads_answered} read(s); "
             "the log already reflects what the branch has done"
         )
         return

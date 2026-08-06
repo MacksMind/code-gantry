@@ -234,6 +234,37 @@ class TestProvenance:
         assert r.calls[0].detail == "docs/plan.md"
         assert r.calls[0].lines > 0
 
+    def test_a_refusal_is_recorded_as_one(self, repo):
+        """What was denied, not only what was answered.
+
+        `calls` was appended to in `_spend`, which only runs after a tool
+        succeeds, so a refusal appeared in neither the run log nor
+        `planner.json`. Measured over one run of 65 planning steps, 24 stopped
+        at exactly the 25-call ceiling and zero refusals were recorded — a step
+        that stopped because it was finished and a step that stopped because it
+        was cut off were indistinguishable in the artifact.
+        """
+        r = reader(repo)
+        r.record_refusal("read_file", "spec/models/ghost_spec.rb", "does not exist")
+        assert [c.tool for c in r.calls] == ["read_file"]
+        assert r.calls[0].refusal == "does not exist"
+        assert r.calls[0].lines == 0
+
+    def test_a_refusal_does_not_spend_the_call_budget(self, repo):
+        """Recording the denial must not make the denial more likely.
+
+        The ceiling counts answered calls, so a run of refusals cannot starve
+        a planner of the reads it has not yet made. `_max_tool_turns` is what
+        bounds a model that ignores the refusal and keeps asking.
+        """
+        r = reader(repo, max_calls=2)
+        r.record_refusal("read_file", "nope.rb", "does not exist")
+        r.record_refusal("read_file", "also-nope.rb", "does not exist")
+        r.list_files()
+        r.list_files()
+        with pytest.raises(ToolError, match="too many"):
+            r.list_files()
+
 
 class TestSearchDialect:
     """A model writes Perl-flavoured regex; git's default engine is not.

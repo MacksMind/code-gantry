@@ -268,4 +268,22 @@ def dispatch(
             return "\n".join(found) if found else "(nothing similar found)"
         return f"unknown tool {name!r}"
     except ToolError as e:
+        reader.record_refusal(name, call_detail(args), str(e))
         return f"cannot do that: {e}"
+
+
+def call_detail(args: dict) -> str:
+    """The one argument worth naming a call by.
+
+    Shared with the reviewer's log so the two roles label a call the same
+    way; the field-picking was written twice before, which is how two
+    renderings of the same fact drift apart.
+    """
+    return (
+        args.get("path")
+        or args.get("pattern")
+        or args.get("glob")
+        or args.get("question")
+        or args.get("ref")
+        or ""
+    )

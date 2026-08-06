@@ -401,6 +401,13 @@ class PlannerOutcome:
     # the first long run was reconstructing what it had been told, and that was
     # when the inputs were fixed.
     tool_calls: list[str] = field(default_factory=list)
+    # How many of those were answered. `tool_calls` stopped being a usable
+    # proxy for "it looked at something" once refusals joined the ledger: two
+    # requests for paths that are not there produce a log of length two and
+    # nothing seen. `reconcile` refuses a verdict reached without reading, and
+    # it must count reads rather than entries. Defaults to zero so a path that
+    # forgets to set it refuses rather than waves the verdict through.
+    reads_answered: int = 0
     # Observations about the plan going stale, appended to the addendum when
     # the stage lands. Carried rather than written here: a note about work that
     # then fails review would be a record of something that did not happen.
@@ -524,7 +531,21 @@ class AnthropicPlanner:
         that two different objects record calls.
         """
         calls = list(getattr(self.reader, "calls", []))
-        return [f"{c.tool}({c.detail}) -> {c.lines} line(s)" for c in calls]
+        return [
+            f"{c.tool}({c.detail}) -> "
+            + (f"refused: {c.refusal}" if getattr(c, "refusal", "") else f"{c.lines} line(s)")
+            for c in calls
+        ]
+
+    def _reads_answered(self) -> int:
+        """Of what was asked, how much came back.
+
+        Kept beside `_tool_log` because the two are read together and derived
+        from the same ledger; splitting them is how a count and the log it
+        summarises drift.
+        """
+        calls = list(getattr(self.reader, "calls", []))
+        return sum(1 for c in calls if not getattr(c, "refusal", ""))
 
     def _max_tool_turns(self) -> int:
         """Backstop on the conversation length.
@@ -567,6 +588,7 @@ class AnthropicPlanner:
             if terminal is not None:
                 terminal.usage = billed
                 terminal.tool_calls = self._tool_log()
+                terminal.reads_answered = self._reads_answered()
                 return terminal
 
             problem = _semantic_problem(parsed) or self._unusable(parsed)
@@ -581,6 +603,7 @@ class AnthropicPlanner:
                     plan_notes=[n.model_dump() for n in parsed.plan_notes],
                     usage=billed,
                     tool_calls=self._tool_log(),
+                    reads_answered=self._reads_answered(),
                     failed=False,
                 )
 
@@ -588,6 +611,7 @@ class AnthropicPlanner:
                 outcome = _blocked(problem)
                 outcome.usage = billed
                 outcome.tool_calls = self._tool_log()
+                outcome.reads_answered = self._reads_answered()
                 outcome.raw = parsed.model_dump()
                 return outcome
 

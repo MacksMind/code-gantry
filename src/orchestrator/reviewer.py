@@ -35,7 +35,7 @@ from typing import Literal, Protocol
 from pydantic import BaseModel
 
 from orchestrator.config import ReviewerConfig
-from orchestrator.plannertools import dispatch, openai_tool_schemas
+from orchestrator.plannertools import call_detail, dispatch, openai_tool_schemas
 from orchestrator.retry import Backoff, with_provider_retry
 
 Verdict = Literal["approved", "rework", "blocked"]
@@ -389,9 +389,7 @@ def _refusal(response) -> str:
 
 def _describe(name: str, args: dict) -> str:
     """One tool call, rendered for the log and the artifact."""
-    detail = args.get("path") or args.get("pattern") or args.get("glob") or args.get(
-        "question"
-    ) or args.get("ref") or ""
+    detail = call_detail(args)
     return f"{name}({detail})" if detail else name
 
 

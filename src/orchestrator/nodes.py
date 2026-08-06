@@ -231,8 +231,17 @@ def plan(state: RunState, rt: Runtime) -> dict:
         # What it looked at, before what it decided. A stage drawn from six
         # reads and a search is a different artefact from one drawn from
         # nothing, and only this line distinguishes them afterwards.
+        #
+        # `read` counts what came back, and refusals are reported beside it
+        # rather than folded into it. Counting this line is how the 25-call
+        # ceiling was found to be binding on 24 of 65 steps, and a count that
+        # quietly included denied calls would have answered that question
+        # wrongly while looking exactly as authoritative.
+        refused = len(outcome.tool_calls) - outcome.reads_answered
         rt.log(
-            f"[plan] read {len(outcome.tool_calls)} thing(s): "
+            f"[plan] read {outcome.reads_answered} thing(s)"
+            + (f", {refused} refused" if refused else "")
+            + ": "
             + "; ".join(outcome.tool_calls)
         )
 
@@ -280,6 +289,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
                 # different fact from "the planner did not look" — one is the
                 # plan being accurate, the other is a bug.
                 "tool_calls": list(outcome.tool_calls),
+                "reads_answered": outcome.reads_answered,
                 "plan_notes": list(outcome.plan_notes),
                 "client_failure": outcome.failed,
                 # Present only when we rejected an answer the model did give.

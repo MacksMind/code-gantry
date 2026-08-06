@@ -1618,6 +1618,32 @@ class TestPlannerArtifactRecordsWhatItLookedAtAndSaid:
         assert written["tool_calls"] == []
         assert written["plan_notes"] == []
 
+    def test_the_artifact_says_how_many_reads_were_answered(self, repo, tmp_path):
+        """So the question can be answered by reading, not by regex.
+
+        The rendered log already carries "refused:", but counting a run's
+        binding caps off rendered strings is the pattern that has produced a
+        confident wrong answer every time it has been tried here. The number
+        travels as a number.
+        """
+        planner = StubPlanner(
+            [
+                PlannerOutcome(
+                    "project_complete", "done", "e",
+                    tool_calls=[
+                        "search(render text: in app) -> 7 line(s)",
+                        "read_file(app/ghost.rb) -> refused: does not exist",
+                    ],
+                    reads_answered=1,
+                )
+            ]
+        )
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        nodes.plan(state, rt)
+        written = self._artifact(rt)
+        assert len(written["tool_calls"]) == 2
+        assert written["reads_answered"] == 1
+
 
 class TestPlanNotesSurviveFromDerivationToLanding:
     """The planner emits a note; the commit has to contain it.

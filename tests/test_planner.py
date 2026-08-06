@@ -1454,3 +1454,68 @@ class TestReasoningEffortIsOperatorControlled:
         assert _reasoning_param(ReviewerConfig(model="m", effort="max")) == {
             "reasoning": {"effort": "max"}
         }
+
+
+class TestTheToolLogSaysWhatWasDenied:
+    """A ceiling is only legible if the artifact records hitting it.
+
+    Measured over one run of 65 planning steps: 24 stopped at exactly the
+    25-call cap, and no refusal appeared in `run.log` or any `planner.json`,
+    because the ledger was written by `_spend` and `_spend` only runs when a
+    tool succeeds. Truncation and satisfaction produced identical records.
+    """
+
+    def _planner(self, calls):
+        from orchestrator.planner import AnthropicPlanner
+
+        reader = SimpleNamespace(calls=calls)
+        return AnthropicPlanner(cfg(), client=object(), reader=reader)
+
+    def test_an_answered_call_reads_as_before(self):
+        from orchestrator.repotools import ToolCall
+
+        p = self._planner([ToolCall("read_file", "app/order.rb", 12)])
+        assert p._tool_log() == ["read_file(app/order.rb) -> 12 line(s)"]
+
+    def test_a_refusal_says_so_instead_of_reporting_zero_lines(self):
+        # "-> 0 line(s)" already means "the search found nothing", which is a
+        # different fact and one the planner acts on differently.
+        from orchestrator.repotools import ToolCall
+
+        p = self._planner(
+            [ToolCall("read_file", "app/ghost.rb", 0, refusal="does not exist")]
+        )
+        assert p._tool_log() == ["read_file(app/ghost.rb) -> refused: does not exist"]
+
+    def test_a_fruitless_search_is_not_a_refusal(self):
+        from orchestrator.repotools import ToolCall
+
+        p = self._planner([ToolCall("search", "widget in app", 0)])
+        assert p._tool_log() == ["search(widget in app) -> 0 line(s)"]
+
+    def test_the_answered_count_travels_with_the_outcome(self):
+        """The count, not the length of the log.
+
+        `tool_calls` used to be a proxy for "the planner read something", and
+        `reconcile` refuses a verdict reached without reading. Recording
+        refusals broke that proxy — two refused calls make a non-empty log
+        describing nothing seen — so the count crosses the boundary as its own
+        value rather than being re-derived from rendered strings at the far end.
+        """
+        from orchestrator.repotools import ToolCall
+
+        p = self._planner(
+            [
+                ToolCall("read_file", "app/order.rb", 12),
+                ToolCall("read_file", "app/ghost.rb", 0, refusal="does not exist"),
+            ]
+        )
+        assert p._reads_answered() == 1
+
+    def test_a_log_of_nothing_but_refusals_answers_zero(self):
+        from orchestrator.repotools import ToolCall
+
+        p = self._planner(
+            [ToolCall("read_file", "app/ghost.rb", 0, refusal="does not exist")]
+        )
+        assert p._reads_answered() == 0

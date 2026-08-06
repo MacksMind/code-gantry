@@ -69,11 +69,27 @@ class ReadBudget:
 
 @dataclass
 class ToolCall:
-    """One answered question, for the run log."""
+    """One question put to the repository, answered or not.
+
+    `refusal` is empty for an answered call and carries the reason for a
+    denied one. It exists because the ledger used to be written only by
+    `_spend`, which runs after a tool succeeds: a call that was refused —
+    for an exhausted budget, a path that is not there, a pattern that is
+    not a pattern — left no trace at all. Measured over one run of 65
+    planning steps, 24 stopped at exactly the 25-call ceiling and not one
+    refusal was recorded, so a step that stopped because it had finished
+    and a step that stopped because it had been cut off produced the same
+    artifact. A cap whose binding cannot be observed cannot be tuned.
+
+    `lines: 0` is deliberately not the marker. It already means "the search
+    ran and matched nothing", which is a different fact that the planner
+    acts on differently.
+    """
 
     tool: str
     detail: str
     lines: int
+    refusal: str = ""
 
 
 @dataclass
@@ -179,8 +195,28 @@ class RepoReader:
         self.calls.append(ToolCall(tool=tool, detail=detail, lines=used))
         return text
 
+    def record_refusal(self, tool: str, detail: str, reason: str) -> None:
+        """Note a call that was denied.
+
+        Called by the dispatcher rather than at the raise sites: `_resolve`
+        and `_require_readable` know neither the tool's name nor what was
+        asked for, and the detail of a refused call is the question, because
+        there is no content to describe it by.
+        """
+        self.calls.append(ToolCall(tool=tool, detail=detail, lines=0, refusal=reason))
+
+    def _answered(self) -> int:
+        """Calls the budget is actually spent on.
+
+        Recording a denial must not make the next one more likely, so the
+        ceiling counts answered calls and refusals ride along free.
+        `_max_tool_turns` is what bounds a model that ignores a refusal and
+        keeps asking.
+        """
+        return sum(1 for c in self.calls if not c.refusal)
+
     def _charge_call(self, tool: str) -> None:
-        if len(self.calls) >= self.budget.max_calls:
+        if self._answered() >= self.budget.max_calls:
             raise ToolError(
                 f"too many tool calls for one planning step "
                 f"(limit {self.budget.max_calls}). Answer with what you have."
