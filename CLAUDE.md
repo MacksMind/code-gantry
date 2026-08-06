@@ -393,6 +393,52 @@ stops that reasoning at abandonment. The reviewer's observations stay on the
 landing gate, because those describe a diff and an abandoned diff does not
 exist. Two kinds of record, one gate, and only one of them belonged behind it.
 
+**A test that pins where a value lives passes while the value is lost.**
+`plan_seconds` was measured correctly in `plan`, recorded correctly by
+`advance`, and read zero in production for four hours: deriving a stage returns
+`**base` and then `**fresh_stage_fields()`, so the reset zeroed the value
+`base` had just set. `fresh_stage_fields`' own docstring warns about exactly
+this for `pending_plan_notes` and says it cost two stages to find — and the
+test written alongside the new field was `assert
+fresh_stage_fields()["plan_seconds"] == 0.0`, which asserts the location of a
+zero rather than the behaviour of a stage, and stayed green throughout. A field
+whose value crosses nodes wants a test that drives both nodes; a test that can
+be satisfied by the constant it is checking for is not testing the journey.
+
+**An inner loop that skips the file under edit is worse than none.** Aider's
+`--test-cmd` was built from `test_paths` alone, so a stage declaring none ran
+with no in-session test at all — 12 of 35 on one run. The fallback to the tests
+in `edit_files` was the obvious fix and it was half of one: of the 17 stages
+that *did* declare paths and also edited a test, 11 named a different file than
+the one they were editing, so the loop reported green while the edit was
+unverified. Between the two shapes, 23 of 35 stages had no feedback on the spec
+being rewritten. The rule that shipped first — "do not second-guess a choice the
+planner made" — sounded principled and was refuted by the next stage that ran.
+Declaring something is not declaring the right thing, and a green loop that
+never ran the changed file is a worse signal than no loop, because the attempt
+ends believing it succeeded.
+
+**Effort is priced in output tokens, and output is the minority of this bill.**
+Measured across 29 stages at `xhigh` against 56 at `high`: output fell 24% per
+stage, 30,144 tokens to 22,766, which is exactly what a tier buys. In money that
+is $0.184 a stage — about 4% of planner spend, because the prompt is an enormous
+cached prefix and output is ~13% of the total. Over the same window `high`
+stopped the run twice with `revise` without a stage spec, against zero in ~87
+landings at `xhigh`. A 4% saving that buys an unattended stop is not a saving.
+The trap in measuring it is that *total* cost per stage rose over the same
+period — $4.29 to $5.60 — entirely because the progress log had not been folded;
+prompt per stage was up 34%. Read the totals and you conclude the opposite of
+what the evidence supports.
+
+**The progress log sits inside the cached prefix and changes every landing.**
+It is spliced into the plan block, which carries a cache breakpoint, so each
+landing invalidates the whole block and rewrites it — the log is not just
+costing its own size, it drags the plan tree through the cache with it. Measured
+between two folds: 292 bytes to 263KB over 66 landings, block 0 at 810KB, and an
+extra per-stage cost of roughly `landings-since-fold × $0.018`. That is
+quadratic in the gap, so ~$100 over 50 stages at 90 landings deep. Folding is
+not housekeeping; it is the largest single lever on the run's bill.
+
 ## Where things live
 
 `nodes.py` holds the loop's decisions — which failures route to the executor,

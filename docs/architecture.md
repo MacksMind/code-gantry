@@ -297,6 +297,31 @@ of shell commands about to run unattended for hours.
 been fixed by a human.
 `status` reports where a run stopped and why.
 
+**Editing a document the run reads means `run`, not `resume`.** The plan tree
+and the repository's agent-facing conventions are both pinned to a sha taken at
+run start — `_doc_sha` is `plan_sha or base_sha` — and only the progress log
+splices live. So a resume after a fold reads the pre-fold checklists, and a
+resume after an `AGENTS.md` edit feeds the old conventions to all three roles,
+for the rest of the run. Both were caught by diffing the document at the frozen
+sha against the branch tip before resuming: 14,757 characters against 17,692 in
+the `AGENTS.md` case. That check is two commands and worth making a habit,
+because nothing in the run's output says which sha its documents came from.
+
+Everything already landed survives a restart — it is on the project branch, and
+a fresh run rebuilds its history from the progress log and `stage-costs.md`
+rather than from in-run memory. What restarting costs is the completed-stage
+block and a cold prompt cache, which is one prefix write.
+
+**Killing a run is second-best but not dangerous, and the danger is not where
+the docstring says.** `pause` is checked before each planner call, so the stage
+in flight lands or fails normally; that is the supported route. A kill taken
+while the run sits in the planner leaves a clean tree too — but a kill taken
+during verify orphaned an `rspec` inside the container holding an `idle in
+transaction` connection, and the next run's `db:test:purge` then refused to drop
+the test database. The half-applied executor edit the docstring warns about is
+the obvious hazard; a child process outliving the run and holding a lock is the
+one that actually stopped a resume.
+
 ### The denylist
 
 `validate` rejects any configured command matching a hardcoded denylist,
