@@ -317,7 +317,24 @@ priced" as often as it means "free"; and its cache accounting reads Anthropic's
 and DeepSeek's fields but never OpenAI's `prompt_tokens_details.cached_tokens`,
 so a silent zero there is the instrument, not the cache. Measured directly at
 the API: an identical 16k prefix caches at 99.9% on chat/completions with
-nothing configured.
+nothing configured — **and that figure does not cover the path the executor
+now takes.** It routes through `openai/responses/<model>`, and the measurement
+was made against chat/completions, which is the same substitution the rule two
+paragraphs up was written about: a fact established on the layer beside the one
+being called. Three artifacts were checked for a reading on the real path and
+none carries one — `aider-chat.md` reports `38k sent` with no cache fields,
+`aider-llm.txt` holds prompt and response text with no usage block at all, and
+our own accounting bills every token at full input price while
+`executor-model.json` declares a `cache_read_input_token_cost` it never
+applies. So the honest state is *unmeasured*, not *zero* and not *99.9%*.
+
+Left unmeasured deliberately, which is the part worth remembering. Executor
+spend is $3.30 across 152 recorded stages — median $0.0079 — against $199.15 of
+planner spend on a single run. A perfect cache discount there saves about the
+price of one planner call, so the measurement would buy a number with no
+decision attached to it. The instinct to close an open question is right about
+the question and wrong about the priority: what makes a reading worth taking is
+that something changes depending on the answer.
 
 **A figure in a document must name the artifact it came from.** Two cost
 numbers reached `docs/architecture.md` — "$15.13 a run", "$2.80" — in the same
