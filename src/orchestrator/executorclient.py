@@ -79,10 +79,36 @@ def _reasoning_param(cfg: ExecutorConfig) -> dict:
 class OpenAIExecutorModel:
     """Drives one edit cycle: the model calls tools until it stops."""
 
-    def __init__(self, cfg: ExecutorConfig, client=None, log=None):
+    def __init__(self, cfg: ExecutorConfig, client=None, log=None, tool_log=None):
         self.cfg = cfg
         self.log = log
+        # Its own file, like the other two roles. This one has never been in
+        # the run log at all and could not be: sixty calls a cycle would drown
+        # a timeline, which is why `nodes.execute` reports counts. The full
+        # exchange with results is still the per-attempt transcript; this is
+        # the one-line-per-call view, in the same file the planner and reviewer
+        # write to, so one `tail -f` shows every role.
+        self.tool_log = tool_log
         self._client = client if client is not None else build_openai_client(cfg)
+
+    def _log_new_calls(self, reader, editor, seen: int) -> int:
+        """Emit the calls made since `seen`; return the new watermark.
+
+        Two ledgers, because reads and edits are recorded by different objects
+        — `_count_tool_use` merges the same pair for the summary line. Order
+        within a turn is reads then edits rather than the true interleaving,
+        which the split ledgers cannot recover; the turn boundary is preserved
+        and that is what a reader following along actually needs.
+        """
+        calls = list(getattr(reader, "calls", []) or []) + list(
+            getattr(editor, "calls", []) or []
+        )
+        if self.tool_log:
+            from orchestrator.planner import _render_call
+
+            for call in calls[seen:]:
+                self.tool_log(f"[execute] {_render_call(call)}")
+        return len(calls)
 
     def _max_turns(self) -> int:
         """Backstop, not the real ceiling.
@@ -111,6 +137,8 @@ class OpenAIExecutorModel:
         """
         out = ExecutorTurn()
         tools = openai_tool_schemas(semantic)
+        # Both ledgers, cumulative across the turns of one attempt.
+        logged = len(reader.calls) + len(editor.calls)
 
         extra: dict = {
             # GPT-5.6 caches at breakpoints and does not fall back to the
@@ -205,6 +233,7 @@ class OpenAIExecutorModel:
                         ],
                     }
                 )
+            logged = self._log_new_calls(reader, editor, logged)
 
         # Ran out of turns with the model still asking for things. Not a
         # failure of the work — whatever it committed stands and the gates will

@@ -81,6 +81,17 @@ class RunPaths:
         return self.run_dir / "run.log"
 
     @property
+    def tool_log(self) -> Path:
+        """Every role's reads, live, kept out of the timeline.
+
+        `run.log` is a timeline of node transitions and decisions and its
+        reader is a person reconstructing why a run stopped; the planner alone
+        makes ~25 reads a decision. One file per run rather than per decision,
+        because that is what `tail -f` wants.
+        """
+        return self.run_dir / "tools.log"
+
+    @property
     def report(self) -> Path:
         return self.run_dir / "report.md"
 
@@ -380,6 +391,7 @@ def build_runtime(
     planner: PlannerClient,
     reviewer: ReviewerClient,
     log: Callable[[str], None] | None = None,
+    tool_log: Callable[[str], None] | None = None,
 ) -> Runtime:
     # First, so a run holds every module it can reach before it starts. See
     # `pin_modules`: without this, editing the codebase during a live run can
@@ -393,6 +405,11 @@ def build_runtime(
     for client in (planner, reviewer):
         if hasattr(client, "log"):
             client.log = logger
+        # Reads go to their own file so the timeline stays a timeline. Absent
+        # in tests that build a runtime directly, where the fallback to the run
+        # log is what keeps the reporting visible at all.
+        if tool_log is not None and hasattr(client, "tool_log"):
+            client.tool_log = tool_log
     # The planner cannot check its own stage against project rules — they live
     # in config, and the schema has no way to express "this string compiles as
     # a regex". Told what is wrong it can usually fix it in one more call; not

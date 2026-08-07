@@ -31,7 +31,11 @@ from orchestrator.addendum import (
 )
 from orchestrator.commands import clip_for_model
 from orchestrator.config import Stage, validate_stage
-from orchestrator.executor import ExcerptError, resolve_excerpts
+from orchestrator.executor import (
+    TRANSCRIPT_FILENAME,
+    ExcerptError,
+    resolve_excerpts,
+)
 from orchestrator.flake import adjudicate, append_flakes, predates_stage
 from orchestrator.gitops import GitError
 from orchestrator.globs import matches_any
@@ -669,7 +673,6 @@ def execute(state: RunState, rt: Runtime) -> dict:
             state["stage_index"], stage.id, state.get("revision", 0), attempt,
             "prompt.md", prompt,
         )
-        rt.log(f"[execute] {stage.id}: attempt {attempt}")
         # The attempt's artifacts — the conversation, the prompt as sent, the
         # loop's own record. Kept per attempt because the first thing worth
         # reading when a stage does something inexplicable is what it was
@@ -678,6 +681,14 @@ def execute(state: RunState, rt: Runtime) -> dict:
             state["stage_index"], stage.id, state.get("revision", 0), attempt
         )
         history_dir.mkdir(parents=True, exist_ok=True)
+        # Named, because the one-line-per-call view in `tools.log` is not the
+        # whole record: this file carries the results too, and it is the thing
+        # to open when an attempt did something inexplicable. Until this line
+        # an operator had to derive the directory to find it.
+        rt.log(
+            f"[execute] {stage.id}: attempt {attempt} — "
+            f"{history_dir / TRANSCRIPT_FILENAME}"
+        )
         result = rt.executor.run_agent_stage(
             stage,
             prompt,

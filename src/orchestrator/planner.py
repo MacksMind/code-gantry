@@ -539,6 +539,8 @@ class AnthropicPlanner:
         # always been.
         self.reader = reader
         self.semantic = semantic
+        # Bound by `build_runtime`. Reads go here rather than to the run log.
+        self.tool_log = None
 
     def _tool_log(self) -> list[str]:
         """What was looked at, for the run log.
@@ -566,9 +568,14 @@ class AnthropicPlanner:
         renderer for the same reason `number_lines` is.
         """
         calls = list(getattr(self.reader, "calls", []) or [])
-        if self.log:
+        # The tool log when one is bound, the run log otherwise. `run.log` is a
+        # timeline of node transitions and decisions, and ~25 reads a decision
+        # turns it into a feed; a planner built outside `build_runtime` still
+        # reports rather than losing its output to an unbound attribute.
+        sink = getattr(self, "tool_log", None) or self.log
+        if sink:
             for call in calls[seen:]:
-                self.log(f"[plan] {_render_call(call)}")
+                sink(f"[plan] {_render_call(call)}")
         return len(calls)
 
     def _reads_answered(self) -> int:

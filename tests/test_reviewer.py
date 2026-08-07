@@ -128,7 +128,15 @@ def tool_response(name, arguments, call_id="call_1"):
 
 
 class StubReader:
-    """Stands in for `RepoReader`. Records what it was asked for."""
+    """Stands in for `RepoReader`. Records what it was asked for.
+
+    It keeps a ledger because the real one does, and because `review.json` is
+    now built from that ledger rather than from the request — so a stub that
+    declared `calls` and never wrote to it would report nothing while the real
+    reader reports everything. That is the helper-laxer-than-the-node problem
+    the project instructions name: the divergence surfaces as an assertion
+    about the feature, which is the confusing way for it to arrive.
+    """
 
     def __init__(self, text="file contents"):
         self.text = text
@@ -136,7 +144,13 @@ class StubReader:
         self.calls = []
 
     def read_file(self, path, start=None, end=None):
+        from orchestrator.repotools import ToolCall
+
         self.asked.append(path)
+        detail = path if start is None and end is None else f"{path}:{start}-{end}"
+        self.calls.append(
+            ToolCall(tool="read_file", detail=detail, lines=self.text.count("\n") + 1)
+        )
         return self.text
 
 
@@ -584,8 +598,11 @@ class TestToolLoop:
         out = OpenAIReviewer(
             cfg_with().reviewer, client=client, reader=StubReader()
         ).review(MESSAGES)
-        assert out.tool_calls == ["read_file(app/models/cart.rb)"]
-        assert out.as_dict()["tool_calls"] == ["read_file(app/models/cart.rb)"]
+        # The line count is the point of reading from the ledger: the request
+        # alone could not say whether anything came back.
+        assert out.tool_calls == ["read_file(app/models/cart.rb) -> 1 line(s)"]
+        # And the artifact carries the same string, not a second rendering.
+        assert out.as_dict()["tool_calls"] == out.tool_calls
 
     def test_usage_is_summed_across_turns(self):
         # A tool loop bills once per turn. Reporting only the last one
@@ -644,6 +661,6 @@ class TestToolLoop:
         ).review(MESSAGES)
         assert out.verdict == "blocked"
         assert out.failed
-        assert out.tool_calls == ["read_file(a.rb)"]
+        assert out.tool_calls == ["read_file(a.rb) -> 1 line(s)"]
         # The first turn's tokens were still spent and must still be reported.
         assert out.usage.prompt_tokens == 100

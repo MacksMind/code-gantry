@@ -506,6 +506,9 @@ def _drive(
 ) -> int:
     saver, conn = open_checkpointer(paths.state_db)
     log = RunLog(paths.run_log)
+    # Its own file, and deliberately not echoed: the terminal carries the
+    # timeline, and this is what the timeline is being kept free of.
+    tools = RunLog(paths.tool_log, echo=None)
     # Non-blocking preflight findings, repeated into the run log. They are
     # already printed to stdout, which for an unattended run is a nohup file
     # nobody opens unless something has gone wrong — so a warning that only
@@ -521,7 +524,11 @@ def _drive(
             planner=make_planner(cfg.planner, cfg.target_repo),
             reviewer=make_reviewer(cfg.reviewer, cfg.target_repo),
             log=log,
+            tool_log=tools,
         )
+        # Said once, in the timeline, so the file is discoverable without
+        # knowing it exists. A log nobody can find is not visibility.
+        log(f"[run] tool reads are streaming to {paths.tool_log}")
         graph = build_graph(rt, checkpointer=saver)
         final = graph.invoke(
             graph_input,
@@ -553,6 +560,7 @@ def _drive(
         raise
     finally:
         log.close()
+        tools.close()
         conn.close()
 
     report = build_report(final, cfg)

@@ -160,7 +160,51 @@ class OpenAIReviewer:
         # reviewer judges from the diff alone as it always did.
         self.reader = reader
         self.semantic = semantic
+        # Bound by `build_runtime`; see the planner's.
+        self.tool_log = None
         self._client = client if client is not None else _build_openai_client(cfg)
+
+    def _looked_at(self) -> list[str]:
+        """What the reviewer read, from the ledger rather than the request.
+
+        This was built at the call site from the arguments, before dispatch
+        ran, so the artifact recorded that a call was *made* and nothing about
+        what came back — neither the size of the answer nor whether there was
+        one. A reviewer cut off by its read budget produced a `review.json`
+        identical to one that stopped because it was satisfied, so asked how
+        often the 25-call cap bound across 331 reviews, the artifact could not
+        say.
+
+        That is exactly what `ToolCall.refusal` exists for one layer down, and
+        its docstring already argues it: "a cap whose binding cannot be
+        observed cannot be tuned."
+
+        `_render_call` is the planner's, imported rather than restated. Two
+        renderings of one ledger is how they drift, and these two had — the
+        planner's carried the line count and the refusal, the reviewer's
+        carried neither.
+        """
+        from orchestrator.planner import _render_call
+
+        return [_render_call(c) for c in getattr(self.reader, "calls", []) or []]
+
+    def _log_new_calls(self, seen: int) -> int:
+        """Emit the reads made since `seen`; return the new watermark.
+
+        The planner's, one role over, and for the same reason: until the
+        verdict came back there was no way to tell a gate reading seven files
+        from one reading none. Shorter here — reviews ran 29 to 66 seconds
+        against derivations of 3 to 20 minutes — and nearly free, because
+        `_looked_at` already renders the ledger.
+        """
+        calls = list(getattr(self.reader, "calls", []) or [])
+        sink = getattr(self, "tool_log", None) or self.log
+        if sink:
+            from orchestrator.planner import _render_call
+
+            for call in calls[seen:]:
+                sink(f"[review] {_render_call(call)}")
+        return len(calls)
 
     def _max_tool_turns(self) -> int:
         """The reader's own call budget is the real ceiling.
@@ -199,8 +243,9 @@ class OpenAIReviewer:
         tools = openai_tool_schemas(self.semantic) if self.reader else []
         conversation = list(messages)
         usage = TokenUsage()
-        looked_at: list[str] = []
         response = None
+        # The ledger is cumulative, so each turn reports only what it added.
+        logged = len(getattr(self.reader, "calls", []) or [])
 
         # One turn per tool round trip, plus one for the answer.
         for _ in range(self._max_tool_turns() + 1):
@@ -228,7 +273,7 @@ class OpenAIReviewer:
             except Exception as e:  # noqa: BLE001 - any failure means "no verdict"
                 outcome = _blocked(f"The reviewer call failed: {e}")
                 outcome.usage = usage
-                outcome.tool_calls = looked_at
+                outcome.tool_calls = self._looked_at()
                 return outcome
 
             usage = _merge_usage(usage, _extract_usage(getattr(response, "usage", None)))
@@ -251,7 +296,6 @@ class OpenAIReviewer:
             conversation.extend(getattr(response, "output", None) or [])
             for item in requests:
                 name, args = _tool_request(item)
-                looked_at.append(_describe(name, args))
                 conversation.append(
                     {
                         "type": "function_call_output",
@@ -278,6 +322,8 @@ class OpenAIReviewer:
                         ],
                     }
                 )
+            # After the batch has run, before the next request goes out.
+            logged = self._log_new_calls(logged)
 
         if response is None:  # pragma: no cover - the loop always runs once
             return _blocked("The reviewer produced no response.")
@@ -286,7 +332,7 @@ class OpenAIReviewer:
         if refusal:
             outcome = _blocked(f"The reviewer refused to answer: {refusal}")
             outcome.usage = usage
-            outcome.tool_calls = looked_at
+            outcome.tool_calls = self._looked_at()
             return outcome
 
         if getattr(response, "status", None) == "incomplete":
@@ -300,7 +346,7 @@ class OpenAIReviewer:
                 "verdict cannot be trusted."
             )
             outcome.usage = usage
-            outcome.tool_calls = looked_at
+            outcome.tool_calls = self._looked_at()
             return outcome
 
         parsed = getattr(response, "output_parsed", None)
@@ -310,7 +356,7 @@ class OpenAIReviewer:
             # that ran out of turns must say so rather than look like a refusal.
             outcome = _blocked("The reviewer returned no parsable verdict.")
             outcome.usage = usage
-            outcome.tool_calls = looked_at
+            outcome.tool_calls = self._looked_at()
             return outcome
 
         return ReviewOutcome(
@@ -321,7 +367,7 @@ class OpenAIReviewer:
             observations=list(getattr(parsed, "observations", None) or []),
             usage=usage,
             failed=False,
-            tool_calls=looked_at,
+            tool_calls=self._looked_at(),
         )
 
 
