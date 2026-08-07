@@ -54,6 +54,44 @@ class ToolError(Exception):
     """A refusal the planner is allowed to see and work around."""
 
 
+SEPARATOR = " | "
+"""What divides a line number from the line.
+
+It may not be whitespace, and for most of this project's life it was: two
+spaces, against indentation that is also spaces. A line indented by two arrived
+as four with nothing marking where ours stopped and the file's began, so a model
+quoting it back into an `edit` quoted our padding as code and the edit was
+refused for text the file does not contain.
+
+Measured over 117 refused `old_string`s on one run: 74 — 63% — matched the file
+exactly once two spaces were stripped from every line. That is not a model
+misremembering what it read. The median gap between reading a file and failing
+to edit it was zero conversation items; it read what we sent and reproduced it
+faithfully, and what we sent was ambiguous.
+"""
+
+
+def number_lines(lines: list[str], first: int = 1) -> str:
+    """Lines, numbered, in the one format every part of this system uses.
+
+    Three places rendered this and each held its own copy of the format string —
+    here, the nearest-match window in an edit refusal, and the planner's
+    excerpts. The refusal's own message tells the model those bytes are
+    "numbered as `read_file` numbers them", which was a promise nothing enforced.
+    A format that appears in three literals drifts while every test stays green,
+    so it appears in one.
+
+    An empty line drops the trailing pad. Nothing else is trimmed: a line whose
+    content is whitespace still has that content, and a rendering that lied in
+    that direction would be the same class of defect as the one it replaces.
+    """
+    out = []
+    for i, line in enumerate(lines):
+        numbered = f"{first + i:>5}{SEPARATOR}{line}"
+        out.append(numbered if line else numbered.rstrip())
+    return "\n".join(out)
+
+
 @dataclass
 class ReadBudget:
     """Ceilings on what one planning call may pull into context.
@@ -289,7 +327,7 @@ class RepoReader:
         chosen = body[first - 1 : last] if first <= last else []
         chosen, clipped = self._clip(chosen)
 
-        numbered = "\n".join(f"{first + i:>5}  {line}" for i, line in enumerate(chosen))
+        numbered = number_lines(chosen, first)
         if clipped:
             numbered += f"\n... truncated at {len(chosen)} lines; ask for a narrower range"
         return self._spend("read_file", rel, numbered)

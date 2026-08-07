@@ -28,7 +28,13 @@ import subprocess
 import pytest
 
 from orchestrator.gitops import Git
-from orchestrator.repotools import ReadBudget, RepoReader, ToolError
+from orchestrator.repotools import (
+    SEPARATOR,
+    ReadBudget,
+    RepoReader,
+    ToolError,
+    number_lines,
+)
 
 
 @pytest.fixture
@@ -94,6 +100,72 @@ class TestReadFile:
         # result reads as "no matches"; the planner must learn it was wrong.
         with pytest.raises(ToolError, match="does not exist"):
             reader(repo).read_file("spec/requests/godata_spec.rb")
+
+
+class TestTheLineNumberSeparator:
+    """Whether a reader can tell our prefix from the file's own indentation.
+
+    For most of this project's life it could not. The separator was two spaces
+    and indentation is spaces, so a line indented by two arrived as four with
+    nothing marking the boundary, and a model quoting it back into an `edit`
+    quoted our padding as if it were code. Measured over 117 refused
+    `old_string`s on one run, 74 — 63% — matched the file exactly once two
+    spaces were removed from every line. That is not the model misremembering:
+    the median gap between reading a file and failing to edit it was zero
+    conversation items. It read what we sent and reproduced it faithfully.
+
+    A non-space delimiter is the whole fix, and these tests are about the
+    property rather than the character: the prefix must be unambiguous, and a
+    blank line must come back blank rather than carrying the separator as
+    trailing whitespace.
+    """
+
+    def test_the_file_bytes_are_recoverable_from_the_rendering(self, repo):
+        # The property the model needs and did not have. Whatever the prefix
+        # is, taking everything after the delimiter must give back the line.
+        indented = repo / "app" / "controllers" / "orders_controller.rb"
+        original = indented.read_text().splitlines()
+        out = reader(repo).read_file("app/controllers/orders_controller.rb")
+        for rendered, source in zip(out.splitlines(), original, strict=True):
+            assert rendered.split(SEPARATOR, 1)[1] == source
+
+    def test_the_separator_is_not_whitespace(self, repo):
+        # The one thing it may not be, for the reason in the docstring.
+        assert not SEPARATOR.strip() == ""
+
+    def test_a_blank_line_carries_no_trailing_whitespace(self):
+        # Under the old format a blank line rendered as ` 1470  ` — the
+        # separator became trailing whitespace on a line with no content, so
+        # quoting a range that spanned one failed on the emptiest line in it.
+        blank = number_lines(["one", "", "three"]).splitlines()[1]
+        assert blank == blank.rstrip()
+
+    def test_real_trailing_whitespace_survives(self):
+        # The rendering may not lie about the file in the other direction
+        # either. Only an empty line loses the pad; a line whose content is
+        # whitespace still has that content, and trimming it would be the same
+        # class of defect as the one this replaces.
+        out = number_lines(["one   "])
+        assert out.split(SEPARATOR, 1)[1] == "one   "
+
+    def test_every_renderer_in_the_codebase_agrees(self, repo):
+        # Three places number lines: this one, the nearest-match window in a
+        # refusal — whose message tells the model the bytes are "numbered as
+        # `read_file` numbers them" — and the planner's excerpts. They were
+        # three copies of one format string, which is how a format drifts while
+        # every test stays green. They are one function now and this is what
+        # says so.
+        from orchestrator import edittools, executor
+
+        assert edittools.number_lines is number_lines
+        assert executor.number_lines is number_lines
+
+    def test_numbers_are_right_aligned_so_the_text_starts_in_one_column(self):
+        # Ragged numbering would reintroduce the problem it fixes: the model
+        # would be reading the indentation of the *rendering* rather than of
+        # the file.
+        out = number_lines(["a", "b"], first=9).splitlines()
+        assert len(out[0].split(SEPARATOR)[0]) == len(out[1].split(SEPARATOR)[0])
 
 
 class TestConfinement:

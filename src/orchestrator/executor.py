@@ -33,6 +33,7 @@ from orchestrator.commands import (
 from orchestrator.config import ProjectConfig, Stage
 from orchestrator.gitops import Git, GitError
 from orchestrator.globs import matches_any
+from orchestrator.repotools import number_lines
 
 # The flags we build. preflight checks each of these against `aider --help`
 # so a release that renamed one fails validation instead of stage 1.
@@ -934,10 +935,7 @@ def resolve_excerpts(
             label += f" (clipped from {first}-{last} by max_read_lines)"
         if ex.note:
             label += f" — {ex.note}"
-        numbered = "\n".join(
-            f"{first + i:>5}  {line}" for i, line in enumerate(chosen)
-        )
-        out.append((label, numbered))
+        out.append((label, number_lines(chosen, first)))
     return out
 
 

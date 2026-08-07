@@ -33,6 +33,9 @@ READ_TOOLS: list[dict[str, Any]] = [
         "description": (
             "Read a tracked file, or a range of its lines. Output is line "
             "numbered so you can cite what you saw.\n\n"
+            "Each line reads `<number> | <the line>`. Everything after the "
+            "`| ` is the file's own bytes, indentation included; everything "
+            "before it is ours. A blank line in the file is blank here.\n\n"
             "This is how a lead becomes a fact. Before you assert that a file "
             "contains something, that a spec covers something, or that a count "
             "is correct, read the lines and see."

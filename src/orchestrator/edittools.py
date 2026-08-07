@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from orchestrator.globs import matches_any
-from orchestrator.repotools import ToolCall, ToolError
+from orchestrator.repotools import ToolCall, ToolError, number_lines
 
 
 @dataclass(frozen=True)
@@ -216,10 +216,15 @@ def _best_window(
 
 
 def _window(lines: list[str], at: int, span: int) -> str:
-    """Numbered exactly as `read_file` numbers, so it reads the same way."""
+    """Numbered exactly as `read_file` numbers, so it reads the same way.
+
+    Which is now enforced rather than promised — the refusal message says these
+    bytes are numbered the way `read_file` numbers them, and it says so to a
+    model that is about to quote them back.
+    """
     start = max(at - 1, 0)
     chosen = lines[start : start + span]
-    return "\n".join(f"{start + 1 + i:>5}  {line}" for i, line in enumerate(chosen))
+    return number_lines(chosen, start + 1)
 
 
 def apply_edits(

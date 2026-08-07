@@ -26,9 +26,10 @@ from orchestrator.executor import (
     shield_path_mentions,
 )
 from orchestrator.gitops import Git
+from orchestrator.repotools import SEPARATOR
 
 
-BASE_STAGE = {"id": "s1", "instruction": "do it", "edit_files": ["app/**", "src/*.py"]}
+BASE_STAGE ={"id": "s1", "instruction": "do it", "edit_files": ["app/**", "src/*.py"]}
 
 
 def cfg_with(stage_overrides=None, **cfg_overrides):
@@ -235,7 +236,11 @@ class TestReadContextBudget:
         assert len(got) == 1
         label, text = got[0]
         assert label == "huge.rb:40-44 — why"
-        assert text.splitlines()[0].startswith("   40  ")
+        # Numbered from the range's own start, not from 1 — the executor is
+        # told to match a line and a number that does not name the file's line
+        # is worse than no number. The rendering itself is `number_lines`'
+        # business and is pinned there.
+        assert text.splitlines()[0].startswith(f"   40{SEPARATOR}")
         assert len(text.splitlines()) == 5
 
     def test_reference_files_and_excerpts_share_one_budget(self, tmp_path):
