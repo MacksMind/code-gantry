@@ -1559,3 +1559,45 @@ class TestTheConventionsAreFramedForWhoReadsThem:
 
         assert _conventions_block(None, role="executor") == ""
         assert _conventions_block("   ") == ""
+
+
+class TestTheTwoBehaviouralRulesTheOldEditorHad:
+    """Both were in the editor this replaces, and neither is about format.
+
+    Its prompt was mostly SEARCH/REPLACE syntax, which a tool call makes
+    unnecessary — dropping that is the point. But two of its rules were about
+    conduct rather than encoding, and dropping those was an oversight:
+    `lazy_prompt` ("NEVER leave comments describing code without implementing
+    it") and `overeager_prompt` ("Do what they ask, but no more").
+
+    Worded here as facts about this system rather than as exhortation. "A
+    change outside what the stage asked for is rejected" is checkable against
+    the reviewer's behaviour; "Do not improve... in any way!" is shouting.
+    """
+
+    def test_a_placeholder_is_named_as_not_being_a_change(self, tmp_path):
+        from orchestrator.prompts import _executor_system_prompt
+
+        text = _executor_system_prompt(_exec_cfg(tmp_path))
+        assert "TODO" in text
+        assert "is not a change" in text
+        # And the honest alternative, so "stop" is a real option rather than
+        # the model's only out being a stub.
+        assert "say so " in text and "reaches a human" in text
+
+    def test_scope_within_a_permitted_file_is_named_as_the_models_own(self, tmp_path):
+        # The tool enforces file-level scope and cannot enforce this one, so
+        # the prompt has to say which half is which — otherwise "scope is
+        # refused at the tool" reads as covering everything.
+        from orchestrator.prompts import _executor_system_prompt
+
+        text = _executor_system_prompt(_exec_cfg(tmp_path))
+        assert "Within a file it may legitimately edit" in text
+        assert "rejected even when it is an improvement" in text
+
+    def test_neither_rule_names_a_projects_vocabulary(self, tmp_path):
+        from orchestrator.prompts import _executor_system_prompt
+
+        text = _executor_system_prompt(_exec_cfg(tmp_path)).lower()
+        for word in ("rails", "rspec", "rubocop", "ruby", "python", ".rb"):
+            assert word not in text, word
