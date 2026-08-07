@@ -1,0 +1,168 @@
+"""One test selection, asked two ways.
+
+The executor's inner loop and the verify gate both need "which tests does this
+stage need". They asked separately for most of this project's life and drifted
+in five places, each drift correct for its own caller and invisible to the
+other. These tests pin the differences *against each other*, in the same file
+and where possible in the same test, so that changing one and not the other
+fails here rather than in a run.
+"""
+
+from orchestrator.config import Stage, parse_config
+from orchestrator.gates import resolve_test_command, resolve_test_paths
+from orchestrator.gitops import Git
+
+
+def build(repo, stage_overrides=None, **cfg_overrides):
+    data = {
+        "target_repo": str(repo),
+        "base_ref": "main",
+        "project_branch": "proj",
+        "plan_root": "PLAN.md",
+        "test_command": "full-suite",
+        "executor": {"model": "m"},
+        "planner": {"model": "claude-opus-5"},
+        "reviewer": {"model": "gpt-5.5"},
+    }
+    data.update(cfg_overrides)
+    cfg = parse_config(data)
+
+    fields = {"id": "s1", "instruction": "do it", "edit_files": ["app.py", "src/**"]}
+    fields.update(stage_overrides or {})
+    return cfg, Stage(**fields)
+
+
+class TestTheTwoCallersDifferOnPurpose:
+    def test_a_path_the_stage_may_create_is_kept_by_the_loop_and_dropped_by_the_gate(
+        self, repo
+    ):
+        """The single most important difference, asserted in one place.
+
+        The loop runs *after* the edits, so a spec the stage was told to write
+        will be there by the time the command runs. The gate runs after too,
+        but it has the diff to tell it what actually appeared, and a declared
+        path that never materialised is not a test — running the full suite
+        instead is slow but true.
+
+        Kept unconditionally on the gate's side, a path the stage cannot create
+        is a command that can never pass. Observed live: a planner declared two
+        spec paths for a repository containing neither, and the attempt hung on
+        a 77,000-token fix while the gate dropped the same two paths and ran
+        the whole suite green.
+        """
+        cfg, stage = build(
+            repo,
+            {
+                "test_paths": ["spec/not_yet_spec.rb"],
+                "edit_files": ["spec/not_yet_spec.rb"],
+            },
+            scoped_test_command="rspec {paths}",
+        )
+        sha = Git(repo).head_sha()
+
+        loop = resolve_test_paths(stage, cfg, for_loop=True)
+        gate = resolve_test_paths(stage, cfg, Git(repo), sha, for_loop=False)
+
+        assert loop == ["spec/not_yet_spec.rb"]
+        assert gate == []
+
+    def test_a_path_the_stage_could_not_create_is_dropped_by_both(self, repo):
+        # The keep rule is evidence-based, not permissive. A declared path
+        # outside `edit_files` on a stage with no test requirement is one the
+        # planner guessed at, and neither caller should run it.
+        cfg, stage = build(
+            repo,
+            {"test_paths": ["spec/phantom_spec.rb"], "edit_files": ["app.py"]},
+            scoped_test_command="rspec {paths}",
+        )
+        sha = Git(repo).head_sha()
+
+        assert resolve_test_paths(stage, cfg, for_loop=True) == []
+        assert resolve_test_paths(stage, cfg, Git(repo), sha, for_loop=False) == []
+
+    def test_only_the_loop_adds_the_tests_the_stage_may_edit(self, repo):
+        # The gate does not need them: if the stage touched a test file, it is
+        # in the diff and arrives that way.
+        (repo / "spec").mkdir(exist_ok=True)
+        (repo / "spec" / "thing_spec.rb").write_text("describe\n")
+        Git(repo).commit_all("spec")
+        sha = Git(repo).head_sha()
+
+        cfg, stage = build(
+            repo,
+            {"edit_files": ["spec/thing_spec.rb"]},
+            scoped_test_command="rspec {paths}",
+        )
+
+        assert resolve_test_paths(stage, cfg, for_loop=True) == ["spec/thing_spec.rb"]
+        assert resolve_test_paths(stage, cfg, Git(repo), sha, for_loop=False) == []
+
+    def test_nothing_to_run_means_no_loop_but_the_full_suite_at_the_gate(self, repo):
+        """The fifth difference, and the one that reads backwards.
+
+        A command that can never pass is worse than no command, because the
+        attempt ends believing it succeeded. The gate has the opposite problem
+        and the opposite answer: running nothing and calling it green is the
+        failure there, so it falls back to the whole suite.
+        """
+        cfg, stage = build(repo, scoped_test_command="rspec {paths}")
+        sha = Git(repo).head_sha()
+
+        assert resolve_test_command(stage, cfg, for_loop=True) is None
+        assert (
+            resolve_test_command(stage, cfg, Git(repo), sha, for_loop=False)
+            == "full-suite"
+        )
+
+
+class TestWhatBothDoIdentically:
+    def test_an_unmatched_glob_is_dropped_by_both(self, repo):
+        # Left in, it reaches the runner as a literal asterisk and dies in
+        # three seconds — which the gate then reads as failing tests and
+        # charges to the executor's retry budget.
+        cfg, stage = build(
+            repo,
+            {"test_paths": ["spec/**/*nothing*_spec.rb"]},
+            scoped_test_command="rspec {paths}",
+        )
+        sha = Git(repo).head_sha()
+
+        assert resolve_test_paths(stage, cfg, for_loop=True) == []
+        assert resolve_test_paths(stage, cfg, Git(repo), sha, for_loop=False) == []
+
+    def test_both_swap_in_the_directory_command_on_the_same_input(self, repo):
+        (repo / "spec" / "models").mkdir(parents=True, exist_ok=True)
+        (repo / "spec" / "models" / "keep_spec.rb").write_text("x\n")
+        Git(repo).commit_all("specs")
+        sha = Git(repo).head_sha()
+
+        cfg, stage = build(
+            repo,
+            {"test_paths": ["spec/models"], "edit_files": ["spec/models"]},
+            scoped_test_command="rspec {paths}",
+            directory_test_command="rspec-dir {paths}",
+        )
+
+        assert resolve_test_command(stage, cfg, for_loop=True) == "rspec-dir spec/models"
+        assert (
+            resolve_test_command(stage, cfg, Git(repo), sha, for_loop=False)
+            == "rspec-dir spec/models"
+        )
+
+    def test_an_operator_named_loop_command_is_not_swapped(self, repo):
+        # An operator who named the loop's command meant that command. The
+        # gate has no equivalent override, so this asymmetry is the loop's
+        # alone.
+        (repo / "spec" / "models").mkdir(parents=True, exist_ok=True)
+        (repo / "spec" / "models" / "keep_spec.rb").write_text("x\n")
+        Git(repo).commit_all("specs")
+
+        cfg, stage = build(
+            repo,
+            {"test_paths": ["spec/models"], "edit_files": ["spec/models"]},
+            auto_test_command="loop-cmd {paths}",
+            scoped_test_command="rspec {paths}",
+            directory_test_command="rspec-dir {paths}",
+        )
+
+        assert resolve_test_command(stage, cfg, for_loop=True) == "loop-cmd spec/models"

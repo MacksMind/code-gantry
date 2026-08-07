@@ -27,6 +27,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from enum import Enum
 
+from orchestrator import gates
 from orchestrator.commands import CommandResult, CommandRunner, clip_for_model
 from orchestrator.config import ProjectConfig, Stage
 from orchestrator.flake import adjudicate
@@ -631,75 +632,16 @@ def _record_full_suite(ctx: _Context, outcome: VerifyOutcome, command: str) -> N
 def resolve_test_command(
     stage: Stage, cfg: ProjectConfig, git: Git, stage_start_sha: str
 ) -> str | None:
-    """Which test command to run for this stage.
+    """Which test command the gate runs for this stage.
 
-    When `scoped_test_command` is configured, iteration runs only the specs the
-    stage actually affects — the paths from the diff, plus any the planner
-    declared it expected to affect. The planner supplies paths; the operator
-    supplies the command. That is how per-stage scoping happens without a model
-    authoring shell.
+    The selection itself lives in `gates.py`, shared with the executor's inner
+    loop, because the two used to decide separately and drifted. This wrapper
+    is the gate's spelling of the question — `for_loop=False` — and exists so
+    the call sites and their tests keep naming what they have always named.
     """
-    if stage.test_command:
-        return stage.test_command
-
-    if cfg.scoped_test_command:
-        paths = _scoped_test_paths(stage, cfg, git, stage_start_sha)
-        if paths:
-            command = cfg.scoped_test_command
-            if cfg.directory_test_command and any(
-                (cfg.target_repo / p).is_dir() for p in paths
-            ):
-                command = cfg.directory_test_command
-            return command.format(paths=" ".join(paths))
-        # Nothing identifiable to scope to: fall through to the full command
-        # rather than running an empty selection and calling it green.
-
-    return cfg.test_command
-
-
-def _resolve_declared(paths: list[str], repo: Path) -> list[str]:
-    """Turn the planner's declared paths into ones that exist.
-
-    The planner writes globs, and it should: it cannot know the repository's
-    file list, so `spec/controllers/**/*billing*` is a reasonable way to say
-    "the billing controller specs". But an unmatched glob substituted into a
-    command reaches the test runner as a literal asterisk, and rspec dies on it
-    in three seconds — which verify then reads as the stage's tests failing and
-    charges to the executor's retry budget. Three seconds is not a test run,
-    and nothing noticed.
-
-    So globs are expanded here and anything that does not exist is dropped.
-    Dropping everything is fine: `resolve_test_command` falls back to the full
-    command, which is slow but true.
-    """
-    out: list[str] = []
-    for raw in paths:
-        path = (raw or "").strip()
-        if not path:
-            continue
-        if any(ch in path for ch in "*?["):
-            out.extend(
-                sorted(str(m.relative_to(repo)) for m in repo.glob(path))
-            )
-        elif (repo / path).exists():
-            out.append(path)
-    return out
-
-
-def _scoped_test_paths(
-    stage: Stage, cfg: ProjectConfig, git: Git, stage_start_sha: str
-) -> list[str]:
-    changed = git.diff_names(stage_start_sha)
-    from_diff = [p for p in changed if matches_any(p, cfg.test_file_patterns)]
-    declared = _resolve_declared(stage.test_paths, cfg.target_repo)
-    # Deduplicate while preserving order, diff first: those definitely exist.
-    seen: set[str] = set()
-    out: list[str] = []
-    for path in from_diff + declared:
-        if path not in seen:
-            seen.add(path)
-            out.append(path)
-    return out
+    return gates.resolve_test_command(
+        stage, cfg, git, stage_start_sha, for_loop=False
+    )
 
 
  # --- layer 5: checks -----------------------------------------------------

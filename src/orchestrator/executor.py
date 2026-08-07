@@ -24,6 +24,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from orchestrator import gates
 from orchestrator.commands import CommandResult, CommandRunner
 from orchestrator.config import ProjectConfig, Stage
 from orchestrator.gitops import Git, GitError
@@ -437,7 +438,9 @@ def build_aider_argv(
     if api_base:
         argv += ["--openai-api-base", api_base]
 
-    test_command = _auto_test_command(stage, cfg) if ex.auto_test else None
+    test_command = (
+        gates.resolve_test_command(stage, cfg, for_loop=True) if ex.auto_test else None
+    )
     if test_command:
         argv += ["--test-cmd", test_command, "--auto-test"]
 
@@ -818,126 +821,3 @@ def _within_read_budget(read_files: list[str], cfg: ProjectConfig) -> list[str]:
         dropped.add(path)
         total -= sizes[path] or 0
     return [p for p in read_files if p not in dropped]
-
-
-def _runnable(path: str, stage: Stage, cfg: ProjectConfig) -> bool:
-    """Is this declared path worth putting in front of the inner loop?
-
-    Dropped only on positive evidence that it is not: a readable repository
-    that does not contain it, and a stage that cannot create it. A stage can
-    create it if the path is inside what it is allowed to write, or if it is
-    obliged to add tests and so may write specs it was not handed by name.
-
-    The repository check is deliberately a precondition rather than an
-    assumption. If `target_repo` cannot be read there is no evidence either
-    way, and inventing some by treating every path as absent would silently
-    switch the inner loop off for a whole project on the strength of a check
-    that never ran.
-    """
-    if not cfg.target_repo.is_dir():
-        return True
-    if (cfg.target_repo / path).exists():
-        return True
-    return stage.require_new_tests or matches_any(path, stage.edit_files)
-
-
-def _tests_the_stage_may_edit(stage: Stage, cfg: ProjectConfig) -> list[str]:
-    """The stage's own tests, added to whatever it declared.
-
-    Measured over one run of 35 stages: 12 declared no `test_paths` at all, so
-    a third of the run ran with no inner loop and paid a whole round trip — a
-    fresh process, re-reading the files — for every failure it could have fixed
-    in place. Those 12 averaged 1.42 attempts against 0.91 for the rest. In
-    every one of them the tests were already listed in `edit_files`, because a
-    coverage stage edits the spec it is proving.
-
-    Added rather than used as a fallback, which is the correction to the first
-    version of this. Declaring paths does not mean declaring the right ones: of
-    the 17 stages that declared some *and* edited a test file, 11 named a
-    different file than the one they were editing — including the worst stage
-    of that run, which reached attempt 4 editing a controller spec while its
-    inner loop ran two request specs. A loop that tests everything except the
-    file being rewritten is worse than none, because it reports green while the
-    edit is unverified. Between them the two shapes covered 23 of 35 stages.
-
-    So this reads a fact the stage already carries rather than asking the
-    planner to restate it. What counts as a test comes from
-    `test_file_patterns`, the same config the new-tests gate reads, so no
-    project's vocabulary reaches this file.
-
-    Plain paths only. A glob in `edit_files` may be `spec/**`, and expanding it
-    would hand Aider most of the suite — which it must never have, because it
-    knows nothing of `edit_files` and will edit whatever is red to make it
-    green. A stage whose tests are only reachable by glob keeps the old
-    behaviour of no inner loop, which is worse than a scoped one and much
-    better than a wrong one.
-    """
-    return [
-        path
-        for path in stage.edit_files
-        if not any(ch in path for ch in "*?[")
-        and matches_any(path, cfg.test_file_patterns)
-    ]
-
-
-def _auto_test_command(stage: Stage, cfg: ProjectConfig) -> str | None:
-    """The command Aider runs itself, after applying its edits.
-
-    Built from the stage's declared `test_paths`, falling back to the tests it
-    is allowed to edit when it declared none — see `_tests_the_stage_may_edit`,
-    which is where the reasoning for the fallback lives. Never the project's
-    full suite: Aider has no notion of `edit_files`, so faced with a red spec
-    outside the stage it will edit that spec, and a full suite gives it three
-    and a half minutes per pass to do so. Scoped, the inner loop is seconds and
-    confined to the specs the stage claims to prove.
-
-    Resolution differs from the verify layer's on purpose. A glob is a question
-    about files that exist, so an unmatched one is dropped — left in, it reaches
-    the runner as a literal and kills the loop. A plain path that does not exist
-    yet is kept *only when this stage could plausibly create it*: either it is
-    inside `edit_files`, or the stage is required to add tests. Aider runs this
-    after its edits, so a spec the stage was told to write will be there.
-
-    Kept unconditionally, as it was, a path the stage cannot create is a command
-    that can never pass. Aider reads the runner's "no such file" as a failing
-    test and spends its reflections repairing a file that will never exist.
-    Observed live: a planner that cannot grep the spec tree declared
-    `spec/requests/godata_spec.rb` and `spec/controllers/godata_controller_spec.rb`
-    for a repository containing no godata specs at all, and the attempt hung on
-    a 77,000-token fix. Verify dropped the same two paths and ran the whole
-    suite, which passed — so the edit was right the entire time and only the
-    inner loop was chasing a phantom.
-
-    No runnable paths means no inner loop, rather than one that cannot pass.
-    """
-    template_base = cfg.auto_test_command or cfg.scoped_test_command
-    if not template_base:
-        return None
-
-    paths: list[str] = []
-    for raw in stage.test_paths:
-        path = (raw or "").strip()
-        if not path:
-            continue
-        if any(ch in path for ch in "*?["):
-            paths.extend(
-                sorted(str(m.relative_to(cfg.target_repo)) for m in cfg.target_repo.glob(path))
-            )
-        elif _runnable(path, stage, cfg):
-            paths.append(path)
-
-    for path in _tests_the_stage_may_edit(stage, cfg):
-        if path not in paths:
-            paths.append(path)
-
-    if not paths:
-        return None
-
-    template = template_base
-    if (
-        cfg.auto_test_command is None
-        and cfg.directory_test_command
-        and any((cfg.target_repo / p).is_dir() for p in paths)
-    ):
-        template = cfg.directory_test_command
-    return template.format(paths=" ".join(paths))
