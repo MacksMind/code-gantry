@@ -210,9 +210,10 @@ def _recorded_answer(ctx: "_Context", layer: str, command: str | None) -> dict |
     resume-into-verify path — the whole human-in-the-loop tier — still tests
     everything: a hand-edit moves HEAD.
     """
-    if not getattr(ctx.cfg, "trust_executor_gates", False):
-        # The operator has not said the loop may answer for the gate. See
-        # `ProjectConfig.trust_executor_gates` for why that is the default.
+    if layer not in (getattr(ctx.cfg, "trust_executor_gates", None) or ()):
+        # The operator has not said the loop may answer for *this* layer. See
+        # `ProjectConfig.trust_executor_gates` for why that is the default, and
+        # why it is granted per layer rather than wholesale.
         return None
     record = (ctx.green_records or {}).get(layer)
     if not record:

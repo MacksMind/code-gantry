@@ -733,7 +733,22 @@ class ProjectConfig(_Strict):
     # Worth turning on once a run's worth of stages shows the gate never
     # disagreeing with the loop. Until then the duplication is what buys the
     # right to trust it, and 14s a stage is a cheap price for that.
-    trust_executor_gates: bool = False
+    #
+    # Named per layer, because that condition is met at different times for
+    # different layers and a single switch conflates them. Measured over 81
+    # verdicts after the executor rewrite: the gate disagreed about `tests`
+    # **12 times** and about `checks` **zero**. `checks` moved wholesale into
+    # the loop and commits there, so the gate re-asks a question already
+    # answered on the same bytes; `tests` diverges deliberately, because the
+    # gate adds test files from the diff and its set is a superset. As one
+    # boolean, the well-evidenced skip was unavailable without the contradicted
+    # one — and the contradicted one is the expensive layer, so the switch
+    # offered a minute a stage in exchange for the only check that catches a
+    # loop testing the wrong thing.
+    #
+    # Empty is the default and stays the default. Layer names are the ones
+    # `gate_records` uses: "checks", "tests", "patterns", "residue".
+    trust_executor_gates: list[str] = []
 
     # A reviewer leaves comments on the work in front of it. It does not ask for
     # the work again, and an author who cannot see their own diff is not in a

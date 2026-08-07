@@ -1403,7 +1403,7 @@ class TestTheGateDoesNotRepeatTheLoop:
     def test_a_recorded_pass_skips_the_run(self, repo):
         sha = Git(repo).head_sha()
         edit(repo)
-        cfg, stage = build(repo, test_command="exit 1", trust_executor_gates=True)
+        cfg, stage = build(repo, test_command="exit 1", trust_executor_gates=["tests"])
         out = verify(
             repo, cfg, stage, sha,
             green_records=self._record(repo, "exit 1"),
@@ -1413,7 +1413,7 @@ class TestTheGateDoesNotRepeatTheLoop:
     def test_a_recorded_failure_is_adopted_rather_than_repeated(self, repo):
         sha = Git(repo).head_sha()
         edit(repo)
-        cfg, stage = build(repo, test_command="exit 0", trust_executor_gates=True)
+        cfg, stage = build(repo, test_command="exit 0", trust_executor_gates=["tests"])
         out = verify(
             repo, cfg, stage, sha,
             green_records=self._record(
@@ -1434,7 +1434,7 @@ class TestTheGateDoesNotRepeatTheLoop:
         # a resume moves HEAD, so their work is always tested.
         sha = Git(repo).head_sha()
         edit(repo)
-        cfg, stage = build(repo, test_command="exit 1", trust_executor_gates=True)
+        cfg, stage = build(repo, test_command="exit 1", trust_executor_gates=["tests"])
         stale = {"tests": {"command": "exit 1", "head_sha": "0" * 40}}
         out = verify(repo, cfg, stage, sha, green_records=stale)
         assert not out.passed
@@ -1443,10 +1443,62 @@ class TestTheGateDoesNotRepeatTheLoop:
     def test_a_record_for_a_different_command_is_ignored(self, repo):
         sha = Git(repo).head_sha()
         edit(repo)
-        cfg, stage = build(repo, test_command="exit 1", trust_executor_gates=True)
+        cfg, stage = build(repo, test_command="exit 1", trust_executor_gates=["tests"])
         out = verify(
             repo, cfg, stage, sha,
             green_records=self._record(repo, "some other command"),
+        )
+        assert not out.passed
+
+    def test_trust_is_granted_per_layer_not_wholesale(self, repo):
+        """The evidence for trusting one layer is not evidence for another.
+
+        Measured over 81 verify verdicts on the run that followed the executor
+        rewrite: the gate disagreed with the loop about `tests` **12 times**
+        and about `checks` **zero** times. That is not two readings of the same
+        question. `checks` moved wholesale into the loop and commits there, so
+        the gate is asking a question already answered on the same bytes;
+        `tests` diverges by design, because the gate's path set adds test files
+        from the diff and is a superset of the loop's.
+
+        A single boolean made the cheap well-evidenced skip unavailable without
+        the expensive contradicted one — and the contradicted one is the
+        expensive layer, so the flag as built offered ~65s a stage in exchange
+        for the only check that catches a loop testing the wrong thing.
+        """
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(repo, test_command="exit 1", trust_executor_gates=["checks"])
+        out = verify(
+            repo, cfg, stage, sha,
+            green_records=self._record(repo, "exit 1"),
+        )
+        # `tests` is not trusted, so the failing command really runs.
+        assert not out.passed
+        assert out.failed_layer is Layer.TESTS
+
+    def test_a_trusted_layer_is_skipped_while_an_untrusted_one_runs(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(
+            repo, {"checks": ["exit 1"]},
+            test_command="exit 0", trust_executor_gates=["checks"],
+        )
+        out = verify(
+            repo, cfg, stage, sha,
+            green_records={"checks": {"command": "", "head_sha": Git(repo).head_sha()}},
+        )
+        # The check would have failed had it run; the record says the loop
+        # already got a green from it on these exact bytes.
+        assert out.passed
+
+    def test_naming_no_layers_trusts_none_of_them(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(repo, test_command="exit 1", trust_executor_gates=[])
+        out = verify(
+            repo, cfg, stage, sha,
+            green_records=self._record(repo, "exit 1"),
         )
         assert not out.passed
 
