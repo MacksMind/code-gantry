@@ -16,6 +16,8 @@ one.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from orchestrator.config import ProjectConfig, Stage
 from orchestrator.plandoc import PlanTree
 from orchestrator.planner import cache_control
@@ -1052,6 +1054,39 @@ def _failure_block(
     return "\n\n".join(parts)
 
 
+def _system_prompt_override(cfg: ProjectConfig | None) -> str:
+    """An operator's own system prompt, if they wrote one.
+
+    A path in config, read here, rather than the text in config — the same
+    rule that says config holds the path and not the copy. Replaces the
+    built-in rather than appending to it: two statements of the tool contract
+    in one prompt leave no way to tell which the model followed.
+
+    A configured file that cannot be read is a silent fallback to the default,
+    which is the wrong failure. It raises, because an operator who named a file
+    meant that file.
+    """
+    if cfg is None:
+        return ""
+    named = getattr(getattr(cfg, "executor", None), "system_prompt_file", None)
+    if not named:
+        return ""
+    path = Path(cfg.target_repo) / named
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except OSError as e:
+        raise FileNotFoundError(
+            f"executor.system_prompt_file names {named!r}, which could not be "
+            f"read: {e}. Remove the setting to use the built-in prompt."
+        ) from e
+    if not text:
+        raise ValueError(
+            f"executor.system_prompt_file names {named!r}, which is empty. "
+            "Remove the setting to use the built-in prompt."
+        )
+    return text
+
+
 def _executor_system_prompt(cfg: ProjectConfig | None) -> str:
     """Everything true of every stage, so it is paid for once.
 
@@ -1069,6 +1104,10 @@ def _executor_system_prompt(cfg: ProjectConfig | None) -> str:
     formatter that rewrites the tree is a property of the machinery, and one
     revision cycle was already spent discovering it.
     """
+    override = _system_prompt_override(cfg)
+    if override:
+        return override
+
     parts = [
         "You are changing a repository under an orchestrator. You edit through "
         "tools; nothing you write as prose is applied.",

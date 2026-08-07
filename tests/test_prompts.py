@@ -1429,3 +1429,90 @@ class TestExecutorPromptCarriesNoProjectVocabulary:
             ".erb", "activerecord", "bundler", "app/", "spec/", "example",
         ):
             assert word not in text, f"{word!r} is project knowledge in a prompt"
+
+
+class TestTheExecutorSystemPrompt:
+    """Static, first, and replaceable.
+
+    The ordering is the caching strategy — this block is byte-identical across
+    every stage of a run, which is what lets it sit inside the breakpoint and
+    be read rather than written on each call. But the reason it exists at all
+    is quieter than caching: a failure in the edit tool announces itself as a
+    refusal, and a failure in the prompt shows up as worse code with nothing
+    to point at.
+    """
+
+    def test_it_states_the_tool_contract_and_what_runs_after(self, tmp_path):
+        from orchestrator.prompts import _executor_system_prompt
+
+        text = _executor_system_prompt(_exec_cfg(tmp_path))
+        assert "exactly once" in text
+        assert "none are applied" in text
+        assert "refused by the tool" in text
+        # What happens when it stops is the half a model cannot discover.
+        assert "runs the project's checks" in text
+        assert "no tool to do so" in text
+
+    def test_it_names_no_projects_vocabulary(self, tmp_path):
+        from orchestrator.prompts import _executor_system_prompt
+
+        text = _executor_system_prompt(_exec_cfg(tmp_path)).lower()
+        for word in ("rails", "rspec", "ruby", "python", "django", ".rb", ".py"):
+            assert word not in text, word
+
+    def test_an_operator_file_replaces_it(self, tmp_path):
+        from orchestrator.prompts import _executor_system_prompt
+
+        (tmp_path / "PROMPT.md").write_text("Follow the house style.\n")
+        cfg = _exec_cfg(tmp_path, system_prompt_file="PROMPT.md")
+        assert _executor_system_prompt(cfg) == "Follow the house style."
+
+    def test_a_named_file_that_cannot_be_read_raises(self, tmp_path):
+        import pytest
+
+        from orchestrator.prompts import _executor_system_prompt
+
+        cfg = _exec_cfg(tmp_path, system_prompt_file="missing.md")
+        # Not a silent fallback to the default: an operator who named a file
+        # meant that file, and a prompt quietly reverting is the failure that
+        # shows up as worse code rather than as an error.
+        with pytest.raises(FileNotFoundError, match="system_prompt_file"):
+            _executor_system_prompt(cfg)
+
+    def test_the_static_region_is_marked_and_the_stage_is_not(self, tmp_path):
+        from orchestrator.prompts import build_executor_messages
+
+        cfg = _exec_cfg(tmp_path)
+        from orchestrator.config import Stage
+
+        stage = Stage(id="s", instruction="do", edit_files=["a.py"])
+        messages = build_executor_messages(
+            stage, cfg, "THE STAGE", agent_context="CONVENTIONS", feedback=["FB"]
+        )
+        marked = [
+            m for m in messages
+            if any("prompt_cache_breakpoint" in part for part in m["content"])
+        ]
+        assert len(marked) == 1, "exactly one breakpoint closes the static region"
+        assert "CONVENTIONS" in marked[0]["content"][0]["text"]
+        # The stage and its feedback follow the mark, so they may vary without
+        # invalidating what precedes them.
+        tail = "".join(m["content"][0]["text"] for m in messages[2:])
+        assert "THE STAGE" in tail and "FB" in tail
+
+
+def _exec_cfg(tmp_path, **executor_over):
+    from orchestrator.config import parse_config
+
+    executor = {"model": "m", "provider": "openai"}
+    executor.update(executor_over)
+    return parse_config({
+        "target_repo": str(tmp_path),
+        "base_ref": "main",
+        "project_branch": "proj",
+        "plan_root": "PLAN.md",
+        "test_command": "true",
+        "executor": executor,
+        "planner": {"model": "claude-opus-5"},
+        "reviewer": {"model": "gpt-5.5"},
+    })
