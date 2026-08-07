@@ -664,6 +664,12 @@ class Executor:
         )
         out.dropped_reads = [p for p in stage.read_files if p not in kept]
         if history_dir is not None:
+            # The whole prompt, not the stage half. `nodes.execute` writes
+            # `prompt.md` from `build_executor_prompt`, which no longer carries
+            # the feedback on this path — so that artifact stopped explaining
+            # why an attempt existed at all, and a reader opening the directory
+            # after a rework saw a prompt identical to the previous attempt's.
+            _write_sent_prompt(history_dir, conversation)
             _write_transcript(history_dir, conversation, out)
         return out
 
@@ -1013,5 +1019,39 @@ def _write_transcript(history_dir: Path, conversation: list, out: ExecutionResul
                 indent=2,
             )
         )
+    except OSError:
+        return
+
+
+def _write_sent_prompt(history_dir: Path, conversation: list) -> None:
+    """What the model was actually given, as one readable document.
+
+    Separate from `executor-conversation.json`, which is the whole exchange
+    including every tool call and result and is the wrong thing to open first.
+    This is the input: system prompt, conventions, stage, feedback — in order,
+    and only the messages that were there before the model said anything.
+
+    Best effort, like the transcript. An attempt that worked must not fail
+    because a directory could not be written.
+    """
+    parts: list[str] = []
+    for item in conversation:
+        if not isinstance(item, dict):
+            # Everything the model produced and everything answering it. The
+            # exchange belongs in the transcript, not in the record of what it
+            # was asked.
+            break
+        role = item.get("role")
+        if role is None:
+            break
+        content = item.get("content")
+        text = (
+            "".join(p.get("text", "") for p in content)
+            if isinstance(content, list)
+            else str(content or "")
+        )
+        parts.append(f"<!-- {role} -->\n\n{text}")
+    try:
+        (history_dir / "sent-prompt.md").write_text("\n\n---\n\n".join(parts))
     except OSError:
         return

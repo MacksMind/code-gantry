@@ -138,8 +138,15 @@ def run_verify(
         _layer_progress,
         _layer_patterns,
         _layer_residue,
-        _layer_tests,
+        # Checks before tests, because a check may *write*: `rubocop -A` and
+        # its kin exit zero after rewriting files, and `checks_commit_changes`
+        # commits what they rewrote. Run the suite first and its green
+        # describes bytes that are not the ones landing — caught eventually by
+        # the full suite at review, a whole round trip later. The executor's
+        # loop has always had this order; the gate had the legacy one, from
+        # when nothing between the suite and the merge could change a file.
         _layer_checks,
+        _layer_tests,
         _layer_new_tests,
     ):
         failure = layer(context, outcome)

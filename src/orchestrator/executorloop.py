@@ -132,7 +132,7 @@ def run_loop(
 def _gate_cycle(stage, cfg, git, runner, out: ExecutionResult, since_sha, log=None):
     """Lint, commit, then the gates — in that order, for the reasons above."""
     lint = gates.run_checks(stage, runner)
-    changed = _commit_if_dirty(git, stage, out)
+    changed = _commit_if_dirty(git, stage, out, why=", after checks")
     if changed and log:
         log(f"[execute] checks rewrote files; committed as {changed[:12]}")
     if not lint.ok:
@@ -169,17 +169,25 @@ def _gate_cycle(stage, cfg, git, runner, out: ExecutionResult, since_sha, log=No
     return None
 
 
-def _commit_if_dirty(git: Git, stage: Stage, out: ExecutionResult) -> str | None:
+def _commit_if_dirty(
+    git: Git, stage: Stage, out: ExecutionResult, why: str = ""
+) -> str | None:
     """Commit whatever is in the tree, and remember the sha.
 
     Called after the checks and again on the way out, so a loop that ran out of
     budget still leaves committed work rather than a dirty tree the next
     stage's precheck refuses to cut a branch over.
+
+    The message carries the cycle and what prompted the commit. All of these
+    are squashed on landing, so the project branch is unaffected — but a stage
+    branch is what you read when a stage misbehaves, and five commits all
+    saying `[stage-id] executor` cannot tell cycle 1 from cycle 3, or the
+    model's edits from a formatter's rewrite of them.
     """
     try:
         if git.is_clean():
             return None
-        sha = git.commit_all(f"[{stage.id}] executor")
+        sha = git.commit_all(f"[{stage.id}] executor cycle {out.cycles}{why}")
     except GitError:
         # A failure to commit is not a failure of the work, and the gates
         # judge the tree either way. Reported through the log rather than

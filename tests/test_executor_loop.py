@@ -243,3 +243,71 @@ class TestFailures:
 
         assert out.edit_refusals
         assert "does not appear" in out.edit_refusals[0]
+
+
+class TestTheRecordOfAnAttempt:
+    def test_commit_messages_distinguish_the_cycles(self, repo):
+        # Squashed on landing, so this changes nothing about the project
+        # branch. A stage branch is what you read when a stage misbehaves, and
+        # five commits all saying the same thing cannot tell cycle 1 from
+        # cycle 3, or the model's edits from a formatter's rewrite of them.
+        cfg, stage = build(repo, {"must_not_remain": ["class"]})
+        model = ScriptedModel([
+            [edit_file("app/a.rb", "class A", "class B")],
+            [edit_file("app/a.rb", "class B", "class C")],
+        ])
+        drive(repo, cfg, stage, model)
+
+        import subprocess
+
+        log = subprocess.run(
+            ["git", "log", "--format=%s"], cwd=repo, capture_output=True, text=True
+        ).stdout
+        assert "cycle 1" in log and "cycle 2" in log
+
+    def test_a_checks_rewrite_says_so_in_its_own_commit(self, repo):
+        cfg, stage = build(
+            repo, {"checks": ["printf 'class C\\nend\\n' > app/a.rb"]}
+        )
+        drive(repo, cfg, stage, ScriptedModel([[edit_file("app/a.rb", "class A", "class B")]]))
+
+        import subprocess
+
+        log = subprocess.run(
+            ["git", "log", "--format=%s"], cwd=repo, capture_output=True, text=True
+        ).stdout
+        assert "after checks" in log
+
+    def test_the_sent_prompt_is_written_whole(self, tmp_path):
+        # `prompt.md` carries the stage half only on this path, so it stopped
+        # explaining why an attempt existed. A reader opening the directory
+        # after a rework saw a prompt identical to the previous attempt's.
+        from orchestrator.executor import _write_sent_prompt
+
+        conversation = [
+            {"role": "system", "content": [{"type": "input_text", "text": "SYS"}]},
+            {"role": "user", "content": [{"type": "input_text", "text": "CONV"}]},
+            {"role": "user", "content": [{"type": "input_text", "text": "STAGE"}]},
+            {"role": "user", "content": [{"type": "input_text", "text": "REWORK"}]},
+        ]
+        _write_sent_prompt(tmp_path, conversation)
+        text = (tmp_path / "sent-prompt.md").read_text()
+        assert text.index("SYS") < text.index("CONV") < text.index("STAGE")
+        assert "REWORK" in text
+
+    def test_it_stops_at_the_first_thing_the_model_said(self, tmp_path):
+        # The exchange belongs in the transcript; this is the record of what
+        # was asked.
+        from types import SimpleNamespace
+
+        from orchestrator.executor import _write_sent_prompt
+
+        conversation = [
+            {"role": "user", "content": [{"type": "input_text", "text": "ASKED"}]},
+            SimpleNamespace(type="reasoning"),
+            {"type": "function_call_output", "call_id": "c", "output": []},
+        ]
+        _write_sent_prompt(tmp_path, conversation)
+        text = (tmp_path / "sent-prompt.md").read_text()
+        assert "ASKED" in text
+        assert "function_call_output" not in text

@@ -235,13 +235,13 @@ class RepoReader:
     def _charge_call(self, tool: str) -> None:
         if self._answered() >= self.budget.max_calls:
             raise ToolError(
-                f"too many tool calls for one planning step "
-                f"(limit {self.budget.max_calls}). Answer with what you have."
+                f"too many tool calls in one step "
+                f"(limit {self.budget.max_calls}). Work with what you have."
             )
         if self._lines_used >= self.budget.max_total_lines:
             raise ToolError(
-                f"read budget spent for this planning step "
-                f"({self.budget.max_total_lines} lines). Answer with what you have."
+                f"read budget spent for this step "
+                f"({self.budget.max_total_lines} lines). Work with what you have."
             )
 
     def _clip(self, lines: list[str]) -> tuple[list[str], bool]:

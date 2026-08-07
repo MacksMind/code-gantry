@@ -717,11 +717,37 @@ class TestChecks:
         cfg, stage = build(repo, {"checks": ["echo BAD_ROUTES >&2; exit 2"]})
         assert "BAD_ROUTES" in verify(repo, cfg, stage, sha).feedback
 
-    def test_runs_after_the_tests(self, repo):
+    def test_runs_before_the_tests(self, repo):
+        """Reversed deliberately, and this test is the record of why.
+
+        A check may *write*. `rubocop -A` and its kin exit zero after
+        rewriting files, and `checks_commit_changes` commits what they
+        rewrote — so running the suite first means its green describes bytes
+        that are not the ones landing. That was caught eventually by the full
+        suite at review, a whole reviewer round trip later.
+
+        The old order saved running cheap checks when an expensive suite had
+        already failed. The new one costs that and buys a green that means
+        what it says. The executor's own loop has always had this order; the
+        gate had the legacy one, from when nothing between the suite and the
+        merge could change a file.
+        """
         sha = Git(repo).head_sha()
         edit(repo)
         cfg, stage = build(repo, {"checks": ["false"]}, test_command="exit 1")
-        assert verify(repo, cfg, stage, sha).failed_layer is Layer.TESTS
+        assert verify(repo, cfg, stage, sha).failed_layer is Layer.CHECKS
+
+    def test_a_check_that_rewrites_is_seen_by_the_suite(self, repo):
+        # The point of the ordering, asserted on behaviour rather than on
+        # which layer reported: the suite runs against the corrected tree.
+        sha = Git(repo).head_sha()
+        edit(repo, "app.py", "broken\n")
+        cfg, stage = build(
+            repo,
+            {"checks": ["printf 'fixed\\n' > app.py"]},
+            test_command="grep -q fixed app.py",
+        )
+        assert verify(repo, cfg, stage, sha).passed
 
 
 class TestRequireNewTests:
