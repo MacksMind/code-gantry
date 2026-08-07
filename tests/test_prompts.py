@@ -1516,3 +1516,46 @@ def _exec_cfg(tmp_path, **executor_over):
         "planner": {"model": "claude-opus-5"},
         "reviewer": {"model": "gpt-5.5"},
     })
+
+
+class TestTheConventionsAreFramedForWhoReadsThem:
+    """One document, two jobs, and the framing is not interchangeable.
+
+    Written for the reviewer and reused verbatim for the executor, this told
+    something whose entire job is to write code that it was judging a diff.
+    Nothing fails when a prompt is wrong in this way — the only symptom is
+    worse work, which is why it is worth a test rather than a careful reading.
+    """
+
+    def test_the_executor_is_not_told_it_is_judging(self):
+        from orchestrator.prompts import _conventions_block
+
+        text = _conventions_block("SOME CONVENTIONS", role="executor").lower()
+        assert "judging" not in text
+        assert "the diff you are judging" not in text
+        assert "what you write" in text
+
+    def test_the_executor_is_told_it_cannot_run_commands(self):
+        # The repository's own file makes this argument about why its
+        # operations document is kept separate: an agent handed a coding task
+        # follows a command it cannot run rather than ignoring it.
+        from orchestrator.prompts import _conventions_block
+
+        text = _conventions_block("SOME CONVENTIONS", role="executor")
+        assert "cannot run commands" in text
+
+    def test_the_reviewers_framing_is_unchanged(self):
+        # It sits inside a cached prefix that is written once per run, so a
+        # change here is a cache miss on every stage as well as a change of
+        # meaning.
+        from orchestrator.prompts import _conventions_block
+
+        text = _conventions_block("SOME CONVENTIONS")
+        assert "the diff you are judging" in text
+        assert "a defect even where" in text
+
+    def test_neither_invents_a_heading_when_there_is_no_document(self):
+        from orchestrator.prompts import _conventions_block
+
+        assert _conventions_block(None, role="executor") == ""
+        assert _conventions_block("   ") == ""

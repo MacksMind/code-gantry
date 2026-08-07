@@ -598,24 +598,44 @@ def _review_system_prompt(cfg: ProjectConfig | None) -> str:
     return REVIEW_SYSTEM_PROMPT
 
 
-def _conventions_block(agent_context: str | None) -> str:
-    """The repository's own agent-facing documents, for the reviewer.
+def _conventions_block(agent_context: str | None, *, role: str = "reviewer") -> str:
+    """The repository's own agent-facing documents, framed for who is reading.
 
     Framed as what the repository requires rather than as background, because
-    this is a gate: a convention it is shown but not told to enforce buys
-    nothing. Empty string when there is none, so a project without one gets no
-    heading rather than an empty promise.
+    a convention shown but not connected to the reader's job buys nothing.
+    Empty string when there is none, so a project without one gets no heading
+    rather than an empty promise.
+
+    The framing has to differ by role and the document does not. This was
+    written for the reviewer and reused verbatim for the executor, which meant
+    telling something whose entire job is to write code that it was judging a
+    diff — a prompt defect of the quiet kind, since nothing fails and the only
+    symptom is worse work. The repository's own file gets this right and says
+    so in its opening lines: it is for anything that edits *or* reviews.
     """
     if not agent_context or not agent_context.strip():
         return ""
+    if role == "executor":
+        binding = (
+            "They bind what you write as firmly as the stage's own instruction "
+            "does: a change that breaks one is wrong even where the stage said "
+            "nothing about it, and it will be rejected on that ground alone. "
+            "Where a passage describes procedure rather than how code should be "
+            "written, it is context and not a rule — and you cannot run "
+            "commands, so a procedure is never something for you to carry out."
+        )
+    else:
+        binding = (
+            "They bind the diff you are judging as firmly as the stage's own "
+            "constraints do: a change that breaks one is a defect even where "
+            "the stage said nothing about it. Where a passage describes "
+            "procedure rather than how code should be written, it is context "
+            "and not a criterion."
+        )
     return (
         "## How this repository is worked in\n\n"
         "Conventions its maintainers keep, read at the commit this run started "
-        "from. They bind the diff you are judging as firmly as the stage's own "
-        "constraints do: a change that breaks one is a defect even where the "
-        "stage said nothing about it. Where a passage describes procedure "
-        "rather than how code should be written, it is context and not a "
-        "criterion.\n\n" + agent_context.strip() + "\n\n"
+        "from. " + binding + "\n\n" + agent_context.strip() + "\n\n"
     )
 
 
@@ -1173,7 +1193,7 @@ def build_executor_messages(
         }
     ]
 
-    conventions = _conventions_block(agent_context)
+    conventions = _conventions_block(agent_context, role="executor")
     messages.append(
         {
             "role": "user",
