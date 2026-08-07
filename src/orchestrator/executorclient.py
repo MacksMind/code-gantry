@@ -57,6 +57,13 @@ class ExecutorTurn:
         self.text: str = ""
         self.failure: str = ""
         self.peak_prompt_tokens: int = 0
+        # The first turn of a cycle, kept apart from the total. Summed
+        # usage cannot answer whether the static prefix survived from the
+        # previous stage: within one attempt the conversation grows and
+        # every later turn re-reads what the first one wrote, so a run
+        # with no cross-stage reuse at all still reports 90%-plus.
+        self.first_prompt_tokens: int = 0
+        self.first_cached_tokens: int = 0
 
 
 def _reasoning_param(cfg: ExecutorConfig) -> dict:
@@ -148,6 +155,9 @@ class OpenAIExecutorModel:
             out.peak_prompt_tokens = max(
                 out.peak_prompt_tokens, turn_usage.prompt_tokens
             )
+            if out.turns == 1:
+                out.first_prompt_tokens = turn_usage.prompt_tokens
+                out.first_cached_tokens = turn_usage.cached_tokens
 
             declined = refusal(response)
             if declined:

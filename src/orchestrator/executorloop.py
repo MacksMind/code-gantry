@@ -80,6 +80,9 @@ def run_loop(
         )
         out.model_turns += turn.turns
         out.cycles = cycle + 1
+        if cycle == 0:
+            out.first_prompt_tokens = turn.first_prompt_tokens
+            out.first_cached_tokens = turn.first_cached_tokens
         if turn.usage is not None:
             out.usage = _merge(out.usage, turn.usage)
         out.log = turn.text or out.log

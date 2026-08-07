@@ -283,6 +283,11 @@ class ExecutionResult:
     # Which gate failed on which cycle, so a stage that used its whole budget
     # says what it kept failing rather than only that it ran out.
     in_loop_failures: list[str] = field(default_factory=list)
+    # The opening turn of the attempt's first cycle. This is the only figure
+    # that answers whether the prefix arranged to be shared across stages
+    # actually is: everything after it in an attempt reads what it wrote.
+    first_prompt_tokens: int = 0
+    first_cached_tokens: int = 0
     # What the loop proved green, and against which tree: layer name ->
     # {"command", "head_sha"}. The gate reads this to decide whether running
     # the same command again would ask a question already answered. Not trust
@@ -1013,6 +1018,10 @@ def _write_transcript(history_dir: Path, conversation: list, out: ExecutionResul
                         "completion_tokens": getattr(
                             out.usage, "completion_tokens", 0
                         ),
+                    },
+                    "opening_turn": {
+                        "prompt_tokens": out.first_prompt_tokens,
+                        "cached_tokens": out.first_cached_tokens,
                     },
                     "cost_usd": out.cost_usd,
                 },

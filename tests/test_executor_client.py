@@ -265,3 +265,28 @@ class TestFailures:
         m, _ = model([refused])
         out = m.run([], reader=reader, editor=editor)
         assert "refused to answer" in out.failure
+
+
+class TestTheOpeningTurnIsRecordedSeparately:
+    """Summed usage cannot answer the cross-stage question.
+
+    Within one attempt the conversation grows and every later turn re-reads
+    what the first one wrote, so a run with no reuse between stages at all
+    still reports 90%-plus cached. Whether the prefix arranged to be shared
+    across stages *is* shared is a fact about the opening turn alone.
+    """
+
+    def test_the_first_turns_figures_are_kept_apart(self, parts):
+        editor, _, reader = parts
+        m, _ = model([
+            response([call("read_file", '{"path": "app/a.rb"}')], usage(1000, 5, cached=800)),
+            response([SimpleNamespace(type="message", content=[])], usage(9000, 5, cached=8900)),
+        ])
+        out = m.run([], reader=reader, editor=editor)
+
+        assert out.first_prompt_tokens == 1000
+        assert out.first_cached_tokens == 800
+        # The total is dominated by the later turn, which is the whole reason
+        # the opening one has to be recorded on its own.
+        assert out.usage.prompt_tokens == 10_000
+        assert out.usage.cached_tokens == 9_700
