@@ -25,7 +25,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from orchestrator import gates
-from orchestrator.commands import CommandResult, CommandRunner
+from orchestrator.commands import (
+    CommandResult,
+    CommandRunner,
+    collapse_progress_runs,
+)
 from orchestrator.config import ProjectConfig, Stage
 from orchestrator.gitops import Git, GitError
 from orchestrator.globs import matches_any
@@ -187,7 +191,18 @@ def cache_tokens_from_log(log: str) -> dict[str, int]:
     total reused.
     """
     totals = {"write": 0, "hit": 0}
-    for amount, scale, kind in _CACHE_TOKENS.findall(log or ""):
+    # Collapsed first, and not for tidiness. `([\d,.]+)` includes `.`, so
+    # against an unbroken run of dots it matches greedily from every start
+    # position and backtracks the whole run looking for `\s+cache` — quadratic,
+    # measured at 0.94s for 8,000 dots and therefore ~580s for the 200,000 a
+    # progress reporter emits. One test in this suite was paying exactly that,
+    # 500 seconds against 8 for the next slowest, and the durations had never
+    # been read. In production it is an editor log with a progress bar in it,
+    # which is the common case rather than the exotic one.
+    #
+    # A run of one repeated character never contains a token count, so this
+    # costs nothing and is the same fix `path_hints` needed for the same reason.
+    for amount, scale, kind in _CACHE_TOKENS.findall(collapse_progress_runs(log or "")):
         totals[kind.lower()] += int(_scaled(amount, scale))
     return totals
 

@@ -24,7 +24,12 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from orchestrator.commands import CommandResult, CommandRunner, clip_for_model
+from orchestrator.commands import (
+    CommandResult,
+    CommandRunner,
+    clip_for_model,
+    collapse_progress_runs,
+)
 from orchestrator.config import ProjectConfig, Stage
 from orchestrator.flake import adjudicate
 from orchestrator.gitops import Git
@@ -414,10 +419,22 @@ def path_hints(output: str) -> list[str]:
     What the planner needs at an intervention is where the damage is — that is
     what distinguishes "widen this stage by two files" from "we skipped a
     prerequisite". Best effort; the full output travels alongside it.
+
+    Progress runs are collapsed first, and that is not an optimisation. The
+    pattern's leading class includes `.`, so against an unbroken run of dots it
+    matches greedily from every start position and backtracks the whole run
+    looking for an extension that is not there — quadratic, measured at 0.29s
+    for 8,000 dots and therefore minutes for the 200,000 a real progress
+    reporter emits. The gate calls this on raw command output, so a suite that
+    draws a long progress bar would have stalled it for minutes while the
+    planner waited.
+
+    Collapsing is also the semantically right answer rather than a workaround:
+    a run of one repeated character never contains a path.
     """
     seen: set[str] = set()
     out: list[str] = []
-    for match in _PATH_HINT.findall(output or ""):
+    for match in _PATH_HINT.findall(collapse_progress_runs(output or "")):
         if match not in seen:
             seen.add(match)
             out.append(match)

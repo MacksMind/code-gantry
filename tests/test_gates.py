@@ -276,3 +276,44 @@ class TestTheMovedLayersAgreeWithTheGate:
         assert outcome.failed_layer is Layer.TESTS
         assert "app/models/order.rb" in found.failing_paths
         assert outcome.failing_paths == found.failing_paths
+
+
+class TestPathHintsCannotStallTheGate:
+    """A regex that backtracks is a hang, not a slow function.
+
+    `_PATH_HINT`'s leading class includes `.`, so against an unbroken run of
+    dots it matched greedily from every start position and backtracked the
+    whole run looking for an extension that was not there. Quadratic: 0.29s at
+    8,000 dots, and a real progress reporter emits 200,000.
+
+    This is production behaviour, not a test artifact. `run_tests` calls
+    `path_hints` on *raw* command output, so a suite drawing a long progress
+    bar stalled the gate for minutes while the planner waited. The suite was
+    paying 500 seconds in one test to demonstrate it and nobody had read the
+    durations.
+    """
+
+    def test_a_long_progress_run_is_answered_promptly(self):
+        import time
+
+        from orchestrator.gates import path_hints
+
+        started = time.time()
+        hints = path_hints("." * 200_000 + "\nfailed at app/models/order.rb:12")
+        elapsed = time.time() - started
+
+        # Generous by three orders of magnitude against the 180s this took
+        # before, so the assertion is about complexity rather than about the
+        # machine it runs on.
+        assert elapsed < 2.0, f"path_hints took {elapsed:.1f}s on a progress run"
+        assert hints == ["app/models/order.rb"]
+
+    def test_a_path_after_a_collapsed_run_still_survives(self):
+        # Collapsing must not eat the finding. A progress reporter puts its
+        # dots first and what it found afterwards, which is the whole reason
+        # `clip_for_model` collapses before it truncates.
+        from orchestrator.gates import path_hints
+
+        assert path_hints("." * 500 + "\nspec/a_spec.rb:4 failed") == [
+            "spec/a_spec.rb"
+        ]
