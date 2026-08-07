@@ -288,6 +288,13 @@ class ExecutionResult:
     # actually is: everything after it in an attempt reads what it wrote.
     first_prompt_tokens: int = 0
     first_cached_tokens: int = 0
+    # What it asked for, by tool, and what was refused, by reason. Counts
+    # rather than the rendered calls the other two loops log: the planner's
+    # 40-call line is already hard to read, and this one makes sixty a cycle.
+    # The calls themselves are in `executor-conversation.json`, so a summary
+    # that points at the detail beats one that repeats it.
+    tool_counts: dict[str, int] = field(default_factory=dict)
+    refusal_counts: dict[str, int] = field(default_factory=dict)
     # What the loop proved green, and against which tree: layer name ->
     # {"command", "head_sha"}. The gate reads this to decide whether running
     # the same command again would ask a question already answered. Not trust
@@ -668,6 +675,7 @@ class Executor:
             log=self.log,
         )
         out.dropped_reads = [p for p in stage.read_files if p not in kept]
+        _count_tool_use(out, reader, editor)
         if history_dir is not None:
             # The whole prompt, not the stage half. `nodes.execute` writes
             # `prompt.md` from `build_executor_prompt`, which no longer carries
@@ -1064,3 +1072,44 @@ def _write_sent_prompt(history_dir: Path, conversation: list) -> None:
         (history_dir / "sent-prompt.md").write_text("\n\n---\n\n".join(parts))
     except OSError:
         return
+
+
+def _refusal_kind(reason: str) -> str:
+    """One refusal, bucketed by what the caller should do about it.
+
+    Deliberately about the reader's next move rather than about which function
+    raised: "read budget" means stop asking, "not found" means read the file,
+    "not unique" means widen the anchor. A count of `ToolError` would say
+    nothing an operator could act on.
+    """
+    text = (reason or "").lower()
+    if "too many tool calls" in text or "read budget spent" in text:
+        return "budget"
+    if "does not appear" in text:
+        return "edit not found"
+    if "appears" in text and "times" in text:
+        return "edit not unique"
+    if "scope" in text:
+        return "out of scope"
+    if "does not exist" in text or "not tracked" in text:
+        return "no such path"
+    return "other"
+
+
+def _count_tool_use(out: ExecutionResult, reader, editor) -> None:
+    """Summarise both ledgers onto the result.
+
+    Two objects record calls — the reader and the editor — and an operator
+    reading the log wants one answer, so they are merged here rather than at
+    the log site. Same reason `_tool_log` merges the planner's two.
+    """
+    tools: dict[str, int] = {}
+    refusals: dict[str, int] = {}
+    for source in (reader, editor):
+        for call in getattr(source, "calls", []) or []:
+            tools[call.tool] = tools.get(call.tool, 0) + 1
+            if getattr(call, "refusal", ""):
+                kind = _refusal_kind(call.refusal)
+                refusals[kind] = refusals.get(kind, 0) + 1
+    out.tool_counts = tools
+    out.refusal_counts = refusals

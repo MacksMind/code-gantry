@@ -311,3 +311,56 @@ class TestTheRecordOfAnAttempt:
         text = (tmp_path / "sent-prompt.md").read_text()
         assert "ASKED" in text
         assert "function_call_output" not in text
+
+
+class TestWhatTheExecutorAskedFor:
+    """The third agentic loop to report what it looked at.
+
+    The planner and reviewer have logged this since they got tools; the
+    executor makes more calls than either and logged none of them. Counts
+    rather than rendered calls, because the planner's forty-call line is
+    already hard to read and this one makes sixty a cycle — and the calls
+    themselves sit in `executor-conversation.json` beside the log line.
+    """
+
+    def test_both_ledgers_are_merged(self, repo):
+        from orchestrator.edittools import Edit
+        from orchestrator.executor import _count_tool_use, ExecutionResult
+        from orchestrator.repotools import ToolCall
+
+        cfg, stage = build(repo)
+        reader, editor = parts(repo, stage)
+        reader.read_file("app/a.rb")
+        editor.edit("app/a.rb", [Edit("class A", "class B")])
+
+        out = ExecutionResult(ok=True)
+        _count_tool_use(out, reader, editor)
+        assert out.tool_counts == {"read_file": 1, "edit": 1}
+        assert out.refusal_counts == {}
+
+    def test_refusals_are_bucketed_by_what_to_do_about_them(self, repo):
+        # Not by which function raised. "budget" means stop asking, "not
+        # found" means read the file, "not unique" means widen the anchor —
+        # a count of ToolError would say nothing an operator could act on.
+        from orchestrator.executor import _count_tool_use, ExecutionResult
+
+        cfg, stage = build(repo)
+        reader, editor = parts(repo, stage)
+        editor.record_refusal("edit", "a.rb", "edit 1: that text does not appear in the file.")
+        editor.record_refusal("edit", "a.rb", "edit 1: that text appears 3 times, so it does not")
+        reader.record_refusal("read_file", "b.rb", "too many tool calls in one step (limit 60).")
+
+        out = ExecutionResult(ok=True)
+        _count_tool_use(out, reader, editor)
+        assert out.refusal_counts == {
+            "edit not found": 1, "edit not unique": 1, "budget": 1
+        }
+
+    def test_a_loop_that_asked_for_nothing_reports_nothing(self, repo):
+        from orchestrator.executor import _count_tool_use, ExecutionResult
+
+        cfg, stage = build(repo)
+        reader, editor = parts(repo, stage)
+        out = ExecutionResult(ok=True)
+        _count_tool_use(out, reader, editor)
+        assert out.tool_counts == {}

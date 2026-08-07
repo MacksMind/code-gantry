@@ -687,6 +687,27 @@ def execute(state: RunState, rt: Runtime) -> dict:
             feedback=feedback if in_process else None,
         )
 
+    if result.tool_counts:
+        # The third agentic loop to report what it looked at. Counts rather
+        # than the rendered calls the planner and reviewer log, because this
+        # one makes sixty a cycle and the calls themselves are in the
+        # conversation artifact beside this line's own log.
+        asked = ", ".join(
+            f"{n} {name}" for name, n in sorted(
+                result.tool_counts.items(), key=lambda kv: -kv[1]
+            )
+        )
+        refused = ", ".join(
+            f"{n} {kind}" for kind, n in sorted(
+                result.refusal_counts.items(), key=lambda kv: -kv[1]
+            )
+        )
+        rt.log(
+            f"[execute] {stage.id}: {sum(result.tool_counts.values())} tool "
+            f"call(s) over {result.cycles} cycle(s): {asked}"
+            + (f"; refused {refused}" if refused else "")
+        )
+
     if result.dropped_reads:
         rt.log(
             f"[execute] {stage.id}: withheld {len(result.dropped_reads)} "
