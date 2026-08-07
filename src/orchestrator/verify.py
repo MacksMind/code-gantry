@@ -23,26 +23,16 @@ from __future__ import annotations
 
 import hashlib
 import re
-from pathlib import Path
 from dataclasses import dataclass, field
 from enum import Enum
 
 from orchestrator import gates
-from orchestrator.commands import CommandResult, CommandRunner, clip_for_model
+from orchestrator.commands import CommandResult, CommandRunner
 from orchestrator.config import ProjectConfig, Stage
-from orchestrator.flake import adjudicate
 from orchestrator.gitops import Git, GitError
 from orchestrator.globs import matches_any
 from orchestrator.plandoc import resolve_plan_tree
 
-# How much of a failing command's output to carry forward. Enough for a
-# traceback and a summary; not so much that it crowds out the instruction.
-FEEDBACK_OUTPUT_CHARS = 4_000
-
-# Regex for a pytest/rspec-style failing file path in test output. Best effort:
-# what the planner needs is a hint about where the damage is, and a wrong guess
-# costs nothing because the full output travels with it.
-_PATH_HINT = re.compile(r"([\w./-]+\.(?:rb|py|js|ts|tsx|go))")
 
 
 class Layer(str, Enum):
@@ -411,101 +401,29 @@ def _layer_progress(ctx: _Context, outcome: VerifyOutcome):
 
 
 def _layer_patterns(ctx: _Context, outcome: VerifyOutcome):
-    if not ctx.stage.forbidden_patterns:
+    """The gate's spelling of `gates.check_patterns`.
+
+    The finding lives in `gates.py` so the executor's loop can ask the same
+    question before paying for a round trip; the routing lives here, because
+    which of executor, planner or human a failure belongs to is the graph's
+    decision and not a gate's.
+    """
+    found = gates.check_patterns(ctx.stage, ctx.cfg, ctx.git, ctx.stage_start_sha)
+    outcome.exempt_pattern_files = found.exempt_pattern_files
+    if found.ok:
         return None
-
-    added = ctx.git.added_lines(ctx.stage_start_sha)
-    hits: list[str] = []
-    exempt: list[str] = []
-    for pattern in ctx.stage.forbidden_patterns:
-        compiled = re.compile(pattern)
-        for path, text in added:
-            if not compiled.search(text):
-                continue
-            # A test proving the construct is gone has to name it. The gate
-            # reads added lines, so `not_to include('new Ajax.Request')` and
-            # reintroducing `new Ajax.Request` are the same text — nothing in
-            # the line distinguishes them. Deadlocked a stage across all three
-            # components: the planner prescribed the assertion, the reviewer
-            # reworked the stage for omitting it, and this gate rejected every
-            # attempt that included it.
-            if matches_any(path, ctx.cfg.test_file_patterns):
-                if path not in exempt:
-                    exempt.append(path)
-                continue
-            hits.append(f"  {path}: {text.strip()}   [matches /{pattern}/]")
-
-    outcome.exempt_pattern_files = exempt
-
-    if not hits:
-        return None
-
-    return _fail(
-        Layer.PATTERNS,
-        Route.EXECUTOR,
-        "the diff introduced a forbidden pattern",
-        "These added lines match patterns this stage forbids:\n"
-        + "\n".join(hits[:40])
-        + "\nRemove them. They are out of bounds for this stage even if they "
-        "would be correct elsewhere in the project.",
-    )
+    return _fail(Layer.PATTERNS, Route.EXECUTOR, found.summary, found.feedback)
 
 
 # --- layer 4: residue ----------------------------------------------------
 
 
 def _layer_residue(ctx: _Context, outcome: VerifyOutcome):
-    """Nothing the stage promised to remove is still there.
-
-    `forbidden_patterns` reads the diff's added lines, so it sees a construct
-    arriving and is blind to one left behind — and "no occurrence of X should
-    remain" is the shape of most migration work. An occurrence the executor
-    simply missed produces no added line, so the diff cannot be asked about it.
-    This reads the files instead.
-
-    Scoped to `edit_files`, with the same globs the scope guard uses. That is
-    the ground the stage claimed; a residue outside it belongs to work nobody
-    authorised this stage to do, and failing on it would be unactionable.
-    """
-    if not ctx.stage.must_not_remain:
+    """The gate's spelling of `gates.check_residue`. See `_layer_patterns`."""
+    found = gates.check_residue(ctx.stage, ctx.cfg, ctx.git)
+    if found.ok:
         return None
-
-    compiled = [(p, re.compile(p)) for p in ctx.stage.must_not_remain]
-    hits: list[str] = []
-
-    for path in ctx.git.tracked_paths_now():
-        if not matches_any(path, ctx.stage.edit_files):
-            continue
-        full = ctx.cfg.target_repo / path
-        try:
-            text = full.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            # Binary, unreadable, or deleted in this attempt. A regex over
-            # source has nothing to say about any of those.
-            continue
-        for number, line in enumerate(text.splitlines(), start=1):
-            for pattern, rx in compiled:
-                if rx.search(line):
-                    hits.append(
-                        f"  {path}:{number}: {line.strip()}   [matches /{pattern}/]"
-                    )
-
-    if not hits:
-        return None
-
-    return _fail(
-        Layer.RESIDUE,
-        Route.EXECUTOR,
-        "the stage left behind what it was meant to remove",
-        "This stage declared that no occurrence of these patterns may remain "
-        "in the files it owns, and these are still there:\n"
-        + "\n".join(hits[:40])
-        + (f"\n… and {len(hits) - 40} more" if len(hits) > 40 else "")
-        + "\n\nThese are occurrences that were never edited, not ones you "
-        "introduced — the work is incomplete rather than wrong. Convert the "
-        "remaining sites the same way you converted the others, and change "
-        "nothing else.",
-    )
+    return _fail(Layer.RESIDUE, Route.EXECUTOR, found.summary, found.feedback)
 
 
 # --- layer 5: tests ------------------------------------------------------
@@ -538,79 +456,35 @@ def _layer_tests(ctx: _Context, outcome: VerifyOutcome):
             "spec instead.",
         )
 
-    result = ctx.runner.run(command)
-    outcome.results.append(result)
-    outcome.test_seconds += result.duration_seconds
+    # The running, the one re-run and the flake adjudication all live in
+    # `gates.py`, shared with the executor's loop. What stays here is the
+    # routing and the full-suite bookkeeping: a signal is a human's problem, a
+    # failure is the executor's, and neither is a gate's decision to make.
+    found = gates.run_tests(
+        ctx.stage, ctx.cfg, ctx.git, ctx.runner, ctx.stage_start_sha, for_loop=False
+    )
+    outcome.results.extend(found.results)
+    outcome.test_seconds += found.test_seconds
+    outcome.flake_reruns += found.flake_reruns
+    outcome.flaky_files.extend(found.flaky_files)
+    outcome.flaky_seeds.update(found.flaky_seeds)
 
-    if result.ok:
-        _record_full_suite(ctx, outcome, command)
-        return None
-
-    if result.signal is not None:
-        # Something killed the suite from outside — the container stack going
-        # down, an OOM kill, a Ctrl-C. Not a stage failure, so it must not spend
-        # a retry, and re-running against the same dead environment would learn
-        # nothing at whatever the suite costs.
-        return _fail(
-            Layer.TESTS,
-            Route.HUMAN,
-            f"the test command was killed by signal {result.signal}",
-            f"The test command did not fail — it was killed by signal "
-            f"{result.signal}.\n\nThat is an environment problem rather than a "
-            "problem with this stage: the container stack going down, an "
-            "out-of-memory kill, or an interrupt. Nothing the executor or the "
-            "planner can do will fix it, so the run stops here rather than "
-            "spending attempts.\n\nPut the environment back and resume; the "
-            "gate re-runs from here.\n"
-            f"{result.summary()}\n{_clip(result.output)}",
-        )
-
-    # One re-run before consuming a retry. Browser-driven and timing-sensitive
-    # suites would otherwise spend the whole retry budget on noise.
-    #
-    # How to re-run depends on what just ran. A broad suite gets the failed
-    # examples re-run on their own, which tests the order dependence directly
-    # instead of re-rolling every other example in the suite. A command already
-    # scoped to the stage's own specs has nothing broader to blame — every
-    # failing example is one the stage owns — so it simply runs again.
-    broad = command in (ctx.cfg.test_command, ctx.cfg.full_test_command)
-    if broad:
-        verdict = adjudicate(
-            output=result.output,
-            command=command,
-            cfg=ctx.cfg,
-            runner=ctx.runner,
-        )
-        outcome.results.extend(verdict.results)
-        outcome.test_seconds += verdict.seconds
-        detail = verdict.summary
-        last_output = verdict.output or result.output
-        flaked = verdict.flaked
-        if flaked:
-            outcome.flaky_files.extend(verdict.files)
-            outcome.flaky_seeds.update(verdict.seeds)
-    else:
-        rerun = ctx.runner.run(command)
-        outcome.results.append(rerun)
-        outcome.test_seconds += rerun.duration_seconds
-        detail = rerun.summary()
-        last_output = rerun.output
-        flaked = rerun.ok
-
-    if flaked:
-        outcome.flake_reruns += 1
+    if found.ok:
         # A file that passes whole and standalone is green, which is the same
-        # verdict the merge gate would reach — so this counts as the full suite
-        # having passed on this tree, exactly as a first-try pass does.
+        # verdict the merge gate would reach — so a flake counts as the full
+        # suite having passed on this tree, exactly as a first-try pass does.
         _record_full_suite(ctx, outcome, command)
         return None
+
+    if found.signal is not None:
+        return _fail(Layer.TESTS, Route.HUMAN, found.summary, found.feedback)
 
     return _fail(
         Layer.TESTS,
         Route.EXECUTOR,
-        "the test command failed",
-        f"The test command failed.\n{detail}\n{_clip(last_output)}",
-        failing_paths=_path_hints(last_output),
+        found.summary,
+        found.feedback,
+        failing_paths=found.failing_paths,
     )
 
 
@@ -644,43 +518,29 @@ def resolve_test_command(
     )
 
 
- # --- layer 5: checks -----------------------------------------------------
-
-
-
-
-# --- layer 5: checks -----------------------------------------------------
+# --- layer 6: checks -----------------------------------------------------
 
 
 def _layer_checks(ctx: _Context, outcome: VerifyOutcome):
-    if not ctx.stage.checks:
+    """The gate's spelling of `gates.run_checks`. See `_layer_patterns`.
+
+    These are the checks that may *write* — `rubocop -A` and its kin — which
+    is why the executor runs them inside its own loop and commits after. Run
+    only here, a check's rewrite is swept up silently when the stage lands and
+    orphaned when it does not.
+    """
+    found = gates.run_checks(ctx.stage, ctx.runner)
+    outcome.results.extend(found.results)
+    if found.ok:
         return None
-
-    results = ctx.runner.run_all(ctx.stage.checks)
-    outcome.results.extend(results)
-
-    failed = next((r for r in results if not r.ok), None)
-    if failed is None:
-        return None
-
-    if failed.signal is not None:
-        # Checks run in the same environment as the suite and die with it.
-        return _fail(
-            Layer.CHECKS,
-            Route.HUMAN,
-            f"a required check was killed by signal {failed.signal}",
-            f"A required check did not fail — it was killed by signal "
-            f"{failed.signal}, which is an environment problem rather than a "
-            "problem with this stage. Put the environment back and resume.\n"
-            f"{failed.summary()}\n{_clip(failed.output)}",
-        )
-
+    if found.signal is not None:
+        return _fail(Layer.CHECKS, Route.HUMAN, found.summary, found.feedback)
     return _fail(
         Layer.CHECKS,
         Route.EXECUTOR,
-        "a required check failed",
-        f"A required check failed.\n{failed.summary()}\n{_clip(failed.output)}",
-        failing_paths=_path_hints(failed.output),
+        found.summary,
+        found.feedback,
+        failing_paths=found.failing_paths,
     )
 
 
@@ -688,88 +548,19 @@ def _layer_checks(ctx: _Context, outcome: VerifyOutcome):
 
 
 def _layer_new_tests(ctx: _Context, outcome: VerifyOutcome):
-    # Two rules, and only the second is conditional. Whether a stage *must*
-    # write tests is the operator's and the planner's business; whether a test
-    # file it did write is worth anything is not a matter of opinion, and an
-    # empty one is worthless however the stage was configured.
-    #
-    # This was originally written entirely behind the flag. One stage later, a
-    # stage whose whole output was a spec file left it at zero bytes with the
-    # flag unset, so the gate never ran and a review turn paid for it.
-    changed = ctx.git.diff_names(ctx.stage_start_sha)
-    touched = [p for p in changed if matches_any(p, ctx.cfg.test_file_patterns)]
-
-    # Content, not just a path. The editor creates any file it is handed, so a
-    # stage naming a not-yet-existing spec in `edit_files` gets that file
-    # whether or not the model's reply was applied — and a reply that returned
-    # the spec body as a plain fenced block instead of an edit leaves it at zero
-    # bytes. Observed: the scoped suite passed in five seconds because there
-    # were no examples to run, this gate passed because the diff really had
-    # added a test file, and the reviewer was the only thing between an empty
-    # file and a landed stage.
-    #
-    # A path in the diff that is missing from the worktree was deleted, which is
-    # not what this gate is about; it simply does not count towards the
-    # requirement.
-    root = Path(ctx.cfg.target_repo)
-    substantial = []
-    for path in touched:
-        try:
-            if (root / path).read_text().strip():
-                substantial.append(path)
-        except (OSError, UnicodeDecodeError):
-            # Unreadable or binary — not this gate's business to adjudicate,
-            # and a binary fixture is content by any reading.
-            substantial.append(path)
-    if substantial:
-        return None
-
-    patterns = ", ".join(ctx.cfg.test_file_patterns)
-    if touched:
-        listed = ", ".join(touched)
-        plural = len(touched) > 1
-        return _fail(
-            Layer.NEW_TESTS,
-            Route.EXECUTOR,
-            "the stage's test files are empty" if plural
-            else "the stage's test file is empty",
-            f"This stage touched {listed}, but "
-            + ("every one of them is empty" if plural else "that file is empty")
-            + ", so they assert nothing and the suite passes them in no time at "
-            "all.\n\nThe editor creates a file named in your scope before you "
-            "edit it, so an empty one means your reply was not applied as an "
-            "edit. Write the file's contents as a proper edit rather than as a "
-            "quoted block, and check the file is not empty before you finish.",
-        )
-    if not ctx.stage.require_new_tests:
-        # Nothing empty, and nothing required. A stage that legitimately writes
-        # no tests reaches here and is none of this gate's business.
-        return None
-    return _fail(
-        Layer.NEW_TESTS,
-        Route.EXECUTOR,
-        "the stage wrote no tests",
-        "This stage requires tests, and the diff touches no test file. Write "
-        "the tests for this behaviour, then the implementation that satisfies "
-        f"them.\nRecognised test paths: {patterns}",
+    """The gate's spelling of `gates.check_new_tests`. See `_layer_patterns`."""
+    found = gates.check_new_tests(
+        ctx.stage, ctx.cfg, ctx.git, ctx.stage_start_sha
     )
-
-
-def _path_hints(output: str) -> list[str]:
-    """Source paths mentioned in failing output.
-
-    What the planner needs at an intervention is where the damage is — that is
-    what distinguishes "widen this stage by two files" from "we skipped a
-    prerequisite". Best effort; the full output travels alongside it.
-    """
-    seen: set[str] = set()
-    out: list[str] = []
-    for match in _PATH_HINT.findall(output or ""):
-        if match not in seen:
-            seen.add(match)
-            out.append(match)
-    return out[:20]
+    if found.ok:
+        return None
+    return _fail(Layer.NEW_TESTS, Route.EXECUTOR, found.summary, found.feedback)
 
 
 def _clip(text: str) -> str:
-    return clip_for_model(text, FEEDBACK_OUTPUT_CHARS)
+    # The same clipping the gates use, so a setup failure and a test failure
+    # are truncated the same way. `collapse_progress_runs` before truncation is
+    # the load-bearing half: a progress reporter puts its dots first and its
+    # findings after, and 1,575 unbroken dots once made up 66% of the feedback
+    # handed to an executor.
+    return gates.clip(text)

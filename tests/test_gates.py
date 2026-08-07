@@ -166,3 +166,113 @@ class TestWhatBothDoIdentically:
         )
 
         assert resolve_test_command(stage, cfg, for_loop=True) == "loop-cmd spec/models"
+
+
+class TestTheMovedLayersAgreeWithTheGate:
+    """Each moved layer, asked directly and through `run_verify`.
+
+    The move is only safe if the two spellings of the same question return the
+    same verdict for the same tree. Asserted per layer rather than once, because
+    the failure this guards against is one layer drifting while the others hold
+    — which is exactly how the two test selectors came to disagree.
+    """
+
+    def _verify(self, repo, cfg, stage, sha):
+        from orchestrator.commands import CommandRunner
+        from orchestrator.verify import run_verify
+
+        return run_verify(
+            stage=stage,
+            cfg=cfg,
+            git=Git(repo),
+            runner=CommandRunner(cwd=repo, timeout=60),
+            stage_start_sha=sha,
+        )
+
+    def test_patterns_agrees(self, repo):
+        from orchestrator.gates import check_patterns
+        from orchestrator.verify import Layer
+
+        sha = Git(repo).head_sha()
+        (repo / "app.py").write_text("import pdb; pdb.set_trace()\n")
+        cfg, stage = build(repo, {"forbidden_patterns": ["pdb"]}, test_command="true")
+
+        found = check_patterns(stage, cfg, Git(repo), sha)
+        outcome = self._verify(repo, cfg, stage, sha)
+
+        assert not found.ok
+        assert not outcome.passed
+        assert outcome.failed_layer is Layer.PATTERNS
+        assert outcome.summary == found.summary
+
+    def test_residue_agrees(self, repo):
+        from orchestrator.gates import check_residue
+        from orchestrator.verify import Layer
+
+        sha = Git(repo).head_sha()
+        (repo / "app.py").write_text("before_filter :x\nchanged\n")
+        cfg, stage = build(repo, {"must_not_remain": ["before_filter"]}, test_command="true")
+
+        found = check_residue(stage, cfg, Git(repo))
+        outcome = self._verify(repo, cfg, stage, sha)
+
+        assert not found.ok
+        assert not outcome.passed
+        assert outcome.failed_layer is Layer.RESIDUE
+        assert outcome.summary == found.summary
+
+    def test_new_tests_agrees(self, repo):
+        from orchestrator.gates import check_new_tests
+        from orchestrator.verify import Layer
+
+        sha = Git(repo).head_sha()
+        (repo / "app.py").write_text("changed\n")
+        cfg, stage = build(repo, {"require_new_tests": True}, test_command="true")
+
+        found = check_new_tests(stage, cfg, Git(repo), sha)
+        outcome = self._verify(repo, cfg, stage, sha)
+
+        assert not found.ok
+        assert not outcome.passed
+        assert outcome.failed_layer is Layer.NEW_TESTS
+        assert outcome.summary == found.summary
+
+    def test_checks_agrees(self, repo):
+        from orchestrator.commands import CommandRunner
+        from orchestrator.gates import run_checks
+        from orchestrator.verify import Layer
+
+        sha = Git(repo).head_sha()
+        (repo / "app.py").write_text("changed\n")
+        cfg, stage = build(repo, {"checks": ["false"]}, test_command="true")
+
+        found = run_checks(stage, CommandRunner(cwd=repo, timeout=60))
+        outcome = self._verify(repo, cfg, stage, sha)
+
+        assert not found.ok
+        assert not outcome.passed
+        assert outcome.failed_layer is Layer.CHECKS
+        assert outcome.summary == found.summary
+
+    def test_tests_agrees_and_carries_the_failing_paths(self, repo):
+        # `failing_paths` is what the planner reads at an intervention, and it
+        # is produced by a regex that was nearly rewritten during this move.
+        from orchestrator.commands import CommandRunner
+        from orchestrator.gates import run_tests
+        from orchestrator.verify import Layer
+
+        sha = Git(repo).head_sha()
+        (repo / "app.py").write_text("changed\n")
+        cfg, stage = build(repo, test_command="echo 'app/models/order.rb:12 failed'; false")
+
+        found = run_tests(
+            stage, cfg, Git(repo), CommandRunner(cwd=repo, timeout=60), sha,
+            for_loop=False,
+        )
+        outcome = self._verify(repo, cfg, stage, sha)
+
+        assert not found.ok
+        assert not outcome.passed
+        assert outcome.failed_layer is Layer.TESTS
+        assert "app/models/order.rb" in found.failing_paths
+        assert outcome.failing_paths == found.failing_paths
