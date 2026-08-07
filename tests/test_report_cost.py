@@ -134,3 +134,33 @@ class TestTheCostSectionRecordsWhatProducedIt:
         monkeypatch.setenv("LITELLM_MODEL_COST_MAP_URL", "http://127.0.0.1:9/none")
         out = build_report(state_with(planner_prompt_tokens=10), cfg_with())
         assert "## Cost" in out
+
+
+class TestTheExecutorsCacheRateIsReported:
+    """Computable per attempt is not the same as visible for the run.
+
+    The executor's usage reached `executor-loop.json` and stopped there, so a
+    cache hit rate could be worked out one attempt at a time and never for the
+    run — which is the shape of every value this codebase has lost crossing a
+    schema. The section appears only when there is something to report, so the
+    subprocess path, which has no real counts, still renders as it did.
+    """
+
+    def test_it_appears_with_a_hit_rate_when_the_executor_reported_usage(self):
+        from orchestrator.report import _cost_section
+
+        state = state_with(
+            executor_prompt_tokens=100_000,
+            executor_cached_tokens=90_000,
+            executor_completion_tokens=5_000,
+        )
+        text = "\n".join(_cost_section(state, cfg_with()))
+        assert "**Executor**" in text
+        assert "90,000 cached, 90%" in text
+        assert "Uncached prompt tokens: 10,000" in text
+
+    def test_it_is_absent_when_nothing_was_reported(self):
+        from orchestrator.report import _cost_section
+
+        text = "\n".join(_cost_section(state_with(), cfg_with()))
+        assert "**Executor**" not in text

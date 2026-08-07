@@ -196,6 +196,11 @@ class RunState(TypedDict, total=False):
     # finding once per attempt.
     pending_observations: list[dict]
     executor_context_tokens: int
+    # What the executor loop proved green and against which tree, so the
+    # gate can tell a question already answered from one it must ask.
+    # Declared here or the schema drops it in transit, which is how four
+    # previous values were lost.
+    gate_records: dict
     executor_cost_usd: float
     withheld_reads: list[str]
 
@@ -300,6 +305,17 @@ def _zero_usage() -> dict[str, int]:
         "planner_cached_tokens": 0,
         "planner_cache_write_tokens": 0,
         "planner_completion_tokens": 0,
+        # The executor had no keys here at all while it was a subprocess:
+        # its usage was scraped from a console line that omitted reasoning
+        # tokens and could not see this provider's cache fields, so there
+        # was nothing true to accumulate. In-process there is, and without
+        # these the hit rate is computable per attempt and nowhere for the
+        # run — which is the fifth value in this file to be computed
+        # correctly and lost crossing a schema.
+        "executor_prompt_tokens": 0,
+        "executor_cached_tokens": 0,
+        "executor_cache_write_tokens": 0,
+        "executor_completion_tokens": 0,
     }
 
 
@@ -340,6 +356,12 @@ def fresh_stage_fields() -> dict:
         # merge sha it had nothing to do with — and that file is what the
         # planner sizes the next batch against.
         "executor_context_tokens": 0,
+        # Cleared for the same reason as the line above. These say "this
+        # exact command was green on this exact tree"; carried into a new
+        # stage they would be answers to a question about a different one,
+        # and although the sha comparison would reject them, a value that
+        # is never cleared is invisible until it is wrong.
+        "gate_records": {},
         "executor_cost_usd": 0.0,
         # A new stage has a new tree; nothing has been proven about it yet.
         "full_suite_digest": "",

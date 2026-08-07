@@ -109,6 +109,7 @@ def run_verify(
     previous_diff_digest: str | None = None,
     previous_failure_layer: str | None = None,
     resuming: bool = False,
+    green_records: dict[str, dict] | None = None,
 ) -> VerifyOutcome:
     outcome = VerifyOutcome(passed=True)
     context = _Context(
@@ -125,6 +126,7 @@ def run_verify(
         previous_diff_digest=previous_diff_digest,
         previous_failure_layer=previous_failure_layer,
         resuming=resuming,
+        green_records=green_records or {},
     )
 
     outcome.diff_digest = diff_digest(git, stage_start_sha)
@@ -171,6 +173,39 @@ class _Context:
     previous_diff_digest: str | None = None
     previous_failure_layer: str | None = None
     resuming: bool = False
+    # What the executor's loop already proved green, and against which
+    # tree. See `_already_answered`.
+    green_records: dict = field(default_factory=dict)
+
+
+def _already_answered(ctx: "_Context", layer: str, command: str | None) -> bool:
+    """Has this exact question already been answered on this exact tree?
+
+    The executor's loop runs the layers it can act on, and until now the gate
+    ran them again — same command, same bytes, same answer. Measured on one
+    stage: 16.7s of specs and 1.5s of formatter, twice per attempt.
+
+    That duplication was never the design. It existed because the subprocess
+    editor could not be made to run the set we wanted, so the gate had to run
+    the authoritative one itself. Controlling the executor is what removes the
+    need, and this is where the need is removed.
+
+    Not trust — two facts compared. The command must be the one this gate would
+    run, and HEAD must be where it was when the answer was obtained. Anything
+    that moves the tree, including a human's commit on a resume or a check that
+    rewrote a file, fails the comparison and the layer runs. Which is why the
+    resume-into-verify path — the whole human-in-the-loop tier — still tests
+    everything: a hand-edit moves HEAD.
+    """
+    record = (ctx.green_records or {}).get(layer)
+    if not record:
+        return False
+    if record.get("command") != (command or ""):
+        return False
+    try:
+        return bool(record.get("head_sha")) and record["head_sha"] == ctx.git.head_sha()
+    except GitError:  # pragma: no cover - a broken repo fails louder elsewhere
+        return False
 
 
 def _fail(
@@ -192,6 +227,15 @@ def _fail(
 def _layer_setup(ctx: _Context, outcome: VerifyOutcome):
     command = ctx.stage.effective_setup_command(ctx.cfg)
     if not command:
+        return None
+
+    # Precheck runs this before the executor, and the executor's own tests
+    # need the same stack up — so on the agent path it has already run, on
+    # this tree, minutes ago. Keyed to HEAD like the others rather than to
+    # "did anything run it": the environment question is only settled while
+    # nothing has moved, and a resume where a human restarted Docker moves
+    # HEAD with their commit.
+    if ctx.green_records and _already_answered(ctx, "checks", ""):
         return None
 
     result = ctx.runner.run(command)
@@ -456,6 +500,12 @@ def _layer_tests(ctx: _Context, outcome: VerifyOutcome):
             "spec instead.",
         )
 
+    if _already_answered(ctx, "tests", command):
+        # The loop ran this command on this tree and it passed. Running it
+        # again asks a question with a known answer.
+        _record_full_suite(ctx, outcome, command)
+        return None
+
     # The running, the one re-run and the flake adjudication all live in
     # `gates.py`, shared with the executor's loop. What stays here is the
     # routing and the full-suite bookkeeping: a signal is a human's problem, a
@@ -529,6 +579,9 @@ def _layer_checks(ctx: _Context, outcome: VerifyOutcome):
     only here, a check's rewrite is swept up silently when the stage lands and
     orphaned when it does not.
     """
+    if _already_answered(ctx, "checks", ""):
+        return None
+
     found = gates.run_checks(ctx.stage, ctx.runner)
     outcome.results.extend(found.results)
     if found.ok:

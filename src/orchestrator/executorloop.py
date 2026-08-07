@@ -136,21 +136,36 @@ def _gate_cycle(stage, cfg, git, runner, out: ExecutionResult, since_sha, log=No
     if changed and log:
         log(f"[execute] checks rewrote files; committed as {changed[:12]}")
     if not lint.ok:
+        out.gate_records.pop("checks", None)
         return lint
 
-    for found in (
-        gates.check_patterns(stage, cfg, git, since_sha),
-        gates.check_residue(stage, cfg, git),
-        gates.check_new_tests(stage, cfg, git, since_sha),
-        gates.run_tests(
-            stage, cfg, git, runner, since_sha,
-            # The editor refuses an out-of-scope write, so the reason the
-            # subprocess path was denied the full suite does not apply.
-            for_loop=True, allow_full_suite=True,
+    # The checks passed on the tree as it stands *after* their own rewrites
+    # were committed, which is the tree the gate will see.
+    out.gate_records["checks"] = {"command": "", "head_sha": git.head_sha()}
+
+    for name, found in (
+        ("patterns", gates.check_patterns(stage, cfg, git, since_sha)),
+        ("residue", gates.check_residue(stage, cfg, git)),
+        ("new_tests", gates.check_new_tests(stage, cfg, git, since_sha)),
+        (
+            "tests",
+            gates.run_tests(
+                stage, cfg, git, runner, since_sha,
+                # The editor refuses an out-of-scope write, so the reason the
+                # subprocess path was denied the full suite does not apply.
+                for_loop=True, allow_full_suite=True,
+            ),
         ),
     ):
         if not found.ok:
+            out.gate_records.pop(name, None)
+            out.gate_records.pop("tests", None)
             return found
+        if found.command:
+            out.gate_records[name] = {
+                "command": found.command,
+                "head_sha": found.head_sha or git.head_sha(),
+            }
     return None
 
 

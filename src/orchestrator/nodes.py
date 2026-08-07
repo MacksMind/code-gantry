@@ -703,6 +703,22 @@ def execute(state: RunState, rt: Runtime) -> dict:
     # 60k of context loaded is exactly the datum that should shrink the next
     # stage, and it is the one most likely to be discarded.
     measured = {"executor_context_tokens": result.context_tokens} if result.context_tokens else {}
+    # What the loop proved green, carried to the gate so it does not ask
+    # the same question of the same tree. Always written, including empty,
+    # so a later attempt cannot inherit an earlier one's answers.
+    measured["gate_records"] = dict(result.gate_records)
+    if result.usage is not None:
+        measured["run_usage"] = accumulate_usage(
+            state.get("run_usage"),
+            executor_prompt_tokens=getattr(result.usage, "prompt_tokens", 0),
+            executor_cached_tokens=getattr(result.usage, "cached_tokens", 0),
+            executor_cache_write_tokens=getattr(
+                result.usage, "cache_write_tokens", 0
+            ),
+            executor_completion_tokens=getattr(
+                result.usage, "completion_tokens", 0
+            ),
+        )
     # Accumulated, not replaced. Each attempt is its own Aider session with its
     # own running total, so a stage that took four attempts paid for four and
     # the figure worth recording is the stage's, not the last attempt's.
@@ -855,6 +871,10 @@ def verify(state: RunState, rt: Runtime) -> dict:
         previous_diff_digest=state.get("last_diff_digest") or None,
         previous_failure_layer=state.get("failure_layer") or None,
         resuming=bool(state.get("resuming")),
+        # What the executor's loop already proved on this tree. Empty on the
+        # subprocess path, on script stages and on a resume that re-enters
+        # here — all three being cases where nothing has tested anything.
+        green_records=state.get("gate_records") or {},
     )
 
     rt.write_artifact(

@@ -151,6 +151,12 @@ class TestUsageAccumulation:
             "completion_tokens", "planner_prompt_tokens",
             "planner_cached_tokens", "planner_cache_write_tokens",
             "planner_completion_tokens",
+            # The executor had none of these while it was a subprocess whose
+            # usage was scraped from a console line. In-process it reports
+            # real counts, and without a home here the cache hit rate is
+            # computable per attempt and nowhere for the run.
+            "executor_prompt_tokens", "executor_cached_tokens",
+            "executor_cache_write_tokens", "executor_completion_tokens",
         }
 
 

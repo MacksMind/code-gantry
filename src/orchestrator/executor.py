@@ -283,6 +283,11 @@ class ExecutionResult:
     # Which gate failed on which cycle, so a stage that used its whole budget
     # says what it kept failing rather than only that it ran out.
     in_loop_failures: list[str] = field(default_factory=list)
+    # What the loop proved green, and against which tree: layer name ->
+    # {"command", "head_sha"}. The gate reads this to decide whether running
+    # the same command again would ask a question already answered. Not trust
+    # — two facts compared, and any of them moving means it runs.
+    gate_records: dict[str, dict] = field(default_factory=dict)
 
 
 # Aider's own normalisation, lifted from `get_file_mentions` in the installed
@@ -987,6 +992,23 @@ def _write_transcript(history_dir: Path, conversation: list, out: ExecutionResul
                     "edit_refusals": out.edit_refusals,
                     "commits": out.commits,
                     "in_loop_failures": out.in_loop_failures,
+                    # Recorded here and not only rolled into the run total,
+                    # because a cache whose hit rate cannot be seen per
+                    # attempt cannot be tuned — the same argument that put
+                    # refusals in the planner's ledger. The static prefix is
+                    # arranged to be shared across every stage of a run, and
+                    # this is the only place that claim can be checked.
+                    "usage": {
+                        "prompt_tokens": getattr(out.usage, "prompt_tokens", 0),
+                        "cached_tokens": getattr(out.usage, "cached_tokens", 0),
+                        "cache_write_tokens": getattr(
+                            out.usage, "cache_write_tokens", 0
+                        ),
+                        "completion_tokens": getattr(
+                            out.usage, "completion_tokens", 0
+                        ),
+                    },
+                    "cost_usd": out.cost_usd,
                 },
                 indent=2,
             )

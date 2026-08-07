@@ -371,6 +371,31 @@ def _cost_section(state: RunState, cfg: ProjectConfig) -> list[str]:
             planner_writes, planner_completion,
         ),
         "",
+    ]
+
+    exec_prompt = run_usage.get("executor_prompt_tokens", 0)
+    if exec_prompt:
+        exec_cached = run_usage.get("executor_cached_tokens", 0)
+        exec_writes = run_usage.get("executor_cache_write_tokens", 0)
+        exec_completion = run_usage.get("executor_completion_tokens", 0)
+        exec_pct = exec_cached / exec_prompt * 100
+        lines += [
+            f"**Executor** ({cfg.executor.model}, effort "
+            f"{cfg.executor.reasoning_effort or 'default'})",
+            "",
+            f"- Prompt tokens: {exec_prompt:,} "
+            f"({exec_cached:,} cached, {exec_pct:.0f}%)",
+            f"- Uncached prompt tokens: {exec_prompt - exec_cached:,}",
+            f"- Completion tokens: {exec_completion:,}",
+            "- Estimated cost: "
+            + _dollars(
+                prices, cfg.executor.model, exec_prompt, exec_cached,
+                exec_writes, exec_completion,
+            ),
+            "",
+        ]
+
+    lines += [
         f"Total test-suite runtime: {test_seconds:.0f}s across "
         f"{len(completed)} landed stage(s). On a large suite this, rather than "
         "token cost, is usually what makes a run expensive — the full suite runs "
