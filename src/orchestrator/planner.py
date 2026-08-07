@@ -546,12 +546,30 @@ class AnthropicPlanner:
         Rendered here rather than in the node so the node never has to know
         that two different objects record calls.
         """
-        calls = list(getattr(self.reader, "calls", []))
-        return [
-            f"{c.tool}({c.detail}) -> "
-            + (f"refused: {c.refusal}" if getattr(c, "refusal", "") else f"{c.lines} line(s)")
-            for c in calls
-        ]
+        return [_render_call(c) for c in getattr(self.reader, "calls", []) or []]
+
+    def _log_new_calls(self, seen: int) -> int:
+        """Emit the calls made since `seen`; return the new watermark.
+
+        A derivation is a tool loop of median 28 calls and up to 45, each an
+        HTTP round trip, and it takes between 7 and 20 minutes on this project.
+        For all of it the planner wrote nothing: `planner.json` lands when the
+        decision completes, and the run log carried "deriving next stage"
+        followed by silence. Asked what a 19-minute derivation was doing, the
+        only available answers were the elapsed time and that the process was
+        blocked on I/O rather than spinning — nothing about the work.
+
+        The calls were already logged in full; they were held to the end and
+        emitted as one line. This is the same bytes, earlier. `plan` now
+        reports a count instead of the list, because two renderings of one
+        fact is how the two of them drift, and `_render_call` is the single
+        renderer for the same reason `number_lines` is.
+        """
+        calls = list(getattr(self.reader, "calls", []) or [])
+        if self.log:
+            for call in calls[seen:]:
+                self.log(f"[plan] {_render_call(call)}")
+        return len(calls)
 
     def _reads_answered(self) -> int:
         """Of what was asked, how much came back.
@@ -676,6 +694,9 @@ class AnthropicPlanner:
         conversation = list(messages)
         usage = PlannerUsage()
         response = None
+        # The ledger is cumulative across the whole decision, so the loop
+        # reports only what each turn added.
+        logged = len(getattr(self.reader, "calls", []) or [])
 
         # One turn per tool round trip, plus one for the answer. The ceiling is
         # the reader's own call budget: it refuses past that, the planner reads
@@ -746,6 +767,10 @@ class AnthropicPlanner:
                     ],
                 },
             ]
+            # After the batch has run, before the next request goes out. This
+            # is the only point in a 7-to-20-minute decision where anything is
+            # known about what it is doing.
+            logged = self._log_new_calls(logged)
 
         if response is None:  # pragma: no cover - loop always runs once
             return _blocked("the planner produced no response"), None, usage
@@ -1154,6 +1179,22 @@ once and verifying it again on every decision for the rest of the run. Then
 draw against what the repository actually contains.\
 """
 )
+
+
+def _render_call(call) -> str:
+    """One ledger entry, as both the live log and the artifact spell it.
+
+    A single renderer because there are now two readers of it — the line
+    emitted while the loop runs and the list recorded when it finishes. Three
+    copies of the numbered-source format string is how that one drifted while
+    every test stayed green.
+    """
+    tail = (
+        f"refused: {call.refusal}"
+        if getattr(call, "refusal", "")
+        else f"{call.lines} line(s)"
+    )
+    return f"{call.tool}({call.detail}) -> {tail}"
 
 
 def cache_control(ttl: str | None = None) -> dict:

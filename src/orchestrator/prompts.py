@@ -313,9 +313,16 @@ def build_executor_prompt(
         )
 
     if excerpts:
-        blocks = [
-            f"### `{label}`\n\n```\n{text}\n```" for label, text in excerpts
-        ]
+        # The code span holds the path and range; the note follows it. One
+        # label carries both, and wrapping the whole of it meant the note's own
+        # backticks — `note` is prose about identifiers, so it has them — closed
+        # the span early and the rest of the heading rendered as something else.
+        # The clip warning stays inside, because it is about the range.
+        blocks = []
+        for label, text in excerpts:
+            ref, _, note = label.partition(" — ")
+            heading = f"`{ref}`" + (f" — {note}" if note else "")
+            blocks.append(f"### {heading}\n\n```\n{text}\n```")
         # Read at the stage's starting commit, which is the right baseline and
         # is not always the tree. Where this stage has already changed
         # something, the lines below may have moved under it — and the next

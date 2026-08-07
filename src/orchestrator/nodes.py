@@ -237,12 +237,16 @@ def plan(state: RunState, rt: Runtime) -> dict:
         # ceiling was found to be binding on 24 of 65 steps, and a count that
         # quietly included denied calls would have answered that question
         # wrongly while looking exactly as authoritative.
+        # A count, not the list. Each call is now logged as it returns, so
+        # repeating them here would be the same bytes twice — and the reason
+        # they were held to the end no longer applies, since holding them was
+        # what made a 19-minute derivation opaque. The full list stays in
+        # `planner.json`, which is what the measurements read.
         refused = len(outcome.tool_calls) - outcome.reads_answered
         rt.log(
             f"[plan] read {outcome.reads_answered} thing(s)"
             + (f", {refused} refused" if refused else "")
-            + ": "
-            + "; ".join(outcome.tool_calls)
+            + f" over {planned_for:.0f}s"
         )
 
     usage = accumulate_usage(

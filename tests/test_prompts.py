@@ -2179,3 +2179,54 @@ class TestNoPromptDescribesTheExecutorThatWasDeleted:
             "activerecord", "gemfile", "render text",
         ):
             assert word not in blob, f"{word!r} is project knowledge in a prompt"
+
+
+class TestAnExcerptHeadingDoesNotSwallowItsNote:
+    """The label is a path and a range; the note is prose and contains backticks.
+
+    Observed in a live prompt. `resolve_excerpts` builds one label carrying the
+    range *and* the planner's note, and the heading wrapped the whole of it in
+    a code span:
+
+        ### `config/routes.rb:1473-1493 — ... leaving `display_title` unrouted`
+
+    The note's own backticks close the span early, so the rest renders as prose
+    inside a heading meant to be one identifier. Nothing breaks — the executor
+    reads raw text — but the heading is what it scans to find the right
+    excerpt, and the note is the sentence saying what the range is for. Both
+    are worth keeping legible.
+
+    Split rather than escaped: the path and range go in the span, the note
+    follows it. That also stops the heading growing without bound, since a note
+    is free-form and one has already reached a full line.
+    """
+
+    def _headings(self, tmp_path, excerpts):
+        from orchestrator.config import Stage
+        from orchestrator.prompts import build_executor_prompt
+
+        text = build_executor_prompt(
+            Stage(id="s", instruction="do", edit_files=["a"]),
+            _exec_cfg(tmp_path),
+            excerpts=excerpts,
+        )
+        return [ln for ln in text.splitlines() if ln.startswith("### ")]
+
+    def test_the_span_holds_only_the_path_and_range(self, tmp_path):
+        headings = self._headings(
+            tmp_path, [("a.rb:1-9 — what `foo` must match", "    1 | x")]
+        )
+        assert headings == ["### `a.rb:1-9` — what `foo` must match"]
+
+    def test_a_label_with_no_note_is_unchanged(self, tmp_path):
+        headings = self._headings(tmp_path, [("a.rb:1-9", "    1 | x")])
+        assert headings == ["### `a.rb:1-9`"]
+
+    def test_a_clip_note_stays_with_the_range(self, tmp_path):
+        # `resolve_excerpts` appends the clip warning to the range itself, and
+        # it is about the range rather than about the code — it belongs inside.
+        label = "a.rb:1-5 (clipped from 1-40 by max_read_lines) — the list"
+        headings = self._headings(tmp_path, [(label, "    1 | x")])
+        assert headings == [
+            "### `a.rb:1-5 (clipped from 1-40 by max_read_lines)` — the list"
+        ]
