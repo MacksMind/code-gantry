@@ -272,3 +272,86 @@ class TestARunHoldsEveryModuleItCanReach:
 
         body = inspect.getsource(build_runtime)
         assert "pin_modules()" in body.split("logger = log")[0]
+
+
+class TestEveryRoleGetsBothLogs:
+    """Wiring, pinned, because this is where it keeps going missing.
+
+    `Executor.__init__` carries the comment "Assigned by `build_runtime`" and
+    `build_runtime` never assigned it: the loop that binds the logger names the
+    planner and the reviewer, and the executor is constructed on its own line
+    with no `log`. So `self.log` was `None` for the whole of the executor's
+    life, and two sites went with it — `run_loop`'s "checks rewrote files;
+    committed as", which has been emitted **zero** times across every run, and
+    the transport-retry line, whose absence is exactly the case the runtime
+    docstring warns about: "a silent fifteen-minute wait and a hung process
+    look identical from outside."
+
+    Then the same thing happened again on the way past. `tool_log` was added to
+    `OpenAIExecutorModel`, the draining method was written, and nothing passed
+    it — so `tools.log` carried the planner and the reviewer and not one
+    executor line. Two changes, both correct in isolation, and the capability
+    between them was never connected.
+
+    Asserted at the seam rather than by reading either file, because both
+    defects review as fine: the constructor takes the argument, the caller
+    exists, and only running it shows they are not joined.
+    """
+
+    def _built(self, cfg, tmp_path):
+        project = ProjectPaths("proj", root=tmp_path / "projects")
+        timeline, tools = [], []
+        rt = build_runtime(
+            cfg,
+            project,
+            RunPaths(project, "run-1"),
+            AnthropicPlanner(cfg.planner, client=object()),
+            OpenAIReviewer(cfg.reviewer, client=object()),
+            log=timeline.append,
+            tool_log=tools.append,
+        )
+        return rt, timeline, tools
+
+    def test_the_executor_gets_the_run_log(self, repo, tmp_path):
+        rt, timeline, _tools = self._built(a_config(repo), tmp_path)
+        assert rt.executor.log is not None
+        rt.executor.log("hello")
+        assert timeline == ["hello"]
+
+    def test_the_executor_gets_the_tool_log(self, repo, tmp_path):
+        rt, _timeline, tools = self._built(a_config(repo), tmp_path)
+        assert rt.executor.tool_log is not None
+        rt.executor.tool_log("read")
+        assert tools == ["read"]
+
+    def test_all_three_roles_are_bound(self, repo, tmp_path):
+        rt, _t, _s = self._built(a_config(repo), tmp_path)
+        for role in (rt.planner, rt.reviewer, rt.executor):
+            assert role.log is not None, role
+            assert role.tool_log is not None, role
+
+    def test_the_executors_model_is_handed_both(self, repo, tmp_path, monkeypatch):
+        # One step further out: the executor holding them is not the same as
+        # the provider client receiving them, and that is the join that broke.
+        from orchestrator import executorclient
+
+        seen = {}
+
+        class Spy:
+            def __init__(self, cfg, client=None, log=None, tool_log=None):
+                seen["log"], seen["tool_log"] = log, tool_log
+
+            def run(self, *a, **kw):  # pragma: no cover - never reached
+                raise AssertionError
+
+        monkeypatch.setattr(executorclient, "OpenAIExecutorModel", Spy)
+        rt, timeline, tools = self._built(a_config(repo), tmp_path)
+        from orchestrator.config import Stage
+
+        try:
+            rt.executor.run_agent_stage(
+                Stage(id="s", instruction="do", edit_files=["a.py"]), "prompt"
+            )
+        except AssertionError:
+            pass
+        assert seen["log"] is not None and seen["tool_log"] is not None

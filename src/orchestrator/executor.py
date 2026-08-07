@@ -129,12 +129,20 @@ class Executor:
         runner: CommandRunner,
         git: Git | None = None,
         log=None,
+        tool_log=None,
     ):
         self.cfg = cfg
         self.runner = runner
         self.git = git
-        # Assigned by `build_runtime`; the executor predates the run log.
+        # Both passed by `build_runtime`. This said "assigned by build_runtime"
+        # and was not: the loop that binds the logger names the planner and the
+        # reviewer, and the executor was constructed on its own line without
+        # one. `self.log` was None for the whole of the executor's life, which
+        # took "checks rewrote files; committed as" — zero emissions across
+        # every run — and the transport-retry line with it.
         self.log = log
+        # Reads, to the file the timeline is kept free of. See `RunPaths`.
+        self.tool_log = tool_log
 
     def _tracked_paths(self) -> list[str] | None:
         """What the repository currently tracks, for the mention shield.
@@ -212,7 +220,9 @@ class Executor:
         reader, editor, semantic = build_loop_parts(
             stage, self.cfg, self.cfg.target_repo
         )
-        model = OpenAIExecutorModel(self.cfg.executor, log=self.log)
+        model = OpenAIExecutorModel(
+            self.cfg.executor, log=self.log, tool_log=self.tool_log
+        )
         kept = set(_within_read_budget(stage.read_files, self.cfg))
 
         from orchestrator.prompts import build_executor_messages
