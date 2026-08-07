@@ -709,6 +709,21 @@ class ProjectConfig(_Strict):
     # solve on the operator's behalf.
     checks_commit_changes: bool = True
 
+    # Let the gate accept the executor loop's verdict when the command and the
+    # tree are identical, instead of running the same thing again.
+    #
+    # Off, and the default is the point. The gate re-running is the one check
+    # that would catch a loop testing the wrong thing — measured on one run,
+    # 23 of 35 stages had an inner loop that was either absent or aimed at a
+    # file the stage was not editing, and every one of them reported green.
+    # An executor whose test selection has not been watched for long is
+    # exactly the case that check exists for.
+    #
+    # Worth turning on once a run's worth of stages shows the gate never
+    # disagreeing with the loop. Until then the duplication is what buys the
+    # right to trust it, and 14s a stage is a cheap price for that.
+    trust_executor_gates: bool = False
+
     # A reviewer leaves comments on the work in front of it. It does not ask for
     # the work again, and an author who cannot see their own diff is not in a
     # position to amend it — so a rejected attempt stays on the branch and the

@@ -186,6 +186,12 @@ class _Context:
 
 
 def _already_answered(ctx: "_Context", layer: str, command: str | None) -> bool:
+    """True when the loop answered this and the answer was yes."""
+    record = _recorded_answer(ctx, layer, command)
+    return record is not None and not record.get("failed")
+
+
+def _recorded_answer(ctx: "_Context", layer: str, command: str | None) -> dict | None:
     """Has this exact question already been answered on this exact tree?
 
     The executor's loop runs the layers it can act on, and until now the gate
@@ -204,15 +210,21 @@ def _already_answered(ctx: "_Context", layer: str, command: str | None) -> bool:
     resume-into-verify path — the whole human-in-the-loop tier — still tests
     everything: a hand-edit moves HEAD.
     """
+    if not getattr(ctx.cfg, "trust_executor_gates", False):
+        # The operator has not said the loop may answer for the gate. See
+        # `ProjectConfig.trust_executor_gates` for why that is the default.
+        return None
     record = (ctx.green_records or {}).get(layer)
     if not record:
-        return False
+        return None
     if record.get("command") != (command or ""):
-        return False
+        return None
     try:
-        return bool(record.get("head_sha")) and record["head_sha"] == ctx.git.head_sha()
+        if record.get("head_sha") and record["head_sha"] == ctx.git.head_sha():
+            return record
     except GitError:  # pragma: no cover - a broken repo fails louder elsewhere
-        return False
+        return None
+    return None
 
 
 def _fail(
@@ -507,11 +519,23 @@ def _layer_tests(ctx: _Context, outcome: VerifyOutcome):
             "spec instead.",
         )
 
-    if _already_answered(ctx, "tests", command):
-        # The loop ran this command on this tree and it passed. Running it
-        # again asks a question with a known answer.
-        _record_full_suite(ctx, outcome, command)
-        return None
+    known = _recorded_answer(ctx, "tests", command)
+    if known is not None:
+        if not known.get("failed"):
+            # The loop ran this command on this tree and it passed.
+            _record_full_suite(ctx, outcome, command)
+            return None
+        # And it ran the same command on the same tree and it failed. Running
+        # it again to watch it fail identically is the duplication this whole
+        # mechanism exists to remove, and it falls hardest on the stages that
+        # need the most attempts.
+        return _fail(
+            Layer.TESTS,
+            Route.EXECUTOR,
+            known.get("summary") or "the test command failed",
+            known.get("feedback") or "",
+            failing_paths=list(known.get("failing_paths") or []),
+        )
 
     # The running, the one re-run and the flake adjudication all live in
     # `gates.py`, shared with the executor's loop. What stays here is the

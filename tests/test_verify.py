@@ -1382,3 +1382,89 @@ class TestAgentContextIsNotAStagesToEdit:
         (repo / "AGENTS.md").write_text("rewritten\n")
         out = verify(repo, cfg, stage, sha)
         assert out.passed or out.failed_layer is not Layer.SCOPE
+
+
+class TestTheGateDoesNotRepeatTheLoop:
+    """Both answers are answers, and only greens were kept at first.
+
+    The loop runs the layers it can act on and records the verdict against the
+    HEAD it was reached on. Skipping a *pass* was obvious. Skipping a *failure*
+    is the same argument and was missed: nothing moves the tree between the
+    loop's last run and the gate, so re-running watches the identical command
+    fail identically — and that falls hardest on the stages that need the most
+    attempts, which are the ones already costing the most.
+    """
+
+    def _record(self, repo, command, **over):
+        rec = {"command": command, "head_sha": Git(repo).head_sha()}
+        rec.update(over)
+        return {"tests": rec}
+
+    def test_a_recorded_pass_skips_the_run(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(repo, test_command="exit 1", trust_executor_gates=True)
+        out = verify(
+            repo, cfg, stage, sha,
+            green_records=self._record(repo, "exit 1"),
+        )
+        assert out.passed, "a command that would fail was not run"
+
+    def test_a_recorded_failure_is_adopted_rather_than_repeated(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(repo, test_command="exit 0", trust_executor_gates=True)
+        out = verify(
+            repo, cfg, stage, sha,
+            green_records=self._record(
+                repo, "exit 0", failed=True, summary="the test command failed",
+                feedback="THE FEEDBACK", failing_paths=["app/a.rb"],
+            ),
+        )
+        # A command that would have passed was not run, and the recorded
+        # verdict routes exactly as an observed one would.
+        assert not out.passed
+        assert out.failed_layer is Layer.TESTS
+        assert out.route is Route.EXECUTOR
+        assert out.feedback == "THE FEEDBACK"
+        assert out.failing_paths == ["app/a.rb"]
+
+    def test_a_record_from_another_tree_is_ignored(self, repo):
+        # The whole safety of this is the sha comparison: a human's commit on
+        # a resume moves HEAD, so their work is always tested.
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(repo, test_command="exit 1", trust_executor_gates=True)
+        stale = {"tests": {"command": "exit 1", "head_sha": "0" * 40}}
+        out = verify(repo, cfg, stage, sha, green_records=stale)
+        assert not out.passed
+        assert out.failed_layer is Layer.TESTS
+
+    def test_a_record_for_a_different_command_is_ignored(self, repo):
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(repo, test_command="exit 1", trust_executor_gates=True)
+        out = verify(
+            repo, cfg, stage, sha,
+            green_records=self._record(repo, "some other command"),
+        )
+        assert not out.passed
+
+    def test_the_gate_runs_its_own_tests_by_default(self, repo):
+        """The default is off, and that is the substance of the setting.
+
+        Accepting the loop's verdict removes the one check that would notice a
+        loop testing the wrong thing — measured on one run, 23 of 35 stages had
+        an inner loop either absent or aimed at a file the stage was not
+        editing, and every one reported green. The duplication is what buys the
+        right to trust it later.
+        """
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(repo, test_command="exit 1")
+        out = verify(
+            repo, cfg, stage, sha,
+            green_records=self._record(repo, "exit 1"),
+        )
+        assert not out.passed, "the recorded pass was accepted without opting in"
+        assert out.failed_layer is Layer.TESTS

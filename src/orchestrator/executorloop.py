@@ -158,8 +158,24 @@ def _gate_cycle(stage, cfg, git, runner, out: ExecutionResult, since_sha, log=No
         ),
     ):
         if not found.ok:
-            out.gate_records.pop(name, None)
+            # Recorded, not discarded. A failure is as much an answer as a
+            # pass: the gate would run the same command on the same tree and
+            # reach the same verdict, which is 14s of specs to learn something
+            # already known. Only greens were kept at first, which left the
+            # duplication in place on exactly the path where attempts are
+            # slowest — a stage that is struggling runs the gate most often.
             out.gate_records.pop("tests", None)
+            if found.command:
+                out.gate_records[name] = {
+                    "command": found.command,
+                    "head_sha": found.head_sha or git.head_sha(),
+                    "failed": True,
+                    "summary": found.summary,
+                    "feedback": found.feedback,
+                    "failing_paths": list(found.failing_paths),
+                }
+            else:
+                out.gate_records.pop(name, None)
             return found
         if found.command:
             out.gate_records[name] = {
