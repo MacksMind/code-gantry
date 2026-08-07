@@ -343,6 +343,20 @@ finds nothing left to do. Measured cost of not doing this: two consecutive
 stages, one cop each with no autocorrection, three or four attempts apiece and
 one planner intervention, to communicate a one-line change.
 
+**And when you find one, sweep for the rest rather than waiting to trip over
+them.** Two of these turned up in a day by accident, so the third was found by
+looking: a deliberate pass over every model-facing string, checking each claim
+about the machinery against what the code now does, produced **nine** more. The
+worst were not the stale ones but the *contradictions* — the `instruction`
+field told the planner to quote code in fenced blocks, which `validate_stage`
+rejects outright; the planner was told the executor "cannot run `grep`" while
+the executor has `search` and its own prompt had just been told to search
+before finishing; `read_files` was described as what the executor "may read"
+when `RepoReader` never consults it. Each was one component describing another
+from memory. The pass costs an hour and is worth scheduling after any change
+that removes a component, because the prompts are where a deleted thing goes on
+living.
+
 **A prompt sentence outlives the fact it was written about.** The excerpt block
 told the executor "treat them as current — you do not need to look them up
 again", and by then `resolve_excerpts` read at `stage_start_sha` rather than

@@ -676,10 +676,11 @@ def check_new_tests(
                 f"This stage touched {listed}, but "
                 + ("every one of them is empty" if plural else "that file is empty")
                 + ", so they assert nothing and the suite passes them in no time at "
-                "all.\n\nThe editor creates a file named in your scope before you "
-                "edit it, so an empty one means your reply was not applied as an "
-                "edit. Write the file's contents as a proper edit rather than as a "
-                "quoted block, and check the file is not empty before you finish."
+                "all.\n\nAn empty file means the contents never reached it — a "
+                "`create_file` called with nothing in it, or a reply that described "
+                "the file rather than writing it. Nothing you say in prose is "
+                "applied. Call `create_file` with the whole body, then read the "
+                "file back before you finish."
             ),
         )
     if not stage.require_new_tests:

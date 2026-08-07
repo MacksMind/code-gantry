@@ -444,10 +444,15 @@ class TestTheExecutorCannotRunCommands:
         section = PLANNER_SYSTEM_PROMPT.lower()
         assert "forbidden_patterns" in section
         # The guidance has to connect the two: do not ask the executor to
-        # check; declare the check instead.
-        idx = section.find("cannot run")
+        # check; declare the check instead. Anchored on the prohibition
+        # itself rather than on the bullet's first words, which now open with
+        # what the executor *can* do — it has read tools, and saying so is
+        # what stops a planner enumerating what `search` would find. Measuring
+        # from the bullet made the window a proxy for the bullet's length
+        # instead of for the distance between the two halves of the argument.
+        idx = section.find("do not write")
         assert idx != -1
-        assert "forbidden_patterns" in section[idx : idx + 900]
+        assert "forbidden_patterns" in section[idx : idx + 600]
 
     def test_the_field_description_says_it_too(self):
         # The planner sees field descriptions even when it skims the prose.
@@ -2079,3 +2084,98 @@ class TestTheScopeListSaysWhichFilesDoNotExist:
         text = self._prompt(tmp_path, ["EDIT_PATH"]).lower()
         for word in ("rails", "rspec", "ruby", ".rb", "app/", "spec/", "example"):
             assert word not in text, word
+
+
+class TestNoPromptDescribesTheExecutorThatWasDeleted:
+    """A deliberate pass over every model-facing claim about the machinery.
+
+    Two Aider-era falsehoods were found in one day by tripping over them — an
+    excerpt described as current when it is read at the stage's start, and a
+    file described as pre-created when nothing creates it. Both were prose that
+    survived a change to the code beneath it. This class is the pass that
+    should have been done instead of waiting for the third.
+
+    The class of defect is narrow and worth naming: a prompt sentence has no
+    compiler and no caller, so nothing fails when what it describes stops being
+    true. A docstring at least sits above the code it describes; these sit in
+    another file entirely.
+    """
+
+    def test_the_planner_is_not_told_the_executor_reads_only_what_it_names(self):
+        # `RepoReader` never consults `stage.read_files`, and the executor's own
+        # prompt says so — "not a permission list: you may read anything in the
+        # repository". The planner was told the opposite.
+        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+
+        assert "reads the files you name" not in PLANNER_SYSTEM_PROMPT
+
+    def test_the_planner_is_not_told_the_executor_cannot_search(self):
+        # It has `search`, which is grep over the repository.
+        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+
+        assert "cannot run `grep`" not in PLANNER_SYSTEM_PROMPT
+        assert "search" in PLANNER_SYSTEM_PROMPT
+
+    def test_the_planner_is_not_told_the_executor_never_sees_a_test_result(self):
+        # The loop runs the gates after every batch and appends the failure to
+        # the same conversation. The executor's own prompt describes this.
+        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+
+        assert "cannot see the result of one" not in PLANNER_SYSTEM_PROMPT
+
+    def test_no_prompt_calls_the_executor_a_local_model(self):
+        # Measured against a hosted model since the cutover; the economics note
+        # in the project instructions exists because that changed.
+        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+        from orchestrator.prompts import REVIEW_SYSTEM_PROMPT
+
+        for text in (PLANNER_SYSTEM_PROMPT, REVIEW_SYSTEM_PROMPT):
+            assert "local model" not in text
+
+    def test_the_instruction_field_does_not_ask_for_what_validation_rejects(self):
+        # `validate_stage` rejects a fenced block in `instruction` outright, and
+        # this field told the planner to use them.
+        from orchestrator.planner import PlannedStage
+
+        d = PlannedStage.model_fields["instruction"].description
+        assert "fenced blocks" not in d
+
+    def test_read_files_is_not_described_as_a_permission_list(self):
+        from orchestrator.planner import PlannedStage
+
+        d = PlannedStage.model_fields["read_files"].description
+        assert "may read" not in d
+
+    def test_the_empty_test_feedback_does_not_claim_the_file_was_created(self):
+        # Same retired claim as the scope list carried, in the gate that fires
+        # when it bites — and its remedy named the wrong tool besides.
+        import inspect
+
+        from orchestrator import gates
+
+        src = inspect.getsource(gates)
+        assert "creates a file named in your scope" not in src
+
+    def test_no_planner_field_ships_one_projects_vocabulary(self):
+        """The invariant the executor and reviewer prompts already had.
+
+        `must_not_remain` illustrated itself with `render text:` — a framework's
+        method and its argument, in a string shipped to every project's planner
+        and which no project can correct. Project knowledge belongs in config.
+        """
+        from orchestrator.planner import PlannedStage, PlannerResponse
+
+        blob = " ".join(
+            (f.description or "")
+            for model in (PlannedStage, PlannerResponse)
+            for f in model.model_fields.values()
+        ).lower()
+        for word in (
+            # Whole words or distinctive fragments only: "erb" is a
+            # substring of "verbatim", which is how a naive list turns a real
+            # invariant into a nuisance nobody trusts.
+            "rails", "django", "rspec", "pytest", " ruby", " python",
+            ".erb", ".rb", ".py", "app/", "spec/", "controller",
+            "activerecord", "gemfile", "render text",
+        ):
+            assert word not in blob, f"{word!r} is project knowledge in a prompt"

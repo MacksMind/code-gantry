@@ -15,10 +15,11 @@ the whole design rests on: a model that could author shell would make
 `kind` is deliberately *not* planner-writable. A `script` stage needs an
 operator-authored `command`, and there is no static stage list for the operator
 to put one in — so every planner-derived stage is an `agent` stage. Mechanical
-transforms across hundreds of files are expressed as an agent stage whose
-instruction says to write and run a script: Aider doing that inside its own
-edit loop is Aider's business, and the orchestrator still never executes
-model-authored shell itself.
+transforms across hundreds of files are expressed as an agent stage that says
+what must be true of the files afterwards. The executor has no tool that runs
+a command either, so nothing anywhere in this loop executes model-authored
+shell — the invariant holds on both sides of the handoff rather than resting
+on what the editor happened to do with it.
 """
 
 from __future__ import annotations
@@ -78,21 +79,23 @@ class PlannedStage(BaseModel):
             "What the executor must do, in full. It has no memory of previous "
             "stages and cannot see the plan document, so this must stand "
             "alone.\n\n"
-            "**Quote code in fenced blocks, never indented ones.** The "
-            "executor reads this as raw text, not rendered Markdown, so the "
-            "four spaces that make an indented block are indistinguishable "
-            "from four spaces of source. Asked to match a line exactly, it "
-            "matches what it was shown — including your formatting — and the "
-            "edit silently fails to apply.\n\n"
-            "Observed: a stage quoting two lines of a model file as an "
-            "indented block presented them at six spaces where the file has "
-            "two. Four attempts produced no edit at all, the stage exhausted "
-            "its budget without a single diff reaching review, and the "
-            "instruction had said 'keep the run of spaces exactly as shown'. "
-            "A fenced block would have shown the file's own bytes.\n\n"
-            "This matters most for the code you want matched character for "
-            "character, which is exactly the code most likely to be indented "
-            "for readability."
+            "**No code blocks of any kind.** A fenced block here is rejected "
+            "before the stage runs, and an indented one is worse than "
+            "rejected: the executor reads this as raw text rather than "
+            "rendered Markdown, so the four spaces that make an indented block "
+            "are indistinguishable from four spaces of source. Asked to match "
+            "a line exactly, it matches what it was shown — your indentation "
+            "included — and the edit silently fails to apply.\n\n"
+            "Observed: a stage quoting two lines of a file as an indented "
+            "block presented them at six spaces where the file has two. Four "
+            "attempts produced no edit at all, the stage exhausted its budget "
+            "without a single diff reaching review, and the instruction had "
+            "said 'keep the run of spaces exactly as shown'.\n\n"
+            "Existing code the executor needs goes in `read_excerpts` — a path "
+            "and a line range, read from the file itself, so what arrives is "
+            "the file's own bytes and no formatting of yours is in the way. "
+            "Inline backticks naming an identifier are fine and are not a "
+            "block."
         )
     )
     edit_files: list[str] = Field(
@@ -105,8 +108,17 @@ class PlannedStage(BaseModel):
     read_files: list[str] = Field(
         default_factory=list,
         description=(
-            "Globs the executor may read for context but not edit — base "
-            "classes, route tables, configuration it must respect."
+            "Files you expect to matter that the stage does not change — a "
+            "base class, a route table, configuration it has to respect. They "
+            "are supplied to the executor up front so it does not have to find "
+            "them.\n\n"
+            "Not a permission list. The executor can read anything in the "
+            "repository with its own tools, so naming a file here does not "
+            "grant access and leaving one out does not deny it. What this "
+            "changes is what arrives without being asked for — and it is "
+            "charged against the same read budget as `read_excerpts`, so a "
+            "long list crowds out the excerpts and can be dropped whole. Name "
+            "what the stage genuinely turns on."
         ),
     )
     read_excerpts: list[PlannedExcerpt] = Field(
@@ -167,9 +179,9 @@ class PlannedStage(BaseModel):
         description=(
             "Regexes that must not survive anywhere in edit_files once the "
             "stage is done, checked by reading the files rather than the diff. "
-            "This is how a sweep states its own goal: converting every "
-            "`render text:` in a file means declaring `render\\s+text:` here, "
-            "and the stage cannot pass while one is left.\n\n"
+            "This is how a sweep states its own goal: a stage that replaces "
+            "every occurrence of a construct declares the pattern matching it "
+            "here, and the stage cannot pass while one is left.\n\n"
             "Free, deterministic, and it runs before the tests — so an "
             "incomplete conversion costs nothing to find instead of a review "
             "turn. Scoped to edit_files, so declare the ground you mean to "
@@ -919,8 +931,8 @@ def _extract_usage(usage) -> PlannerUsage:
 
 PLANNER_SYSTEM_PROMPT = (
     """\
-You are the planner in an unattended refactoring loop. A local model makes the
-edits; a reviewer inspects each finished stage; you decide what the next stage
+You are the planner in an unattended refactoring loop. A separate model makes
+the edits; a reviewer inspects each finished stage; you decide what the next stage
 should be, and whether the last one was drawn correctly.
 
 The run is expected to proceed for hours without a human. Your job is to keep
@@ -963,13 +975,18 @@ stage, an environment problem.
 - **Self-contained instruction.** The executor cannot see the plan document,
   the other stages, or this conversation. Everything it needs goes in
   `instruction`.
-- **The executor cannot run commands.** It reads the files you name and edits
-  the files you allow. It cannot run `grep`, or a test, or anything else, and
-  it cannot see the result of one. Do not write "find the sites with
-  `grep -n ...`", or "when done, re-run the grep and confirm" — it cannot, and
-  asking is worse than useless: it will invent the output and argue with itself
-  about a file it is already looking at. One such instruction cost ten minutes
-  of a model looping over hallucinated grep results.
+- **The executor cannot run commands, but it can look.** It has the same read
+  tools you do — `read_file`, `list_files`, `search`, `git_show`, `git_diff` —
+  over the whole repository, not only the files you name. So "find every site
+  that does X and convert it" is a reasonable thing to ask for, and you do not
+  have to enumerate what it can find for itself.
+
+  What it has no tool for is running anything: no shell, no test invocation,
+  nothing whose output it could quote. Do not write "run `grep -n ...`" or
+  "run the specs and check" — there is no such tool, and asking for one is
+  worse than useless: it will invent the output and argue with itself about a
+  file it is already looking at. One such instruction cost ten minutes of a
+  model looping over hallucinated command results.
 
   Anything you want checked mechanically goes to the orchestrator as a regex,
   deterministic and free, and there are two of them because they answer
@@ -983,6 +1000,11 @@ stage, an environment problem.
 
   Describe the *requirement* to the executor; declare the *check* to the
   orchestrator.
+
+  It does see test results, but never by asking. The loop runs the checks and
+  the suite after every batch of edits and hands back whatever failed, so the
+  executor learns what broke without being told to look for it. There is
+  nothing to add to the instruction about this.
 - **You do not write code.** State the **end state** — what must be true of
   the files when the stage is done — and let the executor write whatever makes
   it true. Do not compose the replacement, do not reproduce the file's

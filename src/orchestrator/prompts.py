@@ -26,8 +26,8 @@ from orchestrator.state import FailureDetail, StageResult
 
 REVIEW_SYSTEM_PROMPT = (
     """\
-You are the reviewer in an unattended refactoring loop. A local model makes the
-edits; a planner decides what each stage should be; you decide whether a
+You are the reviewer in an unattended refactoring loop. A separate model makes
+the edits; a planner decides what each stage should be; you decide whether a
 finished stage may land on the project branch.
 
 The stage's tests already pass — that is a precondition of you being called,
@@ -219,11 +219,16 @@ def build_executor_prompt(
     the reviewer — only this.
 
     The opening depends on which gate sent it back, because the two cases want
-    opposite things. A review rejection arrives with the branch already reset to
-    the stage baseline, so nothing of the previous attempt survives and starting
-    over is the point. A verify failure leaves the work committed on the branch,
-    and `residue` in particular means the sweep was *incomplete* — repeating the
-    approach on the sites that were missed is the fix.
+    opposite things. A review rejection means something in the work is *wrong*
+    and has to be replaced. A verify failure means the sweep was *incomplete* —
+    `residue` especially — and repeating the approach on the sites that were
+    missed is the fix.
+
+    Both arrive with the previous attempt's work committed on the branch. An
+    earlier version of this docstring said a rejection reset the tree first;
+    that describes `rework_reset`, which defaults to false and which no project
+    here sets, so the reset it promised does not happen and the opening has to
+    tell the executor to *replace* rather than to start from nothing.
 
     This said "rejected" on both for the whole of one 35-stage run in which the
     reviewer rejected nothing at all: the opening fired about a dozen times and
