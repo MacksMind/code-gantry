@@ -114,10 +114,14 @@ class TestConfinement:
         with pytest.raises(ToolError, match="outside the repository"):
             reader(repo).read_file("link.txt")
 
-    def test_an_untracked_file_is_refused(self, repo):
+    def test_an_untracked_but_unignored_file_is_readable(self, repo):
+        # Git draws this line, not us: untracked and not ignored means part of
+        # the working project and simply not committed yet. It is the spec the
+        # executor just wrote, or the file a human left before resuming —
+        # which the agent must see, or the fix that prompted the resume is
+        # invisible to it.
         (repo / "scratch.rb").write_text("x\n")
-        with pytest.raises(ToolError, match="not tracked"):
-            reader(repo).read_file("scratch.rb")
+        assert "x" in reader(repo).read_file("scratch.rb")
 
     def test_a_gitignored_secret_is_refused_by_name(self, repo):
         # The whole point of the tracked-only rule. This file exists, is
@@ -359,76 +363,71 @@ class TestPinnedToACommit:
         assert "outside the repository" in str(e.value)
 
 
-class TestTheExecutorCanReadWhatItMayWrite:
-    """One bounded exception to tracked-only, and the boundary it must not move.
+class TestIgnoredIsTheBoundaryNotTracked:
+    """`.gitignore` is what keeps a secret out, and it always was.
 
-    An executor has to read back a file it has just created, and that file is
-    untracked until the cycle's commit. Without this it cannot re-read its own
-    new spec, which is exactly when re-reading matters most. The allowlist is
-    the stage's `edit_files`, chosen by the operator and the planner and
-    enforced by the scope gate — not a judgement made here.
+    Tracked-only was a proxy for it: the convention on these projects puts
+    account ids, hosted zone ids and ARNs in environment variables or ignored
+    files *specifically* so they are never committed. Reading untracked but
+    unignored files does not touch that — ignored is exactly what stays out.
+
+    An earlier version scoped the exception to the stage's `edit_files`,
+    reasoning that an untracked file in scope must be the executor's own work.
+    That holds only for a fresh stage on a normal run — precheck's clean-tree
+    guard exempts resumes and revisions — and it answered the wrong question:
+    a human's file after a resume is one the agent needs regardless of whose
+    scope it falls in.
     """
 
-    def test_an_untracked_file_inside_the_write_scope_is_readable(self, repo):
-        (repo / "app" / "controllers" / "new_spec.rb").write_text("describe\n")
-        r = reader(repo)
-        r.writable_globs = ["app/**"]
-        assert "describe" in r.read_file("app/controllers/new_spec.rb")
-
-    def test_the_same_file_is_refused_without_the_allowlist(self, repo):
-        (repo / "app" / "controllers" / "new_spec.rb").write_text("describe\n")
+    def test_an_ignored_secret_is_still_refused_by_name(self, repo):
+        assert (repo / ".agent.env").exists()
         with pytest.raises(ToolError, match="not tracked"):
-            reader(repo).read_file("app/controllers/new_spec.rb")
+            reader(repo).read_file(".agent.env")
 
-    def test_an_ignored_secret_stays_unreadable_even_with_a_wide_allowlist(self, repo):
-        # The reason tracked-only exists. A stage whose scope is the whole repo
-        # still must not reach `.agent.env`, so the allowlist is checked
-        # against the stage's globs rather than treated as "anything untracked
-        # is fine now".
-        r = reader(repo)
-        r.writable_globs = ["app/**", "spec/**"]
+    def test_a_file_in_an_ignored_directory_is_refused(self, repo):
+        (repo / "secrets").mkdir(exist_ok=True)
+        (repo / "secrets" / "keys.txt").write_text("AWS_ACCOUNT_ID=1\n")
         with pytest.raises(ToolError, match="not tracked"):
-            r.read_file(".agent.env")
+            reader(repo).read_file("secrets/keys.txt")
+
+    def test_a_new_spec_anywhere_is_readable(self, repo):
+        # No allowlist consulted: it is readable because git does not ignore
+        # it, not because some stage happened to declare it.
+        (repo / "elsewhere_spec.rb").write_text("describe X do\nend\n")
+        assert "describe X" in reader(repo).read_file("elsewhere_spec.rb")
 
 
-class TestSearchSeesWhatThisCallerJustCreated:
-    """`git grep` reads the working tree but only for *tracked* files.
+class TestSearchSeesWhatIsNotCommittedYet:
+    """`git grep` reads the working tree — but only for *tracked* paths.
 
-    An edit to a tracked file is found; a newly created one is invisible until
-    the commit. The executor writes a spec and then cannot find anything in it,
-    which is the same gap `read_file` had — fixed there hours before this one,
-    and not here, which is the asymmetry the shared-gate module exists to stop.
+    So an edit to a tracked file is found and a newly created one is not. The
+    ones that matter are precisely the new ones: a spec this attempt wrote, or
+    a file a human left before resuming.
+
+    `--untracked` is the whole fix, and it costs nothing here. This repository
+    carries 617,485 untracked files and zero untracked-but-unignored, because
+    the flag excludes ignored paths by default — measured, the search is
+    *faster* with it than without.
     """
 
-    def test_an_untracked_file_in_scope_is_searched(self, repo):
+    def test_an_untracked_file_is_searched(self, repo):
         (repo / "spec" / "models" / "new_spec.rb").write_text(
             "describe Order do\n  it 'does the needful' do\n  end\nend\n"
         )
-        r = reader(repo)
-        r.writable_globs = ["spec/**"]
-        hits = r.search("does the needful")
+        hits = reader(repo).search("does the needful")
         assert any("new_spec.rb" in h for h in hits)
 
-    def test_it_is_invisible_without_the_write_scope(self, repo):
-        (repo / "spec" / "models" / "new_spec.rb").write_text("does the needful\n")
-        assert reader(repo).search("does the needful") == []
+    def test_an_ignored_file_is_never_searched(self, repo):
+        # The same boundary as reading, drawn by the same tool.
+        assert reader(repo).search("AWS_ACCOUNT_ID") == []
 
-    def test_an_untracked_file_outside_the_scope_stays_invisible(self, repo):
-        # The allowlist is the safety, not `--exclude-standard`: a file nobody
-        # ignored is still not readable unless the stage may write it.
-        (repo / "elsewhere.rb").write_text("does the needful\n")
+    def test_a_pinned_reader_searches_the_commit_and_nothing_else(self, repo):
+        # Pinned, the tree is irrelevant: a reviewer replaying a stage must not
+        # see work that happened afterwards.
+        (repo / "spec" / "later_spec.rb").write_text("does the needful\n")
         r = reader(repo)
-        r.writable_globs = ["spec/**"]
+        r.at_sha = Git(repo).head_sha()
         assert r.search("does the needful") == []
 
-    def test_an_ignored_file_stays_invisible_even_inside_the_scope(self, repo):
-        # `.agent.env` is gitignored and holds exactly what must not reach a
-        # cloud API. A wide write scope must not expose it.
-        r = reader(repo)
-        r.writable_globs = ["**"]
-        assert r.search("AWS_ACCOUNT_ID") == []
-
     def test_tracked_files_still_answer_as_before(self, repo):
-        r = reader(repo)
-        r.writable_globs = ["spec/**"]
-        assert len(r.search(r"render text:")) == 2
+        assert len(reader(repo).search(r"render text:")) == 2

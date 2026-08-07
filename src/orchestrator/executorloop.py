@@ -234,12 +234,11 @@ def build_loop_parts(stage: Stage, cfg: ProjectConfig, repo: Path):
     working tree, and a pinned reader would show it the file as it was before
     its own edit.
 
-    Tracked-only is relaxed for paths the stage may write, and for nothing
-    else. The executor must be able to read a file it has just created, which
-    is untracked until the cycle's commit. The reason tracked-only exists —
-    that `.env` and its kin never reach a third-party API — survives intact,
-    because the relaxation is bounded by an allowlist the operator and planner
-    chose and the scope gate enforces.
+    Nothing here relaxes what may be read. `RepoReader` admits a file that
+    is untracked but unignored for every caller, because that is git's own
+    line between "part of the project" and "deliberately kept out" — and the
+    executor is simply the caller that most often has such files, having just
+    written them.
     """
     from orchestrator.repotools import ReadBudget, RepoReader
     from orchestrator.semantic import SemanticSearch, SemanticSearchConfig
@@ -253,7 +252,6 @@ def build_loop_parts(stage: Stage, cfg: ProjectConfig, repo: Path):
             max_calls=cfg.executor.max_read_calls,
         ),
     )
-    reader.writable_globs = list(stage.edit_files)
     editor = FileEditor(repo=repo, edit_files=list(stage.edit_files))
 
     # The index, when one is configured — as a locator for failed edits only,

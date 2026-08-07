@@ -90,7 +90,6 @@ def edit_file(rel, old, new):
 
 def parts(repo, stage):
     reader = RepoReader(Git(repo), repo, ReadBudget())
-    reader.writable_globs = list(stage.edit_files)
     editor = FileEditor(repo=repo, edit_files=list(stage.edit_files))
     return reader, editor
 

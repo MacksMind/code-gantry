@@ -116,10 +116,6 @@ class RepoReader:
     # deletion because a permit list landed later — the right answer for the
     # wrong reason, and indistinguishable from judgement.
     at_sha: str = ""
-    # Paths this caller may also write, and may therefore read back before
-    # they are tracked. Empty for the planner and reviewer, which only
-    # read; set to the stage's `edit_files` for the executor.
-    writable_globs: list[str] = field(default_factory=list)
     _lines_used: int = 0
 
     # --- boundaries -----------------------------------------------------
@@ -183,23 +179,38 @@ class RepoReader:
                 "path from a naming convention — list the directory instead."
             )
         if rel not in tracked:
-            # One exception, and it is bounded by an allowlist rather than by
-            # judgement: a file the caller may *write* is one it must be able
-            # to read back, and a file it just created is untracked until the
-            # cycle's commit. Without this the executor cannot re-read its own
-            # new spec, which is exactly when re-reading matters most.
+            # One exception, and git draws it rather than we do: a file
+            # that is untracked but *not ignored* is part of the working
+            # project and simply not committed yet. The executor's own new
+            # spec is one; so is a file a human left in the tree before
+            # resuming, which the agent must be able to see or the fix that
+            # prompted the resume is invisible to it.
             #
-            # The reason tracked-only exists survives intact. `.env`,
-            # `cdk.context.json` and their kin are still refused, because they
-            # are not in any stage's `edit_files` — the operator and the
-            # planner chose that list and the scope gate enforces it.
-            if matches_any(rel, self.writable_globs):
+            # The reason tracked-only exists survives untouched, because it
+            # was always really about `.gitignore`: `.env`, `.agent.env` and
+            # `cdk.context.json` are ignored precisely so they are never
+            # committed, and ignored is exactly what this does not admit.
+            #
+            # An earlier version scoped this to the stage's `edit_files`,
+            # reasoning that an untracked file in scope must be the executor's
+            # own work. That is only true for a fresh stage on a normal run —
+            # precheck's clean-tree guard exempts both resumes and revisions —
+            # and it answered the wrong question anyway.
+            if rel in self._untracked_but_not_ignored():
                 return
             raise ToolError(
                 f"{rel!r} exists but is not tracked by git, so it cannot be read. "
                 "Untracked and ignored files hold credentials and generated "
                 "output, and this context is sent to a third-party API."
             )
+
+    def _untracked_but_not_ignored(self) -> set[str]:
+        """Files git considers part of the project but does not yet track."""
+        try:
+            out = self.git._out("ls-files", "--others", "--exclude-standard")
+        except GitError:  # pragma: no cover - a broken repo fails louder elsewhere
+            return set()
+        return {line for line in out.splitlines() if line.strip()}
 
     def _relative(self, resolved: Path) -> str:
         return str(resolved.relative_to(self._root()))
@@ -334,10 +345,22 @@ class RepoReader:
         # git then prefixes every hit with `<ref>:`. Stripped below, so a
         # pinned reader and a live one return the same `path:line:text`.
         ref = [self.at_sha] if self.at_sha else []
+        # Live, so include files not yet committed. `git grep` reads the
+        # working tree but only for *tracked* paths, so an edit is found
+        # and a newly created file is not — and the ones that matter here
+        # are precisely the new ones: a spec this attempt just wrote, or a
+        # file a human left before resuming.
+        #
+        # `--untracked` excludes ignored paths by default, which is the
+        # boundary that matters and the only one: this repository has
+        # 617,485 untracked files and 0 untracked-but-not-ignored, so the
+        # flag never walks the ignored tree. Measured, it is *faster* than
+        # the plain search — 0.078s against 0.157s.
+        untracked = [] if self.at_sha else ["--untracked"]
         for flavour in ("-P", "-E"):
             proc = self.git._run(
-                "grep", "-n", "-I", "--no-color", flavour, "-e", pattern,
-                *ref, "--", target,
+                "grep", "-n", "-I", "--no-color", *untracked, flavour,
+                "-e", pattern, *ref, "--", target,
                 check=False,
             )
             if proc.returncode in (0, 1):
@@ -356,63 +379,11 @@ class RepoReader:
         if self.at_sha:
             prefix = self.at_sha + ":"
             hits = [h[len(prefix):] if h.startswith(prefix) else h for h in hits]
-        hits += self._search_new_files(pattern, target)
         hits, clipped = self._clip(hits)
         if clipped:
             hits = hits + ["... truncated; narrow the pattern or the path"]
         self._spend("search", f"{pattern} in {path_glob or '.'}", "\n".join(hits))
         return hits
-
-    def _search_new_files(self, pattern: str, target: str) -> list[str]:
-        """The same search over files this caller created but has not committed.
-
-        `git grep` reads the working tree, so an *edit* to a tracked file is
-        found — but a newly created one is untracked and invisible to it. The
-        executor creates specs and then cannot find anything in them until the
-        cycle's commit. `read_file` was relaxed for exactly this and `search`
-        was not, which is the same asymmetry `gates.py` exists to prevent, one
-        layer down.
-
-        Scoped rather than filtered. `git grep --untracked` on its own would
-        walk every untracked file and leave us discarding matches afterwards —
-        and on a repository with a large ignored tree that means looking at a
-        great deal we have no business reading, then throwing it away. So the
-        in-scope set is computed first and passed as an explicit pathspec, and
-        when it is empty — the common case — no second search runs at all.
-
-        `--exclude-standard` keeps ignored files out, but the allowlist is what
-        makes this safe rather than that flag: an untracked file that nobody
-        ignored is still not readable unless the stage may write it.
-        """
-        if self.at_sha or not self.writable_globs:
-            # Pinned to a commit there is no working tree to consider, and a
-            # caller with no write scope has created nothing.
-            return []
-        try:
-            out = self.git._out("ls-files", "--others", "--exclude-standard")
-        except GitError:  # pragma: no cover - a broken repo fails louder elsewhere
-            return []
-
-        candidates = [
-            p for p in out.splitlines()
-            if p.strip() and matches_any(p.strip(), self.writable_globs)
-        ]
-        if not candidates:
-            return []
-
-        for flavour in ("-P", "-E"):
-            proc = self.git._run(
-                "grep", "-n", "-I", "--no-color", "--untracked", flavour,
-                "-e", pattern, "--", *candidates,
-                check=False,
-            )
-            if proc.returncode in (0, 1):
-                break
-            if "-P" not in (proc.stderr or "") and flavour == "-P":
-                break
-        if proc.returncode not in (0, 1):
-            return []
-        return [line for line in proc.stdout.splitlines() if line.strip()]
 
     def git_show(self, ref: str, path: str) -> str:
         """A file as it stood at a ref."""

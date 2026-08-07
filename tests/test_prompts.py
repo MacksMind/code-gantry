@@ -1601,3 +1601,47 @@ class TestTheTwoBehaviouralRulesTheOldEditorHad:
         text = _executor_system_prompt(_exec_cfg(tmp_path)).lower()
         for word in ("rails", "rspec", "rubocop", "ruby", "python", ".rb"):
             assert word not in text, word
+
+
+class TestTheReadListIsDescribedAsAHintNotAFence:
+    """It stopped being a permission list when the executor got a read tool.
+
+    The subprocess editor had only the files it was handed, so "context you may
+    read" was literally true. The in-process one has `read_file` pointed at the
+    whole repository and `RepoReader` never consulted `stage.read_files` — so
+    the wording promised a fence that does not exist.
+
+    Which matters more than tidiness: a model that believes it is confined to a
+    list will quote from memory rather than read, and quoting from memory is
+    what produced a 38% edit-refusal rate, 54% of it on one 1,700-line file.
+    """
+
+    def test_it_does_not_claim_to_be_the_limit_of_what_may_be_read(self, tmp_path):
+        from orchestrator.config import Stage
+        from orchestrator.prompts import build_executor_prompt
+
+        stage = Stage(
+            id="s", instruction="do", edit_files=["a.py"], read_files=["b.py"]
+        )
+        text = build_executor_prompt(stage, _exec_cfg(tmp_path))
+        assert "not a permission list" in text
+        assert "may read anything in the repository" in text
+
+    def test_it_still_says_the_write_list_is_enforced(self, tmp_path):
+        # The asymmetry is the point: reading a file the planner did not
+        # anticipate cannot damage the repository, writing one can.
+        from orchestrator.config import Stage
+        from orchestrator.prompts import build_executor_prompt
+
+        stage = Stage(
+            id="s", instruction="do", edit_files=["a.py"], read_files=["b.py"]
+        )
+        text = build_executor_prompt(stage, _exec_cfg(tmp_path))
+        assert "that one is enforced" in text
+
+    def test_a_stage_with_no_read_files_says_nothing(self, tmp_path):
+        from orchestrator.config import Stage
+        from orchestrator.prompts import build_executor_prompt
+
+        stage = Stage(id="s", instruction="do", edit_files=["a.py"])
+        assert "drawn against" not in build_executor_prompt(stage, _exec_cfg(tmp_path))
