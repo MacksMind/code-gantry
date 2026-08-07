@@ -317,3 +317,56 @@ class TestPathHintsCannotStallTheGate:
         assert path_hints("." * 500 + "\nspec/a_spec.rb:4 failed") == [
             "spec/a_spec.rb"
         ]
+
+
+class TestTheLoopDoesNotDoubleTheSuite:
+    """One run per cycle, which is what the editor this replaces did.
+
+    Aider ran its test command once per reflection and capped reflections at
+    three (`max_reflections = 3`, read from the installed source). Sharing
+    `run_tests` with the gate quietly doubled that: six runs an attempt where
+    there had been three, and nothing said so.
+
+    The loop does not need the re-run. A failing cycle feeds the output back
+    and the next cycle runs the same specs again, so iteration is the re-run.
+    The gate keeps it, because there a flake costs a whole executor round trip
+    rather than one more pass.
+    """
+
+    def test_the_loop_runs_the_command_once(self, repo):
+        from orchestrator.commands import CommandRunner
+        from orchestrator.gates import run_tests
+
+        counter = repo / "runs.txt"
+        cfg, stage = build(
+            repo,
+            {"test_paths": ["app.py"]},
+            scoped_test_command=f"printf x >> {counter}; false # {{paths}}",
+        )
+        (repo / "app.py").write_text("x\n")
+        Git(repo).commit_all("app")
+
+        run_tests(
+            stage, cfg, Git(repo), CommandRunner(cwd=repo, timeout=60),
+            Git(repo).head_sha(), for_loop=True,
+        )
+        assert counter.read_text() == "x", "the loop re-ran a failing command"
+
+    def test_the_gate_still_re_runs_once(self, repo):
+        from orchestrator.commands import CommandRunner
+        from orchestrator.gates import run_tests
+
+        counter = repo / "runs.txt"
+        cfg, stage = build(
+            repo,
+            {"test_paths": ["app.py"]},
+            scoped_test_command=f"printf x >> {counter}; false # {{paths}}",
+        )
+        (repo / "app.py").write_text("x\n")
+        Git(repo).commit_all("app")
+
+        run_tests(
+            stage, cfg, Git(repo), CommandRunner(cwd=repo, timeout=60),
+            Git(repo).head_sha(), for_loop=False,
+        )
+        assert counter.read_text() == "xx", "the gate stopped adjudicating flakes"

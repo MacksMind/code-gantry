@@ -551,6 +551,24 @@ def run_tests(
         )
         return out
 
+    if for_loop:
+        # No re-run inside the loop, which is what the editor this replaces
+        # did: it ran its test command once per reflection, and its cap was
+        # three, the same as `max_cycles`. Sharing `run_tests` with the gate
+        # quietly doubled that — six runs an attempt where there had been
+        # three.
+        #
+        # The loop does not need it. A failing cycle feeds the output back and
+        # the next cycle runs the same specs again, so iteration is already
+        # the re-run; a flake clears itself on the following pass at no extra
+        # cost. What escapes is a flake on the *last* cycle, and the gate runs
+        # its own tests with its own adjudication immediately afterwards.
+        out.ok = False
+        out.summary = "the test command failed"
+        out.feedback = f"The test command failed.\n{result.summary()}\n{clip(result.output)}"
+        out.failing_paths = path_hints(result.output)
+        return out
+
     # One re-run before consuming a retry. Browser-driven and timing-sensitive
     # suites would otherwise spend the whole retry budget on noise.
     broad = command in (cfg.test_command, cfg.full_test_command)
