@@ -51,7 +51,19 @@ from orchestrator.globs import matches_any
 
 
 class ToolError(Exception):
-    """A refusal the planner is allowed to see and work around."""
+    """A refusal the planner is allowed to see and work around.
+
+    `kind` is for the record, not for the model: a bucket the raiser already
+    knows and the reader would otherwise have to recover by matching words in
+    the message. Most refusals leave it empty and are bucketed from their text,
+    which is fine where the text and the cause are the same thing. It is set
+    where they are not — an edit refused after three different fallbacks tried
+    to place it renders the same sentence every time.
+    """
+
+    def __init__(self, message: str, *, kind: str = "") -> None:
+        super().__init__(message)
+        self.kind = kind
 
 
 SEPARATOR = " | "
@@ -129,6 +141,11 @@ class ToolCall:
     detail: str
     lines: int
     refusal: str = ""
+    # The raiser's own bucket, when the message alone does not carry it.
+    # Empty means "derive it from the text", which is what every refusal did
+    # before an edit could be refused by three different routes to the same
+    # sentence.
+    refusal_kind: str = ""
 
 
 @dataclass
@@ -261,7 +278,9 @@ class RepoReader:
         self.calls.append(ToolCall(tool=tool, detail=detail, lines=used))
         return text
 
-    def record_refusal(self, tool: str, detail: str, reason: str) -> None:
+    def record_refusal(
+        self, tool: str, detail: str, reason: str, kind: str = ""
+    ) -> None:
         """Note a call that was denied.
 
         Called by the dispatcher rather than at the raise sites: `_resolve`
@@ -269,7 +288,11 @@ class RepoReader:
         asked for, and the detail of a refused call is the question, because
         there is no content to describe it by.
         """
-        self.calls.append(ToolCall(tool=tool, detail=detail, lines=0, refusal=reason))
+        self.calls.append(
+            ToolCall(
+                tool=tool, detail=detail, lines=0, refusal=reason, refusal_kind=kind
+            )
+        )
 
     def _answered(self) -> int:
         """Calls the budget is actually spent on.

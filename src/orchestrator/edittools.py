@@ -73,12 +73,36 @@ NEAREST_ANCHOR_MIN_CHARS = 12
 NEAREST_LOCATED_MIN_RATIO = 0.45
 
 
+@dataclass(frozen=True)
+class Nearest:
+    """A window for the model, and which route produced it.
+
+    Always returned, including when there is no window — `text` is empty then
+    and `route` says why. That is the point of the type: an outcome with no
+    window is still an outcome to count, and "the anchor was ambiguous" and
+    "nothing came close" are opposite facts that a `None` collapses into one.
+
+    The route exists because three mechanisms now sit between a bad
+    `old_string` and a stalled attempt, and they do different jobs. The
+    line-number separator stops refusals happening at all; these windows make a
+    refusal recoverable in the turn it occurs. A single refusal rate blends
+    them, so the next run could improve and leave us unable to say what
+    improved. `_refusal_kind` buckets by matching words in the message and
+    every window renders with the same words — so this distinction is invisible
+    to it by construction, which is exactly the shape of a mechanism that gets
+    reported as *available* forever and never shown to have *fired*.
+    """
+
+    text: str
+    route: str
+
+
 def nearest_text(
     text: str,
     old_string: str,
     *,
     locate: Callable[[str], list[str]] | None = None,
-) -> str | None:
+) -> Nearest:
     """Where the file most resembles what was asked for, as its real bytes.
 
     A not-found refusal used to cost a `read_file` call — against a budget that
@@ -119,22 +143,22 @@ def nearest_text(
     while want and not want[-1].strip():
         want.pop()
     if not want or not lines:
-        return None
+        return Nearest("", "none")
 
     anchor = want[0].strip()
     span = min(len(want) + NEAREST_CONTEXT_LINES, NEAREST_MAX_LINES)
 
     hits = [i for i, ln in enumerate(lines) if ln.strip() == anchor]
     if len(hits) == 1:
-        return _window(lines, hits[0], span)
+        return Nearest(_window(lines, hits[0], span), "anchor")
     if len(hits) > 1:
         # Several places look like the anchor, so a single window would be a
         # guess about which. Say so and let the model narrow it itself.
-        return None
+        return Nearest("", "ambiguous")
 
     at, ratio = _best_window(lines, want, 0, len(lines))
     if at is not None and ratio >= NEAREST_MIN_RATIO:
-        return _window(lines, at, span)
+        return Nearest(_window(lines, at, span), "window")
 
     # The semantic fallback, when an index is configured.
     #
@@ -159,8 +183,8 @@ def nearest_text(
         hi = min(at + 2 * len(want) + 1, len(lines))
         found, ratio = _best_window(lines, want, lo, hi)
         if found is not None and ratio >= NEAREST_LOCATED_MIN_RATIO:
-            return _window(lines, found, span)
-    return None
+            return Nearest(_window(lines, found, span), "semantic")
+    return Nearest("", "none")
 
 
 def _anchor_from_chunks(lines: list[str], chunks: list[str]) -> int | None:
@@ -260,17 +284,22 @@ def apply_edits(
         if count == 0:
             near = nearest_text(text, edit.old_string, locate=locate)
             where = (
-                f"\n\nThe closest place in the file is:\n\n{near}\n\n"
+                f"\n\nThe closest place in the file is:\n\n{near.text}\n\n"
                 "Those are its actual bytes, numbered as `read_file` numbers "
                 "them. Quote from there."
-                if near
+                if near.text
                 else " Read it again and quote the exact bytes, including "
                 "indentation."
             )
+            # The route rides on the error and not in the message. It is an
+            # instrument for us; to the model it would be noise about how we
+            # found a window, and the bytes are cut from the live buffer
+            # whichever route found them, so it changes nothing it should do.
             raise ToolError(
                 f"edit {index}: that text does not appear in the file."
                 + where
-                + "\n\nNothing has been changed."
+                + "\n\nNothing has been changed.",
+                kind=f"edit not found ({near.route})",
             )
         if count > 1 and not edit.replace_all:
             raise ToolError(
@@ -361,7 +390,9 @@ class FileEditor:
     def _record(self, tool: str, detail: str, changed: int) -> None:
         self.calls.append(ToolCall(tool=tool, detail=detail, lines=changed))
 
-    def record_refusal(self, tool: str, detail: str, reason: str) -> None:
+    def record_refusal(
+        self, tool: str, detail: str, reason: str, kind: str = ""
+    ) -> None:
         """Note a change that was denied.
 
         Same reason the reader records its refusals: a loop that stopped
@@ -370,7 +401,9 @@ class FileEditor:
         working executor.
         """
         self.calls.append(
-            ToolCall(tool=tool, detail=detail, lines=0, refusal=reason)
+            ToolCall(
+                tool=tool, detail=detail, lines=0, refusal=reason, refusal_kind=kind
+            )
         )
 
     # --- tools ----------------------------------------------------------

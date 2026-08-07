@@ -246,7 +246,9 @@ def dispatch(
                 )
             return editor.delete_file(args.get("path", ""))
         except ToolError as e:
-            editor.record_refusal(name, call_detail(args), str(e))
+            editor.record_refusal(
+                name, call_detail(args), str(e), getattr(e, "kind", "")
+            )
             return f"cannot do that: {e}"
 
     return plannertools.dispatch(name, args, reader, semantic)

@@ -355,6 +355,48 @@ class TestWhatTheExecutorAskedFor:
             "edit not found": 1, "edit not unique": 1, "budget": 1
         }
 
+    def test_the_fallback_route_travels_from_the_editor_to_the_counts(self, repo):
+        """A real refused edit, through the ledger, into the bucket.
+
+        Written as a journey rather than two unit tests because that is where
+        this class of value has been lost four times: computed correctly,
+        written correctly, and dropped in transit. The route is decided inside
+        `nearest_text`, raised on the error, recorded on the call and bucketed
+        here, and nothing between those points has a test of its own.
+
+        It matters because three changes now separate a bad `old_string` from a
+        stalled attempt and they are not interchangeable — the separator stops
+        refusals, the windows make them recoverable. A blended count cannot say
+        which one moved.
+        """
+        from orchestrator.edittools import Edit
+        from orchestrator.executor import ExecutionResult, _count_tool_use
+        from orchestrator.executortools import dispatch
+
+        cfg, stage = build(repo)
+        reader, editor = parts(repo, stage)
+        (editor.repo / "app" / "a.rb").write_text(
+            "class A\n  def total\n    sum\n  end\nend\n"
+        )
+        # Indentation wrong throughout, which is the shape 63% of real misses
+        # took. The first line still matches exactly once, so the anchor places
+        # it without the index being consulted.
+        out_text = dispatch(
+            "edit",
+            {
+                "path": "app/a.rb",
+                "edits": [
+                    {"old_string": "    def total\n      sum\n    end", "new_string": "x"}
+                ],
+            },
+            reader, editor, None,
+        )
+        assert out_text.startswith("cannot do that:")
+
+        out = ExecutionResult(ok=True)
+        _count_tool_use(out, reader, editor)
+        assert out.refusal_counts == {"edit not found (anchor)": 1}
+
     def test_a_loop_that_asked_for_nothing_reports_nothing(self, repo):
         from orchestrator.executor import _count_tool_use, ExecutionResult
 
