@@ -2013,3 +2013,69 @@ def messages_leading(conventions):
         _cfg(), a_plan(), [], agent_context=conventions
     )
     return messages[0]["content"][0]["text"]
+
+
+class TestTheScopeListSaysWhichFilesDoNotExist:
+    """The prompt claimed the editor had pre-created them. It had not.
+
+    `**A file listed here that does not exist yet has already been created for
+    you, empty.**` was true of the subprocess editor, whose own commit message
+    says so — "the editor creates any file it is handed" — because a path
+    handed to it via `--file` was created whether or not it existed. That
+    editor is gone. `build_loop_parts` creates nothing, which is checkable in
+    four lines and was.
+
+    So the prompt asserted a file into existence. A model told an empty file is
+    already there reaches for `edit`, and an `edit` against a file that is not
+    on disk is refused — a wasted turn whose refusal contradicts the prompt
+    that caused it. It was live on the first stage of the run started today,
+    which declared a brand-new spec file.
+
+    Replaced with the fact rather than a claim about machinery: the orchestrator
+    knows which of these paths exist, so it says so per entry. That cannot go
+    stale the way the sentence it replaces did, and it answers the question the
+    model actually has — `edit` or `create_file` — at the point where it is
+    looking at the list.
+
+    Only literal paths are annotated. A glob names no particular file, and
+    reporting that `app/**` "does not exist" would be false in a new way.
+    """
+
+    def _prompt(self, tmp_path, edit_files):
+        from orchestrator.config import Stage
+        from orchestrator.prompts import build_executor_prompt
+
+        return build_executor_prompt(
+            Stage(id="s", instruction="do", edit_files=edit_files),
+            _exec_cfg(tmp_path),
+        )
+
+    def test_the_retired_claim_is_gone(self, tmp_path):
+        text = self._prompt(tmp_path, ["spec/new_spec.rb"])
+        assert "already been created for you" not in text
+
+    def test_a_missing_file_is_marked(self, tmp_path):
+        text = self._prompt(tmp_path, ["spec/new_spec.rb"])
+        assert "spec/new_spec.rb (does not exist yet)" in text
+
+    def test_an_existing_file_is_not_marked(self, tmp_path):
+        (tmp_path / "here.rb").write_text("x\n")
+        text = self._prompt(tmp_path, ["here.rb"])
+        assert "- here.rb\n" in text
+        assert "does not exist yet" not in text
+
+    def test_a_glob_is_never_marked(self, tmp_path):
+        # A glob names no particular file, so "does not exist" would be a new
+        # falsehood rather than a correction of the old one.
+        text = self._prompt(tmp_path, ["app/**", "spec/*_spec.rb"])
+        assert "does not exist yet" not in text
+
+    def test_the_create_instruction_appears_only_when_one_is_missing(self, tmp_path):
+        (tmp_path / "here.rb").write_text("x\n")
+        assert "create_file" not in self._prompt(tmp_path, ["here.rb"])
+        assert "create_file" in self._prompt(tmp_path, ["spec/new_spec.rb"])
+
+    def test_it_names_no_projects_vocabulary(self, tmp_path):
+        text = self._prompt(tmp_path, ["EDIT_PATH"]).lower()
+        for word in ("rails", "rspec", "ruby", ".rb", "app/", "spec/", "example"):
+            assert word not in text, word

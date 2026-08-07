@@ -261,20 +261,36 @@ def build_executor_prompt(
         )
 
     if stage.edit_files:
-        listed = "\n".join(f"- {glob}" for glob in stage.edit_files)
-        parts.append(
+        # Which of these are actually on disk, said per entry. The sentence
+        # this replaces asserted that a missing file "has already been created
+        # for you, empty" — true of the subprocess editor, which created any
+        # path handed to it, and false since it was deleted. A model told an
+        # empty file is waiting reaches for `edit`, and an `edit` against a
+        # file that is not there is refused, so the prompt was buying a wasted
+        # turn whose refusal contradicted it.
+        #
+        # A fact computed here cannot go stale the way that sentence did, and
+        # it answers the question the model actually has at the moment it is
+        # looking at the list: `edit` or `create_file`.
+        missing = [g for g in stage.edit_files if _is_missing_path(g, cfg)]
+        listed = "\n".join(
+            f"- {glob} (does not exist yet)" if glob in missing else f"- {glob}"
+            for glob in stage.edit_files
+        )
+        body = (
             "## Files you may change\n\n"
             f"{listed}\n\n"
             "Editing anything outside this list fails the stage. If the task "
             "appears to require a file that is not listed, stop and say so "
-            "rather than editing it.\n\n"
-            "**A file listed here that does not exist yet has already been "
-            "created for you, empty.** So writing its contents as a quoted "
-            "block rather than as an edit leaves that empty file behind, and "
-            "the empty file is what gets committed. Create its contents the "
-            "way this editor creates a file, and before you finish, confirm "
-            "the file is not empty."
+            "rather than editing it."
         )
+        if missing:
+            body += (
+                "\n\nMake the marked ones with `create_file`, which takes the "
+                "whole contents in one call. `edit` will not do it — there is "
+                "nothing there for an `old_string` to match, so it is refused."
+            )
+        parts.append(body)
 
     if stage.read_files:
         listed = "\n".join(f"- {glob}" for glob in stage.read_files)
@@ -355,6 +371,27 @@ def build_executor_prompt(
         parts.append(f"## Feedback on previous attempts\n\n{listed}")
 
     return "\n\n".join(parts)
+
+
+def _is_missing_path(glob: str, cfg: ProjectConfig | None) -> bool:
+    """A literal path in the scope list with no file behind it.
+
+    Globs are never reported. One names no particular file, so saying `app/**`
+    "does not exist" would be a fresh falsehood rather than a correction of the
+    one this replaces — and the same reasoning `_read_lines` uses when it
+    refuses to invent a size for a glob.
+
+    Anything that cannot be resolved is treated as present, so a path outside
+    the repository or an unreadable directory produces no annotation rather
+    than a wrong one. Silence is the safe answer here: the model has a read
+    tool and can settle it in one call.
+    """
+    if cfg is None or any(ch in glob for ch in "*?["):
+        return False
+    try:
+        return not (Path(cfg.target_repo) / glob).exists()
+    except OSError:  # pragma: no cover - unresolvable path claims nothing
+        return False
 
 
 def _checks_block(cfg: ProjectConfig | None) -> str:
