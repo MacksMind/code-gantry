@@ -177,3 +177,73 @@ class TestProvenance:
 class TestApplyEditsIsPure:
     def test_it_returns_text_and_touches_no_file(self):
         assert apply_edits("a b c", [Edit("b", "B")]) == "a B c"
+
+
+class TestNearestTextFoldsTheReadIntoTheRefusal:
+    """A not-found refusal used to cost a read before the model could retry.
+
+    Measured on the misses that prompted it, both from a 1,700-line routes
+    file: the model wrote the file as it believed it to be — wrong indentation
+    *and* a missing line — so normalising whitespace would not have caught
+    either. What it needs back is the bytes.
+
+    Every test here also holds the line that matters: the edit is still
+    refused. This hands over text to read, never a repaired edit.
+    """
+
+    def test_it_finds_the_block_when_the_indent_is_wrong(self):
+        from orchestrator.edittools import nearest_text
+
+        text = "class A\n  def go\n    work\n  end\nend\n"
+        near = nearest_text(text, "      def go\n        work\n      end")
+        assert near is not None
+        assert "  def go" in near
+        assert near.lstrip().startswith("1"), "numbered like read_file"
+
+    def test_it_finds_it_when_a_line_was_left_out(self):
+        # The real failure: the model omitted a line the block contains.
+        from orchestrator.edittools import nearest_text
+
+        text = "a\n  scope 'x' do\n    get '/'\n    post 'y'\n  end\nb\n"
+        near = nearest_text(text, "    scope 'x' do\n      post 'y'\n    end")
+        assert near and "get '/'" in near
+
+    def test_it_declines_when_the_anchor_is_ambiguous(self):
+        # Several places look alike, so a single window would be a guess about
+        # which — and a confident wrong location invites an edit somewhere the
+        # model never meant.
+        from orchestrator.edittools import nearest_text
+
+        text = "  end\nx\n  end\ny\n  end\n"
+        assert nearest_text(text, "  end") is None
+
+    def test_it_declines_when_nothing_is_close(self):
+        from orchestrator.edittools import nearest_text
+
+        text = "completely\nunrelated\ncontent\nhere\n"
+        assert nearest_text(text, "def some_method\n  raise\nend") is None
+
+    def test_the_refusal_carries_it_and_still_refuses(self, editor):
+        from orchestrator.edittools import Edit
+
+        (editor.repo / "app" / "order.rb").write_text(
+            "class Order\n  def total\n    sum\n  end\nend\n"
+        )
+        before = (editor.repo / "app" / "order.rb").read_bytes()
+
+        with pytest.raises(ToolError) as e:
+            editor.edit("app/order.rb", [Edit("    def total\n      sum\n    end", "x")])
+
+        message = str(e.value)
+        assert "does not appear" in message
+        assert "closest place" in message
+        assert "def total" in message, "the real bytes are in the refusal"
+        assert "Nothing has been changed." in message
+        assert (editor.repo / "app" / "order.rb").read_bytes() == before
+
+    def test_a_hopeless_miss_still_says_read_it_again(self, editor):
+        from orchestrator.edittools import Edit
+
+        with pytest.raises(ToolError) as e:
+            editor.edit("app/order.rb", [Edit("nothing like this at all", "x")])
+        assert "Read it again" in str(e.value)

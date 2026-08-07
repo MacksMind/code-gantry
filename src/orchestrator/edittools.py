@@ -57,6 +57,87 @@ def normalise(text: str) -> str:
     return text
 
 
+# Enough of the file to correct from, and no more. An `old_string` is
+# typically two to five lines, so this leaves room for the surrounding block
+# without turning every refusal into a free file read.
+NEAREST_CONTEXT_LINES = 6
+NEAREST_MAX_LINES = 40
+# Below this, a suggestion is a guess. A confidently wrong location is worse
+# than none: it invites the model to edit somewhere it never meant to.
+NEAREST_MIN_RATIO = 0.6
+
+
+def nearest_text(text: str, old_string: str) -> str | None:
+    """Where the file most resembles what was asked for, as its real bytes.
+
+    A not-found refusal used to cost a `read_file` call — against a budget that
+    twelve of thirty-six attempts exhausted — before the model could try again.
+    This folds that read into the refusal that made it necessary.
+
+    Measured on the misses that prompted it, both from a 1,700-line routes
+    file. One sent a `scope` block at four-space indent where the file has two
+    *and* omitted a line the block actually contains. Another quoted a list
+    entry with the wrong indentation and put the closing token where it is not.
+    So these are not near-misses to be repaired by normalising whitespace —
+    the model is writing the file as it believes it to be. What it needs back
+    is the bytes.
+
+    Anchored on the first non-blank line rather than fuzzy-matched whole,
+    because that line matched exactly modulo indentation in both cases and an
+    anchor gives a location rather than a similarity score. `difflib` is the
+    fallback for when it does not.
+
+    **This never repairs the edit.** It returns text for the model to read; the
+    edit is still refused and the next `old_string` must match exactly. The
+    property that made structured edits worth having — that an applied change
+    is one the model actually specified — is the thing not being traded away
+    here.
+    """
+    lines = text.split("\n")
+    want = [ln for ln in old_string.split("\n")]
+    while want and not want[0].strip():
+        want.pop(0)
+    while want and not want[-1].strip():
+        want.pop()
+    if not want or not lines:
+        return None
+
+    anchor = want[0].strip()
+    span = min(len(want) + NEAREST_CONTEXT_LINES, NEAREST_MAX_LINES)
+
+    hits = [i for i, ln in enumerate(lines) if ln.strip() == anchor]
+    if len(hits) == 1:
+        return _window(lines, hits[0], span)
+    if len(hits) > 1:
+        # Several places look like the anchor, so a single window would be a
+        # guess about which. Say so and let the model narrow it itself.
+        return None
+
+    import difflib
+
+    best_at, best_ratio = None, 0.0
+    width = max(len(want), 1)
+    target = "\n".join(ln.strip() for ln in want)
+    for i in range(0, max(len(lines) - width + 1, 1)):
+        window = "\n".join(ln.strip() for ln in lines[i : i + width])
+        ratio = difflib.SequenceMatcher(None, target, window).quick_ratio()
+        if ratio <= best_ratio:
+            continue
+        ratio = difflib.SequenceMatcher(None, target, window).ratio()
+        if ratio > best_ratio:
+            best_at, best_ratio = i, ratio
+    if best_at is None or best_ratio < NEAREST_MIN_RATIO:
+        return None
+    return _window(lines, best_at, span)
+
+
+def _window(lines: list[str], at: int, span: int) -> str:
+    """Numbered exactly as `read_file` numbers, so it reads the same way."""
+    start = max(at - 1, 0)
+    chosen = lines[start : start + span]
+    return "\n".join(f"{start + 1 + i:>5}  {line}" for i, line in enumerate(chosen))
+
+
 def apply_edits(text: str, edits: list[Edit]) -> str:
     """Every edit, in order, against one buffer — or none of them.
 
@@ -83,10 +164,19 @@ def apply_edits(text: str, edits: list[Edit]) -> str:
         # not have it", and for the same reason: they lead to different next
         # moves. Not found means re-read; found twice means widen the anchor.
         if count == 0:
+            near = nearest_text(text, edit.old_string)
+            where = (
+                f"\n\nThe closest place in the file is:\n\n{near}\n\n"
+                "Those are its actual bytes, numbered as `read_file` numbers "
+                "them. Quote from there."
+                if near
+                else " Read it again and quote the exact bytes, including "
+                "indentation."
+            )
             raise ToolError(
-                f"edit {index}: that text does not appear in the file. Read it "
-                "again and quote the exact bytes, including indentation — "
-                "nothing has been changed."
+                f"edit {index}: that text does not appear in the file."
+                + where
+                + "\n\nNothing has been changed."
             )
         if count > 1 and not edit.replace_all:
             raise ToolError(
