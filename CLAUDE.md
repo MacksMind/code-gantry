@@ -1,6 +1,9 @@
 # Working on this codebase
 
 [README.md](README.md) is how to use the orchestrator.
+[docs/rewrite-plan.md](docs/rewrite-plan.md) is the work in flight — what has
+landed, what has not, and why each remaining step is shaped the way it is. Read
+its status table before starting anything structural.
 [docs/architecture.md](docs/architecture.md) is the design authority on why it
 works this way. Neither is repeated here.
 

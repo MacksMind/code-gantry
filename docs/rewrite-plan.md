@@ -1,0 +1,341 @@
+# Replace Aider and LangGraph; make verify a trust boundary
+
+## Where this stands
+
+Steps 0–6 are done and step 7 is all but done; 8, 9 and 10 remain. Each entry
+below names the commit that did it, because a status line in a document is a
+claim and a sha is checkable — the same reason a figure here has to name the
+artifact it came from.
+
+| step | state | commit |
+|---|---|---|
+| 0 · extract `openaiclient.py` | done | `9143c4d` |
+| 1 · `gates.py`, one test-path selection | done | `1e037ca` |
+| 2 · `edittools.py` | done | `8daa670` |
+| 3 · `executortools.py` | done | `93dab0e` |
+| 4 · `executorclient.py` | done | `93dab0e` |
+| 5 · the loop behind a provider switch | done | `7479631` |
+| 6 · flip the default, take a live run | done | measured in `CLAUDE.md` |
+| 7 · delete Aider | **residue** | `5c298c4` |
+| 8 · replace LangGraph with `driver.py` | pending | — |
+| 9 · simplify `nodes.execute` | pending | — |
+| 10 · up to five stages per derivation | pending | — |
+
+**Step 7's residue**, none of it reached by `RETIRED_EXECUTOR_KEYS` because the
+field is still declared rather than retired: `ExecutorConfig.aider_timeout_seconds`
+survives and is read by nothing; `discover.py` writes it into every newly
+drafted config, so `orchestrator init` still mints an Aider setting today; and
+`scripts/smoke.py` writes a fake `aider` onto `PATH`, which should point at the
+stub server it already runs.
+
+**Step 8 needs a fresh run, not a resume** — `state.db` is LangGraph msgpack
+and no new writer can read it. The work survives regardless: it is squash-merged
+onto the project branch, and `status.md`, the progress log and `stage-costs.md`
+are per-project rather than per-run. That transition was made once already on
+2026-08-07 and cost nothing but an empty `completed` history on the new run.
+
+This file moved here from a session's plan directory on 2026-08-07. A plan with
+open steps that lives outside the repository is the same failure this project
+records about compaction prompts and agent memory: it carries one hop and then
+ages out, where a tracked file does not.
+
+## Context
+
+The orchestrator drives an LLM executor over a target repo. The executor is
+Aider, run as a subprocess. Aider is a pair-programming tool being driven
+headless, and the mismatch is now measured rather than suspected:
+
+- **17% of invocations (11 of 65)** on the current run were hit by Aider's
+  file-mention scan, which attaches any path-shaped string it finds in the
+  message *or in its own reply* — and, per its own log line, *a reply that
+  names a file loses that reply's edits*. There is no flag. We cannot stop the
+  model naming a path in its own prose, so this is unfixable from outside.
+- Usage accounting is blind: Aider's cache fields read Anthropic's and
+  DeepSeek's but never OpenAI's `prompt_tokens_details.cached_tokens`, and its
+  "received" count excludes reasoning tokens. Recorded executor spend was
+  $3.30 against $5.54 actually billed.
+- Read-only file order comes from iterating a `set` (`base_coder.py:392`), so
+  identical `--read` arguments produce a different byte order every process —
+  measured, three orders in four runs. The cache prefix breaks between attempts.
+
+None of this is about money. Executor spend is $3.30 against $199 of planner
+spend; Aider time is ~3,800s against 10,100s of test suite. **The case is that
+we don't control the failure surface, and the failures are the expensive thing.**
+
+Doing it now, during the Rails 4.2→5.2 migration, is deliberate: the next
+project won't offer comparable work to judge it against.
+
+LangGraph comes out at the same time because it turns out to be nearly free to
+remove — two import lines in one file, three call sites in `cli.py`. Routing is
+already ours (`nodes` set `next_hop`; `_router` is a 10-line table lookup).
+`recursion_limit()` exists *only* to defeat LangGraph's 25-super-step default.
+No interrupts, reducers, streaming, `Send`, or `update_state`. Pause is already
+our own filesystem flag.
+
+**Decisions taken:** the executor commits its own work, before tests. It runs
+lint (`rubocop -A`-style) inside its own loop. Clear removal of Aider — no
+dual-path beyond the transition; back out via git if unworkable.
+
+## What verify becomes
+
+Not a test runner — a **trust boundary**. It keeps only what the executor must
+not be allowed to answer about itself:
+
+| stays in verify | why |
+|---|---|
+| scope (`edit_files` + `_is_plan_document`) | adversarial: an executor that can iterate against it routes around it |
+| progress (diff digest unchanged) | same |
+| branch identity | structural safety |
+| setup | environment; routes to a human |
+| the five moved layers, **only when the facts have moved** | see below |
+
+The split is not invented — it is what the existing route table already says.
+Layers routing to `Route.EXECUTOR` (patterns, residue, tests, checks,
+new_tests) are "here is what's wrong, fix it" and move into the loop. Layers
+routing to `PLANNER`/`HUMAN` are "you went outside your remit" and stay out.
+
+**Verify runs the tests exactly when nothing else has tested this tree.**
+
+Two earlier drafts of this were wrong and the corrections are the design. The
+first had verify re-run the moved layers unconditionally, as independent
+confirmation. That is duplication: a deterministic set on an unchanged tree
+gives the same answer twice. We only ever re-ran in verify because we could not
+make Aider run the set we wanted — the re-run was compensating for not
+controlling the executor, and controlling the executor is the point of this
+change. It is also exactly why `_resolve_declared` and `_auto_test_command`
+diverged.
+
+The second draft made the re-run conditional on a recorded (command, HEAD sha)
+pair. Better, but on the agent path that condition can never fire, so it is
+dead weight dressed as a check:
+
+- the gate's path set is a **subset** of the loop's — the gate adds test files
+  from the diff, and the executor can only touch `edit_files`, whose tests the
+  loop already unions in;
+- nothing writes between the loop's last test run and verify, because `checks`
+  now run *inside* the loop and commit there, so HEAD does not move either.
+
+What is left are the two paths with **no loop at all**, and they are the real
+reason the capability survives:
+
+- **`script` stages** — `run_script_stage` runs an operator command and never
+  enters a model loop. Something must test the result.
+- **resume-into-verify** — `resume_entry_point` routes straight to `verify`
+  when a human fixed something by hand mid-stage.
+
+So `GateResult` carries the command run and the HEAD sha, and verify's rule is
+one branch: no green record for this HEAD from a command matching what it would
+run → run it. On the agent path it does nothing at all.
+
+Flake adjudication does **not** move to the executor. It belongs wherever tests
+are run, which is `gates.run_tests`, so both callers inherit it.
+
+## Design
+
+### New modules
+
+- **`edittools.py`** — write-side counterpart to `repotools.py`. Same posture:
+  no model, refuses with `ToolError`, records what it did. `Edit`,
+  `apply_edits`, `normalise`, `FileEditor` with `edit` / `create_file` /
+  `delete_file`.
+- **`executortools.py`** — schemas + dispatch, mirroring `plannertools.py`.
+  Imports `plannertools.READ_TOOLS` **by reference, not copy**.
+- **`gates.py`** — the shared execute/verify layer. `check_patterns`,
+  `check_residue`, `check_new_tests`, `run_checks`, `run_tests`,
+  `resolve_test_command(..., for_loop: bool)`. `GateResult` carries the
+  command run and the HEAD sha it ran against, so verify can decide whether
+  re-running it would ask a question already answered.
+- **`executorclient.py`** — OpenAI Responses client, structured like
+  `reviewer.py`.
+- **`openaiclient.py`** — `TokenUsage`, `_extract_usage`, `_merge_usage`,
+  `_tool_request`, `_transport_errors`, extracted from `reviewer.py`.
+- **`driver.py`** — the hand-rolled graph driver replacing LangGraph.
+
+### The edit tool
+
+Structured tool calls (`path`, list of `old_string`/`new_string`), not diff
+parsing. `old_string` must occur exactly once unless `replace_all`; zero
+occurrences and multiple occurrences are **different refusals**, as
+`RepoReader._require_readable` already distinguishes "not there" from "there
+and you may not have it". A batch applies to an in-memory buffer and writes
+once — any failure leaves the file byte-identical, because a partially applied
+batch leaves the model reasoning against a file neither party has seen.
+
+What replaces Aider's fuzzy matching: Aider compensated for a *lossy channel*
+— a text format reproduced byte-exactly inside free-form prose. A tool call
+removes the channel (provider-escaped JSON, `strict` schema), returns the
+refusal *inside the same turn* naming the file and occurrence count, and the
+model has a read tool to close the loop itself. Aider's model learned from an
+exit code one reflection later. This claim is **bounded and unproven for this
+project** until step 6 measures `edit_refusals` per cycle — which is why that
+field exists.
+
+**Scope is enforced at the tool boundary**, not only at the gate:
+`_resolve_writable` applies the inside-repo rule (`RepoReader._resolve`, which
+catches symlinks pointing out) plus `matches_any(rel, stage.edit_files)` plus
+`_is_plan_document`. The gate stays as defence in depth — `checks` rewrite
+files the tool never saw, and the gate is the half that routes to the planner.
+
+### The tool set
+
+Read tools (`read_file`, `list_files`, `search`, `git_show`, `git_diff`,
+optional `semantic_search`) reused from `plannertools`, plus the three edit
+tools. **Lint, test and commit are loop steps, not tools** — handing the model
+the scheduling is what the budget gets spent on, and a model that must *ask*
+for a test result can decline to ask and declare itself done. There is no tool
+that runs a command; that invariant gets its own test.
+
+One boundary changes: `RepoReader` is tracked-only, and the executor must read
+files it just created. Relax tracked-only for paths matching `stage.edit_files`
+and nothing else — the reason tracked-only exists (`.env`, `cdk.context.json`
+never reach a cloud API) survives intact.
+
+### The loop
+
+```
+per cycle:
+  model edits until it stops calling tools (bounded by max_model_turns)
+  lint   (may rewrite files — feed back which ones)
+  commit (before tests, per the squash-merge invariant)
+  patterns -> residue -> new_tests -> tests   (cheap first)
+  green -> return; else append feedback, next cycle
+```
+
+Terminates on: a green cycle; budget exhausted (commit what's there); two
+consecutive identical diff digests; or the model stopping having changed
+nothing. **Budget exhaustion still commits** — the loop is in-process and
+cooperative, so "the executor committed before verify" becomes a guarantee
+rather than the `git.is_clean()` inference at `nodes.py:781`.
+
+`ok=False` narrows to *the executor itself broke* (transport, auth, unhandled
+exception). Every substantive verdict comes from verify, as before.
+
+`max_test_retries` is unchanged in mechanism but shifts in meaning — an attempt
+is now a whole inner loop. Set `max_cycles` low (3) and **tune one at a time**.
+
+### `ExecutionResult`
+
+Add `usage` (real provider counts, priced by the existing
+`pricing.price_usage`), `cycles`, `model_turns`, `edits_applied`,
+`edit_refusals`, `commits`, `in_loop_failures`. `cost_usd` becomes
+`float | None` — `None` for unpriced, because a zero has meant "not priced" as
+often as "free". Delete `cache_tokens`, `results`, `unapplied_edit`,
+`attached_files`.
+
+### LangGraph removal
+
+`driver.py`: a `while` loop over `NODES[hop]`, `_router` moved inline, one JSON
+row per step in sqlite, and a `load_state` replacing `graph.get_state`. Three
+behaviours must be reproduced deliberately:
+
+1. **Partial-update merging** — trivial, no reducers exist.
+2. **Schema key filtering** — LangGraph silently drops keys not in `RunState`,
+   and `state.py:180-186` documents relying on it. A plain `dict.update` stops
+   dropping them. Keep the filter explicit.
+3. **Crash-mid-node resume** — LangGraph resumes from a pending task, not
+   necessarily `START`, so `resume_entry_point` isn't always consulted. Our
+   loop makes this explicit, which is more predictable but is a behaviour
+   change to pin with tests.
+
+Existing `state.db` files are not readable by a new writer. The live run must
+finish, or be re-run, before the cutover.
+
+## Ordering
+
+Each step keeps the suite green.
+
+0. **Extract `openaiclient.py`** from `reviewer.py`. Pure refactor.
+1. **`gates.py`; unify test-path selection.** Merge `verify._resolve_declared`
+   with `executor._auto_test_command` into one `resolve_test_command(...,
+   for_loop=)`. These two diverged correctly and each divergence has an
+   incident behind it — the fix is making them impossible to change
+   independently. **Aider still runs.** Largest risk-free win; lands first.
+2. **`edittools.py`** — pure module, full test file, nothing calls it.
+3. **`executortools.py`** — schemas + dispatch, nothing calls it.
+4. **`executorclient.py`** — Responses client, scripted-fake tested.
+5. **The loop, behind `ExecutorConfig.provider: "aider" | "openai"`.** Both
+   paths live, both suites green. A live run happens here, before any deletion.
+6. **Flip the default; migrate project configs; take a live run.** Measure
+   attempts/stage, cycles/attempt, edit refusals/cycle, and **the cache read
+   rate on the Responses path** — the figure `CLAUDE.md` currently records as
+   unmeasured.
+7. **Delete Aider.** `shield_path_mentions`, `attached_by_mention`,
+   `build_aider_argv`, the three log-scrapers, `CommandRunner.run_argv`,
+   `NO_BROWSER`, `GIT_CONFIG_OVERRIDES`, `preflight.check_aider_flags`,
+   `scripts/smoke.py`'s fake-aider-on-PATH (replaced by an injected scripted
+   client), and the dead `ExecutorConfig` fields. Removing a config field
+   fails `_Strict` load on existing project configs — the error must name the
+   key and its replacement, not dump a pydantic schema.
+8. **Replace LangGraph with `driver.py`.**
+9. **Simplify `nodes.execute`** — remove the attach block (`nodes.py:706-747`)
+   and the `is_clean()` dance (`784-797`). Kept separate from step 7 so a
+   bisect can tell a deletion from a routing change.
+
+10. **Let one derivation produce up to five stages.** After step 8, because it
+    adds a queue to `RunState` and there is no sense writing that into a
+    checkpointer about to be replaced.
+
+    The planner is the expensive participant — $199 of a run against $3.30 for
+    the executor — and a derivation is 5 to 7 minutes of a ~13.5 minute stage.
+    On homogeneous work it re-answers a question it has already answered:
+    across 16 stages of the current run, `backfill-batch-1` through `batch-13`
+    differ only in which three to eight spec files they name, and each
+    re-surveys the same helper and the same route table to find that out.
+
+    **The risk is that a stage spec is a prediction**, which this project has
+    already paid for twice: an unresolvable `read_excerpts` range now fails the
+    stage back to the planner, costing exactly the derivation being saved, and
+    "an authored edit stops being satisfiable once part of it is already true
+    on the branch" deadlocked a stage into two redraws. Stage 3 of 5 is drawn
+    against a tree stages 1 and 2 have not touched yet.
+
+    So the batch is constrained rather than trusted, in the house style — make
+    the mistake unexpressible: **no stage's `edit_files` may intersect any
+    other batched stage's `edit_files`, `read_files`, or `read_excerpts`
+    paths.** Staleness is then impossible by construction. Truncate to the
+    longest safe prefix rather than rejecting the batch, so heterogeneous work
+    degrades to one stage and today's behaviour. The measured fit is good: only
+    4 of 120 stage pairs in this run share an `edit_files` entry — though note
+    that nearly every batch quotes `spec/support/migrated_controller_inventory.rb`,
+    which is exactly the shared file the constraint exists to catch.
+
+    A queued stage that fails discards the rest of the queue and re-derives.
+    That keeps the feedback loop — the reviewer's `record` and the progress log
+    informing the next stage — for the case where it matters.
+
+    Measure: batch size actually produced, stages discarded per failure, and
+    the failure rate of position-2+ stages against position-1. If position-2+
+    fails materially more, the lost feedback is real and the cap comes down.
+    Do not report the saving from token cost alone; a batch that fails at
+    position 2 costs a derivation *and* an attempt.
+
+## Verification
+
+- `uv run pytest` green at every step (1,262 tests today).
+- **New**: `test_edittools.py` (uniqueness refusals distinct, failed batch
+  leaves file byte-identical, out-of-scope and symlink writes refused,
+  created-file readable before commit while `.env` is not),
+  `test_executortools.py` (strict schemas; read-tool descriptions byte-identical
+  to the planner's; **no tool runs a command**; no description names a
+  framework or file extension), `test_gates.py` (`for_loop` divergence asserted
+  in one test), `test_executor_loop.py` (**the commit precedes the test run**,
+  asserted by a stub test command recording `git.head_sha()`),
+  `test_driver.py` (resume merge, schema filtering, crash-mid-node).
+- **End to end in `test_integration.py`**, per the standing rule that a value
+  crossing a schema boundary gets a journey test: cost and context tokens from
+  scripted usage → `ExecutionResult` → state → `report.md`/`stage-costs.md`;
+  `cycles` reaching an artifact; a model attempting an out-of-scope write with
+  the tool refusing *and* the scope gate never firing; and `execute` then
+  `verify` on a real fixture proving the commit is on the stage branch — driven
+  through the nodes, not `with_stage`, which is laxer than the node.
+- **Live**: step 5 runs against `example` with both providers available; step 6
+  flips the default and measures. `executor_context_tokens` changes instrument
+  at the cutover — write one line into `stage-costs.md` marking it, because a
+  series that silently changes instrument is worse than a gap.
+
+## Not in scope
+
+Qdrant/semantic search and the litellm price map stay. `gitops`'
+`ignore_line_endings` and `strip_added_trailing_whitespace` exist because of
+Aider and should be revisited *after* step 7, not during — they change what the
+reviewer sees.
