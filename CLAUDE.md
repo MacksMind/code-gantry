@@ -336,6 +336,21 @@ decision attached to it. The instinct to close an open question is right about
 the question and wrong about the priority: what makes a reading worth taking is
 that something changes depending on the answer.
 
+**And then it closed itself, which is the more useful half.** Replacing Aider
+with an in-process client made the reading free: we now hold the usage block the
+provider returns instead of scraping someone else's console. Measured over 46
+attempts of one run, instrument `executor-loop.json`: **36,790,654 of 39,218,473
+prompt tokens cached, 93.8%**, and on opening turns alone 207,141 of 369,840,
+**56.0%**, with the largest shared prefix at 6,133 tokens. So the answer was
+neither the *zero* our accounting implied nor the *99.9%* the chat/completions
+probe suggested.
+
+Note what actually unblocked it. Nobody decided to measure; the number arrived
+because we stopped depending on a tool that could not report it. A question
+recorded as unmeasurable is worth re-asking after any change to the layer that
+could not answer it — the reason for the gap is usually a property of the
+instrument rather than of the thing.
+
 **A figure in a document must name the artifact it came from.** Two cost
 numbers reached `docs/architecture.md` — "$15.13 a run", "$2.80" — in the same
 session that built the code which computes them. Neither matches any
@@ -456,6 +471,88 @@ extra per-stage cost of roughly `landings-since-fold × $0.018`. That is
 quadratic in the gap, so ~$100 over 50 stages at 90 landings deep. Folding is
 not housekeeping; it is the largest single lever on the run's bill.
 
+**A delimiter drawn from the content's own alphabet is not a delimiter.**
+`read_file` numbered with a five-character field and *two spaces*, and
+indentation is also spaces. A line indented by two arrived as four with nothing
+marking where our prefix stopped and the file's bytes began, so a model quoting
+it back into an `edit` quoted our padding as code and the edit was refused for
+text the file does not contain. Measured over 117 refused `old_string`s:
+**74 — 63% — matched the file exactly once two spaces were stripped from every
+line.** The blank line was worse; ` 1470  ` made the emptiest line in a range
+the one that broke it.
+
+The diagnosis is the part worth keeping. Three plausible stories were checked
+and refuted first — the model quoting from memory, a stale `git_show`, index
+lag — and the fact that killed all of them was that the **median gap between
+reading a file and failing to edit it was zero conversation items**. It read
+what we sent and reproduced it faithfully. When a model appears to be
+hallucinating a file's contents, measure how far back its source was before
+believing it: the shortest distance is the most likely, and at distance zero
+the fault is ours by construction.
+
+**A classifier over rendered text cannot separate classes the text renders
+identically.** `_refusal_kind` bucketed a refusal by matching words in its
+message, which is fine while the message and the cause are the same thing. Once
+an edit could be refused by three different fallbacks — anchor, whole-file
+window, semantic — all rendering the same sentence, the bucket could not tell
+them apart *by construction*, and no amount of reading it would have said so.
+The route is carried on `ToolError.kind` now rather than derived. The general
+form: before trusting a derived label, ask whether the thing it is derived from
+still varies with what you want to know.
+
+**An earlier branch can eat every fixture.** Three tests were named for the
+semantic fallback and asserted its output; a probe counted that branch
+returning a window **zero times across the entire suite**. Every fixture quoted
+a first line that matched the file exactly modulo indentation — which is the
+*anchor's* case — so the cheap earlier branch answered all of them and the
+locator was never consulted. Two of those tests said in their own docstrings
+that the surviving indexed line placed the window. It never did. A test that
+calls the function and asserts a correct result is not evidence the branch you
+meant ran; if a mechanism has a cheaper predecessor, instrument which one fired
+rather than inferring it from the answer.
+
+**A check that fixes must not sit behind one that can fail for unrelated
+reasons.** `run_all` breaks at the first failure — right for gates, and its
+docstring says so: "once one has failed the stage is failing, and running the
+rest only costs time." That stops being right when a later entry also *repairs*.
+Ordering `annotate` ahead of `bin/rubocop -A` would have meant any docker
+hiccup skipped RuboCop for that cycle, so the model's own edits went
+uncorrected and its only feedback was about a tool it never invoked — and on
+the native executor `checks` is the *only* run of the linter, because
+`executor.lint_command` is read solely where Aider's argv is built. Where a
+fixer must follow a fallible step, chain it into the same entry with `&&` so a
+`break` cannot leave the output uncleaned.
+
+**Measure the artifact in the state your claim is about.** Asked to confirm
+that `annotate` emits trailing whitespace, three separate checks over the
+working tree found none — because the operator had already run RuboCop over it.
+The measurement was correct and answered a question nobody asked. A tree is not
+a fixed thing; before reporting an absence, establish that what you are looking
+at is what the claim was made about.
+
+**A monitor over an append-only log must be anchored to this run.**
+`last-run.out` is appended across every resume, so grepping it for "Paused at
+your request" matched **24 historical pauses** and reported a stop that had not
+happened. A `pgrep -f "orchestrator resume"` in the same wait loop matched the
+loop's own command line, so a run that had exited read as alive. Both failures
+look like the run misbehaving and are the instrument describing itself. Anchor
+to the tail, or to a line count taken at the start.
+
+**Deleting a producer leaves its consumers guarded on a value nobody sets.**
+`context_tokens` and `cost_usd` are assigned in exactly one place — from
+`context_tokens_from_log` and `cost_from_log`, which scrape Aider's console.
+The in-process loop sets neither, so `advance`'s guard
+`if executor_context_tokens or executor_cost_usd` is never true and
+`append_stage_cost` is never called. `stage-costs.md` stopped being written the
+hour the executor switched and stayed frozen for 24 landed stages, while
+`executor-loop.json` carried correct usage the whole time. The planner reads
+`stage-costs.md` on every call. This is the "value lost in transit" rule with
+the loss one step further out — the value was never *computed* on the new path,
+and a truthy guard turned that into silence rather than a zero. When replacing a
+component, grep for every field only it populated, and check the guards that
+read them: a guard written to suppress noise will suppress the whole channel
+just as quietly.
+
 ## Where things live
 
 `nodes.py` holds the loop's decisions — which failures route to the executor,
@@ -470,7 +567,34 @@ that is never cleared is invisible until it is reported back to an operator.
 `runtime.py` assembles the collaborators and is where anything the model clients
 need from the run — the log, the config, the repository — is bound to them;
 values wired there are exactly the ones with no unit test on either side, so
-they get an end-to-end one.
+they get an end-to-end one. It also holds `pin_modules`, which is the reason
+this codebase can be edited while a run is live: several modules are imported
+inside functions to break cycles, so before it existed a module not yet loaded
+was read from disk at the moment it was first needed, putting new code in front
+of an old class already in memory. That is not hypothetical — it stopped a run
+with `AttributeError: 'ExecutorConfig' object has no attribute
+'semantic_search'` forty seconds after an edit. The worst property of it was
+that the same edit was harmless whenever the module happened to be cached
+already, so every time it worked taught the wrong lesson. After `pin_modules`
+returns, a live run finishes on the code it started with, and edits take effect
+at the next start.
+
+`gates.py` is the layer shared by the executor's loop and `verify.py` — patterns,
+residue, new tests, checks, tests — so the two cannot select different test
+paths, which they had done, correctly, for five separately-incident-shaped
+reasons. `edittools.py` is the write-side counterpart to `repotools.py`: no
+model, refuses with `ToolError`, records what it did. `executorloop.py` is the
+cycle itself — edit until the model stops asking, lint, **commit, then test** —
+and `executortools.py` and `executorclient.py` are its schemas and its provider
+call. `repotools.number_lines` is the single renderer of numbered source; three
+copies of that format string is how it drifted while every test stayed green.
+
+Script stages (`kind: "script"`, `run_script_stage`, the branch at
+`nodes.execute`) are presently **unreachable**. `kind` is not planner-writable
+by design and there is no static stage list for an operator to declare one in,
+so nothing constructs one. The branch and its validation are live code with no
+caller; treat a plan that assumes script stages exist as proposing to build
+them.
 
 The docstrings carry the reasoning, usually including the incident that produced
 it. They are worth reading before changing the behaviour they describe.
