@@ -8,6 +8,17 @@ This file is for whoever is *changing* the code. It records the invariants that
 are easy to break without noticing, and the rules that were learned by breaking
 them.
 
+**It is also the only durable channel.** A session's findings can be written
+into a compaction prompt, which carries them one hop and then ages out, or into
+an agent's own memory, which is keyed on this directory's absolute path and
+fails silently if the project is ever renamed or moved. Neither survives the way
+a tracked file does. So when a long session ends — and a request for a
+compaction prompt is the natural moment, because "what is worth keeping?" is
+already the question being asked — the first move is to diff what was learned
+against this file, not to summarise it somewhere more convenient. Anything that
+belongs in project instructions and only reaches a summary is lost on a horizon
+nobody is watching.
+
 Run the tests with `uv run pytest`. They are fast and need no network — there is
 no reason not to run the whole suite.
 
