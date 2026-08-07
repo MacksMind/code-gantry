@@ -580,6 +580,42 @@ a counter, or a periodic look at what it has been swallowing. The question to
 ask when adding one is not "will this stop the false rejection" but "who finds
 out if this fires ten thousand times".
 
+**A test suite can be exercising the path you are about to delete.** The
+integration tests drove a fake `aider` binary on `PATH`, and they were green
+the whole time the in-process executor was running live — because
+`executor.provider` still defaulted to `"aider"`, and nothing made the tests
+follow production. So the end-to-end coverage was entirely on the dead path
+while every real stage took the other one, and the first honest signal was
+23 tests failing the moment the default went away. A default that only tests
+rely on is a fork in the road with no sign on it: when a component is replaced
+behind a switch, grep for what still selects the old branch and make the
+suite's answer the same as the run's.
+
+**A capability can go missing between two correct changes.** Feedback used to
+travel inside the executor's prompt string, and `build_executor_prompt` opened
+a rework with one of two opposite instructions — a review rejection means
+*replace* what is there, a gate failure means the sweep is unfinished and
+repeating the approach on what was missed is the fix. Moving feedback to its
+own conversation turn was right, because an opening at character zero
+invalidates the cached prefix on every rework. Appending it as a bare turn was
+also right in isolation. Between them the framing was dropped, and **82 stages
+ran without it** — no error, no test, and the only visible symptom would be a
+model treating a rejection as something to add to. When a payload changes
+shape, enumerate what the old shape carried; the parts with no field of their
+own are the ones that vanish.
+
+**Cut code with a parser, not a pattern.** Twice in five minutes, deleting
+Aider by regex removed the wrong span: a method boundary matched a `def`
+nested inside a *later* function and swallowed six module-level definitions,
+then a docstring line reading `stage: some blocks match` matched a
+"top-level assignment" pattern mid-sentence. Both were caught, one by the
+compiler and one by `ast.parse` — but `ast.parse` accepts a `return` outside a
+function and `compile` does not, so the first survived a syntax check and
+failed at import. Python's own `ast` gives exact `lineno`/`end_lineno` for
+every symbol and costs three lines to use. This is the "read artifacts; do not
+regex them" rule pointed at source instead of output, and the same answer:
+when a structure has a parser, the pattern is a guess.
+
 **Deleting a producer leaves its consumers guarded on a value nobody sets.**
 `context_tokens` and `cost_usd` are assigned in exactly one place — from
 `context_tokens_from_log` and `cost_from_log`, which scrape Aider's console.
@@ -630,6 +666,15 @@ cycle itself — edit until the model stops asking, lint, **commit, then test** 
 and `executortools.py` and `executorclient.py` are its schemas and its provider
 call. `repotools.number_lines` is the single renderer of numbered source; three
 copies of that format string is how it drifted while every test stayed green.
+
+`executor.py` is now only what shapes an attempt before it starts — the read
+budget, the excerpts, the conventions — plus `run_script_stage`. Aider is gone
+(2,418 lines), and with it nine `ExecutorConfig` settings; `RETIRED_EXECUTOR_KEYS`
+names each one and its replacement, because `extra="forbid"` reports a retired
+key exactly as it reports a typo. `scripts/smoke.py` still writes a fake `aider`
+and is the one caller left: it drives the real CLI in a subprocess, so it needs
+the executor pointed at the stub server it already runs rather than a binary on
+`PATH`.
 
 Script stages (`kind: "script"`, `run_script_stage`, the branch at
 `nodes.execute`) are presently **unreachable**. `kind` is not planner-writable
