@@ -164,6 +164,15 @@ class _EndpointConfig(_Strict):
 
 class ExecutorConfig(_EndpointConfig):
     model: str
+    # Which editor runs a stage. `aider` drives the subprocess; `openai` drives
+    # the in-process loop against the Responses API.
+    #
+    # Defaulting to `aider` while both exist is the whole point of having the
+    # switch: the new path can be run against a real project, on real stages,
+    # before anything is deleted. A rewrite of the component whose failure
+    # modes are the best documented in this repository should not become the
+    # only option on the strength of its unit tests.
+    provider: Literal["aider", "openai"] = "aider"
     api_key_env: str | None = None
     # Passed to aider as `--lint-cmd`, which is narrower than it reads. Aider's
     # linter calls `filename_to_lang` first and returns before consulting this

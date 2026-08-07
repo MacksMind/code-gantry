@@ -244,6 +244,31 @@ class ExecutionResult:
     # this result distinguishes that from a model that produced nothing.
     attached_files: list[str] = field(default_factory=list)
 
+    # --- the in-process executor ----------------------------------------
+    #
+    # Zero on the subprocess path, which is honest: it has no cycles and no
+    # turns, and a zero here says "this executor does not work that way"
+    # rather than "it did none".
+
+    # Real provider counts, so cost is priced by `pricing.price_usage` — the
+    # same function the planner and reviewer already use — instead of scraped
+    # from a console line that omits reasoning tokens and cannot see OpenAI's
+    # cache fields at all.
+    usage: object | None = None
+    cycles: int = 0
+    model_turns: int = 0
+    edits_applied: int = 0
+    # Edits the tool refused. The instrument for the one claim this design
+    # rests on and has not yet earned: that exact matching plus a read tool
+    # beats fuzzy matching a diff out of prose. If this is high the answer is
+    # not to add fuzzy matching back — it is that the refusal text is not
+    # actionable enough.
+    edit_refusals: list[str] = field(default_factory=list)
+    commits: list[str] = field(default_factory=list)
+    # Which gate failed on which cycle, so a stage that used its whole budget
+    # says what it kept failing rather than only that it ran out.
+    in_loop_failures: list[str] = field(default_factory=list)
+
 
 # Aider's own normalisation, lifted from `get_file_mentions` in the installed
 # 0.86.2 source rather than recalled. Both are applied to a whitespace-delimited
@@ -497,11 +522,17 @@ def build_aider_argv(
 
 class Executor:
     def __init__(
-        self, cfg: ProjectConfig, runner: CommandRunner, git: Git | None = None
+        self,
+        cfg: ProjectConfig,
+        runner: CommandRunner,
+        git: Git | None = None,
+        log=None,
     ):
         self.cfg = cfg
         self.runner = runner
         self.git = git
+        # Assigned by `build_runtime`; the executor predates the run log.
+        self.log = log
 
     def _tracked_paths(self) -> list[str] | None:
         """What the repository currently tracks, for the mention shield.
@@ -534,6 +565,66 @@ class Executor:
         return collected, results
 
     def run_agent_stage(
+        self,
+        stage: Stage,
+        prompt: str,
+        history_dir: Path | None = None,
+        since_sha: str = "",
+    ) -> ExecutionResult:
+        """One attempt at a stage.
+
+        `since_sha` is where the stage began. The subprocess editor never
+        needed it — it ran the tests itself and the gate diffed afterwards —
+        but the in-process loop runs the gates as it goes, and every one of
+        them is a question about what has changed *since the stage started*.
+        Optional so the older path and its tests are untouched.
+        """
+        if self.cfg.executor.provider == "openai":
+            return self._run_in_process(stage, prompt, history_dir, since_sha)
+        return self._run_aider(stage, prompt, history_dir)
+
+    def _run_in_process(
+        self,
+        stage: Stage,
+        prompt: str,
+        history_dir: Path | None = None,
+        since_sha: str = "",
+    ) -> ExecutionResult:
+        """The in-process loop. See `executorloop.run_loop`.
+
+        Assembled here rather than in `runtime.py` because every part of it is
+        per-stage: the editor's allowlist is the stage's `edit_files`, and the
+        reader's is the same list. A collaborator bound once for the run would
+        have to be re-scoped on every stage, which is the same thing with a
+        longer-lived object to get wrong.
+        """
+        from orchestrator.executorclient import OpenAIExecutorModel
+        from orchestrator.executorloop import build_loop_parts, run_loop
+
+        reader, editor = build_loop_parts(stage, self.cfg, self.cfg.target_repo)
+        model = OpenAIExecutorModel(self.cfg.executor, log=self.log)
+        kept = set(_within_read_budget(stage.read_files, self.cfg))
+
+        conversation = [{"role": "user", "content": prompt}]
+        out = run_loop(
+            stage,
+            self.cfg,
+            self.git if self.git is not None else Git(self.cfg.target_repo),
+            self.runner,
+            model,
+            reader,
+            editor,
+            since_sha=since_sha,
+            conversation=conversation,
+            cache_key=f"{self.cfg.project_branch}:{stage.id}",
+            log=self.log,
+        )
+        out.dropped_reads = [p for p in stage.read_files if p not in kept]
+        if history_dir is not None:
+            _write_transcript(history_dir, conversation, out)
+        return out
+
+    def _run_aider(
         self, stage: Stage, prompt: str, history_dir: Path | None = None
     ) -> ExecutionResult:
         try:
@@ -821,3 +912,46 @@ def _within_read_budget(read_files: list[str], cfg: ProjectConfig) -> list[str]:
         dropped.add(path)
         total -= sizes[path] or 0
     return [p for p in read_files if p not in dropped]
+
+
+def _write_transcript(history_dir: Path, conversation: list, out: ExecutionResult) -> None:
+    """What the in-process loop did, for the attempt directory.
+
+    The subprocess editor wrote three history files of its own and we relocated
+    them; this writes the equivalent, because the artifact is what explains a
+    stage afterwards and half the debugging on the first long run was
+    reconstructing what the executor had been told.
+
+    Best effort. An attempt that worked must not be failed by a directory that
+    could not be written.
+    """
+    import json
+
+    def plain(item):
+        if isinstance(item, dict):
+            return item
+        return {
+            "type": getattr(item, "type", "?"),
+            "name": getattr(item, "name", ""),
+            "arguments": getattr(item, "arguments", ""),
+        }
+
+    try:
+        (history_dir / "executor-conversation.json").write_text(
+            json.dumps([plain(m) for m in conversation], indent=2, default=str)
+        )
+        (history_dir / "executor-loop.json").write_text(
+            json.dumps(
+                {
+                    "cycles": out.cycles,
+                    "model_turns": out.model_turns,
+                    "edits_applied": out.edits_applied,
+                    "edit_refusals": out.edit_refusals,
+                    "commits": out.commits,
+                    "in_loop_failures": out.in_loop_failures,
+                },
+                indent=2,
+            )
+        )
+    except OSError:
+        return

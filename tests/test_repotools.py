@@ -357,3 +357,35 @@ class TestPinnedToACommit:
         with pytest.raises(ToolError) as e:
             RepoReader(git, repo, at_sha=first).read_file("../outside.txt")
         assert "outside the repository" in str(e.value)
+
+
+class TestTheExecutorCanReadWhatItMayWrite:
+    """One bounded exception to tracked-only, and the boundary it must not move.
+
+    An executor has to read back a file it has just created, and that file is
+    untracked until the cycle's commit. Without this it cannot re-read its own
+    new spec, which is exactly when re-reading matters most. The allowlist is
+    the stage's `edit_files`, chosen by the operator and the planner and
+    enforced by the scope gate — not a judgement made here.
+    """
+
+    def test_an_untracked_file_inside_the_write_scope_is_readable(self, repo):
+        (repo / "app" / "controllers" / "new_spec.rb").write_text("describe\n")
+        r = reader(repo)
+        r.writable_globs = ["app/**"]
+        assert "describe" in r.read_file("app/controllers/new_spec.rb")
+
+    def test_the_same_file_is_refused_without_the_allowlist(self, repo):
+        (repo / "app" / "controllers" / "new_spec.rb").write_text("describe\n")
+        with pytest.raises(ToolError, match="not tracked"):
+            reader(repo).read_file("app/controllers/new_spec.rb")
+
+    def test_an_ignored_secret_stays_unreadable_even_with_a_wide_allowlist(self, repo):
+        # The reason tracked-only exists. A stage whose scope is the whole repo
+        # still must not reach `.agent.env`, so the allowlist is checked
+        # against the stage's globs rather than treated as "anything untracked
+        # is fine now".
+        r = reader(repo)
+        r.writable_globs = ["app/**", "spec/**"]
+        with pytest.raises(ToolError, match="not tracked"):
+            r.read_file(".agent.env")

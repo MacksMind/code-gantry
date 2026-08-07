@@ -218,6 +218,7 @@ def resolve_test_command(
     since_sha: str = "",
     *,
     for_loop: bool,
+    allow_full_suite: bool = False,
 ) -> str | None:
     """Which test command to run, or `None` when there is nothing worth running.
 
@@ -241,20 +242,32 @@ def resolve_test_command(
     if not for_loop and stage.test_command:
         return stage.test_command
 
+    # What the loop does with nothing left to scope to depends on whether the
+    # editor enforces scope.
+    #
+    # The subprocess editor knows nothing of `edit_files`: faced with a red
+    # spec outside the stage it edits that spec, and a full suite gives it
+    # minutes per pass in which to do so. For it, no runnable paths means no
+    # inner loop, because a command that can never pass is worse than none —
+    # the attempt ends believing it succeeded.
+    #
+    # The in-process editor refuses an out-of-scope write at the tool, so it
+    # physically cannot wander. The reasoning that withheld the full suite does
+    # not apply to it, and withholding it anyway would mean a project
+    # configuring only `test_command` gets an executor that never runs a test.
+    fallback = cfg.test_command if (allow_full_suite or not for_loop) else None
+
     template_base = (
         (cfg.auto_test_command or cfg.scoped_test_command)
         if for_loop
         else cfg.scoped_test_command
     )
     if not template_base:
-        return None if for_loop else cfg.test_command
+        return fallback
 
     paths = resolve_test_paths(stage, cfg, git, since_sha, for_loop=for_loop)
     if not paths:
-        # Nothing identifiable to scope to. The gate falls through to the full
-        # command; the loop declines to run rather than running an empty
-        # selection and calling it green.
-        return None if for_loop else cfg.test_command
+        return fallback
 
     template = template_base
     swap_allowed = (not for_loop) or cfg.auto_test_command is None
@@ -463,6 +476,7 @@ def run_tests(
     since_sha: str = "",
     *,
     for_loop: bool,
+    allow_full_suite: bool = False,
 ) -> GateResult:
     """Run the stage's tests once, with one re-run before calling it a failure.
 
@@ -482,7 +496,10 @@ def run_tests(
     to the full suite". That distinction is `resolve_test_command`'s, not this
     function's.
     """
-    command = resolve_test_command(stage, cfg, git, since_sha, for_loop=for_loop)
+    command = resolve_test_command(
+        stage, cfg, git, since_sha,
+        for_loop=for_loop, allow_full_suite=allow_full_suite,
+    )
     if not command:
         return GateResult(ok=True, head_sha=git.head_sha())
 

@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from orchestrator.gitops import Git, GitError
+from orchestrator.globs import matches_any
 
 
 class ToolError(Exception):
@@ -115,6 +116,10 @@ class RepoReader:
     # deletion because a permit list landed later — the right answer for the
     # wrong reason, and indistinguishable from judgement.
     at_sha: str = ""
+    # Paths this caller may also write, and may therefore read back before
+    # they are tracked. Empty for the planner and reviewer, which only
+    # read; set to the stage's `edit_files` for the executor.
+    writable_globs: list[str] = field(default_factory=list)
     _lines_used: int = 0
 
     # --- boundaries -----------------------------------------------------
@@ -178,6 +183,18 @@ class RepoReader:
                 "path from a naming convention — list the directory instead."
             )
         if rel not in tracked:
+            # One exception, and it is bounded by an allowlist rather than by
+            # judgement: a file the caller may *write* is one it must be able
+            # to read back, and a file it just created is untracked until the
+            # cycle's commit. Without this the executor cannot re-read its own
+            # new spec, which is exactly when re-reading matters most.
+            #
+            # The reason tracked-only exists survives intact. `.env`,
+            # `cdk.context.json` and their kin are still refused, because they
+            # are not in any stage's `edit_files` — the operator and the
+            # planner chose that list and the scope gate enforces it.
+            if matches_any(rel, self.writable_globs):
+                return
             raise ToolError(
                 f"{rel!r} exists but is not tracked by git, so it cannot be read. "
                 "Untracked and ignored files hold credentials and generated "
