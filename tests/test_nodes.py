@@ -3267,19 +3267,25 @@ class TestTheNativeExecutorsMeasurementsSurviveTheTrip:
 
 
 class TestTheExecuteLineReportsWhatItPaid:
-    """The same `(N prompt, M cached)` the reviewer's line carries.
+    """Peak context, output tokens, cache rate — not the reviewer's pair.
 
-    Spelled identically on purpose. The executor is the one loop whose cache
-    behaviour was unmeasurable for most of this project's life — Aider's
-    accounting never read OpenAI's `prompt_tokens_details.cached_tokens`, so a
-    silent zero was the instrument rather than the cache. Owning the client
-    made the figure available; putting it on the line the operator already
-    reads is what makes it *seen*, which is a different thing.
+    The executor's cache behaviour was unmeasurable for most of this project's
+    life: Aider's accounting never read OpenAI's
+    `prompt_tokens_details.cached_tokens`, so a silent zero was the instrument
+    rather than the cache. Owning the client made the figure available; putting
+    it where the operator already looks is what makes it seen.
 
-    Totals across the attempt, not the opening turn: the opening turn is what
-    answers "is the prefix shared across stages" and is recorded separately,
-    while this answers "what did this attempt cost", and a multi-turn loop
-    spends most of its tokens after the first call.
+    Deliberately *not* the reviewer's `(N prompt, M cached)`. That line reports
+    a single call. This loop resends its conversation every turn, so a summed
+    prompt re-counts one prefix up to 45 times — measured over 49 attempts it
+    spans 23k to 3.4M, which is `turns × context` restated and describes
+    billing, not work. Billing is `cost_usd`, and it goes to `stage-costs.md`.
+
+    The three that survive answer independent questions: peak is the constraint
+    that decides whether a batch fits, output is the only figure not re-counting
+    context the model was handed, and the rate is scale-free with its useful
+    reading at the *bottom* — the floor over that window was 50.3%, a prefix
+    that broke, which the raw pair would bury.
     """
 
     def _with_usage(self, repo, **usage):
@@ -3292,7 +3298,7 @@ class TestTheExecuteLineReportsWhatItPaid:
             ):
                 self._apply()
                 return ExecutionResult(
-                    ok=True, log="",
+                    ok=True, log="", context_tokens=21_000,
                     tool_counts={"read_file": 3},
                     usage=TokenUsage(**usage),
                 )
@@ -3311,12 +3317,16 @@ class TestTheExecuteLineReportsWhatItPaid:
         nodes.execute(state, rt)
 
         line = next(m for m in lines if "tool call(s)" in m)
-        assert "(3423327 prompt, 3322008 cached)" in line
+        # 3,322,008 / 3,423,327 = 97%. The sum itself never appears.
+        assert "97% cached" in line
+        assert "32037 out" in line
+        assert "21000 peak" in line
+        assert "3423327" not in line, "the summed prompt is billing, not effort"
 
     def test_an_attempt_with_no_usage_says_nothing_extra(self, repo, tmp_path):
-        # A provider that reported nothing must not render "(0 prompt, 0
-        # cached)", which reads as a measurement rather than its absence —
-        # the same reason `stage-costs.md` omits a dollar it does not have.
+        # A provider that reported nothing must not render "0% cached", which
+        # reads as a measurement rather than its absence — the same reason
+        # `stage-costs.md` omits a dollar it does not have.
         class NoUsage(StubExecutor):
             def run_agent_stage(
                 self, stage, prompt, history_dir=None, since_sha="",
@@ -3333,4 +3343,4 @@ class TestTheExecuteLineReportsWhatItPaid:
         nodes.execute(state, rt)
 
         line = next(m for m in lines if "tool call(s)" in m)
-        assert "prompt" not in line and "cached" not in line
+        assert "cached" not in line and "peak" not in line

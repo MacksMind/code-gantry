@@ -702,25 +702,36 @@ def execute(state: RunState, rt: Runtime) -> dict:
                 result.refusal_counts.items(), key=lambda kv: -kv[1]
             )
         )
-        # Spelled exactly as the reviewer's line spells it. The executor is the
-        # loop whose cache behaviour was unmeasurable for most of this
-        # project's life — Aider's accounting read Anthropic's and DeepSeek's
-        # cache fields but never OpenAI's `prompt_tokens_details.cached_tokens`,
-        # so a zero was the instrument rather than the cache. Owning the client
-        # made the figure available; putting it where the operator already
-        # looks is what makes it seen, which is a separate thing.
+        # Not the reviewer's `(N prompt, M cached)`. That line reports one
+        # call, where the pair is the whole story; this loop resends its
+        # conversation every turn, so a summed prompt re-counts the same prefix
+        # 45 times and describes billing rather than work. Measured over 49
+        # attempts, the sum spans 23k to 3.4M — impressive, and almost entirely
+        # `turns × context` restated, which the tool-call count above already
+        # implies. Cost is where the billing question belongs, and it goes to
+        # `stage-costs.md`.
         #
-        # Totals for the attempt, not the opening turn. The opening turn
-        # answers "is the prefix shared across stages" and is recorded on its
-        # own; this answers "what did this attempt cost", and a multi-turn loop
-        # spends most of its tokens after the first call. Omitted entirely when
-        # the provider reported nothing, because "(0 prompt, 0 cached)" reads
-        # as a measurement rather than as its absence.
+        # These three answer different questions and none is derivable from
+        # another. `peak` is the constraint that decides whether a batch fits —
+        # the same figure recorded in `stage-costs.md`, so the log and the file
+        # agree. `out` is what the model actually produced, the only number
+        # here that is not a re-count of context it was handed, and the widest
+        # spread of the set at 374 to 34,295. The cache rate is a percentage
+        # because it is scale-free and because the informative reading is a low
+        # one: the floor over that window was 50.3%, which is a prefix that
+        # broke, and the raw pair buries it.
+        #
+        # Omitted entirely when the provider reported nothing, since "0% cached"
+        # reads as a measurement rather than as its absence — the failure that
+        # made Aider's cache accounting useless.
         paid = ""
         if result.usage is not None:
+            prompt = getattr(result.usage, "prompt_tokens", 0)
+            cached = getattr(result.usage, "cached_tokens", 0)
+            rate = f", {round(cached / prompt * 100)}% cached" if prompt else ""
             paid = (
-                f" ({getattr(result.usage, 'prompt_tokens', 0)} prompt, "
-                f"{getattr(result.usage, 'cached_tokens', 0)} cached)"
+                f" ({result.context_tokens} peak, "
+                f"{getattr(result.usage, 'completion_tokens', 0)} out{rate})"
             )
         rt.log(
             f"[execute] {stage.id}: {sum(result.tool_counts.values())} tool "
