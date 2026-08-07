@@ -1050,3 +1050,114 @@ def _failure_block(
         parts.append(f"### Detail\n\n```\n{failure['detail'].strip()}\n```")
 
     return "\n\n".join(parts)
+
+
+def _executor_system_prompt(cfg: ProjectConfig | None) -> str:
+    """Everything true of every stage, so it is paid for once.
+
+    Ordering is the caching strategy rather than presentation. This block is
+    byte-identical across every stage of a run, which is what lets it sit
+    inside the breakpoint and be read from cache rather than written on each
+    call. Anything that varies per stage belongs after it — this model caches
+    at an explicit breakpoint and does not fall back to the longest matching
+    prefix, so static content placed after the mark misses every time.
+
+    What it says is the tool's own behaviour, declared once rather than left
+    for each stage to rediscover: how an edit is stated, that scope is refused
+    at source rather than reported later, and what runs after the model stops.
+    The last is the same argument `_checks_block` makes to the planner — a
+    formatter that rewrites the tree is a property of the machinery, and one
+    revision cycle was already spent discovering it.
+    """
+    parts = [
+        "You are changing a repository under an orchestrator. You edit through "
+        "tools; nothing you write as prose is applied.",
+        "## How to change a file\n\n"
+        "`edit` replaces exact text. Each `old_string` must appear exactly "
+        "once, matched byte for byte including indentation. Read the file "
+        "first — you have a read tool, and quoting from memory is what makes "
+        "an edit fail.\n\n"
+        "Edits in one call apply in order to one buffer and the file is "
+        "written once. If any of them fails, none are applied and the file is "
+        "left exactly as it was, so a refusal never leaves you reasoning about "
+        "a file that no longer exists in that form.\n\n"
+        "`create_file` writes a new file. `delete_file` removes one, and is "
+        "the only way to empty a file — an `edit` you got slightly wrong is "
+        "refused rather than clearing it.",
+        "## Scope\n\n"
+        "A write outside this stage's declared files is refused by the tool, "
+        "not reported later. If the task cannot be done without such a file, "
+        "say so in your reply and stop rather than working around it.",
+        "## What happens when you stop\n\n"
+        "Ending your turn without calling a tool means you are finished "
+        "editing. The orchestrator then runs the project's checks, commits "
+        "your work, and runs the tests. If anything fails you are told what, "
+        "and you continue from there — so finishing is not a claim that the "
+        "work is correct, only that you have no more edits to make.\n\n"
+        "You do not run the tests yourself and there is no tool to do so. "
+        "They run after every batch of edits whether you ask or not.",
+    ]
+    checks = _checks_block(cfg)
+    if checks:
+        parts.append(checks)
+    return "\n\n".join(p for p in parts if p)
+
+
+def build_executor_messages(
+    stage: Stage,
+    cfg: ProjectConfig,
+    prompt: str,
+    agent_context: str | None = None,
+    feedback: list[str] | None = None,
+) -> list[dict]:
+    """The executor's conversation, stable payload first.
+
+    Three regions, in the order the cache wants them:
+
+    1. The system prompt — true of every stage of every run.
+    2. The repository's agent-facing documents — fixed for this run.
+    3. The stage itself, and then any feedback.
+
+    The breakpoint closes region 2, so regions 1 and 2 are written once for
+    the run and read back on every stage. `build_executor_prompt` puts a retry
+    opening at the *head* of its string, which is correct for a single-shot
+    subprocess and exactly wrong here — it would make attempt 2 differ from
+    attempt 1 at character zero. So feedback is carried as its own trailing
+    messages instead.
+    """
+    messages: list[dict] = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "input_text", "text": _executor_system_prompt(cfg)}
+            ],
+        }
+    ]
+
+    conventions = _conventions_block(agent_context)
+    messages.append(
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    # Marked even when there are no conventions: the breakpoint
+                    # has to close the static region somewhere, and an empty
+                    # one still ends the system prompt.
+                    "text": conventions or "## Repository conventions\n\nNone recorded.",
+                    "prompt_cache_breakpoint": {"mode": "explicit"},
+                }
+            ],
+        }
+    )
+
+    messages.append(
+        {"role": "user", "content": [{"type": "input_text", "text": prompt}]}
+    )
+
+    for item in feedback or []:
+        messages.append(
+            {"role": "user", "content": [{"type": "input_text", "text": item}]}
+        )
+
+    return messages

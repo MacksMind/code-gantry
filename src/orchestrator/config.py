@@ -259,6 +259,18 @@ class ExecutorConfig(_EndpointConfig):
     # otherwise hold a stage open until the request timeout. Same role as
     # `AnthropicPlanner._max_tool_turns`.
     max_model_turns: int = 20
+    # A file holding the executor's system prompt, replacing the built-in one.
+    #
+    # A path rather than the text, for the reason that cost more than the rule
+    # itself: config holding a copy of a document is a copy that drifts, and
+    # the copy is the one the pipeline reads. Read at the run's sha, like every
+    # other document.
+    #
+    # Replaces rather than appends. Appending would leave two statements of the
+    # tool contract in one prompt with no way to tell which the model followed,
+    # and an operator who wants the default plus additions can start from the
+    # default — `orchestrator prompts executor` prints it.
+    system_prompt_file: str | None = None
     # The same read budget the planner and reviewer carry, written here as its
     # own settings rather than shared: the three ask different questions, and
     # whoever decides the executor needs a different budget should be able to

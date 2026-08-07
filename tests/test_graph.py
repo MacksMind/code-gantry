@@ -16,7 +16,9 @@ class TestEdgeTable:
             # rather than escalated, and the redraw is another planner call.
             "plan": ["precheck", "verify", "finalize", "escalate", "plan"],
             "precheck": ["execute", "plan", "escalate"],
-            "execute": ["verify", "plan"],
+            # Reaches itself only when the executor failed to run at all,
+            # so there is nothing for a gate to look at. See EDGES.
+            "execute": ["verify", "plan", "execute"],
             "verify": ["review", "advance", "execute", "plan", "escalate"],
             "review": ["advance", "execute", "plan"],
             "advance": ["plan"],
@@ -122,3 +124,28 @@ class TestCheckpointer:
         _, conn = open_checkpointer(tmp_path / "deep" / "nested" / "state.db")
         assert (tmp_path / "deep" / "nested").is_dir()
         conn.close()
+
+
+class TestTheExecutorCanBeRetriedDirectly:
+    """A crash, not a design question — this one stopped a live run.
+
+    `nodes.execute` has always been able to reach `_retry_or_plan`, which sets
+    `next_hop="execute"`, and the edge spec has always forbidden it. The
+    subprocess editor made the path almost unreachable: it returned `ok=False`
+    only for a missing credential or a malformed argv. The in-process executor
+    returns it whenever the API call itself fails, so the first rejected
+    request took the run down with `node routed to 'execute'`.
+    """
+
+    def test_execute_may_reach_itself(self):
+        from orchestrator.graph import EDGES
+
+        assert "execute" in EDGES["execute"]
+
+    def test_it_is_still_the_only_node_besides_plan_that_does(self):
+        # The self-loop is a licence for one case, not a general one. Every
+        # other node still has to hand control somewhere else.
+        from orchestrator.graph import EDGES
+
+        looping = {name for name, hops in EDGES.items() if name in hops}
+        assert looping == {"plan", "execute"}

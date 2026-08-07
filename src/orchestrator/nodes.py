@@ -647,11 +647,19 @@ def execute(state: RunState, rt: Runtime) -> dict:
                 str(exc),
             )
 
+        # Feedback is embedded in the prompt for the subprocess editor, which
+        # gets one message and no history, and carried separately for the
+        # in-process loop, which gets a conversation. The difference is not
+        # cosmetic: `build_executor_prompt` puts its retry opening at the head
+        # of the string, so an attempt with feedback differs from one without
+        # at character zero — correct for a single-shot invocation and exactly
+        # wrong where a cached prefix is the point.
+        in_process = rt.cfg.executor.provider == "openai"
         prompt = build_executor_prompt(
             stage,
             rt.cfg,
             context=context,
-            feedback=feedback,
+            feedback=None if in_process else feedback,
             failure_layer=state.get("failure_layer"),
             cumulative_diff=cumulative_diff,
             excerpts=excerpts,
@@ -670,7 +678,14 @@ def execute(state: RunState, rt: Runtime) -> dict:
             state["stage_index"], stage.id, state.get("revision", 0), attempt
         )
         history_dir.mkdir(parents=True, exist_ok=True)
-        result = rt.executor.run_agent_stage(stage, prompt, history_dir=history_dir)
+        result = rt.executor.run_agent_stage(
+            stage,
+            prompt,
+            history_dir=history_dir,
+            since_sha=state["stage_start_sha"],
+            agent_context=_conventions(state, rt),
+            feedback=feedback if in_process else None,
+        )
 
     if result.dropped_reads:
         rt.log(

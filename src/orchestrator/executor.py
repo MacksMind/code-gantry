@@ -585,6 +585,8 @@ class Executor:
         prompt: str,
         history_dir: Path | None = None,
         since_sha: str = "",
+        agent_context: str | None = None,
+        feedback: list[str] | None = None,
     ) -> ExecutionResult:
         """One attempt at a stage.
 
@@ -595,7 +597,11 @@ class Executor:
         Optional so the older path and its tests are untouched.
         """
         if self.cfg.executor.provider == "openai":
-            return self._run_in_process(stage, prompt, history_dir, since_sha)
+            return self._run_in_process(
+                stage, prompt, history_dir, since_sha, agent_context, feedback
+            )
+        # The subprocess editor reads the conventions through `--read` and
+        # carries feedback inside `prompt`, so neither reaches it here.
         return self._run_aider(stage, prompt, history_dir)
 
     def _run_in_process(
@@ -604,6 +610,8 @@ class Executor:
         prompt: str,
         history_dir: Path | None = None,
         since_sha: str = "",
+        agent_context: str | None = None,
+        feedback: list[str] | None = None,
     ) -> ExecutionResult:
         """The in-process loop. See `executorloop.run_loop`.
 
@@ -620,7 +628,15 @@ class Executor:
         model = OpenAIExecutorModel(self.cfg.executor, log=self.log)
         kept = set(_within_read_budget(stage.read_files, self.cfg))
 
-        conversation = [{"role": "user", "content": prompt}]
+        from orchestrator.prompts import build_executor_messages
+
+        conversation = build_executor_messages(
+            stage,
+            self.cfg,
+            prompt,
+            agent_context=agent_context,
+            feedback=feedback,
+        )
         out = run_loop(
             stage,
             self.cfg,
@@ -631,7 +647,14 @@ class Executor:
             editor,
             since_sha=since_sha,
             conversation=conversation,
-            cache_key=f"{self.cfg.project_branch}:{stage.id}",
+            # Run-level, not per stage. The provider caps this at 64
+            # characters — a branch and a stage id together overran it and
+            # every call 400'd — but the length is the smaller reason. The
+            # cached prefix is the system prompt and the conventions, which
+            # are identical across every stage of a run; keying per stage
+            # would put each stage in its own cache and guarantee a miss on
+            # the one region that was arranged to be shared.
+            cache_key=f"exec:{self.cfg.project_branch}"[:64],
             log=self.log,
         )
         out.dropped_reads = [p for p in stage.read_files if p not in kept]

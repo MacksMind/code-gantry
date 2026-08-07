@@ -68,6 +68,7 @@ class StubExecutor:
     timed_out: bool = False
     prompts: list = field(default_factory=list)
     history_dirs: list = field(default_factory=list)
+    feedback: list = field(default_factory=list)
 
     def gather_context(self, stage):
         return [], []
@@ -82,9 +83,13 @@ class StubExecutor:
     log: str = "executor log"
     dropped_reads: list = field(default_factory=list)
 
-    def run_agent_stage(self, stage, prompt, history_dir=None):
+    def run_agent_stage(
+        self, stage, prompt, history_dir=None, since_sha="",
+        agent_context=None, feedback=None,
+    ):
         self.prompts.append(prompt)
         self.history_dirs.append(history_dir)
+        self.feedback.append(feedback)
         self._apply()
         # Through the same parser the real executor uses, not a field set by
         # hand: the value's journey starts in Aider's output, and a stub that
@@ -2218,7 +2223,7 @@ class TestAReplyThatNamedAFileLostItsEdits:
         # recovered. Reporting it would fail an attempt that succeeded.
         executor = StubExecutor(repo=repo, edits=[("app.py", "landed\n")])
 
-        def attached_then_edited(stage, prompt, history_dir=None):
+        def attached_then_edited(stage, prompt, history_dir=None, **kw):
             executor._apply()
             return ExecutionResult(
                 ok=True, log="the model replied", attached_files=["bin/rspec"]
@@ -2267,7 +2272,7 @@ class TestAnUnappliedEditOnAChangedTree:
         cfg, rt, state = make(repo, tmp_path, executor=executor)
         state = with_stage(state, rt)
 
-        def unapplied(stage, prompt, history_dir=None):
+        def unapplied(stage, prompt, history_dir=None, **kw):
             executor._apply()
             return ExecutionResult(ok=False, log="already in Gemfile", unapplied_edit=True)
 
@@ -2298,7 +2303,7 @@ class TestAnUnappliedEditOnAChangedTree:
         """
         executor = StubExecutor(repo=repo, edits=[("app.py", "half\n")])
 
-        def timed_out(stage, prompt, history_dir=None):
+        def timed_out(stage, prompt, history_dir=None, **kw):
             executor._apply()  # writes, does not commit
             return ExecutionResult(ok=False, log="killed", timed_out=True)
 
@@ -2321,7 +2326,7 @@ class TestAnUnappliedEditOnAChangedTree:
         """
         executor = StubExecutor(repo=repo, edits=[])
 
-        def committed_then_hung(stage, prompt, history_dir=None):
+        def committed_then_hung(stage, prompt, history_dir=None, **kw):
             (repo / "app.py").write_text("the edit landed\n")
             run_git(repo, "add", "-A")
             run_git(repo, "commit", "-qm", "editor's own commit")
