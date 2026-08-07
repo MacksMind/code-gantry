@@ -325,6 +325,54 @@ def _stage_problems(cfg: ProjectConfig, fields: dict) -> list[str]:
         return [f"the stage spec could not be read: {e}"]
 
 
+def pin_modules() -> None:
+    """Load everything a run will need, before it needs it.
+
+    Several modules are imported inside functions rather than at the top of a
+    file, to break import cycles — `executorloop` needs `executor`, which needs
+    `gates`, and `verify` needs all three. That is fine for correctness and
+    creates a hazard for operation: a module not yet imported is read from disk
+    at the moment it is first needed, so editing this codebase while a run is
+    live can put *new* code in front of an *old* one already in memory.
+
+    That is not hypothetical. `ExecutorConfig` was loaded at process start
+    without a field, `executorloop.py` was edited, and the first agent stage
+    forty seconds later imported the new file against the old class:
+    `AttributeError: 'ExecutorConfig' object has no attribute
+    'semantic_search'`, and the run stopped. Had a stage already run, the
+    module would have been cached and nothing would have happened — which is
+    the worst property of it, because the safety of an edit depended on
+    invisible timing.
+
+    So the whole set is pinned here, at the point a run is assembled. After
+    this returns, every module the run can reach is in memory and the ordinary
+    expectation holds again: edits take effect at the next restart, and a live
+    run finishes on the code it started with. `report` and `pricing` are
+    included precisely because they load last — a run lasting hours would
+    otherwise read them fresh at the end.
+
+    Deliberately the whole set rather than the modules known to be reached
+    lazily. Which those are is a property of every import in the package and
+    changes whenever someone breaks a cycle, so a curated list would be right
+    on the day it was written; the test beside this asserts nothing is left,
+    which is a question with one answer.
+    """
+    from orchestrator import (  # noqa: F401
+        addendum,
+        edittools,
+        executorclient,
+        executorloop,
+        executortools,
+        graph,
+        nodes,
+        pricing,
+        prompts,
+        report,
+        runlog,
+        verify,
+    )
+
+
 def build_runtime(
     cfg: ProjectConfig,
     project: ProjectPaths,
@@ -333,6 +381,10 @@ def build_runtime(
     reviewer: ReviewerClient,
     log: Callable[[str], None] | None = None,
 ) -> Runtime:
+    # First, so a run holds every module it can reach before it starts. See
+    # `pin_modules`: without this, editing the codebase during a live run can
+    # put new code in front of an old class already in memory.
+    pin_modules()
     logger = log or (lambda _msg: None)
     # The model clients wait out network outages themselves and have to be
     # able to say so — a silent fifteen-minute wait and a hung process look

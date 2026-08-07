@@ -231,3 +231,44 @@ class TestAgentContextDocuments:
         run_git(repo, "commit", "-qm", "dangling")
         sha = run_git(repo, "rev-parse", "HEAD")
         assert self._rt(repo, tmp_path).agent_context(sha) == ""
+
+
+class TestARunHoldsEveryModuleItCanReach:
+    """Editing this codebase during a live run must not change that run.
+
+    Several modules are imported inside functions to break cycles, so a module
+    not yet needed is read from disk at the moment it first is. That made the
+    safety of an edit depend on invisible timing: `ExecutorConfig` was in
+    memory without a field, `executorloop.py` was edited, and the next agent
+    stage imported the new file against the old class. Had a stage already run,
+    the module would have been cached and nothing would have happened.
+    """
+
+    def test_no_module_is_left_to_load_later(self):
+        import pathlib
+        import sys
+
+        from orchestrator.runtime import pin_modules
+
+        pin_modules()
+        loaded = {m.split(".")[-1] for m in sys.modules if m.startswith("orchestrator.")}
+        on_disk = {
+            p.stem
+            for p in pathlib.Path("src/orchestrator").glob("*.py")
+            if p.stem != "__init__"
+        }
+        # `cli`, `discover`, `approval` and `preflight` run before a run does
+        # and are already loaded by the entry point; everything a *run* reaches
+        # must be in memory by the time one is assembled.
+        entry_points = {"cli", "discover", "approval", "preflight"}
+        assert not (on_disk - loaded - entry_points)
+
+    def test_pinning_happens_when_the_runtime_is_assembled(self):
+        # Not at import time and not on first use: the point a run is built is
+        # the last moment before it can be affected by an edit.
+        import inspect
+
+        from orchestrator.runtime import build_runtime
+
+        body = inspect.getsource(build_runtime)
+        assert "pin_modules()" in body.split("logger = log")[0]
