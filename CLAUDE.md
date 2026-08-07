@@ -538,6 +538,25 @@ loop's own command line, so a run that had exited read as alive. Both failures
 look like the run misbehaving and are the instrument describing itself. Anchor
 to the tail, or to a line count taken at the start.
 
+**Hiding a tool's own churn from the gate hides it from everyone.** The editor
+normalises line endings on every write, the rule above says the machinery must
+declare that rather than let each planner rediscover it, and `gitops`'
+`ignore_line_endings` duly keeps the churn out of the diff the reviewer judges.
+All correct, and the consequence was not noticed for 77 stages: the target
+repository has **542 tracked files containing CRLF and no `.gitattributes`**,
+and **10 of them have been silently converted to LF** — 4 `.js`, 5 `.erb`, one
+`.haml` — each landing as a whole-file rewrite that no participant ever saw. The
+damage is not the conversion, which is probably an improvement; it is that the
+repository is now *mixed* where it was uniform, and `git blame` on those ten
+files is useless for every line.
+
+Declaring a behaviour to the one participant that would otherwise reject it is
+not the same as accounting for it. A gate exemption suppresses the complaint,
+and the effect keeps accruing where nothing is looking — so an exemption wants
+a counter, or a periodic look at what it has been swallowing. The question to
+ask when adding one is not "will this stop the false rejection" but "who finds
+out if this fires ten thousand times".
+
 **Deleting a producer leaves its consumers guarded on a value nobody sets.**
 `context_tokens` and `cost_usd` are assigned in exactly one place — from
 `context_tokens_from_log` and `cost_from_log`, which scrape Aider's console.
