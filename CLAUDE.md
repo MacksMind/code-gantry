@@ -343,6 +343,21 @@ finds nothing left to do. Measured cost of not doing this: two consecutive
 stages, one cop each with no autocorrection, three or four attempts apiece and
 one planner intervention, to communicate a one-line change.
 
+**A prompt sentence outlives the fact it was written about.** The excerpt block
+told the executor "treat them as current — you do not need to look them up
+again", and by then `resolve_excerpts` read at `stage_start_sha` rather than
+from the working tree. Its own docstring said what that costs: "on a rework the
+executor's own prior attempt has already moved the lines." Both were written
+correctly, months apart, and the prompt was never re-read when the baseline
+moved under it — so the one path where believing the sentence is expensive is
+the one where it is false, and the next thing a model does with an excerpt is
+quote it into an `old_string`. This is the inverse of the capability that went
+missing between two correct changes: there a behaviour was dropped and nothing
+said so, here a *claim* survived the change that invalidated it, which is worse
+because it still reads as true. When you change where a value comes from, grep
+the prose that describes it — a docstring is checked by the code beneath it and
+a prompt string is checked by nothing.
+
 **Collapse before you truncate.** `truncate_middle` keeps the head and tail
 because "command output is informative at both ends" — true of most commands,
 false of a progress reporter, which puts its dots first and its findings after.

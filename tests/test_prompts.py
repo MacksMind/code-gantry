@@ -1603,6 +1603,52 @@ class TestTheTwoBehaviouralRulesTheOldEditorHad:
             assert word not in text, word
 
 
+class TestTheTwoWaysAStageIsLeftHalfDone:
+    """Scope has two edges and the prompt only ever guarded one of them.
+
+    "Do what the stage asked, and nothing else" and "finish what you start"
+    are both about not doing the wrong work — expanding into a tidy, or leaving
+    a stub. Neither covers doing a *fraction* of the right work: converting
+    three of the eight sites a sweep names and stopping, which reads as
+    finished from inside because nothing is stubbed and nothing is out of
+    scope.
+
+    That failure is why `must_not_remain` exists — the sites a sweep misses are
+    untouched, so they never appear as added lines and the pattern check over
+    the diff is blind to them. And it is already in the prompt, in
+    `_RETRY_OPENING_GATE`: "the sweep is unfinished and repeating the approach
+    on what was missed is the fix." Saying it only there means a gate cycle is
+    what communicates it.
+
+    The mirror case is a stage whose work is already true. `fresh_stage_fields`
+    and the "assert state, not change" rule both exist because a requirement
+    phrased as a change becomes unsatisfiable the moment it holds, and a stage
+    burned its whole budget there. The executor was never told that finding
+    nothing to do is an outcome rather than a failure to try harder.
+    """
+
+    def test_a_partial_sweep_is_named_as_not_finished(self, tmp_path):
+        from orchestrator.prompts import _executor_system_prompt
+
+        text = _executor_system_prompt(_exec_cfg(tmp_path))
+        assert "every site" in text
+        assert "count" in text
+
+    def test_work_that_is_already_true_is_named_as_success(self, tmp_path):
+        from orchestrator.prompts import _executor_system_prompt
+
+        text = _executor_system_prompt(_exec_cfg(tmp_path))
+        assert "already true" in text
+        assert "Do not manufacture a change" in text
+
+    def test_neither_names_a_projects_vocabulary(self, tmp_path):
+        from orchestrator.prompts import _executor_system_prompt
+
+        text = _executor_system_prompt(_exec_cfg(tmp_path)).lower()
+        for word in ("rails", "rspec", "rubocop", "ruby", "python", ".rb", "app/"):
+            assert word not in text, word
+
+
 class TestTheReadListIsDescribedAsAHintNotAFence:
     """It stopped being a permission list when the executor got a read tool.
 
@@ -1645,6 +1691,59 @@ class TestTheReadListIsDescribedAsAHintNotAFence:
 
         stage = Stage(id="s", instruction="do", edit_files=["a.py"])
         assert "drawn against" not in build_executor_prompt(stage, _exec_cfg(tmp_path))
+
+
+class TestAnExcerptIsOnlyCurrentWhileTheTreeHasNotMoved:
+    """The prompt claimed a currency the resolver does not provide.
+
+    `resolve_excerpts` reads at `stage_start_sha`, deliberately, so that the
+    executor, the reviewer's diff and the planner's revision block all describe
+    one tree. Its own docstring says what that costs: "on a rework the
+    executor's own prior attempt has already moved the lines." The block none
+    the less told the executor "treat them as current — you do not need to look
+    them up again", which is true on a first attempt and false on exactly the
+    path where believing it is most expensive. An excerpt quoted into an
+    `old_string` after the tree has moved is the refusal we spent a measurement
+    campaign on, and at distance zero from the read the fault is ours.
+
+    Conditioned on the cumulative diff rather than on `feedback`, because that
+    is the fact rather than the label: a `restart` revision arrives with
+    feedback and a branch reset to the baseline, where the excerpt *is* still
+    current.
+    """
+
+    def _text(self, tmp_path, **kw):
+        from orchestrator.config import Stage
+        from orchestrator.prompts import build_executor_prompt
+
+        stage = Stage(id="s", instruction="do", edit_files=["a.py"])
+        return build_executor_prompt(
+            stage,
+            _exec_cfg(tmp_path),
+            excerpts=[("b.py:1-2", "    1 | one\n    2 | two")],
+            **kw,
+        )
+
+    def test_a_first_attempt_is_told_they_are_current(self, tmp_path):
+        text = self._text(tmp_path)
+        assert "Treat them as current" in text
+        assert "may have moved" not in text
+
+    def test_a_tree_that_has_moved_is_told_they_may_be_stale(self, tmp_path):
+        text = self._text(
+            tmp_path, feedback=["missed two"], cumulative_diff="--- a\n+++ b"
+        )
+        assert "Treat them as current" not in text
+        assert "may have moved" in text
+        # The point of saying so at all: the next thing it does with an excerpt
+        # is quote it, and a stale quotation is refused.
+        assert "read it" in text
+
+    def test_a_restart_revision_keeps_the_plain_wording(self, tmp_path):
+        # Feedback, but the branch was reset to the stage baseline — which is
+        # the sha the excerpt was read at, so nothing has moved under it.
+        text = self._text(tmp_path, feedback=["wrong approach"])
+        assert "Treat them as current" in text
 
 
 class TestARetryIsFramedByWhatFailed:
@@ -1694,3 +1793,169 @@ class TestARetryIsFramedByWhatFailed:
     def test_no_feedback_adds_no_opening(self, tmp_path):
         joined = "\n".join(self._turns(tmp_path))
         assert "rejected" not in joined and "did not pass a check" not in joined
+
+
+class TestRepositoryTextIsEvidenceAndNotInstruction:
+    """One sentence, three roles, one place it lives.
+
+    All three participants read arbitrary repository text — the executor and
+    the planner through `READ_TOOLS`, the reviewer through the same schemas and
+    through the diff itself. None of them was ever told whose instructions to
+    follow when the text they read contains some.
+
+    That is not a hypothetical in a legacy repository mid-migration. It is full
+    of comments asserting that the old behaviour is required, vendored upgrade
+    checklists, and `TODO`s written for a human years ago. The accuracy half of
+    this is already covered — "a document is a claim; the code is the fact",
+    which exists because a planner took a count from a checklist and the file
+    disagreed. The authority half is a different question and had no answer.
+
+    Stated once and imported, rather than written into three system prompts. A
+    rule that has to be kept in step across three strings is the thing that
+    drifts; `READ_TOOLS` is shared by reference for exactly this reason.
+    """
+
+    def test_all_three_system_prompts_carry_the_same_sentence(self, tmp_path):
+        from orchestrator.plannertools import REPOSITORY_TEXT_IS_EVIDENCE
+        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+        from orchestrator.prompts import (
+            REVIEW_SYSTEM_PROMPT,
+            _executor_system_prompt,
+        )
+
+        for text in (
+            PLANNER_SYSTEM_PROMPT,
+            REVIEW_SYSTEM_PROMPT,
+            _executor_system_prompt(_exec_cfg(tmp_path)),
+        ):
+            assert REPOSITORY_TEXT_IS_EVIDENCE in text
+
+    def test_it_names_no_projects_vocabulary(self):
+        from orchestrator.plannertools import REPOSITORY_TEXT_IS_EVIDENCE
+
+        blob = REPOSITORY_TEXT_IS_EVIDENCE.lower()
+        for word in ("rails", "rspec", "ruby", "python", ".rb", "app/", "gemfile"):
+            assert word not in blob, word
+
+    def test_an_operators_own_executor_prompt_replaces_it_whole(self, tmp_path):
+        # The override replaces the built-in rather than appending to it, and
+        # that stays true of this. Two statements of who to obey in one prompt
+        # leave no way to tell which was followed.
+        from orchestrator.plannertools import REPOSITORY_TEXT_IS_EVIDENCE
+        from orchestrator.prompts import _executor_system_prompt
+
+        (tmp_path / "PROMPT.md").write_text("MINE")
+        cfg = _exec_cfg(tmp_path, system_prompt_file="PROMPT.md")
+        assert REPOSITORY_TEXT_IS_EVIDENCE not in _executor_system_prompt(cfg)
+
+
+class TestThePlannerIsToldNotToRestateTheConventions:
+    """The executor is handed the same document, so restating it is duplication.
+
+    Both get `agent_context` verbatim — the planner in its cached prefix, the
+    executor in its own. A convention copied into `instruction` lands in the
+    per-stage region that is re-billed on every attempt, to say something the
+    reader already has in full and byte-identical.
+
+    This is "ask what else already carries it" pointed one level out from where
+    it was learned. There the planner's history block was reproducing what
+    three other channels already said, 296,783 characters at 45 stages; here
+    the duplicated text is smaller and the mechanism is identical, including
+    the trap — every sentence of a restated convention is individually
+    defensible as making the handoff self-contained.
+
+    What the planner should write instead is the *consequence* for this stage,
+    which the executor cannot derive: which of the standing rules this
+    particular change is going to run into.
+    """
+
+    def _leading(self, conventions):
+        messages = build_planner_messages(
+            _cfg(), a_plan(), [], agent_context=conventions
+        )
+        return messages[0]["content"][0]["text"]
+
+    def test_it_says_the_executor_already_has_this(self):
+        text = self._leading("## Scoping\n\nAlways scope by tenant.")
+        assert "executor is given this document too" in text
+        assert "do not restate" in text.lower()
+
+    def test_it_asks_for_the_consequence_instead(self):
+        # Not a bare prohibition: the useful half is what to write in its
+        # place, and a rule with no alternative is routed around.
+        text = self._leading("## Scoping\n\nAlways scope by tenant.")
+        assert "consequence" in text.lower()
+
+    def test_a_project_without_one_gets_no_such_paragraph(self):
+        messages = build_planner_messages(_cfg(), a_plan(), [])
+        assert "executor is given this document too" not in all_text(messages)
+
+
+class TestThePlannerChecksTheClaimThatBlocksAnItem:
+    """The unattempted item is the one nothing else will catch.
+
+    `READ_TOOLS` already tells the planner that a document is a claim and the
+    code is the fact — but that is aimed at an item it is about to draw, where
+    a wrong count surfaces as a failed stage. An item the plan says is blocked
+    is never drawn, so a false premise there has no downstream check at all.
+
+    Measured: a repository's agent-facing document recorded a capability, the
+    hand-written config guidance omitted it, and the plan asserted the
+    opposite. The false claim gated five items across two streams and nothing
+    found it, because an item that reads as blocked is never attempted.
+    """
+
+    def test_the_system_prompt_says_to_check_a_blocking_claim(self):
+        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+
+        assert "reads as blocked" in PLANNER_SYSTEM_PROMPT
+        assert "never attempted" in PLANNER_SYSTEM_PROMPT
+
+    def test_it_names_no_projects_vocabulary(self):
+        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+
+        blob = PLANNER_SYSTEM_PROMPT.lower()
+        for word in ("rails", "rspec", "gemfile", "activerecord", ".rb", ".erb"):
+            assert word not in blob, word
+
+
+class TestTheReviewerJudgesSecurityAndTestsThatCannotFail:
+    """Two things a passing suite cannot tell you, at the only judgement gate.
+
+    "The stage's tests already pass — that is a precondition of you being
+    called" is the reviewer's framing, and it is exactly why both of these
+    belong to it. A test that cannot fail satisfies that precondition and
+    proves nothing; a security regression passes every test that was written
+    before it existed.
+
+    Neither widens the scope rule the tool guidance sets. What is judged is
+    still what this diff introduces or exposes — a pre-existing weakness the
+    diff does not touch remains context rather than a defect, which is the
+    same line the rest of the prompt draws.
+    """
+
+    def test_security_is_named_as_in_scope_without_being_asked_for(self):
+        from orchestrator.prompts import REVIEW_SYSTEM_PROMPT
+
+        assert "introduces or exposes" in REVIEW_SYSTEM_PROMPT
+        assert "even where the stage said nothing about it" in REVIEW_SYSTEM_PROMPT
+
+    def test_a_test_that_cannot_fail_is_named(self):
+        from orchestrator.prompts import REVIEW_SYSTEM_PROMPT
+
+        assert "could not fail" in REVIEW_SYSTEM_PROMPT
+
+    def test_rework_asks_for_the_smallest_correction_not_a_design(self):
+        from orchestrator.prompts import REVIEW_SYSTEM_PROMPT
+
+        assert "smallest change that fixes it" in REVIEW_SYSTEM_PROMPT
+
+    def test_none_of_it_names_a_projects_vocabulary(self):
+        from orchestrator.prompts import REVIEW_SYSTEM_PROMPT
+
+        blob = REVIEW_SYSTEM_PROMPT.lower()
+        for word in (
+            "rails", "rspec", "ruby", "python", ".rb", "app/", "controller",
+            "activerecord", "permit list", "gemfile",
+        ):
+            assert word not in blob, word
