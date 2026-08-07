@@ -2,7 +2,7 @@
 
 ## Where this stands
 
-Steps 0–6 are done and step 7 is all but done; 8, 9 and 10 remain. Each entry
+Steps 0–7 and 9 are done; 8 and 10 remain. Each entry
 below names the commit that did it, because a status line in a document is a
 claim and a sha is checkable — the same reason a figure here has to name the
 artifact it came from.
@@ -16,17 +16,28 @@ artifact it came from.
 | 4 · `executorclient.py` | done | `93dab0e` |
 | 5 · the loop behind a provider switch | done | `7479631` |
 | 6 · flip the default, take a live run | done | measured in `CLAUDE.md` |
-| 7 · delete Aider | **residue** | `5c298c4` |
+| 7 · delete Aider | done | `5c298c4`, `57c3b39` |
 | 8 · replace LangGraph with `driver.py` | pending | — |
-| 9 · simplify `nodes.execute` | pending | — |
+| 9 · simplify `nodes.execute` | done, absorbed | `5c298c4`, `5192d1a` |
 | 10 · up to five stages per derivation | pending | — |
 
-**Step 7's residue**, none of it reached by `RETIRED_EXECUTOR_KEYS` because the
-field is still declared rather than retired: `ExecutorConfig.aider_timeout_seconds`
-survives and is read by nothing; `discover.py` writes it into every newly
-drafted config, so `orchestrator init` still mints an Aider setting today; and
-`scripts/smoke.py` writes a fake `aider` onto `PATH`, which should point at the
-stub server it already runs.
+**Step 9 was absorbed into step 7 rather than done on its own.** Both removals
+it named — the attach block and the `is_clean()` dance — went with Aider, and
+the second was replaced by a fact rather than deleted: `diff_names()` against
+the stage's start sha, because the loop commits before every gate, where the
+old inference was drawing a conclusion from a subprocess that could be killed
+mid-write. Kept as its own row because the plan promised a bisectable
+separation and did not deliver one; a reader looking for step 9's commit should
+find step 7's.
+
+**Step 7 is done.** The last of it was worse than residue: the executor block
+`orchestrator init` drafted was entirely Aider-era and two of its keys were on
+the retired list, so a freshly drafted config could not load. The linter moved
+to `stage_defaults.checks` where it now runs, `aider_timeout_seconds` is gone
+(it lived on `Limits`, which `RETIRED_EXECUTOR_KEYS` could not reach — the
+guard is `RETIRED_KEYS` and per-section now), and `scripts/smoke.py` is the one
+remaining fake-`aider`-on-`PATH`, which is a test harness rather than shipped
+behaviour.
 
 **Step 8 needs a fresh run, not a resume** — `state.db` is LangGraph msgpack
 and no new writer can read it. The work survives regardless: it is squash-merged
