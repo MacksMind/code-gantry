@@ -162,6 +162,31 @@ class TestTheLoop:
         sent = m[0]._client.requests[0]
         assert sent["prompt_cache_options"] == {"mode": "explicit"}
 
+    def test_the_reasoning_effort_reaches_the_request(self, parts):
+        """A value that crosses config into a request needs the journey tested.
+
+        The endpoint is what limits this, not the model: chat/completions
+        refuses `max` for these models and /v1/responses accepts it. The whole
+        `openai/responses/` routing prefix existed to get a request onto that
+        endpoint; calling it directly is what replaces the prefix, and this is
+        the assertion that the setting still arrives.
+        """
+        editor, _, reader = parts
+        m, _ = model(
+            [response([SimpleNamespace(type="message", content=[])], usage())],
+            reasoning_effort="max",
+        )
+        m.run([], reader=reader, editor=editor)
+        assert m._client.requests[0]["reasoning"] == {"effort": "max"}
+
+    def test_no_reasoning_parameter_is_sent_when_the_operator_chose_none(self, parts):
+        # A model that does not take the parameter must not be sent it, and no
+        # default of ours should override a provider's.
+        editor, _, reader = parts
+        m, _ = model([response([SimpleNamespace(type="message", content=[])], usage())])
+        m.run([], reader=reader, editor=editor)
+        assert "reasoning" not in m._client.requests[0]
+
     def test_running_out_of_turns_does_not_report_stopped(self, parts):
         # The work it committed stands and the gates judge it, but the loop
         # must not read an exhausted budget as "the model finished".
