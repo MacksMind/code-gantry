@@ -206,7 +206,17 @@ projects/<slug>/
       verify.log
       review.json
       planner.json
+      sent-prompt.md               # what the executor was given, before it ran
+      executor-conversation.jsonl  # the exchange, appended turn by turn
+      executor-loop.json           # the cycle's totals, written at the end
 ```
+
+The split between the last two is which question the artifact answers. A
+transcript is a sequence and can be appended to, so it is written as the
+attempt happens and a stage in progress can be read; totals are only true once
+the attempt is over, so they are written once. The first version wrote both at
+the end, as a JSON array, and an attempt that never returned left no record of
+itself at all — which is the case a record is most wanted for.
 
 `projects/<slug>/` is what makes "project" a concrete thing without making it
 a first-class object in code. Nothing in the graph needs a `Project` class.

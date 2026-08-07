@@ -134,6 +134,29 @@ recorded separately by the reviewer, which is the only participant that has
 seen the diff. Anything written before the work is a prediction, whatever tense
 it uses.
 
+**But an event is recorded as it happens, and only the rule above makes that
+sound like a contradiction.** The two are about different things: a *claim*
+about what a stage did must wait for the stage, while the record of what was
+actually exchanged is only ever a transcription and has nothing to predict.
+`executor-conversation` was a JSON array — a container that can only be written
+whole — so it was produced on the way out, which means a forty-minute attempt
+had nothing to read for thirty-nine of them and an attempt that never returned
+left no record at all. That is precisely the case a record is most wanted for.
+It is `.jsonl` now and each item is appended as the conversation grows;
+`sent-prompt.md` is written before the first call, because everything in it is
+known then. `executor-loop.json` stays a single write at the end, because
+totals are the one thing there that is not true until the attempt is over. Ask
+of any artifact whether it is a sequence or a summary: a sequence written at the
+end is a summary with extra steps, and it is missing exactly when it matters.
+
+The mechanism is worth copying too. The transcript is a `list` subclass that
+mirrors each append to disk, rather than a callback threaded through the four
+places that append — because those places are in two modules, a fifth is one
+refactor away, and a record that has to be *remembered* at each of them is the
+shape of thing that has already gone quietly missing here between two correct
+changes. Make the recording a property of the only operation that can change
+the thing, and no caller can forget it.
+
 ## Rules that cost time when broken
 
 **Project knowledge belongs in config, never in code.** This includes

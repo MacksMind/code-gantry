@@ -278,6 +278,49 @@ class TestTheRecordOfAnAttempt:
         ).stdout
         assert "after checks" in log
 
+    def test_the_transcript_records_every_item_in_order(self, tmp_path):
+        from types import SimpleNamespace
+
+        from orchestrator.executor import Transcript
+
+        t = Transcript(
+            [{"role": "system", "content": [{"type": "input_text", "text": "SYS"}]}],
+            tmp_path,
+        )
+        t.append(SimpleNamespace(type="function_call", name="read_file", arguments="{}"))
+        t.extend([{"type": "function_call_output", "call_id": "c", "output": []}])
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "executor-conversation.jsonl").read_text().splitlines()
+        ]
+        assert [r.get("role") or r.get("type") for r in rows] == [
+            "system", "function_call", "function_call_output",
+        ]
+        assert rows[1]["name"] == "read_file"
+        assert len(t) == 3
+
+    def test_a_directory_that_cannot_be_written_does_not_fail_the_attempt(self, tmp_path):
+        # Best effort, like every other artifact here: an attempt that worked
+        # must not be failed by a record of it that could not be kept.
+        from orchestrator.executor import Transcript
+
+        t = Transcript([{"role": "user", "content": "x"}], tmp_path / "nope" / "deeper")
+        t.append({"role": "user", "content": "y"})
+        assert len(t) == 2
+
+    def test_an_item_that_will_not_serialise_is_still_recorded(self, tmp_path):
+        from orchestrator.executor import Transcript
+
+        class Odd:
+            type = "reasoning"
+
+        t = Transcript([], tmp_path)
+        t.append(Odd())
+        rows = (tmp_path / "executor-conversation.jsonl").read_text().splitlines()
+        assert len(rows) == 1
+        assert json.loads(rows[0])["type"] == "reasoning"
+
     def test_the_sent_prompt_is_written_whole(self, tmp_path):
         # `prompt.md` carries the stage half only on this path, so it stopped
         # explaining why an attempt existed. A reader opening the directory
@@ -311,6 +354,100 @@ class TestTheRecordOfAnAttempt:
         text = (tmp_path / "sent-prompt.md").read_text()
         assert "ASKED" in text
         assert "function_call_output" not in text
+
+
+class TestTheTranscriptIsReadableWhileTheAttemptRuns:
+    """The record has to exist while the attempt runs, not after it.
+
+    `executor-conversation.json` was a JSON array written once, on the way out
+    — so a stage that spent forty minutes had nothing to read for thirty-nine
+    of them, and an attempt that never returned left nothing at all. That is
+    the shape of gap the monitor rules elsewhere are about: the only instrument
+    on a live attempt was the run log, which deliberately reports counts after
+    the fact because the loop makes sixty calls a cycle.
+
+    Driven through `run_agent_stage` rather than against `Transcript` directly.
+    A unit test can only show that appending writes; what is being claimed is
+    that the file is *there while the model is still working*, and the only
+    place that can be observed is inside the model's own turn.
+    """
+
+    def _drive(self, repo, tmp_path, monkeypatch, inspect, cycles=1):
+        from orchestrator import executorclient
+        from orchestrator.edittools import Edit
+        from orchestrator.executor import Executor
+        from orchestrator.executorclient import ExecutorTurn
+
+        history = tmp_path / "attempt"
+        history.mkdir()
+        counter = {"n": 0}
+
+        class Scripted:
+            def __init__(self, *a, **kw):
+                pass
+
+            def run(self, conversation, reader, editor, semantic=None, cache_key=None):
+                counter["n"] += 1
+                inspect(history, counter["n"])
+                out = ExecutorTurn()
+                out.turns = 1
+                out.stopped = True
+                editor.edit(
+                    "app/a.rb", [Edit(f"class {chr(64 + counter['n'])}",
+                                      f"class {chr(65 + counter['n'])}")]
+                )
+                return out
+
+        monkeypatch.setattr(executorclient, "OpenAIExecutorModel", Scripted)
+        cfg, stage = build(
+            repo, {"must_not_remain": ["class"]} if cycles > 1 else None
+        )
+        git = Git(repo)
+        Executor(cfg, CommandRunner(cwd=repo, timeout=60), git).run_agent_stage(
+            stage, "STAGE INSTRUCTION", history_dir=history,
+            since_sha=git.head_sha(),
+        )
+        return history
+
+    def test_the_prompt_is_on_disk_before_the_model_has_said_anything(
+        self, repo, tmp_path, monkeypatch
+    ):
+        seen = {}
+
+        def inspect(history, n):
+            path = history / "executor-conversation.jsonl"
+            seen["transcript"] = path.read_text() if path.exists() else ""
+            seen["prompt"] = (history / "sent-prompt.md").exists()
+
+        self._drive(repo, tmp_path, monkeypatch, inspect)
+
+        assert "STAGE INSTRUCTION" in seen["transcript"], (
+            "the opening messages must be readable before the first turn"
+        )
+        assert seen["prompt"] is True
+
+    def test_each_cycle_lands_before_the_next_one_starts(
+        self, repo, tmp_path, monkeypatch
+    ):
+        sizes = []
+
+        def inspect(history, n):
+            path = history / "executor-conversation.jsonl"
+            sizes.append(len(path.read_text().splitlines()) if path.exists() else 0)
+
+        self._drive(repo, tmp_path, monkeypatch, inspect, cycles=2)
+
+        assert len(sizes) > 1, "the gate must have fed back and run another cycle"
+        assert sizes[1] > sizes[0], (
+            "the feedback turn from cycle 1 should be on disk before cycle 2 runs"
+        )
+
+    def test_the_finished_file_parses_line_by_line(
+        self, repo, tmp_path, monkeypatch
+    ):
+        history = self._drive(repo, tmp_path, monkeypatch, lambda h, n: None)
+        lines = (history / "executor-conversation.jsonl").read_text().splitlines()
+        assert lines and all(isinstance(json.loads(line), dict) for line in lines)
 
 
 class TestWhatTheExecutorAskedFor:

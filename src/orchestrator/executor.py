@@ -99,7 +99,7 @@ class ExecutionResult:
     # What it asked for, by tool, and what was refused, by reason. Counts
     # rather than the rendered calls the other two loops log: the planner's
     # 40-call line is already hard to read, and this one makes sixty a cycle.
-    # The calls themselves are in `executor-conversation.json`, so a summary
+    # The calls themselves are in `executor-conversation.jsonl`, so a summary
     # that points at the detail beats one that repeats it.
     tool_counts: dict[str, int] = field(default_factory=dict)
     refusal_counts: dict[str, int] = field(default_factory=dict)
@@ -217,14 +217,32 @@ class Executor:
 
         from orchestrator.prompts import build_executor_messages
 
-        conversation = build_executor_messages(
-            stage,
-            self.cfg,
-            prompt,
-            agent_context=agent_context,
-            feedback=feedback,
-            failure_layer=failure_layer,
+        # Recording from here on, not from the way out. The opening messages
+        # are complete before the first call, so the two artifacts that explain
+        # why an attempt exists are on disk while it is still running rather
+        # than only if it returns.
+        conversation = Transcript(
+            build_executor_messages(
+                stage,
+                self.cfg,
+                prompt,
+                agent_context=agent_context,
+                feedback=feedback,
+                failure_layer=failure_layer,
+            ),
+            history_dir,
         )
+        if history_dir is not None:
+            # The whole prompt, not the stage half. `nodes.execute` writes
+            # `prompt.md` from `build_executor_prompt`, which no longer carries
+            # the feedback on this path — so that artifact stopped explaining
+            # why an attempt existed at all, and a reader opening the directory
+            # after a rework saw a prompt identical to the previous attempt's.
+            #
+            # Written before the loop because everything in it is already
+            # known: `_write_sent_prompt` stops at the first thing the model
+            # said, so nothing the loop appends would ever have reached it.
+            _write_sent_prompt(history_dir, conversation)
         out = run_loop(
             stage,
             self.cfg,
@@ -249,13 +267,7 @@ class Executor:
         out.dropped_reads = [p for p in stage.read_files if p not in kept]
         _count_tool_use(out, reader, editor)
         if history_dir is not None:
-            # The whole prompt, not the stage half. `nodes.execute` writes
-            # `prompt.md` from `build_executor_prompt`, which no longer carries
-            # the feedback on this path — so that artifact stopped explaining
-            # why an attempt existed at all, and a reader opening the directory
-            # after a rework saw a prompt identical to the previous attempt's.
-            _write_sent_prompt(history_dir, conversation)
-            _write_transcript(history_dir, conversation, out)
+            _write_loop_record(history_dir, out)
         return out
 
 
@@ -449,32 +461,98 @@ def _within_read_budget(read_files: list[str], cfg: ProjectConfig) -> list[str]:
     return [p for p in read_files if p not in dropped]
 
 
-def _write_transcript(history_dir: Path, conversation: list, out: ExecutionResult) -> None:
-    """What the in-process loop did, for the attempt directory.
+TRANSCRIPT_FILENAME = "executor-conversation.jsonl"
 
-    The subprocess editor wrote three history files of its own and we relocated
-    them; this writes the equivalent, because the artifact is what explains a
-    stage afterwards and half the debugging on the first long run was
-    reconstructing what the executor had been told.
 
-    Best effort. An attempt that worked must not be failed by a directory that
-    could not be written.
+def _plain(item) -> dict:
+    """One conversation item as a mapping the record can hold.
+
+    The SDK's own output objects are not dicts and carry more than this, but
+    what an operator opens the file for is which tool was asked for and with
+    what — and a reasoning item's encrypted payload is bytes nobody reads.
+    """
+    if isinstance(item, dict):
+        return item
+    return {
+        "type": getattr(item, "type", "?"),
+        "name": getattr(item, "name", ""),
+        "arguments": getattr(item, "arguments", ""),
+    }
+
+
+class Transcript(list):
+    """The conversation, mirrored to disk one line at a time as it grows.
+
+    A JSON array can only be written whole, so the record used to be produced
+    on the way out of an attempt: a stage that spent forty minutes had nothing
+    to read for thirty-nine of them, and an attempt that never returned left no
+    record at all — which is the one case where the record is most wanted. One
+    JSON object per line is the same content in a container that can be
+    appended to, so the file is complete-so-far at every instant and
+    `tail -f` works.
+
+    A `list` subclass rather than a callback threaded through the four places
+    that append. Those places are in two modules and a fifth is one refactor
+    away; a record that has to be *remembered* at each of them is the shape of
+    thing this codebase has already watched go quietly missing between two
+    correct changes. Appending to the conversation is the only way to record
+    it, so nothing can forget.
+
+    Best effort, like every other artifact here: an attempt that worked must
+    not be failed by a directory that could not be written.
+    """
+
+    def __init__(self, items: Iterable = (), history_dir: Path | None = None):
+        super().__init__()
+        self.path = history_dir / TRANSCRIPT_FILENAME if history_dir else None
+        self.extend(items)
+
+    def append(self, item) -> None:
+        super().append(item)
+        self._record(item)
+
+    def extend(self, items) -> None:
+        for item in items:
+            self.append(item)
+
+    def insert(self, index: int, item) -> None:
+        super().insert(index, item)
+        self._record(item)
+
+    def __iadd__(self, items):
+        self.extend(items)
+        return self
+
+    def _record(self, item) -> None:
+        if self.path is None:
+            return
+        import json
+
+        try:
+            line = json.dumps(_plain(item), default=str)
+        except Exception:  # noqa: BLE001 - a record is never worth an attempt
+            line = json.dumps({"type": "?", "unserialisable": repr(item)[:2000]})
+        try:
+            with self.path.open("a") as fh:
+                # Closed per item rather than held open, so what is on disk is
+                # what has happened. A buffered handle would leave the last
+                # several turns invisible to exactly the reader this exists
+                # for, and the writes are a handful a minute against an HTTP
+                # call apiece.
+                fh.write(line + "\n")
+        except OSError:
+            return
+
+
+def _write_loop_record(history_dir: Path, out: ExecutionResult) -> None:
+    """What the cycle cost and how it went, for the attempt directory.
+
+    Totals, so unlike the transcript this is written once and at the end. Best
+    effort for the same reason.
     """
     import json
 
-    def plain(item):
-        if isinstance(item, dict):
-            return item
-        return {
-            "type": getattr(item, "type", "?"),
-            "name": getattr(item, "name", ""),
-            "arguments": getattr(item, "arguments", ""),
-        }
-
     try:
-        (history_dir / "executor-conversation.json").write_text(
-            json.dumps([plain(m) for m in conversation], indent=2, default=str)
-        )
         (history_dir / "executor-loop.json").write_text(
             json.dumps(
                 {
@@ -516,7 +594,7 @@ def _write_transcript(history_dir: Path, conversation: list, out: ExecutionResul
 def _write_sent_prompt(history_dir: Path, conversation: list) -> None:
     """What the model was actually given, as one readable document.
 
-    Separate from `executor-conversation.json`, which is the whole exchange
+    Separate from `executor-conversation.jsonl`, which is the whole exchange
     including every tool call and result and is the wrong thing to open first.
     This is the input: system prompt, conventions, stage, feedback — in order,
     and only the messages that were there before the model said anything.

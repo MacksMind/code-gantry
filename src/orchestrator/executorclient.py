@@ -127,7 +127,12 @@ class OpenAIExecutorModel:
                 response = with_provider_retry(
                     lambda: self._client.responses.create(
                         model=self.cfg.model,
-                        input=conversation,
+                        # A plain list on the wire. `conversation` is a
+                        # `Transcript` — a list subclass that mirrors itself to
+                        # disk — and what the SDK does with a subclass is its
+                        # business rather than a fact we should be relying on.
+                        # Copying it costs one shallow list per HTTP call.
+                        input=list(conversation),
                         tools=tools,
                         **extra,
                     ),

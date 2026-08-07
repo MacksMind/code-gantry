@@ -339,7 +339,23 @@ projects/<slug>/
     report.md          run.log   state.db  run.json
     stages/<n>-<id>-rev-<r>-attempt-<m>/
       prompt.md  executor.log  verify.log  review.json  planner.json
+      sent-prompt.md  executor-conversation.jsonl  executor-loop.json
 ```
+
+The executor's two artifacts are written **while the attempt is running**, not
+when it returns, which is what makes a stage that is taking too long something
+you can look at rather than only wait for. `sent-prompt.md` is everything the
+model was given, readable, and is on disk before the first call. The transcript
+is one JSON object per line — every tool call and every result, appended as it
+happens:
+
+```sh
+tail -f .../executor-conversation.jsonl \
+  | jq -r '"\(.type // .role) \(.name // "") \(.arguments // "")"'
+```
+
+`executor-loop.json` is the totals — cycles, edits, refusals, usage, cost — so
+it is written once, at the end.
 
 `status.md` is append-only by design. A status page that always showed current
 state would discard the divergence over time between what the plan expected and
