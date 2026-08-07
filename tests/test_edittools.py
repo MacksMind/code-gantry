@@ -247,3 +247,98 @@ class TestNearestTextFoldsTheReadIntoTheRefusal:
         with pytest.raises(ToolError) as e:
             editor.edit("app/order.rb", [Edit("nothing like this at all", "x")])
         assert "Read it again" in str(e.value)
+
+
+class TestALocatorAnchorsOnTextKnownToHaveBeenReal:
+    """A locator's hit is a chunk boundary, not the start of what was wanted.
+
+    Windowing straight from it could return a block that does not contain the
+    text at all. So it narrows the search and the same local matcher picks the
+    window inside that neighbourhood — which is also more accurate than the
+    global scan, since there is less file in which to find a coincidence.
+    """
+
+    def test_a_chunks_own_line_places_the_window(self):
+        from orchestrator.edittools import nearest_text
+
+        lines = ["filler"] * 20 + ["  def target_method", "    body", "  end"] + ["tail"] * 20
+        text = "\n".join(lines)
+        near = nearest_text(
+            text,
+            "      def target_method\n        something else\n      end",
+            # Stale indexed text: the second line has since changed, the first
+            # has not. That surviving line is what places the window.
+            locate=lambda _: ["    def target_method\n      old body\n    end"],
+        )
+        assert near is not None
+        assert "def target_method" in near
+
+    def test_a_locator_pointing_at_nothing_relevant_returns_nothing(self):
+        # Corroboration lowers the bar; it does not remove it.
+        from orchestrator.edittools import nearest_text
+
+        text = "\n".join(["unrelated"] * 200)
+        assert nearest_text(text, "def a\n  b\nend", locate=lambda _: ["nothing at all like the file"]) is None
+
+    def test_no_locator_leaves_the_old_behaviour_exactly(self):
+        from orchestrator.edittools import nearest_text
+
+        text = "a\n  scope 'x' do\n    get '/'\n  end\nb\n"
+        want = "    scope 'x' do\n      get '/'\n    end"
+        assert nearest_text(text, want) == nearest_text(text, want, locate=lambda _: [])
+
+    def test_the_anchor_still_wins_before_any_locator_is_consulted(self):
+        # The cheap, exact path first: a locator is a last resort, and calling
+        # one when the anchor already placed the text would be a network round
+        # trip for an answer we have.
+        from orchestrator.edittools import nearest_text
+
+        called = []
+        text = "a\n  def go\n    work\n  end\nb\n"
+        nearest_text(
+            text, "      def go\n        work\n      end",
+            locate=lambda w: called.append(w) or ["irrelevant"],
+        )
+        assert called == [], "the locator was consulted despite an anchor match"
+
+
+class TestSeveralChunksComeBackForOneFile:
+    def test_the_anchor_narrows_and_the_matcher_still_picks(self):
+        """The first surviving line places the *search*, not the window.
+
+        Ranking is the index's and the walk keeps it, but a chunk ranked first
+        is not thereby the answer — it only says where to look. Here the
+        highest-ranked chunk anchors on `alpha`, and the matcher still lands on
+        `beta`, which is what the wanted text actually resembles.
+        """
+        from orchestrator.edittools import nearest_text
+
+        lines = [
+            "def alpha_method_here", "  a", "end",
+            "def beta_method_here", "  b", "end",
+        ]
+        text = "\n".join(lines)
+        near = nearest_text(
+            text,
+            "def beta_method_here\n  something stale\nend",
+            locate=lambda _: [
+                "def alpha_method_here\n  old\nend",   # ranked first, still present
+                "def beta_method_here\n  older\nend",
+            ],
+        )
+        assert near is not None
+        assert "beta_method_here" in near
+
+    def test_a_line_appearing_twice_is_never_the_anchor(self):
+        # It names no single place, and a wrong place is worse than none.
+        from orchestrator.edittools import nearest_text
+
+        text = "\n".join(["  duplicated_line_here"] * 2 + ["unique_line_over_here", "x"])
+        near = nearest_text(
+            text,
+            "totally different\ncontent entirely\nnot here",
+            locate=lambda _: ["  duplicated_line_here\nunique_line_over_here"],
+        )
+        # The duplicated line is skipped; the unique one anchors, but nothing
+        # nearby resembles the wanted text, so it still declines.
+        assert near is None

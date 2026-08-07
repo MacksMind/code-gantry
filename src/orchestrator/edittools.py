@@ -65,9 +65,20 @@ NEAREST_MAX_LINES = 40
 # Below this, a suggestion is a guess. A confidently wrong location is worse
 # than none: it invites the model to edit somewhere it never meant to.
 NEAREST_MIN_RATIO = 0.6
+# A line has to carry this much to be worth anchoring on. Shorter ones — `end`,
+# a brace, a blank — appear everywhere and would place the window at random.
+NEAREST_ANCHOR_MIN_CHARS = 12
+# Lower, because the location came from text known to have been real rather
+# than from the ratio alone.
+NEAREST_LOCATED_MIN_RATIO = 0.45
 
 
-def nearest_text(text: str, old_string: str) -> str | None:
+def nearest_text(
+    text: str,
+    old_string: str,
+    *,
+    locate: Callable[[str], list[str]] | None = None,
+) -> str | None:
     """Where the file most resembles what was asked for, as its real bytes.
 
     A not-found refusal used to cost a `read_file` call — against a budget that
@@ -113,22 +124,87 @@ def nearest_text(text: str, old_string: str) -> str | None:
         # guess about which. Say so and let the model narrow it itself.
         return None
 
+    at, ratio = _best_window(lines, want, 0, len(lines))
+    if at is not None and ratio >= NEAREST_MIN_RATIO:
+        return _window(lines, at, span)
+
+    # Last resort: a locator, when one is configured.
+    #
+    # It returns text an index believes belongs to this file. That text is
+    # stale — the index is rebuilt on a commit hook, so it can be several edits
+    # and several commits behind — but it is *known to have been real*, which
+    # the `old_string` is not: that has already failed to match, so it is known
+    # wrong. Lines of the chunk are therefore the better anchors.
+    #
+    # Walked a line at a time and stopped at the first that still exists here.
+    # An earlier version scored spans instead, which was the wrong shape twice:
+    # a span is a chunk boundary rather than the start of what was wanted, and
+    # narrowing the same matcher to a region it had already scanned buys only a
+    # lower threshold.
+    #
+    # Nothing indexed reaches the model. The stale text is a search key; every
+    # byte returned is cut from the buffer above. That is what makes consulting
+    # a lagging index safe at all.
+    at = _anchor_from_chunks(lines, locate(old_string) if locate else [])
+    if at is not None:
+        lo = max(at - len(want), 0)
+        hi = min(at + 2 * len(want) + 1, len(lines))
+        found, ratio = _best_window(lines, want, lo, hi)
+        if found is not None and ratio >= NEAREST_LOCATED_MIN_RATIO:
+            return _window(lines, found, span)
+    return None
+
+
+def _anchor_from_chunks(lines: list[str], chunks: list[str]) -> int | None:
+    """The first line of any chunk that still exists here, and where.
+
+    The chunks arrive ranked, and a nested walk visits their lines in that
+    order — first match wins, no intermediate list. Several chunks commonly
+    come back for one file, and scoring each separately would either take the
+    best of several guesses or stop at whichever chunk happened to contain a
+    survivor. Walking them in rank order leaves the index's own ordering as the
+    only preference expressed.
+
+    Compared stripped, because indentation shifts most readily and is not what
+    identifies a line. Short lines are skipped: `end`, `}` and their kind occur
+    everywhere. A line occurring more than once is skipped for the same reason
+    — it names no single place, and a wrong place is worse than none.
+    """
+    for chunk in chunks:
+        for raw in chunk.split("\n"):
+            needle = raw.strip()
+            if len(needle) < NEAREST_ANCHOR_MIN_CHARS:
+                continue
+            hits = [i for i, line in enumerate(lines) if line.strip() == needle]
+            if len(hits) == 1:
+                return hits[0]
+    return None
+
+
+def _best_window(
+    lines: list[str], want: list[str], lo: int, hi: int
+) -> tuple[int | None, float]:
+    """The offset in [lo, hi) whose lines most resemble `want`, and how much.
+
+    Compared with leading whitespace stripped, because indentation is the thing
+    most often wrong and it should not dominate the score — the point is to
+    find the place, and `_window` then returns the real bytes including the
+    indentation that was got wrong.
+    """
     import difflib
 
-    best_at, best_ratio = None, 0.0
     width = max(len(want), 1)
     target = "\n".join(ln.strip() for ln in want)
-    for i in range(0, max(len(lines) - width + 1, 1)):
+    best, best_ratio = None, 0.0
+    for i in range(lo, max(hi - width + 1, lo + 1)):
         window = "\n".join(ln.strip() for ln in lines[i : i + width])
-        ratio = difflib.SequenceMatcher(None, target, window).quick_ratio()
-        if ratio <= best_ratio:
+        matcher = difflib.SequenceMatcher(None, target, window)
+        if matcher.quick_ratio() <= best_ratio:
             continue
-        ratio = difflib.SequenceMatcher(None, target, window).ratio()
+        ratio = matcher.ratio()
         if ratio > best_ratio:
-            best_at, best_ratio = i, ratio
-    if best_at is None or best_ratio < NEAREST_MIN_RATIO:
-        return None
-    return _window(lines, best_at, span)
+            best, best_ratio = i, ratio
+    return best, best_ratio
 
 
 def _window(lines: list[str], at: int, span: int) -> str:
@@ -138,7 +214,12 @@ def _window(lines: list[str], at: int, span: int) -> str:
     return "\n".join(f"{start + 1 + i:>5}  {line}" for i, line in enumerate(chosen))
 
 
-def apply_edits(text: str, edits: list[Edit]) -> str:
+def apply_edits(
+    text: str,
+    edits: list[Edit],
+    *,
+    locate: Callable[[str], list[str]] | None = None,
+) -> str:
     """Every edit, in order, against one buffer — or none of them.
 
     Raises rather than returning a partial result. A half-applied batch is the
@@ -164,7 +245,7 @@ def apply_edits(text: str, edits: list[Edit]) -> str:
         # not have it", and for the same reason: they lead to different next
         # moves. Not found means re-read; found twice means widen the anchor.
         if count == 0:
-            near = nearest_text(text, edit.old_string)
+            near = nearest_text(text, edit.old_string, locate=locate)
             where = (
                 f"\n\nThe closest place in the file is:\n\n{near}\n\n"
                 "Those are its actual bytes, numbered as `read_file` numbers "
@@ -211,6 +292,11 @@ class FileEditor:
     repo: Path
     edit_files: list[str]
     protected: Callable[[str], bool] | None = None
+    # Given a repo-relative path and the text that was not found, returns
+    # candidate line numbers in that file. Optional: the editor works
+    # without one and every project that has no index gets today's
+    # behaviour unchanged.
+    locator: Callable[[str, str], list[int]] | None = None
     calls: list[ToolCall] = field(default_factory=list)
     touched: set[str] = field(default_factory=set)
 
@@ -287,7 +373,10 @@ class FileEditor:
         except (OSError, UnicodeDecodeError) as e:
             raise ToolError(f"{rel!r} could not be read as text: {e}") from e
 
-        after = normalise(apply_edits(before, edits))
+        locate = (
+            (lambda want: self.locator(rel, want)) if self.locator else None
+        )
+        after = normalise(apply_edits(before, edits, locate=locate))
         full.write_text(after, encoding="utf-8")
         self.touched.add(rel)
         self._record("edit", rel, len(edits))

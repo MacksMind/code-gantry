@@ -211,3 +211,67 @@ class TestAMisconfiguredIndexSaysSo:
         out = search(FakeHttp(fail=OSError("Connection refused"))).query("x")
         assert "unavailable" in out[0]
         assert "misconfigured" not in out[0]
+
+
+class TestChunksForIsASearchKeyNotAnAnswer:
+    """The indexed text, handed over to locate with and never to return.
+
+    It lags the working tree by however many edits and commits have happened
+    since the collection was built. That makes it useless as an answer and
+    valuable as a key: by the time anything asks, the model's own `old_string`
+    has failed to match and is known wrong, while this text is known to have
+    been real. The caller finds its surviving lines in the tree and reads the
+    bytes from there.
+
+    An earlier version returned line spans and parsed them out of `query`'s
+    rendered output with a regex — reading our own formatting to recover fields
+    the payload already carried, matching nothing because every citation line
+    begins with a score, and passing its test only because the fake returned
+    the shape it assumed.
+    """
+
+    def _search(self, hits):
+        from orchestrator.semantic import SemanticSearch, SemanticSearchConfig
+
+        s = SemanticSearch(
+            SemanticSearchConfig(
+                api_base="http://x", qdrant_url="http://y",
+                embedding_model="e", collection="c",
+            )
+        )
+        s._search = lambda q: hits
+        return s
+
+    def test_it_returns_the_indexed_text_for_that_file_in_rank_order(self):
+        s = self._search([
+            {"payload": {"path": "config/routes.rb", "content": "FIRST"}},
+            {"payload": {"path": "other.rb", "content": "ELSEWHERE"}},
+            {"payload": {"path": "config/routes.rb", "content": "SECOND"}},
+        ])
+        assert s.chunks_for("scope admin taxes", "config/routes.rb") == [
+            "FIRST", "SECOND"
+        ]
+
+    def test_other_files_are_not_candidates(self):
+        s = self._search([{"payload": {"path": "other.rb", "content": "x"}}])
+        assert s.chunks_for("x", "config/routes.rb") == []
+
+    def test_an_empty_chunk_is_no_use_as_a_key(self):
+        s = self._search([{"payload": {"path": "a.rb", "content": "   \n"}}])
+        assert s.chunks_for("x", "a.rb") == []
+
+    def test_a_failing_index_is_simply_no_locator(self):
+        from orchestrator.semantic import SemanticSearch, SemanticSearchConfig
+
+        s = SemanticSearch(
+            SemanticSearchConfig(
+                api_base="http://x", qdrant_url="http://y",
+                embedding_model="e", collection="c",
+            )
+        )
+
+        def boom(_):
+            raise RuntimeError("qdrant down")
+
+        s._search = boom
+        assert s.chunks_for("x", "a.rb") == []

@@ -110,6 +110,26 @@ class SemanticSearch:
     http: Callable[[str, dict, float], dict] = _post
     calls: list[ToolCall] = field(default_factory=list)
 
+    def _search(self, question: str) -> list[dict]:
+        """Embed the question and ask the collection. Raises; callers classify.
+
+        Factored out because two callers want the same request and different
+        answers: `query` renders it for a model to read, `locations` takes the
+        positions and nothing else.
+        """
+        embedded = self.http(
+            f"{self.cfg.api_base}/embeddings",
+            {"model": self.cfg.embedding_model, "input": [question]},
+            self.cfg.timeout_seconds,
+        )
+        vector = embedded["data"][0]["embedding"]
+        found = self.http(
+            f"{self.cfg.qdrant_url}/collections/{self.cfg.collection}/points/search",
+            {"vector": vector, "limit": self.cfg.max_results, "with_payload": True},
+            self.cfg.timeout_seconds,
+        )
+        return found["result"]
+
     def query(self, text: str) -> list[str]:
         """Ranked `path:start-end` leads, most similar first."""
         question = (text or "").strip()
@@ -117,22 +137,7 @@ class SemanticSearch:
             return ["semantic search needs a question"]
 
         try:
-            embedded = self.http(
-                f"{self.cfg.api_base}/embeddings",
-                {"model": self.cfg.embedding_model, "input": [question]},
-                self.cfg.timeout_seconds,
-            )
-            vector = embedded["data"][0]["embedding"]
-            found = self.http(
-                f"{self.cfg.qdrant_url}/collections/{self.cfg.collection}/points/search",
-                {
-                    "vector": vector,
-                    "limit": self.cfg.max_results,
-                    "with_payload": True,
-                },
-                self.cfg.timeout_seconds,
-            )
-            hits = found["result"]
+            hits = self._search(question)
         except Exception as e:  # noqa: BLE001 - classified rather than guessed
             failure = classify(e)
             self.calls.append(ToolCall("semantic_search", question, 0))
@@ -183,3 +188,37 @@ class SemanticSearch:
 
         self.calls.append(ToolCall("semantic_search", question, len(lines)))
         return lines
+
+
+    def chunks_for(self, text: str, path: str) -> list[str]:
+        """The indexed text of chunks the index associates with one file.
+
+        Returned as a *search key*, never as an answer. The content is as it
+        stood when the collection was built — rebuilt on a commit hook, so it
+        lags the working tree by however many edits and commits have happened
+        since — and an executor quoting bytes exactly must never be handed it.
+
+        It is nonetheless the better anchor. By the time a caller asks, the
+        model's own `old_string` has already failed to match, so it is known
+        wrong; this text is known to have been real, which makes its lines far
+        likelier to still exist verbatim in the file. The caller finds them
+        there and reads the working tree at that point.
+
+        Ranked by how many chunks land in the file being asked about rather
+        than by score. Similarity is a statement about the whole repository and
+        says nothing about position within one file.
+        """
+        try:
+            hits = self._search(text)
+        except Exception:  # noqa: BLE001 - a locator that fails is no locator
+            return []
+
+        found: list[str] = []
+        for h in hits:
+            payload = h.get("payload") or {}
+            if payload.get("path") != path:
+                continue
+            content = payload.get("content") or ""
+            if content.strip():
+                found.append(content)
+        return found

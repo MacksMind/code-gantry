@@ -255,3 +255,25 @@ def build_loop_parts(stage: Stage, cfg: ProjectConfig, repo: Path):
     reader.writable_globs = list(stage.edit_files)
     editor = FileEditor(repo=repo, edit_files=list(stage.edit_files))
     return reader, editor
+
+
+def semantic_locator(semantic, path: str, want: str) -> list[str]:
+    """Known-real text from the index, for the editor to anchor on.
+
+    Returns the chunks' own content rather than their line spans. Spans were
+    the first design and were the wrong shape twice over: a span is a chunk
+    boundary rather than the start of what was wanted, and narrowing the same
+    matcher to a region it had already scanned buys only a lower threshold.
+
+    What the index actually has that is worth anything here is *text that was
+    once in the file*. By this point the model's `old_string` has failed to
+    match, so it is known wrong; the indexed content is known to have been
+    right at some commit. Its lines are the better anchor, and the caller
+    resolves them against the working tree, so nothing stale is returned.
+    """
+    if semantic is None:
+        return []
+    try:
+        return semantic.chunks_for(want, path)
+    except Exception:  # noqa: BLE001 - a locator that fails is simply no locator
+        return []
