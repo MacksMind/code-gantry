@@ -300,10 +300,17 @@ class Git:
 
         `ignore_line_endings` hides hunks whose only difference is a carriage
         return at end of line. That churn is the editor's, not the model's:
-        aider reads with universal newlines and writes with `--line-endings
-        platform`, so every file it touches is rewritten to the host's
-        convention. On a repository with mixed endings — most have some — a
-        one-line semantic change arrives as a whole-file rewrite.
+        `edittools.normalise` rewrites line endings on every file it writes, so
+        on a repository with mixed endings — most have some — a one-line
+        semantic change arrives as a whole-file rewrite.
+
+        Written for a subprocess editor that did the same thing, and kept
+        because the replacement does it too. Worth knowing what hiding it costs:
+        the reviewer never sees the conversion, so it accrues unobserved. On one
+        target with 542 CRLF files and no `.gitattributes`, ten had been
+        silently converted after 77 stages, leaving the repository mixed where
+        it had been uniform. The exemption is right and its effect still wants
+        counting — see CLAUDE.md, "Hiding a tool's own churn from the gate".
 
         Symmetric on purpose. On Linux and macOS the platform default converts
         CRLF to LF; on Windows it converts LF to CRLF. A fix that assumed
@@ -388,10 +395,10 @@ class Git:
         What the orchestrator commits must survive a pre-commit hook, and
         `git diff --cached --check` — the usual form of one — rejects trailing
         whitespace on added lines. Nothing upstream reliably prevents it.
-        `executor.lint_command` reaches Aider as `--lint-cmd`, but Aider's
-        linter returns before it consults that command whenever
-        `filename_to_lang` cannot name the file's language, so ERB templates,
-        YAML and most non-source files are never linted at all.
+        The operator's `checks` run inside the executor's loop and can correct
+        it, but only for the file types the declared linter understands — a
+        Ruby formatter does nothing for ERB templates, YAML, or most non-source
+        files, and those are exactly where a stray trailing space survives.
 
         The line need not be the executor's. One that already carried trailing
         whitespace becomes an *added* line the moment the edit rewrites enough

@@ -164,7 +164,6 @@ class TestEndpointEnvironmentChecks:
         checks = run_preflight(
             cfg,
             run_tests=False,
-            check_aider=False,
             check_models=False,
             check_approval=False,
             check_endpoint=False,
@@ -266,7 +265,6 @@ class TestFailureOutputKeepsTheVerdict:
         )
         checks = run_preflight(
             cfg,
-            check_aider=False,
             check_models=False,
             check_approval=False,
             check_endpoint=False,
@@ -315,7 +313,7 @@ class TestPreflightExcusesAFlakeTheRunWouldExcuse:
     def _check(self, repo, scoped_ok: bool):
         checks = run_preflight(
             self._cfg(repo, scoped_ok),
-            check_aider=False, check_models=False,
+            check_models=False,
             check_approval=False, check_endpoint=False,
         )
         return next(c for c in checks if "test_command passes" in c.name)
@@ -335,7 +333,7 @@ class TestPreflightExcusesAFlakeTheRunWouldExcuse:
         checks = run_preflight(
             self._cfg(repo, scoped_ok=True),
             project_dir=project_dir,
-            check_aider=False, check_models=False,
+            check_models=False,
             check_approval=False, check_endpoint=False,
         )
         assert any(c.ok for c in checks if "test_command passes" in c.name)
@@ -375,7 +373,7 @@ class TestSuitesAreNotRunTwice:
             }
         )
         run_preflight(
-            cfg, check_aider=False, check_models=False,
+            cfg, check_models=False,
             check_approval=False, check_endpoint=False,
         )
         assert marker.read_text().count("x") == 1
@@ -396,7 +394,7 @@ class TestSuitesAreNotRunTwice:
             }
         )
         run_preflight(
-            cfg, check_aider=False, check_models=False,
+            cfg, check_models=False,
             check_approval=False, check_endpoint=False,
         )
         assert marker.read_text().split() == ["a", "b"]
@@ -425,7 +423,7 @@ class TestSuitesAreNotRunTwice:
             }
         )
         checks = run_preflight(
-            cfg, check_aider=False, check_models=False,
+            cfg, check_models=False,
             check_approval=False, check_endpoint=False,
         )
         twin = [c for c in checks if "full_test_command" in c.name]

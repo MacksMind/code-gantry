@@ -3,7 +3,7 @@
 Config validation covers everything checkable from the file alone. These need a
 real target repo, a working environment, and a network — is the tree clean, does
 the test command actually pass, is `setup_command` genuinely idempotent, does
-Aider still have the flags we build, are both models reachable.
+are both models reachable.
 
 All of it runs at the start of `run` as well as under `validate`. Failing fast
 beats failing on stage 30.
@@ -25,7 +25,6 @@ from orchestrator.apistatus import classify
 from orchestrator.approval import approval_problem
 from orchestrator.commands import CommandResult, CommandRunner, truncate_middle
 from orchestrator.config import ProjectConfig
-from orchestrator.executor import AIDER_FLAGS
 from orchestrator.flake import FlakeVerdict, adjudicate, append_flakes
 from orchestrator.gitops import Git, GitError
 from orchestrator.plandoc import resolve_plan_tree
@@ -62,7 +61,6 @@ def run_preflight(
     *,
     project_dir=None,
     run_tests: bool = True,
-    check_aider: bool = True,
     check_models: bool = True,
     check_approval: bool = True,
     check_endpoint: bool = True,
@@ -102,8 +100,6 @@ def run_preflight(
         )
     )
 
-    if check_aider:
-        checks.extend(check_aider_flags(runner))
     if check_models:
         checks.extend(_model_checks(cfg))
     if check_approval and project_dir is not None:
@@ -435,35 +431,6 @@ def _tidiness_check(cfg: ProjectConfig) -> Check:
     )
 
 
-def check_aider_flags(runner: CommandRunner) -> list[Check]:
-    """Confirm the flags we build still exist.
-
-    A renamed flag would otherwise surface as an opaque Aider usage error an
-    hour into an unattended run.
-    """
-    result = runner.run("aider --help")
-    if not result.ok:
-        return [
-            Check(
-                "aider is installed",
-                False,
-                "could not run `aider --help`; no agent stage can execute "
-                f"without it\n{result.output[-1000:]}",
-            )
-        ]
-
-    missing = [flag for flag in AIDER_FLAGS if flag not in result.output]
-    return [
-        Check("aider is installed", True),
-        Check(
-            "aider still accepts the flags we build",
-            not missing,
-            "" if not missing
-            else f"not found in `aider --help`: {', '.join(missing)}. Aider's CLI "
-            "changes between releases — correct these or override with "
-            "executor.extra_args",
-        ),
-    ]
 
 
 def _endpoint_checks(cfg: ProjectConfig) -> list[Check]:

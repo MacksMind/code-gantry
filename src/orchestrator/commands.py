@@ -188,26 +188,6 @@ class CommandRunner:
         (`a && b`, `! grep -q x`), so a shell is required."""
         return self._spawn(command, shell=True, label=command, timeout=timeout)
 
-    def run_argv(
-        self,
-        argv: Sequence[str],
-        timeout: int | None = None,
-        env: dict[str, str] | None = None,
-    ) -> CommandResult:
-        """Run an argument vector with no shell.
-
-        Used for the executor, whose prompt is a multi-line string full of
-        backticks and quotes. Passing that through a shell would be a
-        quoting minefield for no benefit.
-        """
-        return self._spawn(
-            list(argv),
-            shell=False,
-            label=" ".join(argv[:2]) + " ...",
-            timeout=timeout,
-            extra_env=env,
-        )
-
     def _spawn(
         self,
         target,

@@ -647,19 +647,16 @@ def execute(state: RunState, rt: Runtime) -> dict:
                 str(exc),
             )
 
-        # Feedback is embedded in the prompt for the subprocess editor, which
-        # gets one message and no history, and carried separately for the
-        # in-process loop, which gets a conversation. The difference is not
-        # cosmetic: `build_executor_prompt` puts its retry opening at the head
-        # of the string, so an attempt with feedback differs from one without
-        # at character zero — correct for a single-shot invocation and exactly
-        # wrong where a cached prefix is the point.
-        in_process = rt.cfg.executor.provider == "openai"
+        # Feedback is carried beside the prompt, not inside it. The difference
+        # is not cosmetic: `build_executor_prompt` puts its retry opening at
+        # the head of the string, so an attempt with feedback would differ from
+        # one without at character zero — which is exactly wrong where a cached
+        # prefix is the point. It arrives as its own conversation turn instead.
         prompt = build_executor_prompt(
             stage,
             rt.cfg,
             context=context,
-            feedback=None if in_process else feedback,
+            feedback=None,
             failure_layer=state.get("failure_layer"),
             cumulative_diff=cumulative_diff,
             excerpts=excerpts,
@@ -669,11 +666,10 @@ def execute(state: RunState, rt: Runtime) -> dict:
             "prompt.md", prompt,
         )
         rt.log(f"[execute] {stage.id}: attempt {attempt}")
-        # Aider's scratch files go beside this attempt's other artifacts rather
-        # than into the repository under test, where they would fail the scope
-        # gate. As a side effect the model's actual conversation is preserved
-        # per attempt, which is the first thing worth reading when a local
-        # model does something inexplicable.
+        # The attempt's artifacts — the conversation, the prompt as sent, the
+        # loop's own record. Kept per attempt because the first thing worth
+        # reading when a stage does something inexplicable is what it was
+        # actually given, and a rework overwrites nothing.
         history_dir = rt.paths.attempt_dir(
             state["stage_index"], stage.id, state.get("revision", 0), attempt
         )
@@ -684,7 +680,8 @@ def execute(state: RunState, rt: Runtime) -> dict:
             history_dir=history_dir,
             since_sha=state["stage_start_sha"],
             agent_context=_conventions(state, rt),
-            feedback=feedback if in_process else None,
+            feedback=feedback,
+            failure_layer=state.get("failure_layer"),
         )
 
     if result.tool_counts:
@@ -787,49 +784,6 @@ def execute(state: RunState, rt: Runtime) -> dict:
     if result.dropped_reads:
         measured["withheld_reads"] = list(result.dropped_reads)
 
-    if result.attached_files:
-        rt.log(
-            f"[execute] {stage.id}: the editor attached "
-            f"{', '.join(result.attached_files)} because something named "
-            "them — a reply that names a file loses that reply's edits"
-        )
-
-    # Aider scans the model's answer for path-shaped words and, having attached
-    # one, returns before it applies anything that answer contained. The exit
-    # code is clean and the tree is untouched, which is indistinguishable from
-    # a model that did nothing — so the loop said "you produced no changes at
-    # all", and the model wrote the same correct reply again.
-    #
-    # Measured: three SEARCH/REPLACE blocks emitted, zero applied, and every
-    # one of the 29 no-change attempts in the run history preceded by an
-    # attach. Same shape as `unapplied_edit` below and the same reason to be
-    # precise about it: a wrong diagnosis invites the model to repeat what
-    # already worked, louder.
-    #
-    # An attach with work on the tree is not a loss — Aider attaches on one
-    # reply of a reflection and can apply edits on a later one — so this asks
-    # the tree, exactly as the unapplied-edit case does.
-    if result.ok and result.attached_files and not rt.git.diff_names(
-        state["stage_start_sha"]
-    ):
-        listed = ", ".join(result.attached_files)
-        return _retry_or_plan(
-            state,
-            rt,
-            layer="scope",
-            summary="the editor discarded the reply it attached a file for",
-            feedback=(
-                "The previous attempt wrote an edit and the editor threw it "
-                f"away. It attached {listed} because your reply named it, and "
-                "it stops processing a reply as soon as it does that — so "
-                "nothing you wrote was applied.\n\n"
-                "The work itself was not the problem. Send the same change "
-                "again, and name no files outside the ones already listed for "
-                "you: no paths in prose, and no suggested commands."
-            ),
-            detail=_clip(result.log),
-        )
-
     if result.ok:
         return {"next_hop": "verify", **measured}
 
@@ -862,36 +816,19 @@ def execute(state: RunState, rt: Runtime) -> dict:
     # reflection loop ran until the 900s kill. Three attempts, forty-five
     # minutes, all of it redoing finished work before the fourth happened to
     # stop early enough to be counted.
-    committed = not result.timed_out or (
-        rt.git.is_clean() and bool(rt.git.diff_names(state["stage_start_sha"]))
-    )
-    if (result.unapplied_edit or result.timed_out) and committed:
-        if rt.git.diff_names(state["stage_start_sha"]):
-            why = (
-                "was killed but had committed its work"
-                if result.timed_out
-                else "could not apply part of its reply, but the tree has changed"
-            )
-            rt.log(f"[execute] {stage.id}: the editor {why} — verifying what is there")
-            return {"next_hop": "verify", **measured}
-
-    if result.timed_out:
-        what = "timed out"
-        advice = ""
-    elif result.unapplied_edit:
-        # Precision matters here: the model wrote plenty, in a shape the editor
-        # could not apply. Telling it "you produced no changes" invites it to
-        # write the same thing again, louder.
-        what = "could not apply the model's reply"
-        advice = (
-            "\n\nThe model's response was not in a form the editor could turn "
-            "into a file edit — it produced text, not an applicable change. "
-            "Restate the edit in the exact format the editor expects, naming "
-            "the file before each block."
+    # A timeout with work on the tree goes to verify rather than back to the
+    # executor. The loop is cooperative and commits before every gate, so
+    # "there are commits" is a fact rather than the `is_clean()` inference this
+    # used to draw from a subprocess that could be killed mid-write.
+    if result.timed_out and rt.git.diff_names(state["stage_start_sha"]):
+        rt.log(
+            f"[execute] {stage.id}: the executor ran out of time but had "
+            "committed its work — verifying what is there"
         )
-    else:
-        what = "exited non-zero"
-        advice = ""
+        return {"next_hop": "verify", **measured}
+
+    what = "timed out" if result.timed_out else "stopped without finishing"
+    advice = ""
 
     return _retry_or_plan(
         state,

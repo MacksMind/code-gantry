@@ -683,3 +683,54 @@ class TestAgentContextDocuments:
     def test_an_explicit_empty_list_means_none(self):
         # Distinct from unset: the operator looked and decided there is none.
         assert self._cfg(agent_context=[]).effective_agent_context == []
+
+
+class TestRetiredKeysExplainThemselves:
+    """A key this tool used to have must say so, not fail as a typo.
+
+    Deleting Aider removed nine `executor` settings that existed only to build
+    its argv. Every project config that had them stops loading, and `extra=
+    "forbid"` renders that as "Extra inputs are not permitted" against a key
+    the operator deliberately set and that worked yesterday — indistinguishable
+    from a misspelling, and it names no way forward.
+
+    The failure is correct and only the message is wrong, which is the whole
+    point: a config that silently ignored a retired key would leave an operator
+    believing `map_tokens` still bounds something.
+    """
+
+    def _base(self, **over):
+        data = {
+            "target_repo": "/tmp/x",
+            "base_ref": "main",
+            "project_branch": "proj",
+            "plan_root": "PLAN.md",
+            "test_command": "true",
+            "executor": {"model": "m"},
+            "planner": {"model": "claude-opus-5"},
+            "reviewer": {"model": "gpt-5.5"},
+        }
+        data["executor"].update(over)
+        return data
+
+    def test_it_names_the_key_and_why_it_went(self):
+        with pytest.raises(ConfigError) as e:
+            parse_config(self._base(map_tokens=1024))
+        message = "\n".join(e.value.problems)
+        assert "executor.map_tokens" in message
+        assert "aider" in message.lower()
+        assert "Extra inputs are not permitted" not in message
+
+    def test_a_real_typo_still_fails_as_a_typo(self):
+        # The retired list must not swallow everything unknown.
+        with pytest.raises(ConfigError) as e:
+            parse_config(self._base(max_cyclez=2))
+        assert "max_cyclez" in "\n".join(e.value.problems)
+
+    def test_every_retired_key_is_actually_gone_from_the_model(self):
+        # A key listed as retired that still exists would produce a config the
+        # loader rejects and the model accepts — the error would be a lie.
+        from orchestrator.config import RETIRED_EXECUTOR_KEYS, ExecutorConfig
+
+        live = set(ExecutorConfig.model_fields)
+        assert not (set(RETIRED_EXECUTOR_KEYS) & live), "listed as retired but still a field"

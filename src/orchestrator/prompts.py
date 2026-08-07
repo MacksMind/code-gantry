@@ -1197,6 +1197,7 @@ def build_executor_messages(
     prompt: str,
     agent_context: str | None = None,
     feedback: list[str] | None = None,
+    failure_layer: str | None = None,
 ) -> list[dict]:
     """The executor's conversation, stable payload first.
 
@@ -1243,7 +1244,24 @@ def build_executor_messages(
         {"role": "user", "content": [{"type": "input_text", "text": prompt}]}
     )
 
-    for item in feedback or []:
+    # Framed, not bare. `build_executor_prompt` opens a retry with one of two
+    # very different instructions — a review rejection means *replace* what is
+    # there, a gate failure means the sweep is unfinished and repeating the
+    # approach on what was missed is the fix — and that opening reached the
+    # subprocess editor inside its single message. On this path feedback became
+    # its own turn, to keep the cached prefix identical between attempts, and
+    # the framing was left behind with the string it used to live in. Bare
+    # feedback after a rejection reads as "add this", which is the failure the
+    # review opening was written to stop.
+    items = list(feedback or [])
+    if items:
+        opening = (
+            _RETRY_OPENING_REVIEW
+            if failure_layer == "review"
+            else _RETRY_OPENING_GATE
+        )
+        items.insert(0, opening)
+    for item in items:
         messages.append(
             {"role": "user", "content": [{"type": "input_text", "text": item}]}
         )

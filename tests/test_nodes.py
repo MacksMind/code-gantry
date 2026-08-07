@@ -69,6 +69,7 @@ class StubExecutor:
     prompts: list = field(default_factory=list)
     history_dirs: list = field(default_factory=list)
     feedback: list = field(default_factory=list)
+    failure_layers: list = field(default_factory=list)
 
     def gather_context(self, stage):
         return [], []
@@ -85,22 +86,20 @@ class StubExecutor:
 
     def run_agent_stage(
         self, stage, prompt, history_dir=None, since_sha="",
-        agent_context=None, feedback=None,
+        agent_context=None, feedback=None, failure_layer=None,
     ):
         self.prompts.append(prompt)
         self.history_dirs.append(history_dir)
         self.feedback.append(feedback)
+        self.failure_layers.append(failure_layer)
         self._apply()
-        # Through the same parser the real executor uses, not a field set by
-        # hand: the value's journey starts in Aider's output, and a stub that
-        # skipped that would pin the half of the trip that never broke.
-        from orchestrator.executor import cache_tokens_from_log, cost_from_log
-
+        # The measured fields are set by whoever needs them — subclasses in
+        # the tests that care. There is no log to parse any more: the loop
+        # reports usage from the provider's own counts, so a stub that scraped
+        # text would be pinning a journey that no longer exists.
         return ExecutionResult(
             ok=self.ok, log=self.log, timed_out=self.timed_out,
             dropped_reads=list(self.dropped_reads),
-            cost_usd=cost_from_log(self.log),
-            cache_tokens=cache_tokens_from_log(self.log),
         )
 
     def run_script_stage(self, stage):
@@ -456,7 +455,7 @@ class TestTheConventionsReachTheReviewer:
 
 
 class TestTheExecutorsCostSurvivesTheJourney:
-    """Aider's log → ExecutionResult → state → the durable record.
+    """The loop's usage → ExecutionResult → state → the durable record.
 
     Four defects in this project have been values computed correctly and lost
     in transit, every one of them passing its unit tests on both ends. This is
@@ -465,10 +464,16 @@ class TestTheExecutorsCostSurvivesTheJourney:
     """
 
     def test_it_accumulates_across_a_stage_s_attempts(self, repo, tmp_path):
-        # Each attempt is its own Aider session with its own running total, so
-        # replacing would report a four-attempt stage at the price of one.
-        executor = StubExecutor(repo=repo, edits=[("app.py", "a\n"), ("app.py", "b\n")])
-        executor.log = "Cost: $0.02 message, $0.05 session."
+        # Each attempt prices its own turns, so replacing rather than adding
+        # would report a four-attempt stage at the price of one.
+        class Priced(StubExecutor):
+            def run_agent_stage(self, stage, prompt, history_dir=None,
+                                since_sha="", agent_context=None, feedback=None,
+                                failure_layer=None):
+                self._apply()
+                return ExecutionResult(ok=True, log="", cost_usd=0.05)
+
+        executor = Priced(repo=repo, edits=[("app.py", "a\n"), ("app.py", "b\n")])
         cfg, rt, state = make(repo, tmp_path, executor=executor)
         with_stage(state, rt)
         state.update(nodes.execute(state, rt))
@@ -759,13 +764,18 @@ class TestExecute:
         nodes.execute(state, rt)
         assert (rt.paths.attempt_dir(0, "extract", 2, 0) / "prompt.md").exists()
 
-    def test_feedback_reaches_the_prompt(self, repo, tmp_path):
+    def test_feedback_reaches_the_executor_beside_the_prompt(self, repo, tmp_path):
+        # Beside, not inside. `build_executor_prompt` puts a retry opening at
+        # the head of the string, so folding feedback in would make an attempt
+        # with it differ from one without at character zero — and that string
+        # is the cached prefix. It arrives as its own conversation turn.
         ex = StubExecutor(repo=repo, edits=[("app.py", "x\n")])
         cfg, rt, state = make(repo, tmp_path, executor=ex)
         state = with_stage(state, rt)
         state["review_feedback"] = ["Wrong verb on the route."]
         nodes.execute(state, rt)
-        assert "Wrong verb on the route." in ex.prompts[0]
+        assert "Wrong verb on the route." in "\n".join(ex.feedback[0] or [])
+        assert "Wrong verb on the route." not in ex.prompts[0]
 
     def test_a_review_rejection_asks_for_a_replacement_not_an_addition(
         self, repo, tmp_path
@@ -782,10 +792,12 @@ class TestExecute:
         state["review_feedback"] = ["Wrong verb on the route."]
         state["failure_layer"] = "review"
         nodes.execute(state, rt)
-        prompt = ex.prompts[0]
-        assert "rejected" in prompt
-        assert "replace" in prompt
-        assert "do not repeat the rejected approach" not in prompt.lower()
+        # The node's job is to say *which* failure this was; choosing the
+        # wording is `build_executor_messages`', and is pinned there. Split
+        # because the two get it wrong in different ways: this one by losing
+        # the layer, that one by framing a gate failure as a rejection.
+        assert ex.failure_layers[0] == "review"
+        assert "Wrong verb on the route." in "\n".join(ex.feedback[0] or [])
 
     def test_a_gate_failure_does_not_call_the_work_rejected(self, repo, tmp_path):
         # Measured over one run of 35 stages: this opening fired about a dozen
@@ -800,9 +812,9 @@ class TestExecute:
         state["review_feedback"] = ["Two occurrences were never edited."]
         state["failure_layer"] = "residue"
         nodes.execute(state, rt)
-        prompt = ex.prompts[0]
-        assert "rejected" not in prompt
-        assert "Two occurrences were never edited." in prompt
+        opening = "\n".join(ex.feedback[0] or [])
+        assert "rejected" not in opening
+        assert "Two occurrences were never edited." in opening
 
     def test_a_retry_is_shown_what_the_stage_has_changed_so_far(
         self, repo, tmp_path
@@ -2188,157 +2200,8 @@ class TestResumingIsConsumedNotRemembered:
         assert again["next_hop"] == "plan"
 
 
-class TestAReplyThatNamedAFileLostItsEdits:
-    """The same class as an unapplied edit, one cause further out.
-
-    Aider scans the model's answer for path-shaped words, and when it attaches
-    one it returns before `apply_updates()` — so a reply that carried a correct
-    edit *and* mentioned a file produces an empty tree with a clean exit code.
-    Nothing in the executor's own report distinguishes that from a model that
-    sat on its hands, so the loop told it "you produced no changes at all" and
-    it obligingly wrote the same reply again.
-
-    That is the mistake `unapplied_edit` was added to stop being made about a
-    different cause: precision matters here, because the wrong diagnosis invites
-    the model to repeat what already worked, louder.
-    """
-
-    def test_an_empty_tree_after_an_attach_says_why(self, repo, tmp_path):
-        executor = StubExecutor(repo=repo, edits=[])
-        executor.run_agent_stage = lambda *a, **k: ExecutionResult(
-            ok=True, log="the model replied", attached_files=["bin/rspec"]
-        )
-        cfg, rt, state = make(repo, tmp_path, executor=executor)
-        state = with_stage(state, rt)
-        out = nodes.execute(state, rt)
-
-        assert out["next_hop"] == "execute"
-        feedback = " ".join(out["review_feedback"])
-        assert "bin/rspec" in feedback
-        assert "produced no changes at all" not in feedback
-
-    def test_a_changed_tree_after_an_attach_is_not_a_loss(self, repo, tmp_path):
-        # Aider attaches on the *first* reply of a reflection and applies edits
-        # on a later one, so an attach with work on the tree means the loop
-        # recovered. Reporting it would fail an attempt that succeeded.
-        executor = StubExecutor(repo=repo, edits=[("app.py", "landed\n")])
-
-        def attached_then_edited(stage, prompt, history_dir=None, **kw):
-            executor._apply()
-            return ExecutionResult(
-                ok=True, log="the model replied", attached_files=["bin/rspec"]
-            )
-
-        executor.run_agent_stage = attached_then_edited
-        cfg, rt, state = make(repo, tmp_path, executor=executor)
-        state = with_stage(state, rt)
-        assert nodes.execute(state, rt)["next_hop"] == "verify"
-
-    def test_an_empty_tree_with_no_attach_is_unchanged(self, repo, tmp_path):
-        # The genuine do-nothing case still reaches verify, which owns the
-        # "produced no changes" verdict. This guard must not take it over.
-        executor = StubExecutor(repo=repo, edits=[])
-        executor.run_agent_stage = lambda *a, **k: ExecutionResult(
-            ok=True, log="the model replied"
-        )
-        cfg, rt, state = make(repo, tmp_path, executor=executor)
-        state = with_stage(state, rt)
-        assert nodes.execute(state, rt)["next_hop"] == "verify"
 
 
-class TestAnUnappliedEditOnAChangedTree:
-    """The editor reports blocks it could not apply — including redundant ones.
-
-    Aider names every SEARCH block that did not match, and one reason a block
-    does not match is that the work is already there: verbatim, "the REPLACE
-    lines are already in Gemfile!". A model that emits one good block and two
-    redundant ones lands the change and is recorded as having produced nothing.
-
-    Observed twice on one stage. The gem removal committed its edit, was
-    retried, committed it again, and spent ten to fifteen minutes an attempt
-    redoing finished work — the first time costing the stage its entire budget
-    and producing an escalation whose stated cause was wrong.
-
-    So the tree is asked, not the editor's account of itself.
-    """
-
-    def _executor(self, repo, edits):
-        ex = StubExecutor(repo=repo, edits=edits)
-        ex.ok = False
-        return ex
-
-    def test_a_changed_tree_goes_to_verify(self, repo, tmp_path):
-        executor = self._executor(repo, [("app.py", "the edit landed\n")])
-        cfg, rt, state = make(repo, tmp_path, executor=executor)
-        state = with_stage(state, rt)
-
-        def unapplied(stage, prompt, history_dir=None, **kw):
-            executor._apply()
-            return ExecutionResult(ok=False, log="already in Gemfile", unapplied_edit=True)
-
-        executor.run_agent_stage = unapplied
-        out = nodes.execute(state, rt)
-        assert out["next_hop"] == "verify", (
-            "the gates judge a tree better than the editor judges its own blocks"
-        )
-
-    def test_an_untouched_tree_still_fails(self, repo, tmp_path):
-        # The genuine case: nothing applied, nothing to verify. Unchanged.
-        executor = StubExecutor(repo=repo, edits=[])
-        executor.run_agent_stage = lambda *a, **k: ExecutionResult(
-            ok=False, log="no blocks matched", unapplied_edit=True
-        )
-        cfg, rt, state = make(repo, tmp_path, executor=executor)
-        state = with_stage(state, rt)
-        out = nodes.execute(state, rt)
-        assert out["next_hop"] == "execute"
-        assert "could not apply" in " ".join(out["review_feedback"])
-
-    def test_a_timeout_on_a_dirty_tree_still_fails(self, repo, tmp_path, run_git):
-        """Killed mid-write. The edit is half applied and uncommitted.
-
-        "Was it killed" is the wrong discriminator — the editor commits after
-        applying, so a kill mid-write leaves the tree dirty and a kill while it
-        churns on redundant blocks leaves it clean with commits ahead.
-        """
-        executor = StubExecutor(repo=repo, edits=[("app.py", "half\n")])
-
-        def timed_out(stage, prompt, history_dir=None, **kw):
-            executor._apply()  # writes, does not commit
-            return ExecutionResult(ok=False, log="killed", timed_out=True)
-
-        executor.run_agent_stage = timed_out
-        cfg, rt, state = make(repo, tmp_path, executor=executor)
-        state = with_stage(state, rt)
-        out = nodes.execute(state, rt)
-        assert out["next_hop"] == "execute"
-        assert "timed out" in " ".join(out["review_feedback"])
-
-    def test_a_timeout_on_committed_work_goes_to_verify(
-        self, repo, tmp_path, run_git
-    ):
-        """Killed while churning on blocks it had already applied.
-
-        Observed on two consecutive stages: the edit landed, the editor
-        committed it, and the model kept re-issuing blocks for work already
-        done until the 900s kill. Three attempts and forty-five minutes went on
-        redoing finished work.
-        """
-        executor = StubExecutor(repo=repo, edits=[])
-
-        def committed_then_hung(stage, prompt, history_dir=None, **kw):
-            (repo / "app.py").write_text("the edit landed\n")
-            run_git(repo, "add", "-A")
-            run_git(repo, "commit", "-qm", "editor's own commit")
-            return ExecutionResult(ok=False, log="already applied", timed_out=True)
-
-        executor.run_agent_stage = committed_then_hung
-        cfg, rt, state = make(repo, tmp_path, executor=executor)
-        state = with_stage(state, rt)
-        out = nodes.execute(state, rt)
-        assert out["next_hop"] == "verify", (
-            "a clean tree with commits ahead is finished work, not a half edit"
-        )
 
 
 class TestTheOpeningFailureOutlivesItsConsequences:
@@ -3226,7 +3089,7 @@ class TestTheNativeExecutorsMeasurementsSurviveTheTrip:
         class Measured(StubExecutor):
             def run_agent_stage(
                 self, stage, prompt, history_dir=None, since_sha="",
-                agent_context=None, feedback=None,
+                agent_context=None, feedback=None, failure_layer=None,
             ):
                 self._apply()
                 return ExecutionResult(ok=True, log="", **fields)
@@ -3294,7 +3157,7 @@ class TestTheExecuteLineReportsWhatItPaid:
         class Counted(StubExecutor):
             def run_agent_stage(
                 self, stage, prompt, history_dir=None, since_sha="",
-                agent_context=None, feedback=None,
+                agent_context=None, feedback=None, failure_layer=None,
             ):
                 self._apply()
                 return ExecutionResult(
@@ -3330,7 +3193,7 @@ class TestTheExecuteLineReportsWhatItPaid:
         class NoUsage(StubExecutor):
             def run_agent_stage(
                 self, stage, prompt, history_dir=None, since_sha="",
-                agent_context=None, feedback=None,
+                agent_context=None, feedback=None, failure_layer=None,
             ):
                 self._apply()
                 return ExecutionResult(ok=True, log="", tool_counts={"read_file": 3})

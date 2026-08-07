@@ -47,7 +47,7 @@ def build(repo, stage_overrides=None, executor=None, **cfg_overrides):
         "project_branch": "proj",
         "plan_root": "PLAN.md",
         "test_command": "true",
-        "executor": executor or {"model": "m", "provider": "openai"},
+        "executor": executor or {"model": "m"},
         "planner": {"model": "claude-opus-5"},
         "reviewer": {"model": "gpt-5.5"},
     }
@@ -441,7 +441,7 @@ class TestTheLocatorIsWiredButIsNotATool:
         cfg, stage = build(
             repo,
             executor={
-                "model": "m", "provider": "openai",
+                "model": "m",
                 "semantic_search": {
                     "api_base_env": "TEST_EMBED_BASE",
                     "qdrant_url_env": "TEST_QDRANT",
@@ -535,7 +535,7 @@ class TestTheContextHighWaterMarkAndCostReachTheResult:
         # cycle can load less. Neither the last nor the first is the bound.
         cfg, stage = build(
             repo, {"must_not_remain": ["class"]},
-            executor={"model": "m", "provider": "openai", "max_cycles": 3},
+            executor={"model": "m", "max_cycles": 3},
         )
         out = drive(repo, cfg, stage, self._model(
             [4000, 21000, 7000],

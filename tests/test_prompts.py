@@ -1504,7 +1504,7 @@ class TestTheExecutorSystemPrompt:
 def _exec_cfg(tmp_path, **executor_over):
     from orchestrator.config import parse_config
 
-    executor = {"model": "m", "provider": "openai"}
+    executor = {"model": "m"}
     executor.update(executor_over)
     return parse_config({
         "target_repo": str(tmp_path),
@@ -1645,3 +1645,52 @@ class TestTheReadListIsDescribedAsAHintNotAFence:
 
         stage = Stage(id="s", instruction="do", edit_files=["a.py"])
         assert "drawn against" not in build_executor_prompt(stage, _exec_cfg(tmp_path))
+
+
+class TestARetryIsFramedByWhatFailed:
+    """A rejection and a gate failure ask for opposite things.
+
+    A review rejection means something in the work is *wrong* and has to be
+    replaced. A gate failure — `residue` especially — means the sweep is
+    *incomplete*, and repeating the approach on what was missed is the fix.
+    Measured over one 35-stage run in which the reviewer rejected nothing at
+    all: the rejection wording fired about a dozen times and was wrong every
+    time, and on the seven residue failures it told the executor to do the
+    opposite of what the feedback below it asked for.
+
+    The framing lived inside `build_executor_prompt`'s single string, which the
+    subprocess editor received whole. When feedback moved to its own
+    conversation turn — so the cached prefix stays identical between attempts —
+    the opening was left behind with the string. Bare feedback after a
+    rejection reads as "add this", which is exactly what the review opening
+    exists to prevent.
+    """
+
+    def _turns(self, tmp_path, **kw):
+        from orchestrator.config import Stage
+        from orchestrator.prompts import build_executor_messages
+
+        cfg = _exec_cfg(tmp_path)
+        stage = Stage(id="s", instruction="do", edit_files=["a.py"])
+        msgs = build_executor_messages(stage, cfg, "TASK", **kw)
+        return [
+            c["text"] for m in msgs for c in m["content"] if m["role"] == "user"
+        ]
+
+    def test_a_review_rejection_asks_for_a_replacement(self, tmp_path):
+        turns = self._turns(tmp_path, feedback=["Wrong verb."], failure_layer="review")
+        joined = "\n".join(turns)
+        assert "rejected" in joined
+        assert "replace" in joined
+        assert "Wrong verb." in joined
+
+    def test_a_gate_failure_is_not_called_a_rejection(self, tmp_path):
+        turns = self._turns(tmp_path, feedback=["Two sites were missed."], failure_layer="residue")
+        joined = "\n".join(turns)
+        assert "rejected" not in joined
+        assert "did not pass a check" in joined
+        assert "Two sites were missed." in joined
+
+    def test_no_feedback_adds_no_opening(self, tmp_path):
+        joined = "\n".join(self._turns(tmp_path))
+        assert "rejected" not in joined and "did not pass a check" not in joined

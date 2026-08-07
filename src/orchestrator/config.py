@@ -13,8 +13,8 @@ return.
 because a human skims a sixty-line YAML once, motivated to start a run.
 
 Structural validation is everything checkable from the file alone. The checks
-that execute something — clean tree, test command actually passes, Aider's
-flags, endpoint reachability — live in `preflight`.
+that execute something — clean tree, test command actually passes, endpoint
+reachability — live in `preflight`.
 """
 
 from __future__ import annotations
@@ -39,9 +39,8 @@ _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 # definition of the partition.
 # `kind` is deliberately absent: a `script` stage needs an operator-authored
 # `command`, and with no static stage list there is nowhere for the operator to
-# put one. Every planner-derived stage is an `agent` stage; mechanical
-# transforms are expressed as an instruction to write and run a script, which
-# Aider does inside its own edit loop.
+# put one — which makes script stages unreachable in practice. Every
+# planner-derived stage is an `agent` stage.
 PLANNER_WRITABLE_FIELDS = frozenset(
     {
         "id",
@@ -164,58 +163,17 @@ class _EndpointConfig(_Strict):
 
 class ExecutorConfig(_EndpointConfig):
     model: str
-    # Which editor runs a stage. `aider` drives the subprocess; `openai` drives
-    # the in-process loop against the Responses API.
-    #
-    # Defaulting to `aider` while both exist is the whole point of having the
-    # switch: the new path can be run against a real project, on real stages,
-    # before anything is deleted. A rewrite of the component whose failure
-    # modes are the best documented in this repository should not become the
-    # only option on the strength of its unit tests.
-    provider: Literal["aider", "openai"] = "aider"
     api_key_env: str | None = None
-    # Passed to aider as `--lint-cmd`, which is narrower than it reads. Aider's
-    # linter calls `filename_to_lang` first and returns before consulting this
-    # command whenever the file's language cannot be named — grep-ast has no
-    # parser for ERB, YAML, Haml or Markdown, so those are never linted at all,
-    # whatever this says. Prefixing a language does not help either: the lookup
-    # is `self.languages.get(lang)` with `lang` still None.
-    #
-    # So it suits a formatter for a recognised source language — `rubocop -a`,
-    # `ruff check --fix`, which is what `discover` infers — and cannot carry a
-    # guarantee that has to hold for every file. Trailing whitespace was one
-    # such guarantee; it lives in `advance` instead.
-    lint_command: str | None = None
-    # Aider's default varies by model and is usually right for hosted ones. A
-    # local model frequently cannot produce a valid diff — the first real run
-    # ended in "the LLM did not conform to the edit format" — and `whole` trades
-    # tokens for reliability. Left unset so Aider's per-model default applies.
-    edit_format: str | None = None
-    # A path to Aider's own metadata JSON, passed through unchanged. litellm has
-    # no entry for a local model id, so without this Aider guesses at the context
-    # window and warns about it. A path rather than the values themselves: the
-    # numbers describe the endpoint, not the project, and they are Aider's
-    # schema to define rather than ours to mirror.
-    model_metadata_file: str | None = None
-    # Repo map off by default: stages declare the files they need, and an
-    # unscoped map swamps a local model's context before the task is stated.
-    map_tokens: int = 0
-    # Aider's own default is off, and so is this. Caching is a property of the
+    # Caching is a property of the
     # endpoint rather than of the work: against a local server that prices
     # nothing and caches nothing it buys nothing and adds a keepalive ping
     # loop; against a hosted model it is most of the saving. The operator knows
     # which they have — this file already carries every other fact about where
     # the executor runs.
-    # Passed to Aider as `--reasoning-effort`, which it forwards as the API
-    # parameter of the same name. Unset by default: a local model that does not
-    # reason has nothing to do with it, and Aider omits the flag entirely.
+    # The API parameter of the same name. Unset by default: a model that does
+    # not reason has nothing to do with it, and the field is then omitted from
+    # the request entirely rather than sent empty.
     reasoning_effort: str | None = None
-    cache_prompts: bool = False
-    # Aider pings at five-minute intervals to hold the cache open. A stage's
-    # attempts are separated by a scoped suite and sometimes a full one, which
-    # is long enough for a window to lapse between the two attempts that would
-    # have shared it. Meaningless without `cache_prompts`, and ignored there.
-    cache_keepalive_pings: int = 0
     # Ceiling on the total size of a stage's `read_files`, in lines. Unset means
     # no ceiling, which is the old behaviour.
     #
@@ -235,16 +193,6 @@ class ExecutorConfig(_EndpointConfig):
     #
     # `edit_files` is never trimmed — that is the task, not context.
     max_read_lines: int | None = None
-    # Let Aider run the project's tests inside its own edit loop, and try to
-    # repair what fails. Off by default, and the default is load-bearing: the
-    # orchestrator already runs the tests at a layer that knows about the
-    # stage's scope and about suite flakes, and Aider's loop knows neither. On
-    # the first real stage it turned a 90-second edit into a 609-second attempt
-    # spent trying to fix two order-dependent specs outside the stage's box.
-    auto_test: bool = False
-    # Aider's flag surface changes between releases. This is the escape hatch
-    # for correcting it without waiting on a code change.
-    extra_args: list[str] = []
 
     # --- the in-process executor ----------------------------------------
     #
@@ -841,7 +789,6 @@ class ProjectConfig(_Strict):
             ("scoped_test_command", self.scoped_test_command),
             ("directory_test_command", self.directory_test_command),
             ("auto_test_command", self.auto_test_command),
-            ("executor.lint_command", self.executor.lint_command),
         ):
             if command:
                 out.append((label, command))
@@ -891,9 +838,46 @@ def denylist_violations(commands: list[tuple[str, str]]) -> list[str]:
     return problems
 
 
+# Settings that existed only to build Aider's argv, and went with it. Kept as
+# a list rather than deleted silently because `extra="forbid"` renders a
+# retired key as "Extra inputs are not permitted" — the same message a typo
+# gets, against a key the operator set deliberately and that worked yesterday.
+# The failure is right and only the wording is wrong; a config that *ignored*
+# them would be worse, leaving someone believing `map_tokens` still bounds
+# something.
+RETIRED_EXECUTOR_KEYS: dict[str, str] = {
+    "provider": "there is one executor now; the in-process client is not optional",
+    "lint_command": "declare it in `stage_defaults.checks`, which the loop runs",
+    "edit_format": "edits are structured tool calls, not a text format",
+    "model_metadata_file": "pricing comes from the public rate table",
+    "map_tokens": "there is no repo map; the executor reads what it asks for",
+    "cache_prompts": "prompt caching is always on",
+    "cache_keepalive_pings": "nothing to keep alive between calls",
+    "auto_test": "the loop always tests; see `max_cycles`",
+    "extra_args": "there is no subprocess to pass arguments to",
+}
+
+
+def _retired_key_problems(data: dict) -> list[str]:
+    executor = data.get("executor")
+    if not isinstance(executor, dict):
+        return []
+    return [
+        f"executor.{key}: retired when aider was removed — {why}"
+        for key, why in RETIRED_EXECUTOR_KEYS.items()
+        if key in executor
+    ]
+
+
 def parse_config(data: dict) -> ProjectConfig:
     if not isinstance(data, dict):
         raise ConfigError(["config must be a YAML mapping"])
+
+    # Before validation, so a retired key is explained rather than reported as
+    # an unknown one. A genuine typo still falls through to pydantic.
+    retired = _retired_key_problems(data)
+    if retired:
+        raise ConfigError(retired)
 
     try:
         cfg = ProjectConfig.model_validate(data)
