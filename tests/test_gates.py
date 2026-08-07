@@ -370,3 +370,53 @@ class TestTheLoopDoesNotDoubleTheSuite:
             Git(repo).head_sha(), for_loop=False,
         )
         assert counter.read_text() == "xx", "the gate stopped adjudicating flakes"
+
+
+class TestADeletedSpecIsNotPutInItsOwnTestCommand:
+    """A command that cannot pass by construction is worse than no command.
+
+    The gate builds its selection from the diff, and a deleted file is in the
+    diff. A stage whose job is to fold one spec into another and delete it
+    therefore produced a command naming the file it had just removed.
+
+    What makes this worth a test rather than a one-line guard is how it
+    surfaced: the executor was handed the impossible command, worked out that
+    no code change could satisfy it, said so and stopped — exactly what it is
+    asked to do — and the run spent two planner revisions redrawing a stage
+    that was correct all along.
+    """
+
+    def test_a_deleted_spec_is_dropped_from_the_gates_selection(self, repo):
+        (repo / "spec").mkdir(exist_ok=True)
+        (repo / "spec" / "old_spec.rb").write_text("describe\n")
+        (repo / "spec" / "kept_spec.rb").write_text("describe\n")
+        g = Git(repo)
+        g.commit_all("specs")
+        sha = g.head_sha()
+
+        (repo / "spec" / "old_spec.rb").unlink()
+        (repo / "spec" / "kept_spec.rb").write_text("describe :more\n")
+        g.commit_all("fold one spec into the other")
+
+        cfg, stage = build(repo, scoped_test_command="rspec {paths}")
+        paths = resolve_test_paths(stage, cfg, g, sha, for_loop=False)
+
+        assert "spec/kept_spec.rb" in paths
+        assert "spec/old_spec.rb" not in paths, (
+            "a deleted spec in the command makes it unable to pass"
+        )
+
+    def test_the_surviving_spec_still_reaches_the_command(self, repo):
+        # The guard must not be so eager that a consolidation runs nothing.
+        (repo / "spec").mkdir(exist_ok=True)
+        (repo / "spec" / "kept_spec.rb").write_text("describe\n")
+        g = Git(repo)
+        g.commit_all("spec")
+        sha = g.head_sha()
+        (repo / "spec" / "kept_spec.rb").write_text("describe :more\n")
+        g.commit_all("edit")
+
+        cfg, stage = build(repo, scoped_test_command="rspec {paths}")
+        assert resolve_test_command(stage, cfg, g, sha, for_loop=False) == (
+            "rspec spec/kept_spec.rb"
+        )

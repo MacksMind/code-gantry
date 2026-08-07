@@ -188,7 +188,23 @@ def resolve_test_paths(
 
     if not for_loop and git is not None:
         changed = git.diff_names(since_sha)
-        paths.extend(p for p in changed if matches_any(p, cfg.test_file_patterns))
+        paths.extend(
+            p
+            for p in changed
+            if matches_any(p, cfg.test_file_patterns)
+            # A *deleted* spec is in the diff too, and naming it in the command
+            # makes that command unable to pass by construction. Observed live:
+            # a stage whose whole job was to fold one spec into another and
+            # delete it produced `rspec godata_spec.rb godata_users_spec.rb`,
+            # the second being the file it had just been told to remove. The
+            # executor read that correctly, said no code change could satisfy
+            # it, and stopped — which is right, and cost two planner revisions
+            # before anyone looked at the command.
+            #
+            # `check_new_tests` already makes this distinction for the same
+            # reason and in the same words; the selector never got it.
+            and (cfg.target_repo / p).exists()
+        )
 
     for raw in stage.test_paths:
         path = (raw or "").strip()
