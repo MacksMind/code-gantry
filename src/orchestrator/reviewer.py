@@ -27,7 +27,6 @@ means guess, and it never means crash four stages into a run.
 
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
@@ -35,7 +34,16 @@ from typing import Literal, Protocol
 from pydantic import BaseModel
 
 from orchestrator.config import ReviewerConfig
-from orchestrator.plannertools import call_detail, dispatch, openai_tool_schemas
+from orchestrator.openaiclient import (
+    TokenUsage,
+    describe_call as _describe,
+    extract_usage as _extract_usage,
+    merge_usage as _merge_usage,
+    refusal as _refusal,
+    tool_request as _tool_request,
+    transport_errors as _transport_errors,
+)
+from orchestrator.plannertools import dispatch, openai_tool_schemas
 from orchestrator.retry import Backoff, with_provider_retry
 
 Verdict = Literal["approved", "rework", "blocked"]
@@ -94,22 +102,6 @@ class ReviewVerdict(BaseModel):
 
 
 @dataclass
-class TokenUsage:
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    cached_tokens: int = 0
-    # Last, so positional construction keeps working. Written to cache but not
-    # read back: billed above base rate, so a run that writes on every call and
-    # reads on none is paying a premium for nothing — which is exactly what
-    # gpt-5.6-sol was measured doing, six calls, ~55k written each, zero read.
-    cache_write_tokens: int = 0
-
-    @property
-    def uncached_prompt_tokens(self) -> int:
-        return max(self.prompt_tokens - self.cached_tokens, 0)
-
-
-@dataclass
 class ReviewOutcome:
     verdict: Verdict
     summary: str
@@ -156,24 +148,6 @@ class ReviewerClient(Protocol):
 
 def _blocked(reason: str) -> ReviewOutcome:
     return ReviewOutcome(verdict="blocked", summary=reason, failed=True)
-
-
-def _transport_errors() -> tuple[type[BaseException], ...]:
-    """Exception types a transient failure can arrive as.
-
-    `APITimeoutError` subclasses `APIConnectionError`, so one entry covers
-    both. Resolved lazily and degrading to no retrying, matching how the
-    SDK is imported everywhere else here.
-
-    `APIStatusError` covers everything the server did answer, and needs
-    `_is_transient` behind it to separate "come back later" from "your
-    request was wrong".
-    """
-    try:
-        from openai import APIConnectionError, APIStatusError
-    except ImportError:  # pragma: no cover - the SDK is a hard dependency
-        return ()
-    return (APIConnectionError, APIStatusError)
 
 
 class OpenAIReviewer:
@@ -351,64 +325,6 @@ class OpenAIReviewer:
         )
 
 
-def _tool_request(item) -> tuple[str, dict]:
-    """Name and arguments from one `function_call` output item.
-
-    Flat on the Responses API — `name` and `arguments` sit on the item itself
-    rather than under a nested `function` object as they do on chat
-    completions.
-
-    Arguments arrive as a JSON *string* rather than an object, and a model can
-    emit one that does not parse. That is a bad request, not a dead review — an
-    empty dict reaches `dispatch`, which answers with a readable refusal the
-    reviewer can act on.
-    """
-    name = getattr(item, "name", "") or ""
-    raw = getattr(item, "arguments", "") or "{}"
-    try:
-        args = json.loads(raw)
-    except (TypeError, ValueError):
-        return name, {}
-    return name, args if isinstance(args, dict) else {}
-
-
-def _refusal(response) -> str:
-    """The refusal text, if the model declined.
-
-    A refusal is a content part inside an output message rather than a field on
-    the response, so it has to be looked for. Missing it would let `None` reach
-    the parsed check and be reported as an unparsable verdict — true, but not
-    the diagnosis.
-    """
-    for item in getattr(response, "output", None) or []:
-        for part in getattr(item, "content", None) or []:
-            if getattr(part, "type", "") == "refusal":
-                return getattr(part, "refusal", "") or "no reason given"
-    return ""
-
-
-def _describe(name: str, args: dict) -> str:
-    """One tool call, rendered for the log and the artifact."""
-    detail = call_detail(args)
-    return f"{name}({detail})" if detail else name
-
-
-def _merge_usage(left: TokenUsage, right: TokenUsage) -> TokenUsage:
-    """Totals across the turns of one review.
-
-    A tool loop bills once per turn, so the single-call reading understates what
-    a review cost by however many times it looked at something. Summing here is
-    what keeps `report.md` honest — the economic argument for splitting the
-    models depends on that number staying true.
-    """
-    return TokenUsage(
-        prompt_tokens=left.prompt_tokens + right.prompt_tokens,
-        completion_tokens=left.completion_tokens + right.completion_tokens,
-        cached_tokens=left.cached_tokens + right.cached_tokens,
-        cache_write_tokens=left.cache_write_tokens + right.cache_write_tokens,
-    )
-
-
 def make_reviewer(
     cfg: ReviewerConfig, target_repo=None, log=None
 ) -> ReviewerClient:
@@ -461,39 +377,6 @@ def _build_openai_client(cfg: ReviewerConfig):
         base_url=cfg.resolve_api_base(),
         timeout=cfg.request_timeout_seconds,
         max_retries=cfg.max_retries,
-    )
-
-
-def _extract_usage(usage) -> TokenUsage:
-    """Read what the provider reported, tolerating absent fields.
-
-    The Responses API names these `input_tokens` and `output_tokens`, with the
-    cache figures under `input_tokens_details`. The chat-completions names are
-    still read as a fallback so a stub or an older shape does not silently
-    report zero — a usage of zero is indistinguishable from a free call, and
-    the economic argument for splitting the models depends on this number
-    staying true.
-    """
-    if usage is None:
-        return TokenUsage()
-
-    details = getattr(usage, "input_tokens_details", None) or getattr(
-        usage, "prompt_tokens_details", None
-    )
-    prompt = getattr(usage, "input_tokens", None)
-    if prompt is None:
-        prompt = getattr(usage, "prompt_tokens", 0)
-    completion = getattr(usage, "output_tokens", None)
-    if completion is None:
-        completion = getattr(usage, "completion_tokens", 0)
-
-    return TokenUsage(
-        prompt_tokens=prompt or 0,
-        completion_tokens=completion or 0,
-        cached_tokens=(getattr(details, "cached_tokens", 0) or 0) if details else 0,
-        cache_write_tokens=(
-            (getattr(details, "cache_write_tokens", 0) or 0) if details else 0
-        ),
     )
 
 
