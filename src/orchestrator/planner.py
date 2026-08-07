@@ -1122,8 +1122,14 @@ the plan asserted the opposite, and the false claim gated five items across two
 streams until a human found it.
 
 So spend a read on the premise that stops you, not only on the one you are
-about to act on. If a check shows a plan document is wrong, say so in
-`reasoning` and draw against what the repository actually contains.\
+about to act on.
+
+**When a check shows a plan document is wrong, record it as a plan note.** Not
+in `reasoning` — that is read by a human reviewing this one call, and every
+call after this one starts with no memory of it. A plan note is the thing that
+survives to the next call, so it is the difference between verifying a premise
+once and verifying it again on every decision for the rest of the run. Then
+draw against what the repository actually contains.\
 """
 )
 

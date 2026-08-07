@@ -889,7 +889,17 @@ def build_planner_messages(
             "repository, not work to do** — nothing here is a plan item, and "
             "no stage is drawn from it. Where it contradicts a plan document "
             "about what is possible, it is describing the machine and the "
-            "plan is describing intent; say so in `reasoning`.\n\n"
+            # `reasoning` was the wrong channel and this is the incident that
+            # argues it: a capability recorded here, denied by the plan, gated
+            # five items until a human found it. Reasoning reaches `status.md`
+            # and the planner is fed a 4,000-character tail of that file — under
+            # ten decisions of history — so a finding parked there ages out and
+            # the contradiction is rediscovered, or is not. A plan note is
+            # appended to the progress log, which rides in the cached prefix and
+            # is read on every later call.
+            "plan is describing intent; record that as a plan note, which "
+            "survives to the next call, rather than in `reasoning`, which "
+            "does not.\n\n"
             # The executor holds this document too, verbatim, in its own
             # cached prefix. A convention restated in `instruction` lands in
             # the per-stage region — re-sent on every attempt of the stage — to

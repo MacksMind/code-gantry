@@ -1959,3 +1959,57 @@ class TestTheReviewerJudgesSecurityAndTestsThatCannotFail:
             "activerecord", "permit list", "gemfile",
         ):
             assert word not in blob, word
+
+
+class TestAVerifiedFindingGoesWhereItSurvives:
+    """A check worth running once must not be run once per decision.
+
+    Every planner call starts a fresh conversation — `_attempt` does
+    `conversation = list(messages)` — so there is no continuation between
+    stages and nothing the planner concluded last time is in front of it now.
+    Whether a verification happens once or eighty times is therefore decided
+    entirely by which field the finding was written to.
+
+    `reasoning` reaches `status.md` as the entry's `**Why:**` line, and the
+    planner is fed the last 4,000 characters of that file. At a few hundred
+    characters an entry that is under ten decisions of history, so a finding
+    parked there ages out well inside a long run and the premise gets checked
+    again. `plan_notes` is appended to the progress log, which is spliced into
+    the plan block in the cached prefix and read on every subsequent call —
+    and `PlannerResponse.plan_notes` says so in its own description: "only
+    these notes are written down and survive to the next run."
+
+    So the two places that ask the planner to record a wrong plan document
+    have to name that field. Both said `reasoning`, which is the channel that
+    forgets.
+    """
+
+    def test_the_blocking_claim_section_routes_to_a_plan_note(self):
+        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+
+        section = PLANNER_SYSTEM_PROMPT[
+            PLANNER_SYSTEM_PROMPT.index("## Check the claim that stops you"):
+        ]
+        assert "record it as a plan note" in section
+        # Naming the wrong channel is fine and is the point; routing to it is
+        # not.
+        assert "say so in `reasoning`" not in section
+
+    def test_the_conventions_contradiction_routes_to_a_plan_note(self):
+        text = messages_leading("## Scoping\n\nAlways scope by tenant.")
+        assert "plan note" in text
+        assert "say so in `reasoning`" not in text
+
+    def test_the_field_that_forgets_is_named_as_such(self):
+        # Not a bare redirection: the planner has to know why, or the next
+        # edit to either passage puts it back.
+        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+
+        assert "survives to the next call" in PLANNER_SYSTEM_PROMPT
+
+
+def messages_leading(conventions):
+    messages = build_planner_messages(
+        _cfg(), a_plan(), [], agent_context=conventions
+    )
+    return messages[0]["content"][0]["text"]
