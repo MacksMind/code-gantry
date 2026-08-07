@@ -181,3 +181,42 @@ class TestDispatch:
     def test_an_unknown_tool_is_reported_not_raised(self, pair):
         reader, editor, _ = pair
         assert "unknown tool" in dispatch("nope", {}, reader, editor, None)
+
+
+class TestTheSemanticToolWarnsThatItLags:
+    """The executor's own description, not the planner's.
+
+    One paragraph separates them and it is the one that matters. Index lag
+    never arose for the other two roles because both read a tree nobody is
+    editing — the planner before a stage starts, the reviewer after it has
+    committed. The executor is the first caller whose own uncommitted work is
+    missing from what it is shown, and the misses it produces are exactly the
+    refusals this session spent its time on.
+    """
+
+    def _tool(self):
+        return next(
+            t for t in tool_schemas(object()) if t["name"] == "semantic_search"
+        )
+
+    def test_it_says_the_index_is_behind_the_working_tree(self):
+        text = self._tool()["description"]
+        assert "out of date" in text
+        assert "edited in this session" in text
+        assert "several commits behind" in text
+
+    def test_it_forbids_quoting_a_snippet_into_an_edit(self):
+        text = self._tool()["description"]
+        assert "Never quote a snippet" in text
+        assert "read_file" in text
+
+    def test_it_is_not_the_planners_description(self):
+        from orchestrator.plannertools import SEMANTIC_TOOL
+
+        assert self._tool()["description"] != SEMANTIC_TOOL["description"]
+        # Same tool to the model either way, so name and schema must not fork.
+        assert self._tool()["name"] == SEMANTIC_TOOL["name"]
+        assert self._tool()["input_schema"] is SEMANTIC_TOOL["input_schema"]
+
+    def test_it_is_absent_when_no_index_is_configured(self):
+        assert "semantic_search" not in {t["name"] for t in tool_schemas(None)}

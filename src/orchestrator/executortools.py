@@ -117,9 +117,39 @@ EDIT_TOOLS: list[dict[str, Any]] = [
 ]
 
 
+SEMANTIC_TOOL_FOR_EDITING: dict[str, Any] = {
+    "name": SEMANTIC_TOOL["name"],
+    "description": (
+        "Find code by meaning when you do not know what it is called. Good for "
+        "locating the place to work on; useless as a source of text.\n\n"
+        "**What it returns is out of date.** The index is rebuilt from commits, "
+        "so it does not contain anything you have edited in this session, and "
+        "it may be several commits behind the working tree besides. The "
+        "snippets it shows you are the file as it *was*.\n\n"
+        "So treat every result as a pointer: take the path, then `read_file` "
+        "it to see what is there now. Never quote a snippet from here into an "
+        "`edit` — it is the single most reliable way to have that edit "
+        "refused, because you will be quoting bytes that have since changed or "
+        "that you yourself have already replaced.\n\n"
+        "It is also not an existence check. Asked about something with no "
+        "matches it returns the nearest things it has, which look like answers. "
+        "`list_files` and `search` answer existence; this does not."
+    ),
+    "input_schema": SEMANTIC_TOOL["input_schema"],
+}
+
+
 def tool_schemas(semantic: SemanticSearch | None) -> list[dict[str, Any]]:
-    """Everything the executor may call. Semantic search only when configured."""
-    read = [*READ_TOOLS, SEMANTIC_TOOL] if semantic else list(READ_TOOLS)
+    """Everything the executor may call. Semantic search only when configured.
+
+    Its description is the executor's own rather than the planner's, and the
+    difference is one paragraph that matters: the index lags. That never
+    arose for the other two roles because both read a tree nobody is editing —
+    the planner before a stage starts, the reviewer after it has committed. The
+    executor is the first caller whose own uncommitted work is missing from
+    what it is being shown.
+    """
+    read = [*READ_TOOLS, SEMANTIC_TOOL_FOR_EDITING] if semantic else list(READ_TOOLS)
     return [*read, *EDIT_TOOLS]
 
 

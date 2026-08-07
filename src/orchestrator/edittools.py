@@ -93,10 +93,18 @@ def nearest_text(
     the model is writing the file as it believes it to be. What it needs back
     is the bytes.
 
-    Anchored on the first non-blank line rather than fuzzy-matched whole,
-    because that line matched exactly modulo indentation in both cases and an
-    anchor gives a location rather than a similarity score. `difflib` is the
-    fallback for when it does not.
+    Two fallbacks, in order, and worth naming apart because the words are
+    already spoken for: `search` and `semantic_search` are tools the model
+    calls, while neither of these is reachable by it.
+
+    **The anchor fallback** works from the model's own text — the first
+    non-blank line, stripped, then a `difflib` scan. That line matched exactly
+    modulo indentation in both real misses, and an anchor gives a location
+    rather than a similarity score.
+
+    **The semantic fallback** runs only when the anchor one has failed, and
+    works from text the index holds instead. See below for why that is the
+    stronger key at that point.
 
     **This never repairs the edit.** It returns text for the model to read; the
     edit is still refused and the next `old_string` must match exactly. The
@@ -128,7 +136,7 @@ def nearest_text(
     if at is not None and ratio >= NEAREST_MIN_RATIO:
         return _window(lines, at, span)
 
-    # Last resort: a locator, when one is configured.
+    # The semantic fallback, when an index is configured.
     #
     # It returns text an index believes belongs to this file. That text is
     # stale — the index is rebuilt on a commit hook, so it can be several edits

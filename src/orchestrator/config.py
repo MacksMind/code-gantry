@@ -271,6 +271,17 @@ class ExecutorConfig(_EndpointConfig):
     # and an operator who wants the default plus additions can start from the
     # default — `orchestrator prompts executor` prints it.
     system_prompt_file: str | None = None
+    # Same shape as the planner's and the reviewer's, and kept separate for the
+    # same reason: the three ask different questions of the index and whoever
+    # gives one a different collection should be able to say so here.
+    #
+    # The executor does *not* get semantic search as a tool. This is consulted
+    # only when an edit fails to match, to locate the text it meant — see
+    # `edittools.nearest_text`. The index lags the working tree by however many
+    # edits and commits have happened since it was built, which is survivable
+    # for something choosing where to look and not for something quoting bytes
+    # exactly.
+    semantic_search: dict | None = None
     # The same read budget the planner and reviewer carry, written here as its
     # own settings rather than shared: the three ask different questions, and
     # whoever decides the executor needs a different budget should be able to

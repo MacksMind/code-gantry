@@ -356,11 +356,63 @@ class RepoReader:
         if self.at_sha:
             prefix = self.at_sha + ":"
             hits = [h[len(prefix):] if h.startswith(prefix) else h for h in hits]
+        hits += self._search_new_files(pattern, target)
         hits, clipped = self._clip(hits)
         if clipped:
             hits = hits + ["... truncated; narrow the pattern or the path"]
         self._spend("search", f"{pattern} in {path_glob or '.'}", "\n".join(hits))
         return hits
+
+    def _search_new_files(self, pattern: str, target: str) -> list[str]:
+        """The same search over files this caller created but has not committed.
+
+        `git grep` reads the working tree, so an *edit* to a tracked file is
+        found — but a newly created one is untracked and invisible to it. The
+        executor creates specs and then cannot find anything in them until the
+        cycle's commit. `read_file` was relaxed for exactly this and `search`
+        was not, which is the same asymmetry `gates.py` exists to prevent, one
+        layer down.
+
+        Scoped rather than filtered. `git grep --untracked` on its own would
+        walk every untracked file and leave us discarding matches afterwards —
+        and on a repository with a large ignored tree that means looking at a
+        great deal we have no business reading, then throwing it away. So the
+        in-scope set is computed first and passed as an explicit pathspec, and
+        when it is empty — the common case — no second search runs at all.
+
+        `--exclude-standard` keeps ignored files out, but the allowlist is what
+        makes this safe rather than that flag: an untracked file that nobody
+        ignored is still not readable unless the stage may write it.
+        """
+        if self.at_sha or not self.writable_globs:
+            # Pinned to a commit there is no working tree to consider, and a
+            # caller with no write scope has created nothing.
+            return []
+        try:
+            out = self.git._out("ls-files", "--others", "--exclude-standard")
+        except GitError:  # pragma: no cover - a broken repo fails louder elsewhere
+            return []
+
+        candidates = [
+            p for p in out.splitlines()
+            if p.strip() and matches_any(p.strip(), self.writable_globs)
+        ]
+        if not candidates:
+            return []
+
+        for flavour in ("-P", "-E"):
+            proc = self.git._run(
+                "grep", "-n", "-I", "--no-color", "--untracked", flavour,
+                "-e", pattern, "--", *candidates,
+                check=False,
+            )
+            if proc.returncode in (0, 1):
+                break
+            if "-P" not in (proc.stderr or "") and flavour == "-P":
+                break
+        if proc.returncode not in (0, 1):
+            return []
+        return [line for line in proc.stdout.splitlines() if line.strip()]
 
     def git_show(self, ref: str, path: str) -> str:
         """A file as it stood at a ref."""

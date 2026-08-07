@@ -389,3 +389,46 @@ class TestTheExecutorCanReadWhatItMayWrite:
         r.writable_globs = ["app/**", "spec/**"]
         with pytest.raises(ToolError, match="not tracked"):
             r.read_file(".agent.env")
+
+
+class TestSearchSeesWhatThisCallerJustCreated:
+    """`git grep` reads the working tree but only for *tracked* files.
+
+    An edit to a tracked file is found; a newly created one is invisible until
+    the commit. The executor writes a spec and then cannot find anything in it,
+    which is the same gap `read_file` had — fixed there hours before this one,
+    and not here, which is the asymmetry the shared-gate module exists to stop.
+    """
+
+    def test_an_untracked_file_in_scope_is_searched(self, repo):
+        (repo / "spec" / "models" / "new_spec.rb").write_text(
+            "describe Order do\n  it 'does the needful' do\n  end\nend\n"
+        )
+        r = reader(repo)
+        r.writable_globs = ["spec/**"]
+        hits = r.search("does the needful")
+        assert any("new_spec.rb" in h for h in hits)
+
+    def test_it_is_invisible_without_the_write_scope(self, repo):
+        (repo / "spec" / "models" / "new_spec.rb").write_text("does the needful\n")
+        assert reader(repo).search("does the needful") == []
+
+    def test_an_untracked_file_outside_the_scope_stays_invisible(self, repo):
+        # The allowlist is the safety, not `--exclude-standard`: a file nobody
+        # ignored is still not readable unless the stage may write it.
+        (repo / "elsewhere.rb").write_text("does the needful\n")
+        r = reader(repo)
+        r.writable_globs = ["spec/**"]
+        assert r.search("does the needful") == []
+
+    def test_an_ignored_file_stays_invisible_even_inside_the_scope(self, repo):
+        # `.agent.env` is gitignored and holds exactly what must not reach a
+        # cloud API. A wide write scope must not expose it.
+        r = reader(repo)
+        r.writable_globs = ["**"]
+        assert r.search("AWS_ACCOUNT_ID") == []
+
+    def test_tracked_files_still_answer_as_before(self, repo):
+        r = reader(repo)
+        r.writable_globs = ["spec/**"]
+        assert len(r.search(r"render text:")) == 2

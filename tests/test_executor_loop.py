@@ -37,7 +37,7 @@ def repo(tmp_path):
     return r
 
 
-def build(repo, stage_overrides=None, **cfg_overrides):
+def build(repo, stage_overrides=None, executor=None, **cfg_overrides):
     from orchestrator.config import Stage
 
     data = {
@@ -46,7 +46,7 @@ def build(repo, stage_overrides=None, **cfg_overrides):
         "project_branch": "proj",
         "plan_root": "PLAN.md",
         "test_command": "true",
-        "executor": {"model": "m", "provider": "openai"},
+        "executor": executor or {"model": "m", "provider": "openai"},
         "planner": {"model": "claude-opus-5"},
         "reviewer": {"model": "gpt-5.5"},
     }
@@ -364,3 +364,65 @@ class TestWhatTheExecutorAskedFor:
         out = ExecutionResult(ok=True)
         _count_tool_use(out, reader, editor)
         assert out.tool_counts == {}
+
+
+class TestTheLocatorIsWiredButIsNotATool:
+    """Consulted when an edit misses; never offered to the model.
+
+    The index lags the working tree by however many edits and commits have
+    happened since it was built. That is survivable for something choosing
+    where to look and not for something quoting bytes exactly, which is why it
+    reaches the editor and not the tool list.
+    """
+
+    def test_no_semantic_tool_is_offered_even_when_configured(self):
+        from orchestrator.executortools import tool_schemas
+
+        names = {t["name"] for t in tool_schemas(None)}
+        assert "semantic_search" not in names
+
+    def test_an_unconfigured_project_gets_no_locator(self, repo):
+        from orchestrator.executorloop import build_loop_parts
+
+        cfg, stage = build(repo)
+        _, editor, _sem = build_loop_parts(stage, cfg, repo)
+        assert editor.locator is None
+
+    def test_a_configured_project_gets_one(self, repo, monkeypatch):
+        # Endpoints arrive by environment variable name, never as literals: a
+        # tailnet host is an identifiable infrastructure value and the config
+        # file is tracked and hashed for approval.
+        from orchestrator.executorloop import build_loop_parts
+
+        monkeypatch.setenv("TEST_EMBED_BASE", "http://embed")
+        monkeypatch.setenv("TEST_QDRANT", "http://qdrant")
+        cfg, stage = build(
+            repo,
+            executor={
+                "model": "m", "provider": "openai",
+                "semantic_search": {
+                    "api_base_env": "TEST_EMBED_BASE",
+                    "qdrant_url_env": "TEST_QDRANT",
+                    "embedding_model": "e", "collection": "c",
+                },
+            },
+        )
+        _, editor, _sem = build_loop_parts(stage, cfg, repo)
+        assert editor.locator is not None
+
+    def test_the_lookup_lands_in_the_ledger_under_its_own_name(self):
+        # It costs an embedding and a query, so it belongs in the attempt's
+        # record — but under a name that does not imply the model asked.
+        from orchestrator.semantic import SemanticSearch, SemanticSearchConfig
+
+        calls = []
+        s = SemanticSearch(
+            SemanticSearchConfig(
+                api_base="http://x", qdrant_url="http://y",
+                embedding_model="e", collection="c",
+            ),
+            calls=calls,
+        )
+        s._search = lambda q: [{"payload": {"path": "a.rb", "content": "TEXT"}}]
+        s.chunks_for("something", "a.rb")
+        assert [c.tool for c in calls] == ["locate"]

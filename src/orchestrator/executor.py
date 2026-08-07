@@ -641,7 +641,9 @@ class Executor:
         from orchestrator.executorclient import OpenAIExecutorModel
         from orchestrator.executorloop import build_loop_parts, run_loop
 
-        reader, editor = build_loop_parts(stage, self.cfg, self.cfg.target_repo)
+        reader, editor, semantic = build_loop_parts(
+            stage, self.cfg, self.cfg.target_repo
+        )
         model = OpenAIExecutorModel(self.cfg.executor, log=self.log)
         kept = set(_within_read_budget(stage.read_files, self.cfg))
 
@@ -662,6 +664,7 @@ class Executor:
             model,
             reader,
             editor,
+            semantic=semantic,
             since_sha=since_sha,
             conversation=conversation,
             # Run-level, not per stage. The provider caps this at 64

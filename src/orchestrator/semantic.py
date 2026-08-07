@@ -221,4 +221,9 @@ class SemanticSearch:
             content = payload.get("content") or ""
             if content.strip():
                 found.append(content)
+        # Recorded as `locate`, not as `semantic_search`. It costs an embedding
+        # and a query like any other lookup, so it belongs in the ledger — but
+        # under its own name, because no model asked for it and a summary
+        # implying one did would misdescribe the attempt.
+        self.calls.append(ToolCall("locate", f"{path}: {text[:60]}", len(found)))
         return found

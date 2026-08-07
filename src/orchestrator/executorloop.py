@@ -242,6 +242,7 @@ def build_loop_parts(stage: Stage, cfg: ProjectConfig, repo: Path):
     chose and the scope gate enforces.
     """
     from orchestrator.repotools import ReadBudget, RepoReader
+    from orchestrator.semantic import SemanticSearch, SemanticSearchConfig
 
     reader = RepoReader(
         Git(repo),
@@ -254,7 +255,21 @@ def build_loop_parts(stage: Stage, cfg: ProjectConfig, repo: Path):
     )
     reader.writable_globs = list(stage.edit_files)
     editor = FileEditor(repo=repo, edit_files=list(stage.edit_files))
-    return reader, editor
+
+    # The index, when one is configured — as a locator for failed edits only,
+    # never as a tool. `editor.calls` is shared so the lookup appears in the
+    # attempt's ledger under its own name rather than vanishing.
+    semantic = None
+    search_cfg = SemanticSearchConfig.from_mapping(cfg.executor.semantic_search)
+    if search_cfg is not None:
+        # One instance for two jobs: the tool the model may call, and the
+        # locator consulted when an edit misses. Sharing `editor.calls` means
+        # both land in the attempt's ledger, distinguished by name — the
+        # model's own lookups as `semantic_search`, the locator's as `locate`.
+        semantic = SemanticSearch(search_cfg, calls=editor.calls)
+        editor.locator = lambda path, want: semantic_locator(semantic, path, want)
+
+    return reader, editor, semantic
 
 
 def semantic_locator(semantic, path: str, want: str) -> list[str]:
