@@ -420,7 +420,6 @@ class Limits(_Strict):
     # fourth.
     max_interventions_without_landing: int = 3
     max_stages: int = 60
-    aider_timeout_seconds: int = 1800
     command_timeout_seconds: int = 3600
     wall_clock_hours: float = 14.0
 
@@ -845,7 +844,8 @@ def denylist_violations(commands: list[tuple[str, str]]) -> list[str]:
 # The failure is right and only the wording is wrong; a config that *ignored*
 # them would be worse, leaving someone believing `map_tokens` still bounds
 # something.
-RETIRED_EXECUTOR_KEYS: dict[str, str] = {
+RETIRED_KEYS: dict[str, dict[str, str]] = {
+    "executor": {
     "provider": "there is one executor now; the in-process client is not optional",
     "lint_command": "declare it in `stage_defaults.checks`, which the loop runs",
     "edit_format": "edits are structured tool calls, not a text format",
@@ -855,18 +855,40 @@ RETIRED_EXECUTOR_KEYS: dict[str, str] = {
     "cache_keepalive_pings": "nothing to keep alive between calls",
     "auto_test": "the loop always tests; see `max_cycles`",
     "extra_args": "there is no subprocess to pass arguments to",
+    },
+    # Per section, because the first version was per executor and the key that
+    # most needed it lived here. `aider_timeout_seconds` was read by nothing,
+    # survived the deletion of Aider entirely, and was still being written into
+    # every config `orchestrator init` drafted — invisible to a guard that only
+    # looked at one block. A field that is declared rather than retired is not
+    # caught by `extra="forbid"` either, since it loads.
+    "limits": {
+        "aider_timeout_seconds": (
+            "there is no subprocess to time out; an attempt is bounded from "
+            "inside the loop by executor.request_timeout_seconds"
+        ),
+    },
 }
+"""Settings that once meant something, and what to use instead.
+
+`extra="forbid"` reports a retired key exactly as it reports a typo, which is
+the wrong answer for an operator who set it deliberately: they need to know
+where the intent moved, not that they misspelled something.
+"""
 
 
 def _retired_key_problems(data: dict) -> list[str]:
-    executor = data.get("executor")
-    if not isinstance(executor, dict):
-        return []
-    return [
-        f"executor.{key}: retired when aider was removed — {why}"
-        for key, why in RETIRED_EXECUTOR_KEYS.items()
-        if key in executor
-    ]
+    problems: list[str] = []
+    for section, keys in RETIRED_KEYS.items():
+        block = data.get(section)
+        if not isinstance(block, dict):
+            continue
+        problems += [
+            f"{section}.{key}: retired when aider was removed — {why}"
+            for key, why in keys.items()
+            if key in block
+        ]
+    return problems
 
 
 def parse_config(data: dict) -> ProjectConfig:

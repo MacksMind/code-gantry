@@ -9,6 +9,7 @@ into a stage.
 import textwrap
 
 import pytest
+from pathlib import Path
 
 from orchestrator.config import (
     PLANNER_WRITABLE_FIELDS,
@@ -730,7 +731,86 @@ class TestRetiredKeysExplainThemselves:
     def test_every_retired_key_is_actually_gone_from_the_model(self):
         # A key listed as retired that still exists would produce a config the
         # loader rejects and the model accepts — the error would be a lie.
-        from orchestrator.config import RETIRED_EXECUTOR_KEYS, ExecutorConfig
+        # Per section since `limits` needed the same guard; see
+        # `TestARetiredLimitIsNamedLikeARetiredExecutorKey`.
+        from orchestrator.config import RETIRED_KEYS, ExecutorConfig
 
         live = set(ExecutorConfig.model_fields)
-        assert not (set(RETIRED_EXECUTOR_KEYS) & live), "listed as retired but still a field"
+        assert not (set(RETIRED_KEYS["executor"]) & live), "still a field"
+
+
+class TestARetiredLimitIsNamedLikeARetiredExecutorKey:
+    """`limits` needed the same mechanism, and could not reach it.
+
+    `aider_timeout_seconds` lived on `Limits`, not `ExecutorConfig`, so
+    `RETIRED_EXECUTOR_KEYS` could never have caught it — and it survived the
+    deletion of Aider entirely: read by nothing, still declared, and still
+    written into every config `orchestrator init` drafts. A field that is
+    declared rather than retired is invisible to the guard built for exactly
+    this, which is why the guard is now per-section rather than per-executor.
+
+    What replaced it is `executor.request_timeout_seconds`, which bounds an
+    attempt from inside the loop. The retirement message has to say so: an
+    operator who set a timeout deliberately needs to know where that intent
+    now lives, and `extra="forbid"` alone reports it identically to a typo.
+    """
+
+    def _base(self, **limits):
+        return {
+            "target_repo": ".", "base_ref": "main", "project_branch": "p",
+            "plan_root": "PLAN.md", "test_command": "true",
+            "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
+            "reviewer": {"model": "gpt-5.6-sol"}, "limits": limits,
+        }
+
+    def test_it_is_reported_as_retired_not_as_a_typo(self):
+        import pytest
+
+        from orchestrator.config import ConfigError, parse_config
+
+        with pytest.raises(ConfigError) as e:
+            parse_config(self._base(aider_timeout_seconds=900))
+        text = "\n".join(e.value.problems)
+        assert "aider_timeout_seconds" in text
+        assert "request_timeout_seconds" in text, "must name what replaced it"
+
+    def test_an_unknown_limit_is_still_a_typo(self):
+        # The retired list must not swallow everything unknown.
+        import pytest
+
+        from orchestrator.config import ConfigError, parse_config
+
+        with pytest.raises(ConfigError) as e:
+            parse_config(self._base(max_stagez=2))
+        assert "max_stagez" in "\n".join(e.value.problems)
+
+    def test_a_live_limit_still_loads(self):
+        from orchestrator.config import parse_config
+
+        cfg = parse_config(self._base(command_timeout_seconds=120))
+        assert cfg.limits.command_timeout_seconds == 120
+
+    def test_every_retired_key_is_gone_from_its_own_model(self):
+        from orchestrator.config import RETIRED_KEYS, ExecutorConfig, Limits
+
+        for section, model in (("executor", ExecutorConfig), ("limits", Limits)):
+            live = set(model.model_fields) & set(RETIRED_KEYS[section])
+            assert not live, f"{section}: listed as retired but still a field"
+
+    def test_a_drafted_config_names_no_retired_key(self):
+        # `orchestrator init` was still minting one into every new project,
+        # which is how a deleted tool goes on shipping.
+        from orchestrator.config import RETIRED_KEYS
+        from orchestrator.discover import draft_config
+
+        import re
+
+        draft, _notes = draft_config(Path("."), "PLAN.md")
+        for section, keys in RETIRED_KEYS.items():
+            for key in keys:
+                # A key, not a substring: "provider" occurs inside the prose
+                # "litellm provider prefix", and a naive check made the guard
+                # cry wolf on a comment while the real ones sat two lines down.
+                assert not re.search(rf"^\s*{re.escape(key)}\s*:", draft, re.M), (
+                    f"{section}.{key} drafted into a new config"
+                )
