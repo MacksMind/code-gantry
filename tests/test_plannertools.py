@@ -73,3 +73,46 @@ class TestRefusalsAreRecorded:
 
         assert r.calls[0].tool == "search"
         assert "no search pattern" in r.calls[0].refusal
+
+
+class TestCallDetailNamesTheRangeToo:
+    """The other half of the ledger, so one call is named one way.
+
+    `RepoReader` records the range it served; `call_detail` names a call the
+    reviewer and executor render and the one a *refusal* is recorded under.
+    A refused read has no served range — there is nothing to serve — so the
+    only range it can carry is the one that was asked for, which is also the
+    only thing worth knowing about it.
+
+    Left alone for every other tool. `search` and `list_files` take no range,
+    and `call_detail` picks whichever single argument names the call.
+    """
+
+    def test_a_ranged_read_carries_the_range(self):
+        from orchestrator.plannertools import call_detail
+
+        assert call_detail({"path": "a.rb", "start": 5, "end": 9}) == "a.rb:5-9"
+
+    def test_an_open_ended_range_says_so(self):
+        from orchestrator.plannertools import call_detail
+
+        assert call_detail({"path": "a.rb", "start": 5}) == "a.rb:5-"
+        assert call_detail({"path": "a.rb", "end": 9}) == "a.rb:-9"
+
+    def test_a_whole_file_stays_the_bare_path(self):
+        from orchestrator.plannertools import call_detail
+
+        assert call_detail({"path": "a.rb"}) == "a.rb"
+
+    def test_a_null_range_is_a_whole_file(self):
+        # Strict mode makes every property required and optional ones
+        # nullable, so an omitted range arrives as an explicit null.
+        from orchestrator.plannertools import call_detail
+
+        assert call_detail({"path": "a.rb", "start": None, "end": None}) == "a.rb"
+
+    def test_other_tools_are_untouched(self):
+        from orchestrator.plannertools import call_detail
+
+        assert call_detail({"pattern": "render", "glob": "app/**"}) == "render"
+        assert call_detail({"glob": "app/**"}) == "app/**"

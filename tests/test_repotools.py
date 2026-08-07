@@ -503,3 +503,74 @@ class TestSearchSeesWhatIsNotCommittedYet:
 
     def test_tracked_files_still_answer_as_before(self, repo):
         assert len(reader(repo).search(r"render text:")) == 2
+
+
+class TestTheLedgerRecordsWhichLinesWereRead:
+    """A path alone cannot answer whether a re-read saw the same bytes.
+
+    Measured across 97 planner decisions of one run: 188 paths were read in
+    more than one decision, and 73 of them were never modified by the run at
+    all — 184 repeat decisions, ~11.8% of all `read_file` output, returning
+    bytes the planner had already been shown. Whether a cached excerpt would
+    remove that depends entirely on whether those were the *same lines* or
+    different windows of a large file, and `call_detail` records only the
+    path, so the artifact cannot say. Two of the top four are files of a few
+    hundred lines, where it is probably the same read; `config/routes.rb` is
+    1,700 and probably is not.
+
+    The range recorded is the one **served**, not the one asked for. A request
+    for 1-999 against a 40-line file saw 1-40, and a request clipped by the
+    read budget saw less than it named — what a later reading needs is which
+    bytes reached the model. This is the same choice `resolve_excerpts` makes
+    when it labels a clipped excerpt with what actually arrived.
+
+    A whole-file read keeps the bare path. That is the common case, it is
+    unambiguous already, and appending `:1-40` to every one of them would
+    churn the ledger for nothing.
+    """
+
+    def test_a_whole_file_read_is_still_recorded_as_the_bare_path(self, repo):
+        r = reader(repo)
+        r.read_file("docs/plan.md")
+        assert r.calls[0].detail == "docs/plan.md"
+
+    def test_a_ranged_read_records_the_range(self, repo):
+        r = reader(repo)
+        r.read_file("docs/plan.md", start=2, end=3)
+        assert r.calls[0].detail == "docs/plan.md:2-3"
+
+    def test_the_range_recorded_is_the_one_served(self, repo):
+        # Asked past the end of the file. The ledger says what arrived.
+        r = reader(repo)
+        text = (repo / "docs" / "plan.md").read_text()
+        last = len(text.splitlines())
+        r.read_file("docs/plan.md", start=1, end=last + 500)
+        assert r.calls[0].detail == f"docs/plan.md:1-{last}"
+
+    def test_an_open_ended_start_records_where_it_actually_stopped(self, repo):
+        r = reader(repo)
+        last = len((repo / "docs" / "plan.md").read_text().splitlines())
+        r.read_file("docs/plan.md", start=2)
+        assert r.calls[0].detail == f"docs/plan.md:2-{last}"
+
+    def test_a_budget_clip_is_visible_in_the_ledger(self, repo):
+        # A whole-file read that the budget cut short is no longer a
+        # whole-file read, and recording it as the bare path would say it was.
+        from orchestrator.repotools import ReadBudget, RepoReader
+        from orchestrator.gitops import Git
+
+        body = "".join(f"line{i}\n" for i in range(1, 41))
+        (repo / "docs" / "plan.md").write_text(body)
+        r = RepoReader(Git(repo), repo, ReadBudget(max_lines_per_call=5))
+        r.read_file("docs/plan.md")
+        assert r.calls[0].detail == "docs/plan.md:1-5"
+
+    def test_an_empty_file_records_the_bare_path(self, repo):
+        # Nothing was served, so there is no range to name, and `lines: 0`
+        # already says so.
+        (repo / "docs" / "empty.md").write_text("")
+        import subprocess
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        r = reader(repo)
+        r.read_file("docs/empty.md")
+        assert r.calls[0].detail == "docs/empty.md"

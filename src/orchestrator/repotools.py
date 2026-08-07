@@ -118,6 +118,42 @@ class ReadBudget:
     max_calls: int = 25
 
 
+def _read_detail(
+    rel: str,
+    chosen: list[str],
+    first: int,
+    start: int | None,
+    end: int | None,
+    clipped: bool,
+) -> str:
+    """How one read is named in the ledger: the path, and which lines of it.
+
+    The path alone cannot answer whether two reads of a file saw the same
+    bytes, and that question is load-bearing. Measured over 97 planner
+    decisions: 188 paths were read in more than one decision and 73 of those
+    were never modified by the run, ~11.8% of all read output returning
+    content the model had already been shown. Whether a run-fixed excerpt
+    would remove that depends on whether those were the same lines or
+    different windows, and the ledger could not say.
+
+    The range recorded is the one **served**. A request for 1-999 against a
+    40-line file saw 1-40, and one cut short by the read budget saw less than
+    it asked for — what a later reading needs is which bytes reached the
+    model, which is the same choice `resolve_excerpts` makes when it labels a
+    clipped excerpt with what arrived rather than what was wanted.
+
+    A whole file keeps the bare path. It is the common case and already
+    unambiguous, and appending `:1-40` to every one of them would churn the
+    ledger to say nothing.
+    """
+    if not chosen:
+        # `lines: 0` already carries this, and there is no range to name.
+        return rel
+    if start is None and end is None and not clipped:
+        return rel
+    return f"{rel}:{first}-{first + len(chosen) - 1}"
+
+
 @dataclass
 class ToolCall:
     """One question put to the repository, answered or not.
@@ -353,7 +389,7 @@ class RepoReader:
         numbered = number_lines(chosen, first)
         if clipped:
             numbered += f"\n... truncated at {len(chosen)} lines; ask for a narrower range"
-        return self._spend("read_file", rel, numbered)
+        return self._spend("read_file", _read_detail(rel, chosen, first, start, end, clipped), numbered)
 
     def list_files(self, glob: str | None = None) -> list[str]:
         """Tracked paths, optionally filtered.

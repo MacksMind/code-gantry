@@ -309,10 +309,22 @@ def call_detail(args: dict) -> str:
     Shared with the reviewer's log so the two roles label a call the same
     way; the field-picking was written twice before, which is how two
     renderings of the same fact drift apart.
+
+    A read carries its range, because a path alone cannot answer whether two
+    reads of a file saw the same bytes — the question that decides whether
+    re-reading is waste or is the planner tracking a file that moved.
+    `RepoReader` records the range it *served*; this names a call before there
+    is a result, and is what a refusal is recorded under, so the only range
+    available here is the one that was asked for.
     """
+    path = args.get("path")
+    if path:
+        start, end = args.get("start"), args.get("end")
+        if start is None and end is None:
+            return path
+        return f"{path}:{start or ''}-{end or ''}"
     return (
-        args.get("path")
-        or args.get("pattern")
+        args.get("pattern")
         or args.get("glob")
         or args.get("question")
         or args.get("ref")
