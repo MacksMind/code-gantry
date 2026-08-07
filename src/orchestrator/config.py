@@ -237,6 +237,41 @@ class ExecutorConfig(_EndpointConfig):
     # for correcting it without waiting on a code change.
     extra_args: list[str] = []
 
+    # --- the in-process executor ----------------------------------------
+    #
+    # Unread while `provider` is the subprocess editor. Declared here rather
+    # than when the loop lands so that the client, its tests and the config
+    # move together — a value that appears in the same commit as its first
+    # reader has nowhere to be wrong yet.
+
+    # Turns *within* one edit cycle. The editor and the reader refuse past
+    # their own budgets and the model reads those refusals; this is the
+    # backstop for one that ignores them and keeps asking, which would
+    # otherwise hold a stage open until the request timeout. Same role as
+    # `AnthropicPlanner._max_tool_turns`.
+    max_model_turns: int = 20
+    # The same read budget the planner and reviewer carry, written here as its
+    # own settings rather than shared: the three ask different questions, and
+    # whoever decides the executor needs a different budget should be able to
+    # say so without silently moving the other two.
+    max_read_lines_per_call: int = 400
+    max_read_lines_total: int = 6000
+    max_read_calls: int = 60
+    # Complete edit → lint → commit → test passes before the attempt gives up
+    # and hands what it has to the gate. Deliberately low: an attempt is now a
+    # whole loop, and `max_test_retries` still bounds the attempts, so three
+    # here multiplies rather than adds.
+    max_cycles: int = 3
+    request_timeout_seconds: float = 900.0
+    # See `PlannerConfig.transport_retry_seconds`. The wait is bounded by our
+    # own wall clock rather than by an SDK retry counter, which is what makes
+    # including 429 safe here.
+    transport_retry_seconds: float = 3600.0
+    transport_retry_max_delay_seconds: float | None = 300.0
+    invalid_request_retry_seconds: float = 300.0
+    invalid_request_initial_seconds: float = 120.0
+    invalid_request_factor: float = 1.5
+
 
 class PlannerConfig(_EndpointConfig):
     provider: Literal["anthropic"] = "anthropic"

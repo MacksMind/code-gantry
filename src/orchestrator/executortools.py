@@ -1,0 +1,222 @@
+"""What the executor may ask of the repository, and what it may do to it.
+
+The read half is `plannertools.READ_TOOLS`, imported rather than restated. Those
+descriptions carry the rules that keep a lookup from becoming a belief — a
+document is a claim and the code is the fact; semantic search is not an
+existence check — and a planner and an executor told different things would be
+reasoning from different contracts about the same repository. There is one
+place those sentences live.
+
+The write half is new and is the whole point of the change: three tools that
+state an edit precisely enough to be applied without interpretation.
+
+**There is no tool that runs a command.** Not because a `run_tests` tool would
+literally break the invariant — its body would still be operator config — but
+because it would hand over the *scheduling*, and the scheduling is what the
+budget is spent on. A model that must ask for a test result can also decline to
+ask and declare itself finished. The loop runs lint, commit and tests after
+every batch, unconditionally, so the executor cannot end a cycle without having
+been shown what its edits did. That invariant has its own test.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from orchestrator.edittools import Edit, FileEditor
+from orchestrator.plannertools import READ_TOOLS, SEMANTIC_TOOL, call_detail
+from orchestrator.repotools import RepoReader, ToolError
+from orchestrator.semantic import SemanticSearch
+
+EDIT_TOOLS: list[dict[str, Any]] = [
+    {
+        "name": "edit",
+        "description": (
+            "Change an existing file by replacing exact text.\n\n"
+            "Each edit's `old_string` must appear **exactly once** in the file, "
+            "matched byte for byte including indentation. If it appears twice "
+            "the edit is refused: include more surrounding lines until it is "
+            "unique, or set `replace_all`. If it appears nowhere the edit is "
+            "refused: read the file and quote what is actually there.\n\n"
+            "Edits apply in order to one buffer and the file is written once. "
+            "If any edit in the list fails, none of them are applied and the "
+            "file is left exactly as it was — so a refusal never leaves you "
+            "reasoning about a file that no longer exists in that form.\n\n"
+            "Read before you edit. You have a read tool, the file is in front "
+            "of you, and quoting from memory is what makes an edit fail."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Repository-relative path."},
+                "edits": {
+                    "type": "array",
+                    "description": "Replacements, applied in order.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "old_string": {
+                                "type": "string",
+                                "description": (
+                                    "Exact text to replace, including "
+                                    "indentation and line breaks."
+                                ),
+                            },
+                            "new_string": {
+                                "type": "string",
+                                "description": "What to put in its place.",
+                            },
+                            "replace_all": {
+                                "type": "boolean",
+                                "description": (
+                                    "Replace every occurrence instead of "
+                                    "requiring exactly one."
+                                ),
+                            },
+                        },
+                        "required": ["old_string", "new_string", "replace_all"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["path", "edits"],
+        },
+    },
+    {
+        "name": "create_file",
+        "description": (
+            "Write a new file with the given contents. Refused if the file "
+            "already exists and is not empty — use `edit` for those. Parent "
+            "directories are created."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Repository-relative path."},
+                "content": {"type": "string", "description": "The whole file."},
+            },
+            "required": ["path", "content"],
+        },
+    },
+    {
+        "name": "delete_file",
+        "description": (
+            "Remove a file. This is the only way to empty one: an `edit` "
+            "whose `old_string` you got slightly wrong is refused rather than "
+            "silently clearing the file, so removal has to be asked for by "
+            "name."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Repository-relative path."},
+            },
+            "required": ["path"],
+        },
+    },
+]
+
+
+def tool_schemas(semantic: SemanticSearch | None) -> list[dict[str, Any]]:
+    """Everything the executor may call. Semantic search only when configured."""
+    read = [*READ_TOOLS, SEMANTIC_TOOL] if semantic else list(READ_TOOLS)
+    return [*read, *EDIT_TOOLS]
+
+
+def openai_tool_schemas(semantic: SemanticSearch | None) -> list[dict[str, Any]]:
+    """The same tools in the Responses API's shape.
+
+    Strict mode is not a preference: the SDK refuses to auto-parse otherwise,
+    and strict in turn requires every property in `required` and
+    `additionalProperties: false`. Optional properties are therefore made
+    nullable and required, which is the shape strict mode provides for "may be
+    omitted" — `dispatch` reads them with `.get`, so a null arrives as a
+    missing argument and nothing downstream can tell the difference.
+
+    Nested object properties are rewritten too, which the planner's version
+    never had to do because none of its schemas nest. `edit` carries a list of
+    objects with an optional `replace_all`.
+    """
+    out = []
+    for tool in tool_schemas(semantic):
+        schema = _strictify(tool["input_schema"])
+        out.append(
+            {
+                # Flat, not nested under a `function` object. That nesting is
+                # the chat/completions shape; the Responses API takes the name,
+                # description and parameters at the top level.
+                "type": "function",
+                "name": tool["name"],
+                "description": tool["description"],
+                "strict": True,
+                "parameters": schema,
+            }
+        )
+    return out
+
+
+def _strictify(schema: dict) -> dict:
+    """One object schema, made valid for strict mode, recursively."""
+    properties = {}
+    required = schema.get("required") or []
+    for name, spec in (schema.get("properties") or {}).items():
+        spec = dict(spec)
+        if spec.get("type") == "object":
+            spec = _strictify(spec)
+        elif spec.get("type") == "array" and isinstance(spec.get("items"), dict):
+            items = spec["items"]
+            if items.get("type") == "object":
+                spec["items"] = _strictify(items)
+        if name not in required:
+            kind = spec.get("type", "string")
+            spec["type"] = [kind, "null"] if isinstance(kind, str) else kind
+        properties[name] = spec
+    return {
+        **schema,
+        "properties": properties,
+        "required": list(properties),
+        "additionalProperties": False,
+    }
+
+
+def dispatch(
+    name: str,
+    args: dict,
+    reader: RepoReader,
+    editor: FileEditor,
+    semantic: SemanticSearch | None,
+) -> str:
+    """Run one tool call and render its result as text.
+
+    Every failure becomes a readable string rather than an exception, and every
+    refusal is recorded against the object that refused it. A loop that stopped
+    because it was finished and one that stopped because every edit was refused
+    produce the same artifact otherwise, and only one of them is a working
+    executor.
+    """
+    from orchestrator import plannertools
+
+    if name in {"edit", "create_file", "delete_file"}:
+        try:
+            if name == "edit":
+                edits = [
+                    Edit(
+                        old_string=e.get("old_string") or "",
+                        new_string=e.get("new_string") or "",
+                        replace_all=bool(e.get("replace_all")),
+                    )
+                    for e in (args.get("edits") or [])
+                ]
+                if not edits:
+                    raise ToolError("no edits given")
+                return editor.edit(args.get("path", ""), edits)
+            if name == "create_file":
+                return editor.create_file(
+                    args.get("path", ""), args.get("content") or ""
+                )
+            return editor.delete_file(args.get("path", ""))
+        except ToolError as e:
+            editor.record_refusal(name, call_detail(args), str(e))
+            return f"cannot do that: {e}"
+
+    return plannertools.dispatch(name, args, reader, semantic)
