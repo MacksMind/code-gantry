@@ -518,14 +518,36 @@ class TestRunAgentStage:
         recorded = json.loads(fake_aider.read_text())
         assert recorded["env"]["OPENAI_API_KEY"] == "sk-real"
 
-    def test_no_placeholder_without_an_api_base(self, repo, fake_aider):
+    def test_no_placeholder_without_an_api_base(self, repo, fake_aider, monkeypatch):
         # No api_base means the real OpenAI endpoint, which genuinely needs a
         # key. Injecting a placeholder there would turn a legible "you set no
         # key" into a puzzling 401 from a paid service.
+        #
+        # The subprocess inherits the operator's environment, so asserting on
+        # the whole of it asserts on the shell that ran the suite. This test
+        # used to, and it failed for anyone who had configured the tool at all
+        # — the one environment in which the suite most needs to pass. What is
+        # under test is whether *we* inject a placeholder, so the variable is
+        # cleared first and the assertion is about what we added.
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         cfg, stage = cfg_with(target_repo=str(repo), executor={"model": "gpt-4o"})
         Executor(cfg, CommandRunner(cwd=repo, timeout=60)).run_agent_stage(stage, "p")
         recorded = json.loads(fake_aider.read_text())
         assert "OPENAI_API_KEY" not in recorded["env"]
+
+    def test_the_operators_own_key_is_passed_through_untouched(
+        self, repo, fake_aider, monkeypatch
+    ):
+        # The other half, and the reason the test above cannot simply assert
+        # absence: a key already in the environment must still reach the
+        # subprocess. Distinguishing "we injected one" from "one was already
+        # there" is the whole point of clearing it in that test rather than
+        # relaxing this assertion.
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-operators-own")
+        cfg, stage = cfg_with(target_repo=str(repo), executor={"model": "gpt-4o"})
+        Executor(cfg, CommandRunner(cwd=repo, timeout=60)).run_agent_stage(stage, "p")
+        recorded = json.loads(fake_aider.read_text())
+        assert recorded["env"]["OPENAI_API_KEY"] == "sk-operators-own"
 
     def test_missing_api_key_env_var_is_an_error(self, repo, fake_aider):
         cfg, stage = cfg_with(
