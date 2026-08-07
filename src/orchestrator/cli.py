@@ -18,6 +18,7 @@ Exit codes: 0 complete, 1 failed or escalated, 2 complete with deferred steps.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import traceback
@@ -313,6 +314,13 @@ def run(slug: str, run_id: str | None, skip_preflight_tests: bool) -> None:
         click.echo(f"refusing to start: {problem}", err=True)
         sys.exit(EXIT_FAILED)
 
+    # Before preflight, not after. Preflight is the slow thing — containers,
+    # the test database, the whole suite — and printing only once it returns
+    # is what made a starting run indistinguishable from a hung one.
+    click.echo(
+        _startup_banner("run", slug, cfg, run_tests=not skip_preflight_tests)
+    )
+
     checks = run_preflight(cfg, project_dir=project, run_tests=not skip_preflight_tests)
     click.echo(format_checks(checks))
     if any(c.blocking for c in checks):
@@ -431,6 +439,8 @@ def resume(run_id: str, reset_progress_budget: bool) -> None:
     if problem:
         click.echo(f"refusing to resume: {problem}", err=True)
         sys.exit(EXIT_FAILED)
+
+    click.echo(_startup_banner("resume", run_id, cfg, run_tests=False))
 
     checks = run_preflight(cfg, project_dir=project, run_tests=False, for_resume=True)
     click.echo(format_checks(checks))
@@ -603,6 +613,53 @@ def _locate_run(run_id: str) -> tuple[ProjectPaths, ProjectConfig]:
                 return project, _load(project.config)
     click.echo(f"no such run: {run_id}", err=True)
     sys.exit(EXIT_FAILED)
+
+
+def _startup_banner(
+    command: str,
+    subject: str,
+    cfg: ProjectConfig,
+    *,
+    pid: int | None = None,
+    run_tests: bool = True,
+    now: str | None = None,
+) -> str:
+    """What is starting, printed before anything slow happens.
+
+    Two problems, and the second is the one that has cost time.
+
+    An operator watching the console saw nothing. `run_preflight` is the first
+    thing either command does, and on a fresh run it starts the containers,
+    prepares the test database and runs the whole suite — minutes — before the
+    first `click.echo`. The run id is not generated until after it, so during
+    that window there was no id to look up and no run directory to list, and
+    alive, hung and dead all looked identical.
+
+    And `last-run.out` is appended across every invocation with nothing marking
+    where one begins. That is the append-only-log trap the project
+    instructions already record: a monitor grepping it for a pause matched 24
+    historical ones and reported a stop that had not happened. Anchoring
+    correctly meant taking `wc -l` out of band beforehand and remembering to.
+    A fixed marker carrying the wall clock and the pid is an anchor a later
+    reader can find by itself.
+
+    The pid is here because the timestamp is not enough on its own: two
+    invocations inside one second is exactly what a resume loop produces.
+
+    A pure string, so the thing printed before a slow call can be tested
+    without making one.
+    """
+    stamp = now or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    suites = (
+        "including the test suites, which take minutes"
+        if run_tests
+        else "test suites skipped"
+    )
+    return (
+        f"=== orchestrator {command} {subject} — {stamp} pid {pid or os.getpid()} ===\n"
+        f"target: {cfg.target_repo} on {cfg.project_branch}\n"
+        f"preflight: starting ({suites})"
+    )
 
 
 def _generate_run_id(cfg: ProjectConfig) -> str:
