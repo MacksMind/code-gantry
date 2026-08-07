@@ -702,10 +702,31 @@ def execute(state: RunState, rt: Runtime) -> dict:
                 result.refusal_counts.items(), key=lambda kv: -kv[1]
             )
         )
+        # Spelled exactly as the reviewer's line spells it. The executor is the
+        # loop whose cache behaviour was unmeasurable for most of this
+        # project's life — Aider's accounting read Anthropic's and DeepSeek's
+        # cache fields but never OpenAI's `prompt_tokens_details.cached_tokens`,
+        # so a zero was the instrument rather than the cache. Owning the client
+        # made the figure available; putting it where the operator already
+        # looks is what makes it seen, which is a separate thing.
+        #
+        # Totals for the attempt, not the opening turn. The opening turn
+        # answers "is the prefix shared across stages" and is recorded on its
+        # own; this answers "what did this attempt cost", and a multi-turn loop
+        # spends most of its tokens after the first call. Omitted entirely when
+        # the provider reported nothing, because "(0 prompt, 0 cached)" reads
+        # as a measurement rather than as its absence.
+        paid = ""
+        if result.usage is not None:
+            paid = (
+                f" ({getattr(result.usage, 'prompt_tokens', 0)} prompt, "
+                f"{getattr(result.usage, 'cached_tokens', 0)} cached)"
+            )
         rt.log(
             f"[execute] {stage.id}: {sum(result.tool_counts.values())} tool "
             f"call(s) over {result.cycles} cycle(s): {asked}"
             + (f"; refused {refused}" if refused else "")
+            + paid
         )
 
     if result.dropped_reads:

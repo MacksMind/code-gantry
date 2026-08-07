@@ -3203,3 +3203,134 @@ class TestPlanNotesArePublishedWhenTheStageIsCut:
         before = run_git(repo, "rev-parse", "HEAD").strip()
         nodes.precheck({**with_stage(state, rt), "pending_plan_notes": []}, rt)
         assert run_git(repo, "rev-parse", cfg.project_branch).strip() == before
+
+
+class TestTheNativeExecutorsMeasurementsSurviveTheTrip:
+    """`execute` → state → `advance` → `stage-costs.md`, driven end to end.
+
+    The class above tests the same file and did not catch this, because it
+    seeds `executor_context_tokens` straight into state — it pins `advance`,
+    which was never broken. What broke was one link earlier: `context_tokens`
+    and `cost_usd` were set only by the Aider console scrapers, the in-process
+    loop set neither, and `advance`'s guard
+    `if executor_context_tokens or executor_cost_usd` went quietly false. The
+    file stopped being written the hour the executor switched and nothing
+    failed, because a guard that suppresses noise suppresses the channel the
+    same way. The planner reads that file on every call.
+
+    `StubExecutor` could not have caught it either: its own comment says the
+    journey starts in Aider's output, which was true and stopped being true.
+    """
+
+    def _measured(self, repo, **fields):
+        class Measured(StubExecutor):
+            def run_agent_stage(
+                self, stage, prompt, history_dir=None, since_sha="",
+                agent_context=None, feedback=None,
+            ):
+                self._apply()
+                return ExecutionResult(ok=True, log="", **fields)
+
+        return Measured(repo=repo, edits=[("app.py", "stage work\n")])
+
+    def test_the_peak_context_and_the_cost_both_land(self, repo, tmp_path):
+        from orchestrator.planner import recent_stage_costs
+
+        ex = self._measured(repo, context_tokens=21_000, cost_usd=0.0092)
+        cfg, rt, state = make(repo, tmp_path, executor=ex)
+        state = with_stage(state, rt)
+        state.update(nodes.execute(state, rt))
+        nodes.advance(state, rt)
+
+        costs = recent_stage_costs(rt.project.project_dir)
+        assert costs, "nothing was written to stage-costs.md at all"
+        assert costs[0]["context_tokens"] == 21_000
+        written = (rt.project.project_dir / "stage-costs.md").read_text()
+        assert "$0.0092" in written
+
+    def test_an_unpriced_model_still_records_its_context(self, repo, tmp_path):
+        # `cost_usd` is None for a model with no rate — the distinction the
+        # pricing module exists to keep. The line must still be written, on the
+        # strength of the context figure alone, or an unpriced executor silently
+        # empties the planner's calibration data.
+        from orchestrator.planner import recent_stage_costs
+
+        ex = self._measured(repo, context_tokens=13_000, cost_usd=None)
+        cfg, rt, state = make(repo, tmp_path, executor=ex)
+        state = with_stage(state, rt)
+        state.update(nodes.execute(state, rt))
+        nodes.advance(state, rt)
+
+        costs = recent_stage_costs(rt.project.project_dir)
+        assert costs and costs[0]["context_tokens"] == 13_000
+        assert "$" not in (rt.project.project_dir / "stage-costs.md").read_text()
+
+
+class TestTheExecuteLineReportsWhatItPaid:
+    """The same `(N prompt, M cached)` the reviewer's line carries.
+
+    Spelled identically on purpose. The executor is the one loop whose cache
+    behaviour was unmeasurable for most of this project's life — Aider's
+    accounting never read OpenAI's `prompt_tokens_details.cached_tokens`, so a
+    silent zero was the instrument rather than the cache. Owning the client
+    made the figure available; putting it on the line the operator already
+    reads is what makes it *seen*, which is a different thing.
+
+    Totals across the attempt, not the opening turn: the opening turn is what
+    answers "is the prefix shared across stages" and is recorded separately,
+    while this answers "what did this attempt cost", and a multi-turn loop
+    spends most of its tokens after the first call.
+    """
+
+    def _with_usage(self, repo, **usage):
+        from orchestrator.openaiclient import TokenUsage
+
+        class Counted(StubExecutor):
+            def run_agent_stage(
+                self, stage, prompt, history_dir=None, since_sha="",
+                agent_context=None, feedback=None,
+            ):
+                self._apply()
+                return ExecutionResult(
+                    ok=True, log="",
+                    tool_counts={"read_file": 3},
+                    usage=TokenUsage(**usage),
+                )
+
+        return Counted(repo=repo, edits=[("app.py", "stage work\n")])
+
+    def test_the_counts_are_appended_to_the_tool_summary(self, repo, tmp_path):
+        ex = self._with_usage(
+            repo, prompt_tokens=3_423_327, cached_tokens=3_322_008,
+            cache_write_tokens=96_040, completion_tokens=32_037,
+        )
+        cfg, rt, state = make(repo, tmp_path, executor=ex)
+        lines: list[str] = []
+        rt.log = lines.append
+        state = with_stage(state, rt)
+        nodes.execute(state, rt)
+
+        line = next(m for m in lines if "tool call(s)" in m)
+        assert "(3423327 prompt, 3322008 cached)" in line
+
+    def test_an_attempt_with_no_usage_says_nothing_extra(self, repo, tmp_path):
+        # A provider that reported nothing must not render "(0 prompt, 0
+        # cached)", which reads as a measurement rather than its absence —
+        # the same reason `stage-costs.md` omits a dollar it does not have.
+        class NoUsage(StubExecutor):
+            def run_agent_stage(
+                self, stage, prompt, history_dir=None, since_sha="",
+                agent_context=None, feedback=None,
+            ):
+                self._apply()
+                return ExecutionResult(ok=True, log="", tool_counts={"read_file": 3})
+
+        ex = NoUsage(repo=repo, edits=[("app.py", "stage work\n")])
+        cfg, rt, state = make(repo, tmp_path, executor=ex)
+        lines: list[str] = []
+        rt.log = lines.append
+        state = with_stage(state, rt)
+        nodes.execute(state, rt)
+
+        line = next(m for m in lines if "tool call(s)" in m)
+        assert "prompt" not in line and "cached" not in line

@@ -29,6 +29,7 @@ here to save round trips, not to reach judgements.
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
@@ -83,6 +84,14 @@ def run_loop(
         if cycle == 0:
             out.first_prompt_tokens = turn.first_prompt_tokens
             out.first_cached_tokens = turn.first_cached_tokens
+        # The high-water mark, across cycles as well as turns. Aider reported
+        # this and `context_tokens_from_log` took the largest for the reason
+        # its docstring gives: what bounds the next stage is the peak, not the
+        # last figure it happened to print. Keeping the same quantity is what
+        # lets the series continue across the cutover rather than silently
+        # changing instrument. A rework cycle routinely loads more than the
+        # first did, so `max` spans them.
+        out.context_tokens = max(out.context_tokens, turn.peak_prompt_tokens)
         if turn.usage is not None:
             out.usage = _merge(out.usage, turn.usage)
         out.log = turn.text or out.log
@@ -129,7 +138,58 @@ def run_loop(
         )
 
     _commit_if_dirty(git, stage, out)
+    out.cost_usd = _price(out.usage, cfg.executor.model)
     return out
+
+
+# The rate table, fetched at most once per process. `load_price_map` reaches
+# the network on every call and only then falls back to its cache file — fine
+# for the report, which runs once, and wrong here: this runs per attempt, and a
+# 90-stage run would make hundreds of HTTP calls to price something whose rates
+# do not change while it runs. Rebuilt on the next start, which is when a new
+# rate would matter anyway.
+_PRICES: dict | None = None
+
+
+def _prices() -> dict:
+    global _PRICES
+    if _PRICES is None:
+        from orchestrator.pricing import load_price_map
+        from orchestrator.report import PRICE_MAP_FILENAME
+
+        _PRICES = load_price_map(
+            os.environ.get("ORCHESTRATOR_PRICE_MAP") or PRICE_MAP_FILENAME
+        )
+    return _PRICES
+
+
+def _price(usage, model: str | None) -> float | None:
+    """What this attempt cost, from the provider's own counts.
+
+    `None` for an unpriced model rather than `0.0`, which is the whole reason
+    to compute this instead of reading a tool's report: a zero has meant "no
+    rate for this model" as often as it has meant "free", and a local endpoint
+    and a missing price were indistinguishable in the record.
+
+    Priced here rather than in `nodes` because this is where the usage is, and
+    the same reasoning that put `price_usage` in one place applies: the report
+    already bills the planner and reviewer through it, and a second arithmetic
+    for the executor would be a second thing to get wrong. `advance` guards on
+    this being truthy before writing `stage-costs.md`, so an unpriced model
+    still lands there on the strength of `context_tokens`.
+    """
+    if usage is None:
+        return None
+    from orchestrator.pricing import entry_for, price_usage
+
+    prices = _prices()
+    return price_usage(
+        entry_for(prices, model),
+        getattr(usage, "prompt_tokens", 0),
+        getattr(usage, "cached_tokens", 0),
+        getattr(usage, "cache_write_tokens", 0),
+        getattr(usage, "completion_tokens", 0),
+    )
 
 
 def _gate_cycle(stage, cfg, git, runner, out: ExecutionResult, since_sha, log=None):

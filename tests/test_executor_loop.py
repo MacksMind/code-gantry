@@ -8,6 +8,7 @@ pinned by observation rather than by reading the code, because the code is what
 these tests exist to catch changing.
 """
 
+import json
 import subprocess
 
 import pytest
@@ -467,3 +468,120 @@ class TestTheLocatorIsWiredButIsNotATool:
         s._search = lambda q: [{"payload": {"path": "a.rb", "content": "TEXT"}}]
         s.chunks_for("something", "a.rb")
         assert [c.tool for c in calls] == ["locate"]
+
+
+class TestTheContextHighWaterMarkAndCostReachTheResult:
+    """Two values Aider used to supply, on the path that replaced it.
+
+    Both were scraped from Aider's console — `context_tokens_from_log` and
+    `cost_from_log` — and the in-process loop set neither. `advance` guards on
+    `if executor_context_tokens or executor_cost_usd` before calling
+    `append_stage_cost`, so the guard went permanently false and
+    `stage-costs.md` stopped being written the hour the executor switched,
+    while `executor-loop.json` carried correct usage throughout. The planner
+    reads `stage-costs.md` on every call.
+
+    The context figure is the *peak* single-turn prompt, not the first and not
+    the sum. That is what Aider reported and what the docstring on
+    `context_tokens_from_log` argues for: "what bounds the next stage is the
+    high-water mark, not the last thing it happened to say." Keeping the same
+    quantity is what lets the series continue across the cutover instead of
+    silently changing instrument. The opening turn understates it badly — tool
+    results accumulate as the loop runs — and the sum is every turn added
+    together, which answers no question anyone has.
+    """
+
+    def _model(self, peaks, edits=None):
+        """Reports a peak per cycle, and edits so the loop keeps going.
+
+        Without an edit the loop breaks on `if not editor.touched`, so a
+        multi-cycle assertion silently measures one cycle. That is the shape of
+        fake that makes a max() look like a first().
+        """
+        scripted = list(edits or [])
+
+        class Peaked:
+            def __init__(self):
+                self.left = list(peaks)
+
+            def run(self, conversation, reader, editor, semantic=None, cache_key=None):
+                from orchestrator.executorclient import ExecutorTurn
+                from orchestrator.openaiclient import TokenUsage
+
+                out = ExecutorTurn()
+                out.turns = 1
+                out.stopped = True
+                if scripted:
+                    scripted.pop(0)(editor)
+                peak = self.left.pop(0)
+                out.peak_prompt_tokens = peak
+                out.first_prompt_tokens = peak // 2
+                out.usage = TokenUsage(
+                    prompt_tokens=peak, cached_tokens=0,
+                    cache_write_tokens=0, completion_tokens=100,
+                )
+                return out
+
+        return Peaked()
+
+    def test_the_peak_is_carried_not_the_first_or_the_sum(self, repo):
+        cfg, stage = build(repo)
+        out = drive(repo, cfg, stage, self._model([9000]))
+        assert out.context_tokens == 9000, "the turn's peak did not reach the result"
+        assert out.first_prompt_tokens == 4500, "still recorded, and still not the peak"
+
+    def test_the_peak_is_the_largest_across_cycles(self, repo):
+        # A rework cycle can load more than the first one did, and a later
+        # cycle can load less. Neither the last nor the first is the bound.
+        cfg, stage = build(
+            repo, {"must_not_remain": ["class"]},
+            executor={"model": "m", "provider": "openai", "max_cycles": 3},
+        )
+        out = drive(repo, cfg, stage, self._model(
+            [4000, 21000, 7000],
+            edits=[
+                edit_file("app/a.rb", "class A", "class B"),
+                edit_file("app/a.rb", "class B", "class C"),
+                edit_file("app/a.rb", "class C", "class D"),
+            ],
+        ))
+        assert out.cycles == 3, "the fixture did not actually run three cycles"
+        assert out.context_tokens == 21000
+
+    def test_an_unpriced_model_reports_none_rather_than_zero(self, repo, monkeypatch, tmp_path):
+        # `load_price_map` fetches before it falls back, so without
+        # blocking the fetch this reads the live table and the pinned
+        # one is never consulted. And the loop memoises, so the cache
+        # has to be cleared between tests.
+        import orchestrator.pricing as pricing
+        from orchestrator import executorloop
+        monkeypatch.setattr(pricing, "_fetch", lambda url: (_ for _ in ()).throw(OSError()))
+        monkeypatch.setattr(executorloop, "_PRICES", None)
+        # `price_usage` returns None for "no rate", and the distinction is the
+        # whole reason to compute this rather than scrape it: a zero has meant
+        # "not priced" as often as "free".
+        empty = tmp_path / "prices.json"
+        empty.write_text("{}")
+        monkeypatch.setenv("ORCHESTRATOR_PRICE_MAP", str(empty))
+        cfg, stage = build(repo)
+        out = drive(repo, cfg, stage, self._model([9000]))
+        assert out.cost_usd is None
+
+    def test_a_priced_model_is_billed_from_real_counts(self, repo, monkeypatch, tmp_path):
+        # `load_price_map` fetches before it falls back, so without
+        # blocking the fetch this reads the live table and the pinned
+        # one is never consulted. And the loop memoises, so the cache
+        # has to be cleared between tests.
+        import orchestrator.pricing as pricing
+        from orchestrator import executorloop
+        monkeypatch.setattr(pricing, "_fetch", lambda url: (_ for _ in ()).throw(OSError()))
+        monkeypatch.setattr(executorloop, "_PRICES", None)
+        table = tmp_path / "prices.json"
+        table.write_text(json.dumps({
+            "m": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}
+        }))
+        monkeypatch.setenv("ORCHESTRATOR_PRICE_MAP", str(table))
+        cfg, stage = build(repo)
+        out = drive(repo, cfg, stage, self._model([9000]))
+        # 9000 prompt @ 1e-6 + 100 completion @ 2e-6
+        assert out.cost_usd == pytest.approx(0.0092)
