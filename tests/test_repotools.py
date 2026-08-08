@@ -657,3 +657,56 @@ class TestTheLedgerRecordsWhichLinesWereRead:
         r = reader(repo)
         r.read_file("docs/empty.md")
         assert r.calls[0].detail == "docs/empty.md"
+
+
+class TestALineIsNotAUnitOfSize:
+    """The budget counted lines, and a line is whatever the repository says.
+
+    Every ceiling here — `max_lines_per_call`, `max_total_lines` — assumes a
+    line is roughly a line's worth of text. That holds for source and fails
+    completely for a minified asset, a vendored bundle, a `structure.sql`, or a
+    fixture with one enormous row. This project's target repository has 4,423
+    tracked files including compiled JavaScript and CSS.
+
+    Measured: a planner derivation issued `search(MIGRATED_CONTROLLERS in .)`
+    returning 106 "lines" and `search(selected_contacts ...)` returning 160,
+    and the loop's next call was rejected at `1103000 tokens > 1000000
+    maximum`. The initial prompt, recorded by `planner-prompt.md`, was 611,008
+    characters — so essentially all of that million arrived through tool
+    results that every line-based ceiling considered small.
+
+    It got worse rather than better when `search` was fixed: the pathspec bug
+    was making a third of searches return nothing, and each of those empty
+    answers was also, accidentally, cheap.
+    """
+
+    def test_a_single_enormous_line_is_truncated(self, repo):
+        (repo / "app" / "bundle.js").write_text("var x=" + "a" * 200_000 + ";\n")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "-c", "commit.gpgsign=false", "commit", "-qm", "bundle"],
+            cwd=repo, check=True, capture_output=True,
+        )
+        out = reader(repo).read_file("app/bundle.js")
+        assert len(out) < 20_000, "one line must not be able to fill the prompt"
+        assert "truncated" in out
+
+    def test_search_hits_are_bounded_by_characters(self, repo):
+        (repo / "app" / "bundle.js").write_text("render text: " + "b" * 200_000 + "\n")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "-c", "commit.gpgsign=false", "commit", "-qm", "bundle"],
+            cwd=repo, check=True, capture_output=True,
+        )
+        hits = reader(repo).search("render text:")
+        assert sum(len(h) for h in hits) < 20_000
+
+    def test_ordinary_output_is_untouched(self, repo):
+        # The cap must not change any answer that was already reasonable —
+        # a ceiling that trims normal work is a policy nobody chose.
+        hits = reader(repo).search(r"render text:")
+        assert len(hits) == 2
+        assert all("truncated" not in h for h in hits)
+        assert "class OrdersController" in reader(repo).read_file(
+            "app/controllers/orders_controller.rb"
+        )

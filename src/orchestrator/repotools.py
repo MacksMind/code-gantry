@@ -117,6 +117,22 @@ class ReadBudget:
     max_lines_per_call: int = 400
     max_total_lines: int = 3000
     max_calls: int = 25
+    # And a ceiling in characters, because a line is not a unit of size.
+    #
+    # Every limit above assumes a line is roughly a line's worth of text. That
+    # holds for source and fails completely for a minified bundle, a vendored
+    # asset, a `structure.sql`, or a fixture with one enormous row — and a
+    # repository of any age has some. Measured on this project's target: a
+    # derivation whose searches returned 106 and 160 "lines" was followed by a
+    # call the provider rejected at `1103000 tokens > 1000000 maximum`, with a
+    # recorded initial prompt of 611,008 characters. Essentially the whole
+    # million arrived through results that every line-based ceiling called
+    # small.
+    #
+    # 12,000 is about 3,000 tokens — comfortably more than 400 ordinary source
+    # lines, so nothing that was already reasonable changes, and three orders
+    # of magnitude below what one minified line can carry.
+    max_chars_per_call: int = 12_000
 
 
 def _read_detail(
@@ -357,9 +373,35 @@ class RepoReader:
         cap = self.budget.max_lines_per_call
         remaining = max(self.budget.max_total_lines - self._lines_used, 0)
         allowed = min(cap, remaining)
-        if len(lines) <= allowed:
-            return lines, False
-        return lines[:allowed], True
+        clipped = False
+        if len(lines) > allowed:
+            lines, clipped = lines[:allowed], True
+        return self._clip_chars(lines, clipped)
+
+    def _clip_chars(self, lines: list[str], clipped: bool) -> tuple[list[str], bool]:
+        """The same ceiling in characters — see `ReadBudget.max_chars_per_call`.
+
+        Applied after the line cap rather than instead of it, because the two
+        answer different questions and a caller wants whichever binds first.
+        A line longer than the whole budget is truncated rather than dropped:
+        the first characters of a minified bundle still identify it, and
+        returning nothing for a file that plainly matched reads as "not there",
+        which is the failure the search work was about.
+        """
+        budget = getattr(self.budget, "max_chars_per_call", 0)
+        if budget <= 0:
+            return lines, clipped
+        out: list[str] = []
+        spent = 0
+        for line in lines:
+            if spent + len(line) > budget:
+                room = budget - spent
+                if room > 0:
+                    out.append(line[:room] + " … line truncated")
+                return out, True
+            out.append(line)
+            spent += len(line) + 1
+        return out, clipped
 
     # --- tools ----------------------------------------------------------
 
