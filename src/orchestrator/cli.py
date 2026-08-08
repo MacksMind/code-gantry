@@ -33,7 +33,13 @@ from orchestrator.approval import approval_problem, config_hash, record_approval
 from orchestrator.config import ConfigError, ProjectConfig, load_config
 from orchestrator.discover import derive_target_repo, draft_config
 from orchestrator.gitops import Git, GitError
-from orchestrator.driver import default_max_steps, drive, load_state, open_checkpointer
+from orchestrator.driver import (
+    UnreadableCheckpoint,
+    default_max_steps,
+    drive,
+    load_state,
+    open_checkpointer,
+)
 from orchestrator.plandoc import resolve_plan_tree, snapshot_tree
 from orchestrator.planner import make_planner
 from orchestrator.preflight import format_checks, run_preflight
@@ -430,7 +436,11 @@ def resume(run_id: str, reset_progress_budget: bool) -> None:
     project, cfg = _locate_run(run_id)
     paths = RunPaths(project, run_id)
 
-    saved = _load_state(paths, run_id)
+    try:
+        saved = _load_state(paths, run_id)
+    except UnreadableCheckpoint as exc:
+        click.echo(f"cannot resume {run_id}: {exc}", err=True)
+        sys.exit(EXIT_FAILED)
     if saved is None:
         click.echo(f"no checkpoint for run {run_id}", err=True)
         sys.exit(EXIT_FAILED)
@@ -477,7 +487,11 @@ def status(run_id: str) -> None:
     """Show where a run stopped and why."""
     project, cfg = _locate_run(run_id)
     paths = RunPaths(project, run_id)
-    saved = _load_state(paths, run_id)
+    try:
+        saved = _load_state(paths, run_id)
+    except UnreadableCheckpoint as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(EXIT_FAILED)
     if saved is None:
         click.echo(f"run {run_id} has no checkpoint yet", err=True)
         sys.exit(EXIT_FAILED)

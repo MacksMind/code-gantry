@@ -258,3 +258,90 @@ class TestTheStepCeiling:
             entry=lambda _s: "a", max_steps=5,
         )
         assert final["status"] == "complete"
+
+
+class TestAnOldCheckpointSaysWhatItIs:
+    """A run started before the cutover cannot be resumed, and must say so.
+
+    `load_state` reads a table this driver created. A `state.db` written by the
+    previous framework has different tables entirely, so the honest answer is
+    "not readable", and the first version returned `None` — which `resume`
+    reports as "no checkpoint for run <id>". That reads like the run never
+    existed, sending an operator to look for a typo in the run id rather than
+    telling them the one true thing: the work is safe on the branch, and this
+    run ends here.
+
+    Detected by what the file contains rather than by a version marker, because
+    there is no marker to read on a database written by something else.
+    """
+
+    def _langgraph_shaped(self, path):
+        import sqlite3
+
+        # The real shape, read off a live run's file rather than imagined:
+        # `checkpoints` and `writes`. The first version of this fixture made up
+        # one table, which is how the detection came to be written as "is ours
+        # missing" instead of "is theirs present".
+        conn = sqlite3.connect(str(path))
+        conn.execute("CREATE TABLE checkpoints (thread_id TEXT, checkpoint BLOB)")
+        conn.execute("CREATE TABLE writes (thread_id TEXT, task_id TEXT)")
+        conn.execute("INSERT INTO checkpoints VALUES ('r', X'0102')")
+        conn.commit()
+        conn.close()
+
+    def test_it_is_named_as_the_older_format(self, tmp_path):
+        from orchestrator.driver import UnreadableCheckpoint, load_state
+
+        db = tmp_path / "state.db"
+        self._langgraph_shaped(db)
+        with pytest.raises(UnreadableCheckpoint) as e:
+            load_state(db, "r")
+        assert "older" in str(e.value).lower()
+        assert "branch" in str(e.value).lower(), "must say the work is not lost"
+
+    def test_a_run_that_never_existed_is_still_just_missing(self, tmp_path):
+        # The two cases must stay distinguishable: nothing to resume is not the
+        # same as something that cannot be read.
+        from orchestrator.driver import load_state, open_checkpointer
+
+        db = tmp_path / "state.db"
+        _w, conn = open_checkpointer(db)
+        conn.close()
+        assert load_state(db, "never-ran") is None
+
+    def test_it_is_still_recognised_after_a_read_created_our_table(self, tmp_path):
+        # What actually happened: a read against a live run's database left an
+        # empty `steps` table behind, and the detection then saw both formats.
+        import sqlite3
+
+        from orchestrator.driver import UnreadableCheckpoint, load_state
+
+        db = tmp_path / "state.db"
+        self._langgraph_shaped(db)
+        conn = sqlite3.connect(str(db))
+        conn.execute("CREATE TABLE steps (run_id TEXT, step INT, node TEXT, state TEXT)")
+        conn.commit()
+        conn.close()
+        with pytest.raises(UnreadableCheckpoint):
+            load_state(db, "r")
+
+    def test_reading_does_not_write(self, tmp_path):
+        # A reader that creates tables is a bug in its own right, and this one
+        # destroyed the evidence the check above depends on.
+        import sqlite3
+
+        from orchestrator.driver import load_state
+
+        db = tmp_path / "state.db"
+        sqlite3.connect(str(db)).close()
+        load_state(db, "r")
+        conn = sqlite3.connect(str(db))
+        tables = [n for (n,) in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")]
+        conn.close()
+        assert tables == [], f"read created {tables}"
+
+    def test_an_absent_file_is_missing_not_unreadable(self, tmp_path):
+        from orchestrator.driver import load_state
+
+        assert load_state(tmp_path / "nope.db", "r") is None

@@ -77,6 +77,11 @@ EDGES: dict[str, list[str]] = {
 ENTRY_POINTS = ["plan", "precheck", "verify"]
 
 
+# What the framework this replaced wrote. Recognised so a run started before
+# the cutover gets told why it cannot resume rather than being reported
+# missing.
+_OLD_TABLES = {"checkpoints", "writes"}
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS steps (
     run_id TEXT NOT NULL,
@@ -86,6 +91,15 @@ CREATE TABLE IF NOT EXISTS steps (
     PRIMARY KEY (run_id, step)
 )
 """
+
+
+class UnreadableCheckpoint(RuntimeError):
+    """A `state.db` this driver did not write.
+
+    Its own type because the caller has to tell it from "no such run": one is
+    a typo in a run id, the other is a run that predates the driver and can
+    only be started again.
+    """
 
 
 def open_checkpointer(db_path: Path | str) -> tuple[Callable, sqlite3.Connection]:
@@ -122,7 +136,27 @@ def load_state(db_path: Path | str, run_id: str) -> RunState | None:
         return None
     conn = sqlite3.connect(str(path))
     try:
-        conn.execute(_SCHEMA)
+        tables = {
+            name for (name,) in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        # Named by what it *is*, not by the absence of ours. The first version
+        # asked "is `steps` missing", which is a weaker question and was
+        # defeated immediately: this function used to run `CREATE TABLE IF NOT
+        # EXISTS` before reading, so a single read against a live run's
+        # database left our table inside it and the check then saw both. A
+        # reader that writes is a bug on its own; it also erased the evidence
+        # it was about to look for.
+        if _OLD_TABLES <= tables:
+            raise UnreadableCheckpoint(
+                f"{path} is in an older format and cannot be resumed. Nothing "
+                "is lost: every landed stage is squash-merged onto the project "
+                "branch, and status.md, the progress log and stage-costs.md "
+                "carry across runs. Start a new run against the same project."
+            )
+        if "steps" not in tables:
+            return None
         row = conn.execute(
             "SELECT state FROM steps WHERE run_id = ? ORDER BY step DESC LIMIT 1",
             (run_id,),
