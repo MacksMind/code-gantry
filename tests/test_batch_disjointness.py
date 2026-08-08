@@ -261,3 +261,54 @@ class TestTheReasonIsUsable:
         )
         assert "second" in dropped[0] and "first" in dropped[0]
         assert "config/routes.rb" in dropped[0]
+
+
+class TestARevisedStageIsRecheckedAgainstTheQueue:
+    """Rework is never batched, and the queue survives it.
+
+    A stage that fails routes to the planner with its child branch intact, and
+    the branch belongs to one stage — so the planner revises *that* stage and
+    cannot answer with a batch. The queued stages behind it, though, are still
+    good work: nothing about them has changed.
+
+    What can change is the revised stage. A revision that widens `edit_files`
+    to fix a scope violation may now name a file a queued stage reads, and the
+    guarantee that made the batch safe would quietly stop holding. So the check
+    is re-run rather than the queue discarded — the queued stages that survive
+    are kept, and only those the revision actually collides with are dropped.
+
+    No new mechanism: putting the revised stage at the head of the list and
+    passing the queue behind it is the same question `safe_batch_prefix`
+    already answers. The revised stage is first so it is always kept, and the
+    queue was already pairwise-disjoint, so the only drops that can appear are
+    the ones the revision caused.
+    """
+
+    def test_a_revision_that_stays_in_scope_keeps_the_whole_queue(self):
+        from orchestrator.config import safe_batch_prefix
+
+        revised = _stage("one", edit=["app/a.rb"], read=["spec/support/helper.rb"])
+        queue = [_stage("two", edit=["app/b.rb"]), _stage("three", edit=["app/c.rb"])]
+        kept, dropped = safe_batch_prefix([revised, *queue], TRACKED)
+        assert [s.id for s in kept] == ["one", "two", "three"]
+        assert dropped == []
+
+    def test_a_widened_revision_drops_only_what_it_now_collides_with(self):
+        # The scope-violation case: `one` is revised to also edit `app/c.rb`,
+        # which `three` was drawn against. `two` is untouched and survives.
+        from orchestrator.config import safe_batch_prefix
+
+        widened = _stage("one", edit=["app/a.rb", "app/c.rb"])
+        queue = [_stage("two", edit=["app/b.rb"]), _stage("three", edit=["app/c.rb"])]
+        kept, dropped = safe_batch_prefix([widened, *queue], TRACKED)
+        assert [s.id for s in kept] == ["one", "two"]
+        assert len(dropped) == 1 and "three" in dropped[0]
+
+    def test_the_revised_stage_is_never_the_one_dropped(self):
+        # It owns the branch. Whatever else goes, it stays.
+        from orchestrator.config import safe_batch_prefix
+
+        widened = _stage("one", edit=["app/**"])
+        queue = [_stage("two", edit=["app/b.rb"]), _stage("three", edit=["app/c.rb"])]
+        kept, _ = safe_batch_prefix([widened, *queue], TRACKED)
+        assert [s.id for s in kept] == ["one"]

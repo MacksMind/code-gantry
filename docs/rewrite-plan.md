@@ -319,25 +319,36 @@ Each step keeps the suite green.
     that nearly every batch quotes `spec/support/migrated_controller_inventory.rb`,
     which is exactly the shared file the constraint exists to catch.
 
-    **Any route back to `plan` discards the queue**, and the reason is the
-    invariant rather than staleness. Disjointness is computed at derivation
-    time; a revision that widens stage 1's `edit_files` may make it overlap
-    stage 3's, and the property that made the batch safe no longer holds. So
-    discarding is required, not prudent. It also keeps the feedback loop — the
-    reviewer's `record` and the progress log informing the next stage — for the
-    case where it matters.
+    **Rework is never batched, and the queue survives it.** A stage that fails
+    routes to the planner with its child branch intact, and a branch belongs to
+    one stage — so the planner revises *that* stage and cannot answer with a
+    batch. `next_stages` applies to the `next_stage` verdict only; a `revise`
+    returns one stage, as today.
 
-    The rule is sharper than "on failure", and the distinctions are worth
-    keeping: a stage that lands keeps the queue, because nothing was rethought.
-    A stage retried by the executor keeps it, because the planner has not
-    touched the spec. Only a route to `plan` discards. And a pause keeps it and
-    persists it — the queue lives in `RunState`, and the pause is checked after
-    the squash, so a run stops between queued stages rather than mid-batch.
+    The queued stages behind it are still good work and are kept. What can
+    change is the revised stage: a revision widening `edit_files` to fix a
+    scope violation may now name a file a queued stage reads, and the guarantee
+    that made the batch safe would quietly stop holding. So **the conflict
+    check is re-run rather than the queue discarded** — the survivors are kept
+    and only what the revision actually collides with is dropped.
 
-    The cost is real: one failure throws away four stages of planning, which
-    could make batching net-negative if failures are common. "Stages discarded
-    per failure" is in the measurements below for that reason — it is the
-    number that decides whether the feature pays.
+    This needs no new mechanism. Putting the revised stage at the head of the
+    list and the queue behind it is the same question `safe_batch_prefix`
+    already answers: the revised stage is first so it is always kept, the queue
+    was already pairwise-disjoint, and the only drops that can appear are the
+    ones the revision caused. An earlier draft of this plan discarded the whole
+    queue on any route to `plan`, which was sound and wasteful — the invariant
+    only requires re-checking, not forgetting.
+
+    The other transitions: a stage that lands keeps the queue, because nothing
+    was rethought. A stage retried by the executor keeps it, because the
+    planner has not touched the spec. A pause keeps and persists it — the queue
+    lives in `RunState` and the pause is checked after the squash, so a run
+    stops between queued stages rather than mid-batch.
+
+    Measure "stages dropped per revision" regardless. If a revision routinely
+    invalidates the queue behind it, the batch was never independent and the
+    cap should come down.
 
     **This is not parallelism, and the distinction is the whole design.**
     Stages still run strictly one at a time. Many of them need a tree that does
