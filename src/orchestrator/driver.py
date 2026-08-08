@@ -30,7 +30,52 @@ import sqlite3
 from pathlib import Path
 from typing import Callable
 
+from orchestrator import nodes
 from orchestrator.state import RunState, resume_entry_point
+
+NODES: dict[str, Callable] = {
+    "plan": nodes.plan,
+    "precheck": nodes.precheck,
+    "execute": nodes.execute,
+    "verify": nodes.verify,
+    "review": nodes.review,
+    "advance": nodes.advance,
+    "finalize": nodes.finalize,
+    "escalate": nodes.escalate,
+}
+
+# Where each node may send the run. Declarative so it is checkable against the
+# spec rather than buried in lambdas.
+EDGES: dict[str, list[str]] = {
+    # Reaches itself, and it is the only node that does. A stage spec that
+    # fails validation is redrawn rather than escalated — a malformed spec is
+    # the definition of a stage drawn wrongly, which is the planner's tier.
+    # Bounded by `max_interventions_without_landing` like every other way the
+    # planner can fail to make progress.
+    "plan": ["precheck", "verify", "finalize", "escalate", "plan"],
+    "precheck": ["execute", "plan", "escalate"],
+    # `execute` reaches itself for one case only: the executor failed to run
+    # at all — a transport error, a rejected request, a missing credential —
+    # so there is nothing for a gate to look at. That path existed in
+    # `nodes.execute` from the start and was illegal here, which nothing
+    # noticed while the subprocess editor made it almost unreachable; the
+    # in-process one returns `ok=False` for exactly this and crashed the run
+    # on its first stage.
+    #
+    # Routing it through `verify` was the alternative and would have been a
+    # lie: the gate would report "the attempt produced no changes", which is
+    # observably true and diagnostically wrong. Bounded by `max_test_retries`
+    # like any other executor retry.
+    "execute": ["verify", "plan", "execute"],
+    "verify": ["review", "advance", "execute", "plan", "escalate"],
+    "review": ["advance", "execute", "plan"],
+    "advance": ["plan"],
+    "finalize": ["end", "escalate"],
+    "escalate": ["end"],
+}
+
+ENTRY_POINTS = ["plan", "precheck", "verify"]
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS steps (
@@ -136,8 +181,8 @@ def default_max_steps(
 def drive(
     rt,
     state: dict,
-    nodes: dict[str, Callable],
-    edges: dict[str, list[str]],
+    nodes: dict[str, Callable] | None = None,
+    edges: dict[str, list[str]] | None = None,
     entry: Callable[[dict], str] = resume_entry_point,
     checkpoint: Callable | None = None,
     max_steps: int = 100_000,
@@ -148,6 +193,8 @@ def drive(
     crash mid-node resume from the last completed one rather than from a
     half-applied update.
     """
+    nodes = NODES if nodes is None else nodes
+    edges = EDGES if edges is None else edges
     hop = entry(state)
     step = 0
     while True:

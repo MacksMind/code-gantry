@@ -1,4 +1,4 @@
-"""End-to-end runs through the real graph.
+"""End-to-end runs through the real driver.
 
 The real checkpointer, real git operations, real verify layers, real branch
 topology. Only the three model calls are stubbed: a fake `aider` on PATH that
@@ -16,7 +16,8 @@ import pytest
 
 from orchestrator.config import parse_config
 from orchestrator.gitops import Git
-from orchestrator.graph import build_graph, open_checkpointer, recursion_limit
+from orchestrator.driver import default_max_steps, open_checkpointer
+from orchestrator.driver import drive as drive_graph
 from orchestrator.plandoc import PlanDocument, PlanTree
 from orchestrator.planner import PlannerOutcome, PlannerUsage
 from orchestrator.report import build_report
@@ -143,7 +144,7 @@ def drive(repo, tmp_path, planner=None, reviewer=None, state=None, run_id="r1", 
     from orchestrator.executor import Executor
 
     runner = CommandRunner(cwd=repo, timeout=60)
-    saver, conn = open_checkpointer(paths.state_db)
+    checkpoint, conn = open_checkpointer(paths.state_db)
     try:
         rt = Runtime(
             cfg=cfg,
@@ -169,13 +170,9 @@ def drive(repo, tmp_path, planner=None, reviewer=None, state=None, run_id="r1", 
                 project_branch="proj",
                 started_at=time.time(),
             )
-        graph = build_graph(rt, checkpointer=saver)
-        final = graph.invoke(
-            state,
-            {
-                "configurable": {"thread_id": run_id},
-                "recursion_limit": recursion_limit(60, 3, 2, 12),
-            },
+        final = drive_graph(
+            rt, state, checkpoint=checkpoint,
+            max_steps=default_max_steps(60, 3, 2, 12),
         )
         return cfg, project, paths, final
     finally:
@@ -535,7 +532,7 @@ class TestResume:
         planner = ScriptedPlanner([PlannerOutcome("project_complete", "done", "e")])
         cfg, project, paths, final = drive(repo, tmp_path, planner=planner)
 
-        saver, conn = open_checkpointer(paths.state_db)
+        checkpoint, conn = open_checkpointer(paths.state_db)
         try:
             from orchestrator.commands import CommandRunner
             from orchestrator.executor import Executor
@@ -545,9 +542,12 @@ class TestResume:
                 cfg=cfg, project=project, paths=paths, git=Git(repo), runner=runner,
                 executor=Executor(cfg, runner), planner=None, reviewer=None,
             )
-            graph = build_graph(rt, checkpointer=saver)
-            snapshot = graph.get_state({"configurable": {"thread_id": "r1"}})
-            assert snapshot.values["status"] == "complete"
+            # Read back from the checkpoint table rather than through a
+            # compiled graph: state is a row now, and reading it needs no
+            # runtime at all.
+            from orchestrator.driver import load_state
+
+            assert load_state(paths.state_db, "r1")["status"] == "complete"
         finally:
             conn.close()
 

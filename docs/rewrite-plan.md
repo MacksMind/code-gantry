@@ -2,7 +2,7 @@
 
 ## Where this stands
 
-Steps 0–7 and 9 are done; 8 and 10 remain. Each entry
+Steps 0–9 are done; only 10 remains. Each entry
 below names the commit that did it, because a status line in a document is a
 claim and a sha is checkable — the same reason a figure here has to name the
 artifact it came from.
@@ -17,7 +17,7 @@ artifact it came from.
 | 5 · the loop behind a provider switch | done | `7479631` |
 | 6 · flip the default, take a live run | done | measured in `CLAUDE.md` |
 | 7 · delete Aider | done | `5c298c4`, `57c3b39` |
-| 8 · replace LangGraph with `driver.py` | pending | — |
+| 8 · replace LangGraph with `driver.py` | done | `6a3225d`, this commit |
 | 9 · simplify `nodes.execute` | done, absorbed | `5c298c4`, `5192d1a` |
 | 10 · up to five stages per derivation | pending | — |
 
@@ -39,11 +39,20 @@ guard is `RETIRED_KEYS` and per-section now), and `scripts/smoke.py` is the one
 remaining fake-`aider`-on-`PATH`, which is a test harness rather than shipped
 behaviour.
 
-**Step 8 needs a fresh run, not a resume** — `state.db` is LangGraph msgpack
-and no new writer can read it. The work survives regardless: it is squash-merged
-onto the project branch, and `status.md`, the progress log and `stage-costs.md`
-are per-project rather than per-run. That transition was made once already on
-2026-08-07 and cost nothing but an empty `completed` history on the new run.
+**Step 8 needed a fresh run and still does for the cutover itself** — the old
+`state.db` is LangGraph msgpack and `load_state` cannot read it, so a run
+started before this cannot be resumed after it. The work survives regardless:
+it is squash-merged onto the project branch, and `status.md`, the progress log
+and `stage-costs.md` are per-project rather than per-run.
+
+What the framework actually supplied, once routing turned out to be ours all
+along, was four things: the loop, a state merge, a checkpointer and a step
+ceiling. Two were load-bearing. The schema filter is a *feature* — `state.py`
+says it depends on undeclared keys being dropped — and resume is explicit now,
+where LangGraph resumed from a pending task and did not always consult
+`resume_entry_point`. The ceiling changed behaviour deliberately: it escalates
+rather than raising, which this document had named as the one failure mode the
+tool must not have and the framework would not let us fix.
 
 This file moved here from a session's plan directory on 2026-08-07. A plan with
 open steps that lives outside the repository is the same failure this project

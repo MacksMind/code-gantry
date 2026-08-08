@@ -198,7 +198,7 @@ projects/<slug>/
   plan-snapshot/         # plan tree as resolved at the start of each run
   status.md              # append-only expected-vs-actual log, one entry per stage
   runs/<run_id>/
-    state.db             # LangGraph checkpointer
+    state.db             # one row per node, the run's own checkpointer
     run.log              # timeline of node transitions and decisions
     report.md            # the run's outcome
     stages/<n>-rev-<r>-attempt-<m>/
@@ -1367,11 +1367,14 @@ The three model clients sit above that, and the graph above them. Only the
 three model calls are stubbed in the suite; the graph, the checkpointer, the
 merges and the subprocess runner are all real.
 
-One number is computed rather than configured: LangGraph's `recursion_limit`
-comes from the stage and retry budgets, because this graph loops far more than
-the default twenty-five super-steps allows and exhausting it surfaces as an
-opaque framework error rather than an escalation — the one failure mode this
-tool must not have.
+One number is computed rather than configured: `default_max_steps` comes from
+the stage and retry budgets, because this graph loops far more than any
+plausible fixed ceiling and a run must not stop on arithmetic it did not
+choose. Exhausting it routes through `escalate` like every other stop, so an
+operator reads it in the run's own vocabulary — which is the whole reason the
+loop is ours. Under the framework it surfaced as an opaque error, and that was
+named here as the one failure mode this tool must not have while being the one
+thing that layer would not let us fix.
 
 Aider's flag names are verified by `validate` parsing `aider --help` rather than
 by trusting this document. Its CLI surface changes between releases, and the

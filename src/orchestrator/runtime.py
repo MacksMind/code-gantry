@@ -375,7 +375,6 @@ def pin_modules() -> None:
         executorclient,
         executorloop,
         executortools,
-        graph,
         nodes,
         pricing,
         prompts,

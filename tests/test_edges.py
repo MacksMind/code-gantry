@@ -2,7 +2,13 @@
 
 import pytest
 
-from orchestrator.graph import EDGES, ENTRY_POINTS, NODES, _router, recursion_limit
+from orchestrator.driver import (
+    EDGES,
+    ENTRY_POINTS,
+    NODES,
+    _next,
+    default_max_steps,
+)
 
 
 class TestEdgeTable:
@@ -58,72 +64,55 @@ class TestEdgeTable:
 
 
 class TestRouter:
-    def test_routes_to_a_permitted_hop(self):
-        assert _router(["verify", "plan"])({"next_hop": "verify"}) == "verify"
+    """The same four rules, now that the router is ours rather than a callback.
 
-    def test_end_maps_to_the_graph_terminal(self):
-        assert _router(["end"])({"next_hop": "end"}) == "__end__"
+    `_router(allowed)` returned a closure LangGraph called per node; `_next`
+    takes the node and the table directly, so the error can name which node
+    misrouted — which the closure could not, and which is the first thing
+    anyone reading that traceback wants.
+    """
+
+    def test_routes_to_a_permitted_hop(self):
+        assert _next("x", {"next_hop": "verify"}, {"x": ["verify", "plan"]}) == "verify"
+
+    def test_end_is_the_terminal(self):
+        # No longer LangGraph's `__end__` sentinel; the loop returns instead.
+        assert _next("x", {"next_hop": "end"}, {"x": ["end"]}) == "end"
 
     def test_an_unpermitted_hop_raises(self):
         # A node asking for an edge the spec lacks is a bug; rerouting hides it.
-        with pytest.raises(RuntimeError):
-            _router(["verify"])({"next_hop": "advance"})
+        with pytest.raises(RuntimeError, match="'x'"):
+            _next("x", {"next_hop": "advance"}, {"x": ["verify"]})
 
     def test_a_missing_hop_escalates(self):
         # Fail safe: an unset next_hop stops the run rather than advancing it.
-        assert _router(["escalate"])({}) == "escalate"
+        assert _next("x", {}, {"x": ["escalate"]}) == "escalate"
 
 
-class TestRecursionLimit:
-    def test_far_above_the_langgraph_default(self):
-        assert recursion_limit(60, 3, 2, 12) > 25
+class TestTheStepCeiling:
+    def test_it_is_generous(self):
+        # It was sized to defeat LangGraph's 25-super-step default. The default
+        # is gone; the arithmetic stays, because the reasoning behind it was
+        # about this project's shape rather than about the framework.
+        assert default_max_steps(60, 3, 2, 12) > 25
 
     def test_scales_with_every_budget(self):
-        base = recursion_limit(10, 3, 2, 12)
-        assert recursion_limit(20, 3, 2, 12) > base
-        assert recursion_limit(10, 6, 2, 12) > base
-        assert recursion_limit(10, 3, 5, 12) > base
-        assert recursion_limit(10, 3, 2, 24) > base
+        base = default_max_steps(10, 3, 2, 12)
+        assert default_max_steps(20, 3, 2, 12) > base
+        assert default_max_steps(10, 6, 2, 12) > base
+        assert default_max_steps(10, 3, 5, 12) > base
+        assert default_max_steps(10, 3, 2, 24) > base
 
     def test_covers_a_worst_case_run(self):
         # Every stage burning every retry and rework, plus every planner
-        # intervention. Exhausting the limit surfaces as an opaque framework
-        # error rather than an escalation — the one failure mode to avoid.
+        # intervention. Exhausting it is an escalation now rather than an
+        # opaque framework error — see `test_driver.py` — but the ceiling
+        # still has to sit above a legitimate worst case, or the escalation
+        # would fire on a run that was working.
         stages, tests, reworks, interventions = 60, 3, 2, 12
         per_stage = 5 * (tests + reworks + 1)
         worst = stages * per_stage + interventions * per_stage
-        assert recursion_limit(stages, tests, reworks, interventions) >= worst
-
-
-class TestCheckpointer:
-    def test_state_survives_a_reopened_connection(self, tmp_path):
-        from orchestrator.graph import open_checkpointer
-
-        saver, conn = open_checkpointer(tmp_path / "runs" / "r1" / "state.db")
-        config = {"configurable": {"thread_id": "r1", "checkpoint_ns": ""}}
-        saver.put(
-            config,
-            {
-                "v": 1, "id": "c1", "ts": "2026-01-01T00:00:00+00:00",
-                "channel_values": {"stage_index": 3}, "channel_versions": {},
-                "versions_seen": {},
-            },
-            {"source": "update", "step": 1, "parents": {}},
-            {},
-        )
-        conn.close()
-
-        reopened, conn2 = open_checkpointer(tmp_path / "runs" / "r1" / "state.db")
-        tup = reopened.get_tuple(config)
-        assert tup.checkpoint["channel_values"]["stage_index"] == 3
-        conn2.close()
-
-    def test_creates_the_run_directory(self, tmp_path):
-        from orchestrator.graph import open_checkpointer
-
-        _, conn = open_checkpointer(tmp_path / "deep" / "nested" / "state.db")
-        assert (tmp_path / "deep" / "nested").is_dir()
-        conn.close()
+        assert default_max_steps(stages, tests, reworks, interventions) >= worst
 
 
 class TestTheExecutorCanBeRetriedDirectly:
@@ -138,14 +127,14 @@ class TestTheExecutorCanBeRetriedDirectly:
     """
 
     def test_execute_may_reach_itself(self):
-        from orchestrator.graph import EDGES
+        from orchestrator.driver import EDGES
 
         assert "execute" in EDGES["execute"]
 
     def test_it_is_still_the_only_node_besides_plan_that_does(self):
         # The self-loop is a licence for one case, not a general one. Every
         # other node still has to hand control somewhere else.
-        from orchestrator.graph import EDGES
+        from orchestrator.driver import EDGES
 
         looping = {name for name, hops in EDGES.items() if name in hops}
         assert looping == {"plan", "execute"}

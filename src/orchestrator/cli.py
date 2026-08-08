@@ -33,7 +33,7 @@ from orchestrator.approval import approval_problem, config_hash, record_approval
 from orchestrator.config import ConfigError, ProjectConfig, load_config
 from orchestrator.discover import derive_target_repo, draft_config
 from orchestrator.gitops import Git, GitError
-from orchestrator.graph import build_graph, open_checkpointer, recursion_limit
+from orchestrator.driver import default_max_steps, drive, load_state, open_checkpointer
 from orchestrator.plandoc import resolve_plan_tree, snapshot_tree
 from orchestrator.planner import make_planner
 from orchestrator.preflight import format_checks, run_preflight
@@ -430,7 +430,7 @@ def resume(run_id: str, reset_progress_budget: bool) -> None:
     project, cfg = _locate_run(run_id)
     paths = RunPaths(project, run_id)
 
-    saved = _load_state(cfg, project, paths, run_id)
+    saved = _load_state(paths, run_id)
     if saved is None:
         click.echo(f"no checkpoint for run {run_id}", err=True)
         sys.exit(EXIT_FAILED)
@@ -477,7 +477,7 @@ def status(run_id: str) -> None:
     """Show where a run stopped and why."""
     project, cfg = _locate_run(run_id)
     paths = RunPaths(project, run_id)
-    saved = _load_state(cfg, project, paths, run_id)
+    saved = _load_state(paths, run_id)
     if saved is None:
         click.echo(f"run {run_id} has no checkpoint yet", err=True)
         sys.exit(EXIT_FAILED)
@@ -504,7 +504,7 @@ def _drive(
     graph_input: dict,
     warnings: list[str] | None = None,
 ) -> int:
-    saver, conn = open_checkpointer(paths.state_db)
+    checkpoint, conn = open_checkpointer(paths.state_db)
     log = RunLog(paths.run_log)
     # Its own file, and deliberately not echoed: the terminal carries the
     # timeline, and this is what the timeline is being kept free of.
@@ -529,18 +529,16 @@ def _drive(
         # Said once, in the timeline, so the file is discoverable without
         # knowing it exists. A log nobody can find is not visibility.
         log(f"[run] tool reads are streaming to {paths.tool_log}")
-        graph = build_graph(rt, checkpointer=saver)
-        final = graph.invoke(
+        final = drive(
+            rt,
             graph_input,
-            {
-                "configurable": {"thread_id": paths.run_id},
-                "recursion_limit": recursion_limit(
-                    cfg.limits.max_stages,
-                    cfg.limits.max_test_retries,
-                    cfg.limits.max_rework_retries,
-                    cfg.limits.max_planner_interventions,
-                ),
-            },
+            checkpoint=checkpoint,
+            max_steps=default_max_steps(
+                cfg.limits.max_stages,
+                cfg.limits.max_test_retries,
+                cfg.limits.max_rework_retries,
+                cfg.limits.max_planner_interventions,
+            ),
         )
     except Exception as exc:
         # The run log is the artifact an operator tails, and until now it said
@@ -599,17 +597,15 @@ def _stage_has_work(git: Git, saved: dict) -> bool:
         return False
 
 
-def _load_state(cfg, project, paths, run_id) -> dict | None:
-    saver, conn = open_checkpointer(paths.state_db)
-    try:
-        # A throwaway runtime: reading state needs the graph shape, not models,
-        # and building them would demand API keys just to read a report.
-        rt = build_runtime(cfg, project, paths, planner=None, reviewer=None)
-        graph = build_graph(rt, checkpointer=saver)
-        snapshot = graph.get_state({"configurable": {"thread_id": run_id}})
-        return dict(snapshot.values) if snapshot and snapshot.values else None
-    finally:
-        conn.close()
+def _load_state(paths, run_id) -> dict | None:
+    """The last checkpoint, read without building anything.
+
+    This used to construct a throwaway runtime, because LangGraph would only
+    hand back state through a compiled graph — so reading a report meant
+    assembling the nodes it would have run. The checkpoint is a table now, and
+    `load_state` opens and closes its own connection.
+    """
+    return load_state(paths.state_db, run_id)
 
 
 def _locate_run(run_id: str) -> tuple[ProjectPaths, ProjectConfig]:
