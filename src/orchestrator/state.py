@@ -214,6 +214,14 @@ class RunState(TypedDict, total=False):
     deferred: list[dict]
     planner_notes: list[str]
     review_feedback: list[str]
+    # What the executor said on an attempt that left the branch unchanged,
+    # held until the next failure carries it. Declared here for the reason the
+    # comment on `paused_before` gives: the driver filters every node's update
+    # against this schema, so an undeclared key is written and silently
+    # dropped. Not folded into `review_feedback`, which is composed with
+    # `[-2:]` at both handoffs — a third kind of entry there pushes the failure
+    # that actually ended the stage out of the window.
+    executor_note: str | None
     review_verdict: str | None
     review_summary: str | None
     review_record: str | None
@@ -298,6 +306,7 @@ def new_state(
         deferred=[],
         planner_notes=[],
         review_feedback=[],
+        executor_note=None,
         review_verdict=None,
         review_summary=None,
         review_record=None,
@@ -395,6 +404,7 @@ def fresh_stage_fields() -> dict:
         "failure_layer": None,
         "failed_stage_id": None,
         "review_feedback": [],
+        "executor_note": None,
         "review_verdict": None,
         "review_summary": None,
         "review_record": None,
@@ -462,6 +472,7 @@ def fresh_revision_fields() -> dict:
         "opening_failure": None,
         "failure_layer": None,
         "review_feedback": [],
+        "executor_note": None,
         "review_verdict": None,
         "review_summary": None,
         "review_record": None,

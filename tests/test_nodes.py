@@ -806,21 +806,17 @@ class TestExecute:
         for args in (["add", "-A"], ["commit", "-qm", "prior attempt"]):
             subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
 
-    def test_a_rework_that_changes_nothing_claims_the_diagnosis(
+    def test_a_rework_that_changes_nothing_records_what_it_said(
         self, repo, tmp_path
     ):
-        """The executor's account of why it stopped is the opening failure.
-
-        It is the first failure of the sequence by construction — the gate
-        result, the red suite and the exhausted budget that follow are all what
-        it caused — and `opening_failure` is what reaches the planner intact.
+        """`result.log` is otherwise read by nothing on this path.
 
         Observed on `remove-non-admin-catch-all-retry` attempt 1: 73 tool calls,
-        zero edits, and a closing paragraph naming the cause precisely. Nothing
-        read it; `result.log` is consumed only on the timeout and turns-
-        exhausted branches. Twenty minutes and a full suite later the planner
-        re-derived it and widened `edit_files` to the directories the executor
-        had already named.
+        zero edits, and a closing paragraph naming the cause precisely — the
+        files it needed were outside its permitted list. Its only consumers are
+        the timeout and turns-exhausted branches, so it went to `executor.log`
+        and nowhere else. Twenty minutes, a reviewer call, a 246s suite and a
+        106s baseline later the planner re-derived it unaided.
         """
         ex = StubExecutor(repo=repo, log="those files are outside my list")
         cfg, rt, state = make(repo, tmp_path, executor=ex)
@@ -829,8 +825,7 @@ class TestExecute:
         out = nodes.execute(state, rt)
         # Routing is unchanged: the gates decide, not the model's own stop.
         assert out["next_hop"] == "verify"
-        assert out["opening_failure"]["layer"] == "executor"
-        assert "outside my list" in out["opening_failure"]["detail"]
+        assert "outside my list" in out["executor_note"]
 
     def test_a_first_attempt_with_no_edits_is_left_to_the_scope_gate(
         self, repo, tmp_path
@@ -842,29 +837,82 @@ class TestExecute:
         state = with_stage(state, rt)
         out = nodes.execute(state, rt)
         assert out["next_hop"] == "verify"
-        assert "opening_failure" not in out
+        assert "executor_note" not in out
 
-    def test_an_attempt_that_edited_does_not_claim_it(self, repo, tmp_path):
+    def test_an_attempt_that_edited_does_not_record_one(self, repo, tmp_path):
         ex = StubExecutor(repo=repo, edits=[("app.py", "new\n")], edits_applied=3,
                           log="done")
         cfg, rt, state = make(repo, tmp_path, executor=ex)
         state = with_stage(state, rt)
         self._prior_work(repo)
-        assert "opening_failure" not in nodes.execute(state, rt)
+        assert "executor_note" not in nodes.execute(state, rt)
 
-    def test_a_real_failure_that_got_there_first_keeps_the_claim(
+
+class TestTheExecutorsAccountReachesTheNextFailure:
+    """It rides the next `FailureDetail`, and both destinations get it.
+
+    Not `opening_failure`: that is write-once, and the full-suite failure which
+    *caused* the rework claims it one node earlier in `_rework_or_plan`. The
+    first implementation put it there and was dead code by construction — it
+    could never fire in the case it was written for.
+
+    Not `review_feedback` either: both handoffs compose their detail from
+    `feedback[-2:]`, so a third kind of entry evicts the failure that actually
+    ended the stage. On the observed sequence the note would have been pushed
+    out by the reviewer rework that followed it.
+    """
+
+    def _state(self):
+        return {
+            "executor_note": "those files are outside my list",
+            "verify_attempt": 0,
+            "rework_attempt": 0,
+            "stage_start_sha": "abc",
+            "review_feedback": ["the suite went red"],
+        }
+
+    def test_it_reaches_the_planner(self, repo, tmp_path):
+        cfg, rt, _ = make(repo, tmp_path)
+        out = nodes._planner_failure(self._state(), "tests", "red", "one spec")
+        assert "outside my list" in out["last_failure"]["detail"]
+        assert "one spec" in out["last_failure"]["detail"]
+        assert out["executor_note"] is None
+
+    def test_it_reaches_another_executor_attempt(self, repo, tmp_path):
+        cfg, rt, _ = make(repo, tmp_path)
+        out = nodes._retry_or_plan(
+            self._state(), rt, "tests", "red", "feedback", "one spec"
+        )
+        assert out["next_hop"] == "execute"
+        assert "outside my list" in out["opening_failure"]["detail"]
+        assert out["executor_note"] is None
+
+    def test_it_reaches_a_rework(self, repo, tmp_path):
+        cfg, rt, _ = make(repo, tmp_path)
+        out = nodes._rework_or_plan(
+            self._state(), rt, ["the reviewer said no"], "blocked"
+        )
+        assert out["next_hop"] == "execute"
+        assert "outside my list" in out["opening_failure"]["detail"]
+        assert out["executor_note"] is None
+
+    def test_nothing_recorded_changes_nothing(self, repo, tmp_path):
+        cfg, rt, _ = make(repo, tmp_path)
+        state = self._state() | {"executor_note": None}
+        out = nodes._planner_failure(state, "tests", "red", "one spec")
+        assert out["last_failure"]["detail"] == "one spec"
+        assert "executor_note" not in out
+
+    def test_it_is_cleared_so_a_later_failure_does_not_reuse_it(
         self, repo, tmp_path
     ):
-        # Write-once. The whole point of `opening_failure` is that the first
-        # diagnosis survives; a later quiet stop must not displace it.
-        ex = StubExecutor(repo=repo, log="those files are outside my list")
-        cfg, rt, state = make(repo, tmp_path, executor=ex)
-        state = with_stage(state, rt)
-        self._prior_work(repo)
-        state["opening_failure"] = {"layer": "tests", "summary": "the real one",
-                                    "detail": "", "out_of_scope_paths": [],
-                                    "failing_paths": []}
-        assert "opening_failure" not in nodes.execute(state, rt)
+        # It describes one attempt. Carried twice it would be attributed to
+        # work it never saw.
+        cfg, rt, _ = make(repo, tmp_path)
+        state = self._state()
+        state.update(nodes._planner_failure(state, "tests", "red", "one spec"))
+        again = nodes._planner_failure(state, "tests", "red", "another spec")
+        assert "outside my list" not in again["last_failure"]["detail"]
 
     def test_writes_the_prompt_under_a_revision_scoped_path(self, repo, tmp_path):
         cfg, rt, state = make(repo, tmp_path)

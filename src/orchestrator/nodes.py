@@ -936,11 +936,24 @@ def execute(state: RunState, rt: Runtime) -> dict:
         # directories the executor had named. The revision's planner prompt
         # contains the sentence zero times.
         #
-        # `opening_failure` is the right home rather than a new field: this is
-        # a retry sequence's first failure by construction, and everything that
-        # follows — the gate, the suite, the budget running out — is what it
-        # caused. The claim is write-once, so a real failure that got here first
-        # keeps it. Routing is deliberately unchanged: the gates decide, and a
+        # It is held for the *next* failure rather than claimed as the opening
+        # one. The first cut did claim it, and it was dead code by
+        # construction: `opening_failure` is write-once and the full-suite
+        # failure that caused this rework had already taken it one node
+        # earlier, in `_rework_or_plan`. Correct behaviour on that helper's
+        # part — the suite failure genuinely is the diagnosis — and it meant
+        # the claim here could never fire in the one case it was written for.
+        #
+        # `review_feedback` is the wrong home too, for a different reason: both
+        # handoffs compose their detail from `feedback[-2:]`, so a third kind
+        # of entry pushes the failure that actually ended the stage out of the
+        # window. Traced on the observed sequence, the note would have been
+        # displaced by the reviewer rework that followed it.
+        #
+        # So it rides the next `FailureDetail` instead, which is causally right
+        # — the gate is about to fail *because* the executor declined — and
+        # arrives whether that goes to another attempt or to the planner.
+        # Routing here is deliberately unchanged: the gates decide, and a
         # model's voluntary stop does not get to end a stage.
         #
         # `cumulative_diff` rather than the attempt counter, because the
@@ -951,14 +964,7 @@ def execute(state: RunState, rt: Runtime) -> dict:
             return {
                 "next_hop": "verify",
                 **measured,
-                **_opening(
-                    state,
-                    _failure_detail(
-                        "executor",
-                        "the executor left the branch unchanged and said why",
-                        _clip(result.log),
-                    ),
-                ),
+                "executor_note": _clip(result.log),
             }
         return {"next_hop": "verify", **measured}
 
@@ -2084,6 +2090,34 @@ def _failure_detail(
     }
 
 
+def _consume_executor_note(state: RunState, detail: str) -> tuple[str, dict]:
+    """Fold in what the executor said when it stopped without editing.
+
+    Written by `execute`, read by whichever handoff comes next, and cleared as
+    it is read — it describes one attempt, and a second failure that carried it
+    again would be attributing it to work it never saw.
+
+    Measured on `remove-non-admin-catch-all-retry` attempt 1: 73 tool calls,
+    zero edits, and a closing paragraph naming the cause exactly — "the
+    reported full-suite failures require changes to other application/spec
+    files involving URL generation, but those files are outside the permitted
+    list". `result.log` was written to `executor.log` and read by nothing; the
+    only consumers were the timeout and turns-exhausted branches. Twenty
+    minutes, a reviewer call, a 246s suite and a 106s baseline later the
+    planner re-derived it unaided and widened `edit_files` to the six
+    directories the executor had already named. The revision's planner prompt
+    contains the sentence zero times.
+    """
+    note = state.get("executor_note")
+    if not note:
+        return detail, {}
+    joined = (
+        f"{detail}\n\nThe previous attempt left the branch unchanged. What the "
+        f"executor said when it stopped:\n{note}"
+    ).strip()
+    return joined, {"executor_note": None}
+
+
 def _opening(state: RunState, detail: dict) -> dict:
     """Claim the sequence's first failure, or leave the claim standing.
 
@@ -2105,6 +2139,7 @@ def _planner_failure(
     failing_paths: list[str] | None = None,
 ) -> dict:
     """Hand the failure to the planner with what it needs to act on."""
+    detail, cleared = _consume_executor_note(state, detail)
     latest = _failure_detail(
         layer, summary, detail, out_of_scope_paths, failing_paths
     )
@@ -2112,6 +2147,7 @@ def _planner_failure(
         "failure_layer": layer,
         "last_failure": latest,
         **_opening(state, latest),
+        **cleared,
         "next_hop": "plan",
     }
 
@@ -2137,12 +2173,14 @@ def _retry_or_plan(
             failing_paths=failing_paths,
         )
 
+    detail, cleared = _consume_executor_note(state, detail)
     accumulated = list(state.get("review_feedback") or [])
     accumulated.append(feedback)
     return {
         "failure_layer": layer,
         "verify_attempt": consumed + 1,
         "review_feedback": accumulated,
+        **cleared,
         # Recorded on the way to the executor, not only on the way to the
         # planner. This is the branch the diagnosis is usually lost on: the
         # real failure retries, the retries stop making progress, and only the
@@ -2199,13 +2237,13 @@ def _rework_or_plan(
         rt.log(f"[review] resetting to {state['stage_start_sha'][:8]} before rework")
         rt.git.reset_hard(state["stage_start_sha"])
 
+    detail, cleared = _consume_executor_note(state, "\n\n".join(feedback[-2:]))
     return {
         "failure_layer": layer,
         "review_feedback": feedback,
         "rework_attempt": consumed + 1,
-        **_opening(
-            state, _failure_detail(layer, summary, "\n\n".join(feedback[-2:]))
-        ),
+        **_opening(state, _failure_detail(layer, summary, detail)),
+        **cleared,
         "next_hop": "execute",
     }
 
