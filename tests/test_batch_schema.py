@@ -54,18 +54,54 @@ class TestTheFieldItself:
         )
         assert [s.id for s in r.additional_stages] == ["two", "three"]
 
-    def test_the_description_does_not_read_as_a_quota(self):
-        """A number in the prose is an invitation to fill it.
+    def test_the_field_defers_to_the_prompt_for_how_many(self):
+        """This test used to assert the opposite, and the reversal is measured.
 
-        The measured risk is not a bad stage but a slower derivation: asked for
-        up to five, the planner may survey as though it needs five, and one
-        call costing five calls' worth of thinking has saved nothing.
+        It required the description to read "normally empty" or "leave it
+        empty", on the reasoning that a number in the prose is an invitation to
+        fill it — asked for up to five, the planner may survey as though it
+        needs five, and one call costing five calls' worth of thinking has
+        saved nothing. That risk is real and the guard against it is kept; what
+        was wrong was where the guidance lived and what it left out.
+
+        The field was the *only* thing the planner was told about batching, and
+        the cap appeared nowhere at all — not in the schema, not in the prompt,
+        reachable only in `config.py` and in the trim at `nodes.advance`. So
+        the planner was asked to decline an option whose size it could not see,
+        by a description that told it declining was correct. That is the shape
+        `CLAUDE.md` records for `observations`: empty 278 times out of 278.
+        Under `max_batch_stages: 5`, two consecutive derivations returned one
+        stage each.
+
+        So the number moves to the prompt, where the cap is known and can be
+        stated as one, and this field points at it instead of pre-empting it.
         """
         from orchestrator.planner import PlannerResponse
 
         d = PlannerResponse.model_fields["additional_stages"].description.lower()
-        assert "leave it empty" in d or "normally empty" in d
+        assert "stated in the prompt" in d
+        # No count here: the field cannot know the cap, and a number written
+        # into it would be wrong for every project that set a different one.
+        assert not any(str(n) in d for n in range(2, 10))
+        # The constraint that decides whether an offered stage survives travels
+        # with the field as well as the prompt, because this is what the model
+        # is looking at while it writes them.
         assert "stand alone" in d or "stands alone" in d
+
+    def test_the_prompt_keeps_the_guard_against_surveying_for_the_cap(self):
+        # The concern the old assertion existed for. Stating a ceiling must not
+        # read as a target: the block has to say, in the same breath, that a
+        # batch of one is a correct answer and that extra reading defeats the
+        # purpose.
+        from types import SimpleNamespace
+
+        from orchestrator.prompts import _batch_block
+
+        text = _batch_block(
+            SimpleNamespace(planner=SimpleNamespace(max_batch_stages=5))
+        ).lower()
+        assert "batch of one" in text
+        assert "cost more than it saved" in text
 
 
 class TestEveryBatchedStageIsChecked:

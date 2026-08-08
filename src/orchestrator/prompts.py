@@ -594,6 +594,64 @@ def _costs_block(costs: list[dict] | None) -> str:
     )
 
 
+def _batch_block(cfg) -> str:
+    """How many stages this call may return, and what makes a batch legal.
+
+    Fixed for the run, so it belongs in the cached prefix with the plan and the
+    layout rather than in the situational half.
+
+    It exists because step 10 changed the output contract and not the prompt.
+    The only description of batching was the `additional_stages` field, whose
+    second sentence read "**Normally empty, and empty is the right answer**" —
+    an optional field with a conditional trigger, described as best declined.
+    That is the exact shape `observations` had when it came back empty 278
+    times out of 278, and the first two derivations under a cap of five each
+    returned one stage. Meanwhile the cap itself lived only in `config.py` and
+    in the trim at `nodes.advance`, so a planner could offer twenty and have
+    fifteen discarded without ever being told the number.
+
+    The orthogonality rules travel with the invitation rather than sitting in
+    the field description alone, because they are what makes an offered stage
+    survive. Invite a batch without them and the planner writes stages that
+    share a file, they are silently dropped, and it learns why only on the
+    *next* call from `batch_notes` — having already paid to draw them.
+    """
+    planner = getattr(cfg, "planner", None)
+    cap = getattr(planner, "max_batch_stages", 1) if planner else 1
+    if cap <= 1:
+        # Said rather than left silent: `advance` trims to nothing here, so a
+        # stage written into `additional_stages` is output spent on work that
+        # is discarded before it runs.
+        return (
+            "## How many stages to return\n\n"
+            "One. Leave `additional_stages` empty — anything in it is "
+            "discarded before it runs.\n\n"
+        )
+    return (
+        "## How many stages to return\n\n"
+        f"Up to **{cap}**: `stage`, plus at most {cap - 1} more in "
+        "`additional_stages`, run in the order you give them. Anything beyond "
+        f"{cap} is discarded, so offering more is output spent for nothing.\n\n"
+        "What a batch saves is the survey, not the work. Each stage still gets "
+        "its own branch, executor, review and merge; what you avoid is reading "
+        "the repository again to draw the next one. So the case for it is "
+        "narrow and specific: the work ahead is several instances of a shape "
+        "you have *just* established, and you can already name each instance "
+        "from reading you have already done. If answering would mean looking "
+        "at more than you otherwise would, it has cost more than it saved.\n\n"
+        "**Every stage must stand alone, because any one of them may be "
+        "dropped.** They are checked against each other before the first one "
+        "runs, and the rule is orthogonality: no stage may edit a file that "
+        "another stage edits, reads, or quotes in `read_excerpts`. A stage "
+        "drawn against a file an earlier stage rewrites is drawn against a "
+        "tree that will not exist by the time it runs. Overlapping stages are "
+        "not rejected and sent back — they are dropped, the rest proceed, and "
+        "you are told which on the next call. So do not write 'extend the "
+        "helper the previous stage adds': nothing here may depend on another "
+        "having run, and a batch of one is a perfectly good answer.\n\n"
+    )
+
+
 def _history_block(
     completed: list[StageResult],
     addendum_path: str | None = None,
@@ -968,6 +1026,7 @@ def build_planner_messages(
             + agent_context
             + "\n\n"
         )
+    leading += _batch_block(cfg)
     leading += _checks_block(cfg)
     if layout:
         leading += "## What the repository contains\n\n" + layout + "\n\n"

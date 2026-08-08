@@ -2230,3 +2230,57 @@ class TestAnExcerptHeadingDoesNotSwallowItsNote:
         assert headings == [
             "### `a.rb:1-5 (clipped from 1-40 by max_read_lines)` — the list"
         ]
+
+
+class TestTheBatchBlockIsSizedByTheSetting:
+    """Step 10 changed the output contract and left the prompt alone.
+
+    `additional_stages` was described in the schema as "normally empty, and
+    empty is the right answer", and nothing anywhere told the planner what the
+    cap actually was. That is the shape `CLAUDE.md` already records as
+    producing nothing: `observations` came back empty 278 times out of 278
+    because an optional field with a conditional trigger can always be
+    declined in good conscience. Two derivations under `max_batch_stages: 5`
+    each returned one stage.
+    """
+
+    def _leading(self, cap):
+        cfg = SimpleNamespace(
+            cache_ttl=None, planner=SimpleNamespace(max_batch_stages=cap)
+        )
+        messages = build_planner_messages(cfg=cfg, plan=a_plan(), completed=[])
+        return messages[0]["content"][0]["text"]
+
+    def test_one_stage_per_call_says_so_rather_than_staying_silent(self):
+        # At a cap of 1 the extra stages are trimmed in `nodes.py` without the
+        # planner ever being told, so any it writes are output spent on work
+        # that is discarded before it runs.
+        text = self._leading(1)
+        assert "How many stages to return" in text
+        assert "additional_stages" in text
+        assert "discarded" in text
+
+    def test_the_actual_cap_reaches_the_planner(self):
+        # It was reachable only in `config.py` and in the trim at
+        # nodes.py:1703. A planner that cannot see the ceiling cannot size a
+        # batch against it.
+        assert "5" in self._leading(5)
+
+    def test_the_orthogonality_rule_travels_with_the_invitation(self):
+        # Inviting a batch without it produces stages that share files and are
+        # dropped — a whole stage of planning spent for nothing, and the
+        # planner only learns why on the *next* call, from `batch_notes`.
+        text = self._leading(5)
+        for phrase in ("edit", "read", "dropped"):
+            assert phrase in text.lower(), phrase
+
+    def test_the_invitation_is_absent_when_batching_is_off(self):
+        assert "orthogonal" not in self._leading(1).lower()
+
+    def test_a_cfg_without_a_planner_section_still_builds(self):
+        # Every existing caller in the tests passes a bare SimpleNamespace, and
+        # so would any project config predating the setting.
+        messages = build_planner_messages(
+            cfg=SimpleNamespace(cache_ttl=None), plan=a_plan(), completed=[]
+        )
+        assert messages[0]["content"][0]["text"]

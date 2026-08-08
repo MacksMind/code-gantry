@@ -340,26 +340,25 @@ class PlannerResponse(BaseModel):
     additional_stages: list[PlannedStage] = Field(
         default_factory=list,
         description=(
-            "More stages to run after `stage`, in order. **Normally empty, and "
-            "empty is the right answer** — one stage is the unremarkable "
-            "case.\n\n"
-            "Use it only when the work ahead is plainly several instances of "
-            "the same shape and you already know all of them from the reading "
-            "you have just done. What it saves is the survey, not the work: "
-            "the stages still run one at a time, each with its own branch, "
-            "review and merge. If answering would mean looking at more than "
-            "you otherwise would, it has cost more than it saved — leave it "
-            "empty and derive the next one when its turn comes.\n\n"
-            "**Every stage here must stand alone.** Any one of them may be "
-            "dropped before it runs: they are checked against each other, and "
-            "one that shares a file with another is removed, because a stage "
-            "drawn against a file a earlier stage rewrites is drawn against a "
-            "tree that will not exist. So do not write 'extend the helper the "
-            "previous stage adds' — nothing here may depend on another having "
-            "run.\n\n"
-            "For the same reason, no stage here may edit a file another reads, "
-            "quotes in `read_excerpts`, or edits. Overlapping stages are not "
-            "rejected, they are dropped, and you will be told which.\n\n"
+            "More stages to run after `stage`, in order. **How many you may "
+            "return, and what makes one survive, is stated in the prompt "
+            "under 'How many stages to return' — read it rather than guessing "
+            "from this field.**\n\n"
+            # This description used to open "Normally empty, and empty is the
+            # right answer", and it was the whole of what the planner was told
+            # about batching — the cap itself appeared nowhere. That is the
+            # shape `observations` had when it came back empty 278 times out
+            # of 278: an optional field with a conditional trigger, described
+            # as best declined. Under a cap of five, two derivations returned
+            # one stage each. The guidance now lives in the prompt, where the
+            # cap is known and can be stated as a number.
+            "In short: they run one at a time, each with its own branch, "
+            "review and merge, so what a batch saves is the survey rather "
+            "than the work. Every one must stand alone — no stage here may "
+            "edit a file another edits, reads, or quotes in `read_excerpts`, "
+            "because a stage drawn against a file an earlier one rewrites is "
+            "drawn against a tree that will not exist. Overlapping stages are "
+            "not rejected, they are dropped, and you are told which.\n\n"
             "Not for `revise`: a stage being reworked owns a branch, and its "
             "replacement is a single stage."
         ),
