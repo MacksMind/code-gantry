@@ -192,17 +192,9 @@ def plan(state: RunState, rt: Runtime) -> dict:
     # Checked here, with the budgets, and for the same reason: this is the
     # point where the run is between stages with nothing in flight. Stopping
     # anywhere else means a half-finished executor and a dirty tree.
-    if rt.paths.pause_flag.exists():
-        note = rt.paths.pause_flag.read_text().strip()
-        return _escalate(
-            "paused",
-            "Paused at your request, between stages. Nothing is wrong and "
-            "nothing is half-done: everything that landed is on the project "
-            "branch and no stage was in flight.\n\n"
-            + (f"Your note: {note}\n\n" if note else "")
-            + f"`orchestrator resume {state.get('run_id')}` picks up from the "
-            "next stage.",
-        )
+    paused = _pause_escalation(rt.paths.pause_flag, state)
+    if paused is not None:
+        return paused
 
     messages = build_planner_messages(
         cfg=rt.cfg,
@@ -1463,7 +1455,7 @@ def advance(state: RunState, rt: Runtime) -> dict:
         )
     rt.log(f"[advance] {stage.id} landed as {result['merge_sha'][:12]}")
 
-    return {
+    landed = {
         **fresh_stage_fields(),
         # Recorded on the stage above; cleared here so the next one is not
         # billed for this one's derivation. Not in `fresh_stage_fields`, which
@@ -1484,6 +1476,13 @@ def advance(state: RunState, rt: Runtime) -> dict:
         "interventions_since_landing": 0,
         "next_hop": "plan",
     }
+
+    # Merged onto the landing, never in place of it. The stage is squash-merged
+    # and on the branch whatever the run does next; replacing this update with
+    # the escalation would leave `completed` short by one and `stage_index`
+    # unmoved, and a resume would re-derive work that is already landed.
+    paused = _pause_escalation(rt.paths.pause_flag, state)
+    return {**landed, **paused} if paused else landed
 
 
 # --- finalize ------------------------------------------------------------
@@ -1604,6 +1603,38 @@ def _wall_clock_overrun(state: RunState, limits) -> str | None:
         # for time must not swallow why.
         reason += f" The stage in flight was being revised because: {failure}"
     return reason
+
+
+def _pause_escalation(flag, state: RunState) -> dict | None:
+    """The pause stop, if the operator has asked for one.
+
+    Consulted at both points where the run is genuinely between stages: before
+    a planner call, and immediately after a stage has been squash-merged. Those
+    were the same instant while `advance` routed only to `plan`, and step 10
+    separates them — a queue of stages from one derivation means `advance` goes
+    to the next queued stage, and a pause requested during the first of five
+    would otherwise wait for all five.
+
+    What makes stopping safe is not that a planner call is next. It is that the
+    merge is done, the stage branch is gone and the tree is clean, which is
+    true at the end of `advance` whatever follows.
+
+    One helper because the message makes a promise — "nothing is half-done" —
+    that is only true where the check sits. A second copy beside a second check
+    is how one of them comes to be wrong.
+    """
+    if not flag.exists():
+        return None
+    note = flag.read_text().strip()
+    return _escalate(
+        "paused",
+        "Paused at your request, between stages. Nothing is wrong and "
+        "nothing is half-done: everything that landed is on the project "
+        "branch and no stage was in flight.\n\n"
+        + (f"Your note: {note}\n\n" if note else "")
+        + f"`orchestrator resume {state.get('run_id')}` picks up from the "
+        "next stage.",
+    )
 
 
 def _escalate(layer: str, reason: str) -> dict:

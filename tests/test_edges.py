@@ -27,7 +27,7 @@ class TestEdgeTable:
             "execute": ["verify", "plan", "execute"],
             "verify": ["review", "advance", "execute", "plan", "escalate"],
             "review": ["advance", "execute", "plan"],
-            "advance": ["plan"],
+            "advance": ["plan", "escalate"],
             "finalize": ["end", "escalate"],
             "escalate": ["end"],
         }
@@ -51,12 +51,21 @@ class TestEdgeTable:
         # a second time.
         assert "verify" in EDGES["plan"]
 
-    def test_only_three_nodes_can_escalate(self):
-        # The design goal: a run stops for a good reason or not at all.
+    def test_only_the_nodes_that_should_can_escalate(self):
+        """The design goal: a run stops for a good reason or not at all.
+
+        `advance` joined the set, and it is worth being explicit that this is
+        not a widening of when a run may give up. Every other escalator stops
+        because something is wrong; `advance` stops only because the operator
+        asked, and only at the instant a stage has been squash-merged and the
+        tree is clean. It is the safest stopping point in the graph, and it had
+        to be added to the table because a node routing outside its edges
+        raises rather than rerouting.
+        """
         escalators = {n for n, t in EDGES.items() if "escalate" in t}
-        assert escalators == {"plan", "precheck", "verify", "finalize"} - {"finalize"} | {
-            "finalize"
-        }
+        assert escalators == {"plan", "precheck", "verify", "advance", "finalize"}
+        assert "escalate" not in EDGES["review"], "a rejection is the planner's"
+        assert "escalate" not in EDGES["execute"], "a failed attempt is retried"
 
     def test_every_entry_point_is_a_real_node(self):
         for entry in ENTRY_POINTS:

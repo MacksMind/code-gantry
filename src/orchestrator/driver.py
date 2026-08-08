@@ -69,7 +69,11 @@ EDGES: dict[str, list[str]] = {
     "execute": ["verify", "plan", "execute"],
     "verify": ["review", "advance", "execute", "plan", "escalate"],
     "review": ["advance", "execute", "plan"],
-    "advance": ["plan"],
+    # `escalate` because a pause is checked immediately after the squash
+    # rather than only before the next planner call. Those were the same
+    # instant while this routed to `plan` alone; a queue of stages from one
+    # derivation separates them. See `nodes._pause_escalation`.
+    "advance": ["plan", "escalate"],
     "finalize": ["end", "escalate"],
     "escalate": ["end"],
 }
