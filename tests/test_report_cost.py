@@ -6,9 +6,9 @@ to date them against `git log` on the config to know what produced the numbers
 — a label inferred rather than recorded, about the one variable the comparison
 is for.
 
-The dollars come from the public table Aider prices against, so the figures in
+The dollars come from the public rate table, so the figures in
 this section and the ones in `stage-costs.md` cannot disagree about what a
-token costs. An unpriced model reports as unpriced and never as $0.00: Aider's
+token costs. An unpriced model reports as unpriced and never as $0.00: an
 own accounting conflates those two, which is how a local endpoint and a missing
 rate came to look identical.
 """
@@ -113,7 +113,7 @@ class TestTheCostSectionRecordsWhatProducedIt:
     def test_an_unpriced_model_says_so_rather_than_zero(self, prices):
         # And the same report shows the reviewer at $0.00, which is the whole
         # point of the distinction: that model *is* priced and spent nothing,
-        # which is a different fact from having no rate. Aider's accounting
+        # which is a different fact from having no rate. An accounting layer
         # renders both as zero.
         out = build_report(
             state_with(planner_prompt_tokens=1_000_000),

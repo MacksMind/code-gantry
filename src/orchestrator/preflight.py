@@ -514,9 +514,9 @@ def check_executor_endpoint(cfg: ProjectConfig) -> list[Check]:
     here turns that into a validation failure that prints the names the server
     actually accepts.
 
-    The `openai/` in `openai/qwen3-coder-next` is a litellm routing prefix,
-    stripped before the request leaves Aider. What the server sees — and what
-    must match — is the remainder.
+    A routing prefix such as the `openai/` in `openai/qwen3-coder-next` is
+    stripped before the request leaves the router. What the server sees — and
+    what must match — is the remainder.
     """
     try:
         api_base = cfg.executor.resolve_api_base()

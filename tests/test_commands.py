@@ -61,8 +61,7 @@ class TestTimeout:
         assert not r.ok
 
     def test_per_call_timeout_overrides_default(self, tmp_path):
-        # Aider gets aider_timeout_seconds; everything else gets the general
-        # command timeout.
+        # A per-call timeout overrides the runner's general one.
         r = CommandRunner(cwd=tmp_path, timeout=300).run("sleep 30", timeout=1)
         assert r.timed_out
 

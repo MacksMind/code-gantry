@@ -56,7 +56,7 @@ class ExecutionResult:
     ok: bool
     log: str = ""
     timed_out: bool = False
-    # Peak context Aider reported for this attempt, or 0 if it never said.
+    # Peak context the attempt held, or 0 if the provider reported none.
     context_tokens: int = 0
     # What the attempt spent, when the model was priced. Zero for a local
     # endpoint, which is the truth rather than a missing reading.
@@ -321,13 +321,12 @@ def _existing_agent_context(cfg: ProjectConfig) -> list[str]:
     """The agent-facing documents that are actually present.
 
     The defaults name two and most projects keep one, so an unconditional pass
-    would hand Aider a path that does not resolve — which it reports as a
-    warning and then offers to create, a prompt `--yes-always` would accept.
+    would name a path that does not resolve.
 
     Not deduplicated by content the way the planner's copy is. That dedup
     exists because both documents are rendered into one prompt; here they are
-    file arguments, and Aider is the thing that decides what to do with two
-    paths naming the same bytes.
+    passed as separate reads, where two paths naming the same bytes cost a
+    duplicate read rather than a confused prompt.
     """
     root = Path(cfg.target_repo)
     return [p for p in cfg.effective_agent_context if (root / p).is_file()]

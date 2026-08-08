@@ -1,4 +1,4 @@
-"""Dollars, from the same public table Aider prices against.
+"""Dollars, from the public rate table.
 
 The orchestrator reported tokens for the planner and reviewer and dollars for
 the executor only — so the file carrying money covered the role that spends
@@ -6,7 +6,7 @@ the executor only — so the file carrying money covered the role that spends
 were unpriced. Effort could therefore be argued about but not settled.
 
 The prices are not ours to write down. `litellm/__init__.py:433` fetches
-`model_prices_and_context_window.json` at import and Aider prices every attempt
+`model_prices_and_context_window.json` at import and every attempt is priced
 from it; the copy bundled in the package is a stale fallback that lacks all
 three of our models. Reading the same URL keeps our planner and reviewer
 figures consistent with the executor's by construction rather than by
@@ -74,7 +74,7 @@ class TestPricingUsage:
         assert got == pytest.approx(5.00)
 
     def test_an_unpriced_model_is_none_not_zero(self):
-        # Aider's own accounting reports 0.0 for "not priced" as often as for
+        # An accounting layer that reports 0.0 for "not priced" as often as for
         # "free", which is why a local model and a billing error looked alike.
         assert price_usage(None, prompt=1, cached=0, cache_writes=0, completion=1) is None
         assert price_usage({}, prompt=1, cached=0, cache_writes=0, completion=1) is None

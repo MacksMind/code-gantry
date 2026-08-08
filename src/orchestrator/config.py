@@ -185,9 +185,8 @@ class ExecutorConfig(_EndpointConfig):
     # the twelfth stage it was sending 4,636 lines to change six, 69,000 tokens
     # a call, and the same stage converted four of six sites and then three of
     # six — the task lost inside the reference material. Attempts took 561s and
-    # 584s against Aider's hardcoded, unreachable 600s request timeout, so
-    # whether a stage landed or looked like it hung came down to the generation
-    # rate that minute.
+    # 584s against a 600s request timeout, so whether a stage landed or looked
+    # like it hung came down to the generation rate that minute.
     #
     # The controlled comparison, from the same run: stage 10 revision 0 carried
     # 2,818 lines of reads and stalled six times over three hours. The planner's

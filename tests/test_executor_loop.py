@@ -608,9 +608,10 @@ class TestTheLocatorIsWiredButIsNotATool:
 
 
 class TestTheContextHighWaterMarkAndCostReachTheResult:
-    """Two values Aider used to supply, on the path that replaced it.
+    """Two values the subprocess executor used to supply, on the path that
+    replaced it.
 
-    Both were scraped from Aider's console — `context_tokens_from_log` and
+    Both were scraped from a console — `context_tokens_from_log` and
     `cost_from_log` — and the in-process loop set neither. `advance` guards on
     `if executor_context_tokens or executor_cost_usd` before calling
     `append_stage_cost`, so the guard went permanently false and
@@ -619,7 +620,7 @@ class TestTheContextHighWaterMarkAndCostReachTheResult:
     reads `stage-costs.md` on every call.
 
     The context figure is the *peak* single-turn prompt, not the first and not
-    the sum. That is what Aider reported and what the docstring on
+    the sum. That is what the scraper reported and what the docstring on
     `context_tokens_from_log` argues for: "what bounds the next stage is the
     high-water mark, not the last thing it happened to say." Keeping the same
     quantity is what lets the series continue across the cutover instead of

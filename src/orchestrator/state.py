@@ -65,9 +65,9 @@ class StageResult(TypedDict, total=False):
     flake_reruns_iteration: int
     flake_reruns_review_gate: int
     instruction: str
-    # Peak context the executor held for this stage, as Aider reported it.
-    # Surfaced to the planner so it sizes the next stage from what this
-    # executor actually carried rather than from a file count.
+    # Peak context the executor held for this stage, from the provider's own
+    # usage block. Surfaced to the planner so it sizes the next stage from what
+    # the executor actually carried rather than from a file count.
     executor_context_tokens: int
     # What this stage's executor attempts cost, summed across them, when the
     # model was priced. Zero for a local endpoint — which is the truth, not a
@@ -377,10 +377,10 @@ def fresh_stage_fields() -> dict:
         "last_diff_digest": "",
         # Never cleared until now, and `advance` copies it onto the landed
         # StageResult and into `stage-costs.md`. `execute` writes it only when
-        # Aider reported a token line, so a stage whose attempts never printed
-        # one carried the previous stage's figure into a record keyed by a
-        # merge sha it had nothing to do with — and that file is what the
-        # planner sizes the next batch against.
+        # usage came back, so a stage whose attempts reported none carried the
+        # previous stage's figure into a record keyed by a merge sha it had
+        # nothing to do with — and that file is what the planner sizes the next
+        # batch against.
         "executor_context_tokens": 0,
         # Cleared for the same reason as the line above. These say "this
         # exact command was green on this exact tree"; carried into a new

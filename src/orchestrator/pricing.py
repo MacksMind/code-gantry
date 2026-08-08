@@ -8,8 +8,8 @@ unpriced. Effort could be argued about and not settled.
 The prices are not ours to write down, and the first design here was going to
 put a hand-written rate table in project config. That would have been the
 `Config should hold the path, not the copy` mistake with money in it: a second
-copy that drifts, and the copy is the one the report reads. Aider prices every
-attempt from `model_prices_and_context_window.json`, which
+copy that drifts, and the copy is the one the report reads. The rates live in
+`model_prices_and_context_window.json`, which
 `litellm/__init__.py:433` fetches from this URL at import — the copy bundled in
 the package is a stale fallback that lacks all three of the models this project
 uses. Reading the same URL makes our planner and reviewer figures consistent
@@ -103,10 +103,10 @@ def price_usage(
 ) -> float | None:
     """What one role's token counts cost, or None when the model is unpriced.
 
-    `None` rather than `0.0`, and that distinction is the reason to write this
-    rather than read Aider's number: its accounting reports zero for "not
-    priced" as often as for "free", so a local endpoint and a missing rate look
-    identical in the record.
+    `None` rather than `0.0`, and the distinction is the whole point. A rate
+    table that reports zero for "not priced" as readily as for "free" makes a
+    local endpoint and a missing rate identical in the record, and the second
+    is a bug while the first is a fact.
 
     `prompt` is total input for either provider — reads and writes are parts of
     it, not additions to it. Read the other way it produced "Uncached prompt

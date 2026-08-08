@@ -517,8 +517,8 @@ class TestPlannerBudgets:
         assert out["next_hop"] == "escalate"
         assert "max_stages" in out["escalation_reason"]
 
-    def test_aider_history_lands_in_the_attempt_directory(self, repo, tmp_path):
-        # Not in the repository under test: Aider's scratch files fail the
+    def test_executor_history_lands_in_the_attempt_directory(self, repo, tmp_path):
+        # Not in the repository under test: the executor's scratch files fail the
         # scope gate there, and they are worth keeping as artifacts anyway.
         planner = StubPlanner(
             [PlannerOutcome("next_stage", "first", "e", stage_fields=planned_stage())]
@@ -1229,7 +1229,7 @@ class TestAdvance:
         assert not rt.git.branch_exists("proj-stage/000-extract")
 
     def test_lands_exactly_one_commit(self, repo, tmp_path):
-        # Aider commits before it tests, so the child branch has red commits.
+        # The executor commits before it tests, so the child branch has red commits.
         cfg, rt, state = make(repo, tmp_path)
         state = with_stage(state, rt)
         before = rt.git.rev_parse("proj")
@@ -1410,7 +1410,7 @@ class TestAFailureThatPredatesTheStage:
     commission-report spec in a file it never touched started failing when the
     clock crossed into the 31st. The executor was scoped to that controller and
     could not have fixed the spec under any instruction, so the whole rework
-    budget bought nothing. Sixteen minutes, three Aider runs, three reviews,
+    budget bought nothing. Sixteen minutes, three executor runs, three reviews,
     three full suites.
 
     One scoped run against the base tree separates the two cases.
@@ -1752,7 +1752,7 @@ class TestExecutorFeedbackIsBounded:
     CommandRunner used to cap output at 20,000 characters, which bounded
     `result.log` incidentally. Raising that cap so the flake gate could see a
     whole test run removed the bound, and a real attempt produced 97,883
-    characters of Aider transcript that went verbatim into the next executor
+    characters of executor transcript that went verbatim into the next executor
     prompt and into planner feedback.
     """
 
@@ -1763,7 +1763,7 @@ class TestExecutorFeedbackIsBounded:
         # so the test stopped exercising truncation while still passing its
         # first assertion. The degenerate case is covered below.
         executor = StubExecutor(repo=repo, ok=False)
-        executor.log = "".join(f"line {i} of aider transcript\n" for i in range(8_000))
+        executor.log = "".join(f"line {i} of transcript\n" for i in range(8_000))
         cfg, rt, state = make(repo, tmp_path, executor=executor)
         state = with_stage(state, rt)
         out = nodes.execute(state, rt)
@@ -2208,7 +2208,7 @@ class TestTheOpeningFailureOutlivesItsConsequences:
     """The first failure of a retry sequence is the diagnosis.
 
     Live, on stage 130 of a 129-stage run: an `assert_select` assertion failed
-    in one spec, the executor reworked twice, aider hit its 900s timeout, and
+    in one spec, the executor reworked twice, an attempt hit its 900s timeout, and
     the no-progress guard sent the stage to the planner carrying only "the
     attempt reproduced the previous diff exactly". The planner redrew the stage
     knowing nothing about the assertion, and the redraw failed the same way.
@@ -3074,7 +3074,7 @@ class TestTheNativeExecutorsMeasurementsSurviveTheTrip:
     The class above tests the same file and did not catch this, because it
     seeds `executor_context_tokens` straight into state — it pins `advance`,
     which was never broken. What broke was one link earlier: `context_tokens`
-    and `cost_usd` were set only by the Aider console scrapers, the in-process
+    and `cost_usd` were set only by the console scrapers they replaced, the in-process
     loop set neither, and `advance`'s guard
     `if executor_context_tokens or executor_cost_usd` went quietly false. The
     file stopped being written the hour the executor switched and nothing
@@ -3082,7 +3082,8 @@ class TestTheNativeExecutorsMeasurementsSurviveTheTrip:
     same way. The planner reads that file on every call.
 
     `StubExecutor` could not have caught it either: its own comment says the
-    journey starts in Aider's output, which was true and stopped being true.
+    journey starts in a subprocess's console output, which was true and stopped
+    being true.
     """
 
     def _measured(self, repo, **fields):
@@ -3133,7 +3134,7 @@ class TestTheExecuteLineReportsWhatItPaid:
     """Peak context, output tokens, cache rate — not the reviewer's pair.
 
     The executor's cache behaviour was unmeasurable for most of this project's
-    life: Aider's accounting never read OpenAI's
+    life: the accounting it replaced never read OpenAI's
     `prompt_tokens_details.cached_tokens`, so a silent zero was the instrument
     rather than the cache. Owning the client made the figure available; putting
     it where the operator already looks is what makes it seen.

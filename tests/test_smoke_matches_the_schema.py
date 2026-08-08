@@ -4,8 +4,8 @@
 script against a synthetic repository, which is the one thing the unit tests
 cannot do. That also means nothing tells it when a schema moves underneath it,
 and it has drifted twice: `ReviewVerdict` gained a required `record`, and the
-executor stopped being a subprocess entirely while the stand-in was still a fake
-`aider` binary on PATH.
+executor stopped being a subprocess entirely while the stand-in was still a
+binary on PATH.
 
 This is the cheap half of the guard — the fields, checked against the real
 models, so a schema change fails in the suite rather than eight minutes into a

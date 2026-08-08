@@ -77,7 +77,7 @@ class TestResetScopes:
     def test_stage_reset_clears_what_the_executor_measured(self):
         """Both figures, and the context one is a fix rather than an addition.
 
-        It was never cleared. `execute` writes it only when Aider reported a
+        It was never cleared. `execute` writes it only when the provider reported a
         token line, so a stage whose attempts never printed one kept the
         previous stage's number — and `advance` copies whatever is in state
         onto the landed `StageResult` and into `stage-costs.md`, keyed by a
@@ -298,7 +298,7 @@ class TestResumingAnInterruptedStage:
 
     Observed live: a stage whose edits were complete and committed was killed
     mid-attempt, resumed, and sent straight back to the executor — which spent
-    ten minutes looping because there was nothing left for it to do and Aider's
+    ten minutes looping because there was nothing left for it to do and the
     prompt gives it no way to say so.
     """
 

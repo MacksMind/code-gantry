@@ -322,10 +322,9 @@ class TestPathHintsCannotStallTheGate:
 class TestTheLoopDoesNotDoubleTheSuite:
     """One run per cycle, which is what the editor this replaces did.
 
-    Aider ran its test command once per reflection and capped reflections at
-    three (`max_reflections = 3`, read from the installed source). Sharing
-    `run_tests` with the gate quietly doubled that: six runs an attempt where
-    there had been three, and nothing said so.
+    The executor's loop runs its test command once per cycle, and cycles are
+    capped. Sharing `run_tests` with the gate quietly doubles that: six runs an
+    attempt where there had been three, and nothing says so.
 
     The loop does not need the re-run. A failing cycle feeds the output back
     and the next cycle runs the same specs again, so iteration is the re-run.

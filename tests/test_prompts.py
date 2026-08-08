@@ -419,7 +419,7 @@ class TestTheExecutorCannotRunCommands:
         ...
         When done, re-run the grep above and confirm
 
-    Aider's executor cannot run commands — its own prompt only lets it
+    The executor cannot run commands — its own prompt only lets it
     *suggest* them. So the model hallucinated grep output and argued with
     itself about the file's contents twenty times over, decoding 24,120 tokens
     before the client cancelled it at ten minutes. Three times in one evening.
@@ -664,7 +664,7 @@ class TestTheHistoryCarriesOnlyWhatHasNoOtherHome:
 class TestTheReviewerIsToldWhatTheEditorDoes:
     """One exemption, stated by the tool rather than by each project.
 
-    Aider normalises the final newline of every file it writes. On a file
+    The editor normalises the final newline of every file it writes. On a file
     committed without one that produces a diff hunk no model chose and no
     instruction can suppress — so a reviewer enforcing scope to the letter
     rejects correct work, the executor reproduces it, and the stage burns its
@@ -1137,8 +1137,9 @@ class TestEveryParticipantSeesTheRepositoryConventions:
     happened to pin the exact output string.
 
     The executor gets the same documents by a different route — `--read`, not
-    the prompt — because Aider attaches every path named in its message. That
-    is `TestConventionsReachAiderAsReadOnlyFiles` in the executor's tests.
+    the prompt — because a tool that scans its message attaches every path
+    named in it. That
+    is `TestConventionsReachTheExecutorAsReads` in the executor's tests.
     """
 
     CONVENTIONS = "## Shop scoping\n\nAlways scope by the current tenant."
@@ -2089,7 +2090,7 @@ class TestTheScopeListSaysWhichFilesDoNotExist:
 class TestNoPromptDescribesTheExecutorThatWasDeleted:
     """A deliberate pass over every model-facing claim about the machinery.
 
-    Two Aider-era falsehoods were found in one day by tripping over them — an
+    Two falsehoods were found in one day by tripping over them — an
     excerpt described as current when it is read at the stage's start, and a
     file described as pre-created when nothing creates it. Both were prose that
     survived a change to the code beneath it. This class is the pass that

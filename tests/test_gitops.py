@@ -4,7 +4,7 @@ Two decisions carry the most weight. Stage diffs are computed against the
 working tree, not `<sha>..HEAD`, because script stages and human fixes leave
 work uncommitted — if that is wrong, the scope guard passes vacuously and the
 reviewer approves an empty diff. And stages land by squash merge, which is what
-lets Aider commit before testing while the project branch stays green.
+lets the executor commit before testing while the project branch stays green.
 """
 
 import pytest
@@ -265,8 +265,8 @@ class TestAddedLines:
 
 class TestSquashMerge:
     def test_lands_a_stage_as_one_commit(self, repo):
-        # Aider commits before it tests, so the child branch has red commits in
-        # it. Squashing is what keeps the project branch green.
+        # The executor commits before it tests, so the child branch has red
+        # commits in it. Squashing is what keeps the project branch green.
         g = Git(repo)
         g.ensure_project_branch("proj", "main")
         before = g.head_sha()
@@ -406,10 +406,9 @@ class TestTrailingWhitespaceOnAddedLines:
 
     A repository-side hook rejecting it is common — `git diff --cached --check`
     in a pre-commit hook is the usual form — and the executor cannot be relied
-    on to avoid it. `executor.lint_command` reaches Aider as `--lint-cmd`, but
-    Aider's linter returns before consulting that command whenever
-    `filename_to_lang` cannot name the file's language: ERB templates, YAML and
-    most non-source files lint as nothing at all.
+    on to avoid it. A linter that dispatches on a file's detected language does
+    nothing at all for the ones it cannot name: templates, YAML and most
+    non-source files.
 
     The harder half is that the offending line need not be the executor's. A
     line that already carried trailing whitespace becomes an *added* line the
@@ -563,10 +562,10 @@ class TestRestartingAStageBranch:
 class TestLineEndingChurnIsHiddenFromReview:
     """The editor rewrites line endings; the reviewer must not judge that.
 
-    aider reads with universal newlines and writes with `--line-endings
-    platform`, so every file it touches is rewritten to the host's convention.
-    On a repository with mixed endings — most have some — a one-line semantic
-    change arrives as a whole-file rewrite.
+    The editor reads with universal newlines and writes the host's convention,
+    so every file it touches is rewritten to that convention. On a repository
+    with mixed endings — most have some — a one-line semantic change arrives as
+    a whole-file rewrite.
 
     Observed: a stage converting one Prototype call in a 156-line CRLF template
     was rejected with "the semantic conversion matches the stage, but the

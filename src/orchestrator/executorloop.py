@@ -84,9 +84,8 @@ def run_loop(
         if cycle == 0:
             out.first_prompt_tokens = turn.first_prompt_tokens
             out.first_cached_tokens = turn.first_cached_tokens
-        # The high-water mark, across cycles as well as turns. Aider reported
-        # this and `context_tokens_from_log` took the largest for the reason
-        # its docstring gives: what bounds the next stage is the peak, not the
+        # The high-water mark, across cycles as well as turns, for the reason
+        # stage sizing needs: what bounds the next stage is the peak, not the
         # last figure it happened to print. Keeping the same quantity is what
         # lets the series continue across the cutover rather than silently
         # changing instrument. A rework cycle routinely loads more than the

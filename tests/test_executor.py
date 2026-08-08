@@ -56,7 +56,7 @@ class TestReadContextBudget:
     sound and grows without bound: by the twelfth stage of one run it was
     sending 4,636 lines of context to change six lines, 69,000 tokens a call.
     Two costs, both measured on that run. Latency — attempts took 561s and 584s
-    against Aider's un-overridable 600s request timeout, so whether a stage
+    against an un-overridable 600s request timeout, so whether a stage
     landed or appeared to hang turned on the generation rate that minute. And
     accuracy — the same stage converted four of six sites, then three of six,
     losing the task inside the reference material.

@@ -834,8 +834,8 @@ def execute(state: RunState, rt: Runtime) -> dict:
         # broke, and the raw pair buries it.
         #
         # Omitted entirely when the provider reported nothing, since "0% cached"
-        # reads as a measurement rather than as its absence — the failure that
-        # made Aider's cache accounting useless.
+        # reads as a measurement rather than as its absence, which is the
+        # difference between "no cache" and "nobody looked".
         paid = ""
         if result.usage is not None:
             prompt = getattr(result.usage, "prompt_tokens", 0)
@@ -884,9 +884,9 @@ def execute(state: RunState, rt: Runtime) -> dict:
                 result.usage, "completion_tokens", 0
             ),
         )
-    # Accumulated, not replaced. Each attempt is its own Aider session with its
-    # own running total, so a stage that took four attempts paid for four and
-    # the figure worth recording is the stage's, not the last attempt's.
+    # Accumulated, not replaced. Each attempt is its own executor session with
+    # its own running total, so a stage that took four attempts paid for four
+    # and the figure worth recording is the stage's, not the last attempt's.
     if result.cost_usd:
         measured["executor_cost_usd"] = (
             state.get("executor_cost_usd", 0.0) + result.cost_usd
@@ -1431,10 +1431,11 @@ def advance(state: RunState, rt: Runtime) -> dict:
     branch = state["stage_branch"]
 
     # Commit anything the executor left uncommitted, then squash the whole
-    # child branch onto the project branch as one commit. Aider's intermediate
-    # commits — some of them red, since it commits before testing — are
-    # discarded by the squash. That is why "every commit on the project branch
-    # is green" and "Aider commits before testing" are both true.
+    # child branch onto the project branch as one commit. The executor's
+    # intermediate commits — some of them red, since it commits before testing
+    # — are discarded by the squash. That is why "every commit on the project
+    # branch is green" and "the executor commits before it tests" are both
+    # true.
     # Written on the stage branch, before the squash picks it up, so the
     # observations land inside the commit they are about. One commit per stage
     # holds, and a reader of that commit sees both what changed and what it
@@ -1496,10 +1497,11 @@ def advance(state: RunState, rt: Runtime) -> dict:
         )
 
     # Commit anything the executor left uncommitted, then squash the whole
-    # child branch onto the project branch as one commit. Aider's intermediate
-    # commits — some of them red, since it commits before testing — are
-    # discarded by the squash. That is why "every commit on the project branch
-    # is green" and "Aider commits before testing" are both true.
+    # child branch onto the project branch as one commit. The executor's
+    # intermediate commits — some of them red, since it commits before testing
+    # — are discarded by the squash. That is why "every commit on the project
+    # branch is green" and "the executor commits before it tests" are both
+    # true.
     # Before anything is committed, not after: a pre-commit hook rejecting
     # trailing whitespace on added lines is common, and neither the executor
     # nor its linter reliably avoids one. `git commit` raising here strands a

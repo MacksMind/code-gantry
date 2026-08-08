@@ -325,9 +325,8 @@ def _dollars(
 ) -> str:
     """A figure, or the reason there isn't one.
 
-    Never "$0.00" for an unpriced model. Aider's accounting reports zero for
-    "not priced" as often as for "free", which made a local endpoint and a
-    missing rate indistinguishable in the record — and this section exists to
+    Never "$0.00" for an unpriced model. Zero for "not priced" and zero for
+    "free" are indistinguishable in a record, and this section exists to
     settle an argument about effort, so a number that might mean two things is
     worse than no number.
     """

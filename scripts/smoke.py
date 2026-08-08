@@ -13,8 +13,8 @@ Three things stand in for the outside world, and nothing else does:
   OpenAI's for the reviewer, and `/v1/responses` for the executor. The real
   SDKs, the real parsing, the real defensive paths — only the inference is fake.
 
-  The executor used to be a fake `aider` script on PATH, back when it shelled
-  out to one. It is in-process now and calls `responses.create`, so a binary on
+  The executor used to be a stub binary on PATH, back when it shelled out to a
+  subprocess. It is in-process now and calls `responses.create`, so a binary on
   PATH stood in for nothing: the smoke test would have driven a code path
   production no longer takes, which is the "a test suite can be exercising the
   path you are about to delete" failure with the roles reversed. The stand-in is
@@ -289,8 +289,8 @@ class ModelStub(BaseHTTPRequestHandler):
 
         The tool call is real. `executortools` validates it, `edittools` applies
         it, and the scope guard judges the result — which is the point of
-        replacing the old fake `aider` binary rather than deleting it: that
-        stood outside every one of those, so the smoke test exercised a path
+        replacing the old stub binary rather than deleting it: that stood
+        outside every one of those, so the smoke test exercised a path
         production no longer takes.
         """
         items = body.get("input") or []
@@ -604,7 +604,8 @@ def patch_config(config: Path, live: bool = False) -> None:
     running against the wrong endpoint.
 
     In live mode the two paid models are left pointing at their real APIs, and
-    the executor at the real endpoint — only Aider stays fake, so a live run
+    the executor at the real endpoint — only the executor stays stubbed, so a
+    live run
     exercises planning and review without generating any code.
     """
     text = config.read_text()
@@ -617,7 +618,7 @@ def patch_config(config: Path, live: bool = False) -> None:
 
     swap("project_branch: refactor/CHANGE-ME", f"project_branch: {BRANCH}")
     # No `openai/` prefix. That was litellm routing, which the executor needed
-    # while it was Aider in a subprocess; in-process it calls the SDK directly
+    # while it ran as a subprocess; in-process it calls the SDK directly
     # and the model id is the endpoint's own.
     swap(
         'model: "<model-id-from-/v1/models>"',

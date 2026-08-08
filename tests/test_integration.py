@@ -1,7 +1,7 @@
 """End-to-end runs through the real driver.
 
 The real checkpointer, real git operations, real verify layers, real branch
-topology. Only the three model calls are stubbed: a fake `aider` on PATH that
+topology. Only the three model calls are stubbed: a stub executor that
 edits files, a scripted planner, and a scripted reviewer.
 """
 
@@ -70,7 +70,7 @@ def stage_spec(**over):
 def scripted_edits(tmp_path, monkeypatch):
     """A scripted executor model, injected in place of the provider client.
 
-    Replaces a fake `aider` binary on PATH. That worked while the executor was
+    Replaces a stub binary on PATH. That worked while the executor was
     a subprocess and stopped meaning anything when it became a library call —
     the tests kept passing only because `provider` still defaulted to the
     subprocess, so they were exercising the path being deleted.
