@@ -572,7 +572,6 @@ class Stage(TypedDict, total=False):
     forbidden_patterns: list[str]  # regexes barred from the diff's added lines
 
     # --- operator-only (executable) ---
-    command: str                   # script stages: the transform to run
     preconditions: list[str]
     context_commands: list[str]    # stdout injected into the executor prompt
     setup_command: str | None

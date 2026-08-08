@@ -57,7 +57,6 @@ PLANNING_FAILURES = frozenset({"precondition", "planner"})
 
 class StageResult(TypedDict, total=False):
     id: str
-    kind: str
     index: int
     revisions: int
     verify_retries: int

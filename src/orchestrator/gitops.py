@@ -7,8 +7,9 @@ guarantee that is for no method to exist that could.
 
 **Stage diffs are computed against the working tree**, not
 `<stage_start_sha>..HEAD`. An executor that auto-commits makes `..HEAD` look
-correct, but a script stage leaves its transform uncommitted and a human's fix
-after an escalation does too. Either would produce an empty diff, and every
+correct, but a human's fix after an escalation is uncommitted, and so is
+anything a check rewrote after the last commit. Either would produce an empty
+diff, and every
 gate downstream — scope guard, forbidden patterns, reviewer — would pass on
 nothing.
 

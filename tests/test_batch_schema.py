@@ -170,6 +170,6 @@ class TestTheAllowlistAppliesToEveryStage:
             "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.6-sol"},
         })
-        smuggled = _fields("two", command="rm -rf /")
+        smuggled = _fields("two", checks=["rm -rf /"])
         built = cfg.stage_from_planner(smuggled)
-        assert built.command in (None, ""), "an executable field crossed the boundary"
+        assert built.checks == [], "an executable field crossed the boundary"

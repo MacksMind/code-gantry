@@ -320,8 +320,8 @@ class FileEditor:
     """Applies changes within the stage's declared scope, or refuses.
 
     Scope is enforced here rather than only at the verify gate. The gate stays
-    — a check may rewrite a file this never saw, a script stage runs operator
-    shell, and a resume can carry a human's work — but a write refused at
+    — a check may rewrite a file this never saw, and a resume can carry a
+    human's work — but a write refused at
     source costs one tool result, where the same write caught at the gate costs
     a whole attempt and routes to the planner.
 

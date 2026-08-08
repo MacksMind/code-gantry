@@ -1,7 +1,7 @@
 """Git operations against the target repo.
 
 Two decisions carry the most weight. Stage diffs are computed against the
-working tree, not `<sha>..HEAD`, because script stages and human fixes leave
+working tree, not `<sha>..HEAD`, because human fixes and check rewrites leave
 work uncommitted — if that is wrong, the scope guard passes vacuously and the
 reviewer approves an empty diff. And stages land by squash merge, which is what
 lets the executor commit before testing while the project branch stays green.
@@ -202,8 +202,9 @@ class TestBranchIdentity:
 
 class TestDiff:
     def test_sees_uncommitted_change(self, repo):
-        # A script stage leaves its transform uncommitted. `<sha>..HEAD` would
-        # report an empty diff and every gate downstream would pass vacuously.
+        # A human's fix after an escalation is uncommitted, and so is anything
+        # a check rewrote after the last commit. `<sha>..HEAD` would report an
+        # empty diff and every gate downstream would pass vacuously.
         g = Git(repo)
         base = g.head_sha()
         (repo / "app.py").write_text("def hello():\n    return 3\n")

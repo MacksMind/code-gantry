@@ -30,8 +30,6 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from orchestrator.globs import matches_any
 
 
-StageKind = Literal["agent", "script"]
-
 # Stage ids name directories and git branches, so they must not contain
 # separators, traversal, or anything git rejects in a ref.
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -39,10 +37,6 @@ _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 # Fields the planner is allowed to author. Everything else in Stage is
 # operator-only. `nodes` and `planner` both import this; it is the single
 # definition of the partition.
-# `kind` is deliberately absent: a `script` stage needs an operator-authored
-# `command`, and with no static stage list there is nowhere for the operator to
-# put one — which makes script stages unreachable in practice. Every
-# planner-derived stage is an `agent` stage.
 PLANNER_WRITABLE_FIELDS = frozenset(
     {
         "id",
@@ -496,7 +490,6 @@ class Stage(_Strict):
     """
 
     id: str
-    kind: StageKind = "agent"
 
     # --- planner-writable (declarative) ---
     instruction: str | None = None
@@ -552,7 +545,6 @@ class Stage(_Strict):
     suite_failing_paths: list[str] = []
 
     # --- operator-only (executable) ---
-    command: str | None = None
     preconditions: list[str] = []
     context_commands: list[str] = []
     setup_command: str | None = None
@@ -1061,8 +1053,8 @@ def validate_stage(stage: Stage, cfg: ProjectConfig) -> list[str]:
             "letters, digits, dot, dash, underscore"
         )
 
-    if stage.kind == "agent" and not stage.instruction:
-        problems.append(f"{where}: agent stages require an instruction")
+    if not stage.instruction:
+        problems.append(f"{where}: a stage requires an instruction")
 
     # The partition, one field further along. `PLANNER_WRITABLE_FIELDS` stops
     # the planner naming anything executable; it never stopped it writing the
@@ -1080,13 +1072,6 @@ def validate_stage(stage: Stage, cfg: ProjectConfig) -> list[str]:
             "existing code in `read_excerpts` as a path and a line range — a "
             "reference can only point at what is already there, which is what "
             "keeps an instruction from becoming a transcription job"
-        )
-    if stage.kind == "script" and not stage.command:
-        problems.append(f"{where}: script stages require a command")
-    if stage.kind == "agent" and stage.command:
-        problems.append(
-            f"{where}: `command` belongs to script stages; this stage is an "
-            "agent stage"
         )
 
     if not stage.edit_files:
@@ -1125,12 +1110,6 @@ def validate_stage(stage: Stage, cfg: ProjectConfig) -> list[str]:
                 f"{where}: forbidden_patterns entry {pattern!r} is not a valid "
                 f"regex: {e}"
             )
-
-    problems.extend(
-        denylist_violations(
-            [(f"{where}.command", stage.command)] if stage.command else []
-        )
-    )
 
     return problems
 

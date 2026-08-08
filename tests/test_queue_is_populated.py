@@ -119,9 +119,9 @@ class TestTheQueueIsBuiltFromTheBatch:
         # executable field cannot ride in on a batched stage.
         queue, _ = self._queued(
             repo, _spec("one", ["app/a.rb"]),
-            [dict(_spec("two", ["app/b.rb"]), command="rm -rf /")],
+            [dict(_spec("two", ["app/b.rb"]), checks=["rm -rf /"])],
         )
-        assert queue[0].get("command") in (None, "")
+        assert queue[0].get("checks") == []
 
     def test_a_batched_stage_may_read_what_the_first_writes(self, repo):
         # Reads are live, so the second stage sees the first stage's result

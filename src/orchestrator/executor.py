@@ -1,9 +1,8 @@
-"""What an attempt is given, and what a script stage runs instead.
+"""What an attempt is given, before any of it reaches a model.
 
 The edit cycle itself lives in `executorloop`; the provider call in
 `executorclient`. What is here is everything that shapes an attempt before it
-starts — the read budget, the excerpts, the conventions — plus `run_script_stage`,
-the one stage kind that never reaches a model.
+starts — the read budget, the excerpts, the conventions.
 
 **File scoping is mandatory, not an optimisation.** An agent stage declares
 what it may edit and what it needs to read, and `max_read_lines` bounds the
@@ -285,18 +284,6 @@ class Executor:
         if history_dir is not None:
             _write_loop_record(history_dir, out)
         return out
-
-
-
-    def run_script_stage(self, stage: Stage) -> ExecutionResult:
-        result = self.runner.run(stage.command or "")
-        return ExecutionResult(
-            ok=result.ok,
-            log=result.output,
-            timed_out=result.timed_out,
-        )
-
-
 
 
 

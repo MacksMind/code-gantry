@@ -884,12 +884,5 @@ and is the one caller left: it drives the real CLI in a subprocess, so it needs
 the executor pointed at the stub server it already runs rather than a binary on
 `PATH`.
 
-Script stages (`kind: "script"`, `run_script_stage`, the branch at
-`nodes.execute`) are presently **unreachable**. `kind` is not planner-writable
-by design and there is no static stage list for an operator to declare one in,
-so nothing constructs one. The branch and its validation are live code with no
-caller; treat a plan that assumes script stages exist as proposing to build
-them.
-
 The docstrings carry the reasoning, usually including the incident that produced
 it. They are worth reading before changing the behaviour they describe.

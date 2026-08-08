@@ -1,4 +1,4 @@
-"""The executor's non-loop surface: read budgets, excerpts, script stages.
+"""The executor's non-loop surface: read budgets, excerpts, conventions.
 
 The edit cycle itself is `test_executor_loop.py`; the provider call is
 `test_executor_client.py`. What is left here is everything that shapes what
@@ -218,54 +218,6 @@ class TestReadContextBudget:
 
 
 
-
-
-class TestRunScriptStage:
-    def test_runs_the_declared_command(self, repo):
-        cfg, stage = cfg_with(
-            target_repo=str(repo),
-            stage_overrides={
-                "id": "annotate",
-                "kind": "script",
-                "command": "echo transforming",
-                "instruction": None,
-            },
-        )
-        result = Executor(cfg, CommandRunner(cwd=repo, timeout=60)).run_script_stage(
-            stage
-        )
-        assert result.ok
-        assert "transforming" in result.log
-
-    def test_failing_command_fails_the_stage(self, repo):
-        cfg, stage = cfg_with(
-            target_repo=str(repo),
-            stage_overrides={
-                "id": "annotate",
-                "kind": "script",
-                "command": "exit 4",
-                "instruction": None,
-            },
-        )
-        result = Executor(cfg, CommandRunner(cwd=repo, timeout=60)).run_script_stage(
-            stage
-        )
-        assert not result.ok
-
-    def test_spends_no_model_tokens(self, repo):
-        # A scripted transform across hundreds of files must not invoke a model.
-        cfg, stage = cfg_with(
-            target_repo=str(repo),
-            stage_overrides={
-                "id": "annotate",
-                "kind": "script",
-                "command": "true",
-                "instruction": None,
-            },
-        )
-        out = Executor(cfg, CommandRunner(cwd=repo, timeout=60)).run_script_stage(stage)
-        # No model was reached, so nothing a model reports has a value.
-        assert out.usage is None and out.model_turns == 0 and out.cycles == 0
 
 
 class TestContextCommands:

@@ -72,8 +72,27 @@ def _clip(text: str) -> str:
 
 
 def current_stage(state: RunState, rt: Runtime) -> Stage | None:
+    """The stage in flight, rebuilt from the checkpoint.
+
+    Filtered to the fields `Stage` still declares, because `Stage` is
+    `extra="forbid"` and `current` was written by whatever build derived it.
+    Deleting a field would otherwise raise on the next *resume* of a run
+    already hours deep — a pydantic error from inside a node, for a stage that
+    is perfectly valid.
+
+    Checked before it happened: the live checkpoint held `kind: "agent"` on a
+    34-stage run when script stages were removed. A fresh run is always a
+    fallback, since the landed work is on the project branch rather than in the
+    checkpoint, but it discards the derived stage and the queue behind it —
+    a poor trade for a field nobody reads. `driver._merge` already drops keys
+    `RunState` does not declare; this is the same rule for the one structure
+    that rebuilds a pydantic model out of state.
+    """
     fields = state.get("current")
-    return Stage(**fields) if fields else None
+    if not fields:
+        return None
+    known = set(Stage.model_fields)
+    return Stage(**{k: v for k, v in fields.items() if k in known})
 
 
 def _attempt(state: RunState) -> int:
@@ -710,94 +729,90 @@ def execute(state: RunState, rt: Runtime) -> dict:
     attempt = _attempt(state)
     feedback = list(state.get("review_feedback") or [])
 
-    if stage.kind == "script":
-        rt.log(f"[execute] {stage.id}: script")
-        result = rt.executor.run_script_stage(stage)
-    else:
-        context, context_results = rt.executor.gather_context(stage)
-        failed = [r for r in context_results if not r.ok]
-        if failed:
-            return _planner_failure(
-                state,
-                "precondition",
-                "a context command failed, so the executor prompt would have "
-                "been built from missing information",
-                f"{failed[0].summary()}\n{_clip(failed[0].output)}",
-            )
+    context, context_results = rt.executor.gather_context(stage)
+    failed = [r for r in context_results if not r.ok]
+    if failed:
+        return _planner_failure(
+            state,
+            "precondition",
+            "a context command failed, so the executor prompt would have "
+            "been built from missing information",
+            f"{failed[0].summary()}\n{_clip(failed[0].output)}",
+        )
 
-        # What the stage has already done, so a retry can amend it rather than
-        # reconstruct it. Only when there is something there: on a first attempt
-        # this is empty, and on a rework with `rework_reset` it has just been
-        # thrown away, so in both cases the section is absent rather than empty.
-        cumulative_diff = ""
-        if state.get("stage_start_sha"):
-            try:
-                cumulative_diff = rt.git.diff(state["stage_start_sha"])
-            except GitError:  # pragma: no cover - defensive
-                cumulative_diff = ""
-
-        # Read at the stage's start, not from the tree. The planner chose these
-        # ranges against that commit, and on a rework the tree has already
-        # moved under them. A range that will not resolve goes to the planner:
-        # with no code in the instruction the excerpt is the code, so this is a
-        # stage that cannot be attempted, and the participant that chose the
-        # range is the one that can fix it.
+    # What the stage has already done, so a retry can amend it rather than
+    # reconstruct it. Only when there is something there: on a first attempt
+    # this is empty, and on a rework with `rework_reset` it has just been
+    # thrown away, so in both cases the section is absent rather than empty.
+    cumulative_diff = ""
+    if state.get("stage_start_sha"):
         try:
-            excerpts = resolve_excerpts(
-                stage, rt.cfg, git=rt.git, sha=state.get("stage_start_sha") or ""
-            )
-        except ExcerptError as exc:
-            return _planner_failure(
-                state,
-                "precondition",
-                "a declared excerpt could not be read, so the executor prompt "
-                "would have been built without code the instruction refers to",
-                str(exc),
-            )
+            cumulative_diff = rt.git.diff(state["stage_start_sha"])
+        except GitError:  # pragma: no cover - defensive
+            cumulative_diff = ""
 
-        # Feedback is carried beside the prompt, not inside it. The difference
-        # is not cosmetic: `build_executor_prompt` puts its retry opening at
-        # the head of the string, so an attempt with feedback would differ from
-        # one without at character zero — which is exactly wrong where a cached
-        # prefix is the point. It arrives as its own conversation turn instead.
-        prompt = build_executor_prompt(
-            stage,
-            rt.cfg,
-            context=context,
-            feedback=None,
-            failure_layer=state.get("failure_layer"),
-            cumulative_diff=cumulative_diff,
-            excerpts=excerpts,
+    # Read at the stage's start, not from the tree. The planner chose these
+    # ranges against that commit, and on a rework the tree has already
+    # moved under them. A range that will not resolve goes to the planner:
+    # with no code in the instruction the excerpt is the code, so this is a
+    # stage that cannot be attempted, and the participant that chose the
+    # range is the one that can fix it.
+    try:
+        excerpts = resolve_excerpts(
+            stage, rt.cfg, git=rt.git, sha=state.get("stage_start_sha") or ""
         )
-        rt.write_artifact(
-            state["stage_index"], stage.id, state.get("revision", 0), attempt,
-            "prompt.md", prompt,
+    except ExcerptError as exc:
+        return _planner_failure(
+            state,
+            "precondition",
+            "a declared excerpt could not be read, so the executor prompt "
+            "would have been built without code the instruction refers to",
+            str(exc),
         )
-        # The attempt's artifacts — the conversation, the prompt as sent, the
-        # loop's own record. Kept per attempt because the first thing worth
-        # reading when a stage does something inexplicable is what it was
-        # actually given, and a rework overwrites nothing.
-        history_dir = rt.paths.attempt_dir(
-            state["stage_index"], stage.id, state.get("revision", 0), attempt
-        )
-        history_dir.mkdir(parents=True, exist_ok=True)
-        # Named, because the one-line-per-call view in `tools.log` is not the
-        # whole record: this file carries the results too, and it is the thing
-        # to open when an attempt did something inexplicable. Until this line
-        # an operator had to derive the directory to find it.
-        rt.log(
-            f"[execute] {stage.id}: attempt {attempt} — "
-            f"{history_dir / TRANSCRIPT_FILENAME}"
-        )
-        result = rt.executor.run_agent_stage(
-            stage,
-            prompt,
-            history_dir=history_dir,
-            since_sha=state["stage_start_sha"],
-            agent_context=_conventions(state, rt),
-            feedback=feedback,
-            failure_layer=state.get("failure_layer"),
-        )
+
+    # Feedback is carried beside the prompt, not inside it. The difference
+    # is not cosmetic: `build_executor_prompt` puts its retry opening at
+    # the head of the string, so an attempt with feedback would differ from
+    # one without at character zero — which is exactly wrong where a cached
+    # prefix is the point. It arrives as its own conversation turn instead.
+    prompt = build_executor_prompt(
+        stage,
+        rt.cfg,
+        context=context,
+        feedback=None,
+        failure_layer=state.get("failure_layer"),
+        cumulative_diff=cumulative_diff,
+        excerpts=excerpts,
+    )
+    rt.write_artifact(
+        state["stage_index"], stage.id, state.get("revision", 0), attempt,
+        "prompt.md", prompt,
+    )
+    # The attempt's artifacts — the conversation, the prompt as sent, the
+    # loop's own record. Kept per attempt because the first thing worth
+    # reading when a stage does something inexplicable is what it was
+    # actually given, and a rework overwrites nothing.
+    history_dir = rt.paths.attempt_dir(
+        state["stage_index"], stage.id, state.get("revision", 0), attempt
+    )
+    history_dir.mkdir(parents=True, exist_ok=True)
+    # Named, because the one-line-per-call view in `tools.log` is not the
+    # whole record: this file carries the results too, and it is the thing
+    # to open when an attempt did something inexplicable. Until this line
+    # an operator had to derive the directory to find it.
+    rt.log(
+        f"[execute] {stage.id}: attempt {attempt} — "
+        f"{history_dir / TRANSCRIPT_FILENAME}"
+    )
+    result = rt.executor.run_agent_stage(
+        stage,
+        prompt,
+        history_dir=history_dir,
+        since_sha=state["stage_start_sha"],
+        agent_context=_conventions(state, rt),
+        feedback=feedback,
+        failure_layer=state.get("failure_layer"),
+    )
 
     if result.tool_counts:
         # The third agentic loop to report what it looked at. Counts rather
@@ -992,9 +1007,8 @@ def verify(state: RunState, rt: Runtime) -> dict:
         previous_diff_digest=state.get("last_diff_digest") or None,
         previous_failure_layer=state.get("failure_layer") or None,
         resuming=bool(state.get("resuming")),
-        # What the executor's loop already proved on this tree. Empty on the
-        # subprocess path, on script stages and on a resume that re-enters
-        # here — all three being cases where nothing has tested anything.
+        # What the executor's loop already proved on this tree. Empty on a
+        # resume that re-enters here, nothing having tested anything yet.
         green_records=state.get("gate_records") or {},
     )
 
@@ -1552,7 +1566,6 @@ def advance(state: RunState, rt: Runtime) -> dict:
     usage = state.get("stage_usage") or {}
     result = {
         "id": stage.id,
-        "kind": stage.kind,
         "index": state["stage_index"],
         "revisions": state.get("revision", 0),
         "verify_retries": state.get("verify_attempt", 0),
