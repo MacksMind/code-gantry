@@ -29,7 +29,7 @@ from pathlib import Path
 import click
 
 from orchestrator.addendum import append_notes
-from orchestrator.approval import approval_problem, config_hash, record_approval
+from orchestrator.configversion import blob_sha, problem_resuming
 from orchestrator.config import ConfigError, ProjectConfig, load_config
 from orchestrator.discover import derive_target_repo, draft_config
 from orchestrator.gitops import Git, GitError
@@ -279,27 +279,6 @@ def _reconcile_prompt(cfg: ProjectConfig) -> list[dict]:
     ]
 
 
-@main.command()
-@click.argument("slug")
-def approve(slug: str) -> None:
-    """Record that a human read this config.
-
-    There is no `approved: true` field, because such a field could be set by
-    anything. Approval is a hash of the exact bytes reviewed.
-    """
-    project = ProjectPaths(slug)
-    cfg = _load(project.config)
-
-    click.echo("Commands this config will run unattended:\n")
-    for label, command in cfg.all_commands():
-        click.echo(f"  {label}: {command}")
-    click.echo("")
-
-    approval = record_approval(
-        project.project_dir, project.config, now=datetime.now(timezone.utc).isoformat()
-    )
-    click.echo(f"approved {approval.config_sha256[:16]} at {approval.approved_at}")
-    click.echo("Editing the config invalidates this and requires approving again.")
 
 
 @main.command()
@@ -316,10 +295,6 @@ def run(slug: str, run_id: str | None, skip_preflight_tests: bool) -> None:
     project = ProjectPaths(slug)
     cfg = _load(project.config)
 
-    problem = approval_problem(project.project_dir, project.config)
-    if problem:
-        click.echo(f"refusing to start: {problem}", err=True)
-        sys.exit(EXIT_FAILED)
 
     # Before preflight, not after. Preflight is the slow thing — containers,
     # the test database, the whole suite — and printing only once it returns
@@ -386,7 +361,7 @@ def run(slug: str, run_id: str | None, skip_preflight_tests: bool) -> None:
     state = new_state(
         run_id=run_id,
         project_slug=slug,
-        config_hash=config_hash(project.config),
+        config_hash=blob_sha(project.config),
         target_repo=str(cfg.target_repo),
         base_ref=cfg.base_ref,
         base_sha=base_sha,
@@ -472,7 +447,11 @@ def resume(run_id: str, reset_progress_budget: bool) -> None:
         click.echo(f"no checkpoint for run {run_id}", err=True)
         sys.exit(EXIT_FAILED)
 
-    problem = approval_problem(project.project_dir, project.config)
+    # A run reads one config for its whole life. If the file has moved on,
+    # this is not the run that config describes — the stages already landed
+    # were produced by different commands, and nothing in the record would say
+    # where the change fell.
+    problem = problem_resuming(project.config, saved.get("config_hash", ""))
     if problem:
         click.echo(f"refusing to resume: {problem}", err=True)
         sys.exit(EXIT_FAILED)

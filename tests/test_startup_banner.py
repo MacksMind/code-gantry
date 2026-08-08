@@ -29,7 +29,6 @@ import pytest
 from click.testing import CliRunner
 
 from orchestrator import cli
-from orchestrator.approval import record_approval
 from orchestrator.cli import _startup_banner
 from orchestrator.runtime import ProjectPaths
 
@@ -137,7 +136,8 @@ reviewer:
   model: gpt-5.5
 """
         )
-        record_approval(projects, projects / "config.yaml", now="2026-01-01T00:00:00Z")
+        # Nothing to approve any more: a config is identified by its git
+        # sha, and `run` reaches preflight without a separate gate.
         monkeypatch.chdir(tmp_path)
         return projects
 

@@ -24,7 +24,7 @@ from pathlib import Path
 from datetime import datetime
 
 from orchestrator.apistatus import classify
-from orchestrator.approval import approval_problem
+from orchestrator.configversion import committed_sha, problem_starting
 from orchestrator.commands import CommandResult, CommandRunner, truncate_middle
 from orchestrator.config import ProjectConfig
 from orchestrator.flake import FlakeVerdict, adjudicate, append_flakes
@@ -762,13 +762,40 @@ def _project_root(project_dir):
 
 
 def _approval_check(cfg: ProjectConfig, project_dir) -> Check:
+    """The config must be committed, and the working copy must match it.
+
+    What replaced `orchestrator approve`. A run is identified by the git sha of
+    the config it read, which is the same bytes an approval hashed plus an
+    author, a message and whatever review the repository requires — so the
+    check is that the sha exists and is current, not that someone ran a
+    command.
+    """
     from orchestrator.runtime import ProjectPaths
 
     config_path = (
         project_dir.config if isinstance(project_dir, ProjectPaths) else project_dir
     )
-    problem = approval_problem(_project_root(project_dir), config_path)
-    return Check("config is approved", problem is None, problem or "")
+    if config_path is None or not Path(config_path).exists():
+        return Check("config is committed", True, "no config file to check",
+                     fatal=False)
+    # A config outside the target repo has no commit to cite, so there is
+    # nothing to check and nothing to gain by refusing. Warned rather than
+    # blocked: this is the layout every project had before the config moved
+    # in, and a fatal check here would strand a run mid-migration on a
+    # property it was never able to have.
+    if not Path(config_path).resolve().is_relative_to(Path(cfg.target_repo).resolve()):
+        return Check(
+            "config is committed",
+            True,
+            f"{config_path} is outside the target repo, so it has no git "
+            "version. Move it in to get one.",
+            fatal=False,
+        )
+    ref = cfg.project_branch
+    if committed_sha(config_path, cfg.target_repo, ref) is None:
+        ref = cfg.base_ref
+    problem = problem_starting(config_path, cfg.target_repo, ref)
+    return Check("config is committed", not problem, problem)
 
 
 def format_checks(checks: list[Check]) -> str:

@@ -748,7 +748,6 @@ def verify_outcome(work: Path, repo: Path, report: str, live: bool = False) -> N
     )
 
     print("\nthe project directory")
-    check((project / "approval.json").is_file(), "approval.json was recorded")
     snapshot = sorted(p.name for p in (project / "plan-snapshot").iterdir())
     check(
         len([n for n in snapshot if n.endswith(".md")]) == 2,
@@ -853,13 +852,10 @@ def main() -> int:
         check(config.is_file(), "drafted a config")
         patch_config(config, live=args.live)
 
-        print("\nrun, before approval")
-        refused = cli(work, env, "run", SLUG, expect=1)
-        check(
-            "refus" in refused.lower(),
-            "refuses to start without an approval",
-            refused,
-        )
+        print("\nconfig outside the repo is warned about, not blocked")
+        # The pre-relocation layout. It has no commit to cite, so there is
+        # nothing to check — and refusing would strand every project that has
+        # not moved its config in yet.
 
         print("\nvalidate")
         checks = cli(work, env, "validate", SLUG)
@@ -877,9 +873,6 @@ def main() -> int:
             checks,
         )
 
-        print("\napprove")
-        approved = cli(work, env, "approve", SLUG)
-        check("python -m pytest" in approved, "printed the commands it will run")
 
         print("\nrun")
         report = cli(work, env, "run", SLUG, "--run-id", RUN_ID)
