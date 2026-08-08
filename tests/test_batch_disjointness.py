@@ -56,18 +56,18 @@ class TestDisjointBatchesSurvive:
             TRACKED,
         )
         assert [s.id for s in kept] == ["one", "two"]
-        assert dropped == ""
+        assert dropped == []
 
     def test_a_single_stage_is_always_safe(self):
         from orchestrator.config import safe_batch_prefix
 
         kept, dropped = safe_batch_prefix([_stage("one", edit=["app/**"])], TRACKED)
-        assert len(kept) == 1 and dropped == ""
+        assert len(kept) == 1 and dropped == []
 
     def test_an_empty_batch_is_empty(self):
         from orchestrator.config import safe_batch_prefix
 
-        assert safe_batch_prefix([], TRACKED) == ([], "")
+        assert safe_batch_prefix([], TRACKED) == ([], [])
 
     def test_stages_may_read_the_same_untouched_file(self):
         # Reading in common is fine. Only writing is what invalidates a spec.
@@ -92,7 +92,7 @@ class TestAConflictTruncates:
             TRACKED,
         )
         assert [s.id for s in kept] == ["one"]
-        assert "two" in dropped and "app/a.rb" in dropped
+        assert "two" in dropped[0] and "app/a.rb" in dropped[0]
 
     def test_a_later_stage_reading_what_an_earlier_one_writes(self):
         # The stale-spec case: stage two was drawn against the file as it is
@@ -107,7 +107,7 @@ class TestAConflictTruncates:
             TRACKED,
         )
         assert [s.id for s in kept] == ["one"]
-        assert "config/routes.rb" in dropped
+        assert "config/routes.rb" in dropped[0]
 
     def test_an_earlier_stage_reading_what_a_later_one_writes(self):
         # Symmetric, and the direction it is easy to forget: stage one is
@@ -143,21 +143,59 @@ class TestAConflictTruncates:
             TRACKED,
         )
         assert [s.id for s in kept] == ["one"]
-        assert "spec/support/helper.rb" in dropped
+        assert "spec/support/helper.rb" in dropped[0]
 
-    def test_it_keeps_the_prefix_before_the_conflict(self):
+    def test_one_bad_pair_costs_one_stage_not_the_tail(self):
+        """Five stages with one collision should yield four, not two.
+
+        Truncating at the first conflict throws away every later stage for a
+        collision they had nothing to do with. Filtering is sound because the
+        rule removes ordering: a kept stage names nothing any other kept stage
+        writes, so its spec is as true after the others run as before.
+        """
+        from orchestrator.config import safe_batch_prefix
+
+        kept, dropped = safe_batch_prefix(
+            [
+                _stage("one", edit=["app/a.rb"]),
+                _stage("two", edit=["app/b.rb"]),
+                _stage("three", edit=["app/c.rb"]),
+                _stage("four", edit=["app/a.rb"]),      # collides with one
+                _stage("five", edit=["spec/a_spec.rb"]),
+            ],
+            TRACKED,
+        )
+        assert [s.id for s in kept] == ["one", "two", "three", "five"]
+        assert len(dropped) == 1 and "four" in dropped[0]
+
+    def test_a_stage_is_judged_against_what_is_kept_not_what_was_dropped(self):
+        # `three` is dropped for clashing with `one`. `four` clashes only with
+        # `three`, which is not going to run — so it has nothing to clash with.
         from orchestrator.config import safe_batch_prefix
 
         kept, _ = safe_batch_prefix(
             [
                 _stage("one", edit=["app/a.rb"]),
-                _stage("two", edit=["app/b.rb"]),
-                _stage("three", edit=["app/a.rb"]),
-                _stage("four", edit=["app/c.rb"]),
+                _stage("three", edit=["app/a.rb", "app/b.rb"]),
+                _stage("four", edit=["app/b.rb"]),
             ],
             TRACKED,
         )
-        assert [s.id for s in kept] == ["one", "two"], "stops at the first conflict"
+        assert [s.id for s in kept] == ["one", "four"]
+
+    def test_every_drop_is_reported(self):
+        from orchestrator.config import safe_batch_prefix
+
+        kept, dropped = safe_batch_prefix(
+            [
+                _stage("one", edit=["app/a.rb"]),
+                _stage("two", edit=["app/a.rb"]),
+                _stage("three", edit=["app/a.rb"]),
+            ],
+            TRACKED,
+        )
+        assert [s.id for s in kept] == ["one"]
+        assert len(dropped) == 2, "silence about a dropped stage is how one goes missing"
 
 
 class TestGlobsAreResolvedNotCompared:
@@ -207,7 +245,7 @@ class TestGlobsAreResolvedNotCompared:
             TRACKED,
         )
         assert [s.id for s in kept] == ["one"]
-        assert "brand_new_spec" in dropped
+        assert "brand_new_spec" in dropped[0]
 
 
 class TestTheReasonIsUsable:
@@ -221,5 +259,5 @@ class TestTheReasonIsUsable:
             ],
             TRACKED,
         )
-        assert "second" in dropped and "first" in dropped
-        assert "config/routes.rb" in dropped
+        assert "second" in dropped[0] and "first" in dropped[0]
+        assert "config/routes.rb" in dropped[0]

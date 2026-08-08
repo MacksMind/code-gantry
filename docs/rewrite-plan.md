@@ -339,6 +339,39 @@ Each step keeps the suite green.
     per failure" is in the measurements below for that reason — it is the
     number that decides whether the feature pays.
 
+    **The planner owns the order.** The batch is filtered, never reordered: a
+    conflicting stage is dropped and the earlier of the pair wins, because it
+    is the one already accepted. `safe_batch_prefix` filters rather than
+    truncates, so a collision at position four still leaves one, two, three and
+    five — truncating there would discard later stages for a collision they had
+    nothing to do with. Each candidate is judged against what was *kept*, never
+    against what was dropped.
+
+    What the check cannot see is a stage whose instruction refers to another in
+    prose — "extend the helper the previous stage adds" — because that
+    dependency touches no file. Batched stages must stand alone, and the schema
+    has to say so, since any one of them may be the one dropped.
+
+    **Everything that goes wrong has to be cued back to the planner, and it is
+    an array.** Today `_failure_block` presents one failure about one stage. A
+    batch produces several facts at once: this one landed, that one failed with
+    this diagnosis, the three after it were discarded from the queue, and
+    another was dropped at validation for sharing a file. Without all of it the
+    planner re-derives blind and can produce the same conflicting batch again —
+    a loop that costs a derivation each time round. The rework block becomes a
+    list of what happened to the batch, not a single failure.
+
+    **A batch can run out of output before it runs out of stages.** Measured
+    over 465 stage specs: instruction length is median 5,139 characters, p90
+    9,766, max 15,167. Five at p90 is ~48,800 characters — about 12,200 tokens
+    of output before any reasoning, against `max_tokens=32,000` which thinking
+    also comes out of. And truncation here is not a clean stop: the SDK parses
+    structured output before returning, so a response cut mid-JSON raises
+    inside the call and surfaces as a pydantic dump, which `_call_failure`
+    exists to translate. So bound the batch by size as well as by count, and
+    raise the ceiling — it is a ceiling rather than an allocation, and the cost
+    of headroom is nothing against a discarded derivation.
+
     **Watch for the ceiling becoming a target.** The likeliest way this fails
     is not a bad stage but a slower derivation: asked for up to five, the
     planner surveys as though it needs five, and one call that costs five

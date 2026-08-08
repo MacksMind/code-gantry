@@ -897,30 +897,53 @@ def safe_batch_prefix(stages: list, tracked: list[str]) -> tuple[list, str]:
     `app/*.rb` and `app/a.rb` have nothing in common as text and everything as
     files.
 
-    Truncates rather than rejects, so heterogeneous work degrades to one stage
-    and today's behaviour instead of failing. Returns the kept stages and, when
-    something was dropped, a sentence naming the pair and the path — an
-    operator reading it should not have to re-derive the collision.
+    **Filters rather than truncates.** A conflicting stage is dropped and the
+    walk continues, so a bad pair at position four still leaves one, two,
+    three and five. Truncating there would throw away every later stage for a
+    collision it had nothing to do with.
+
+    Each candidate is judged against what has been *kept*, never against what
+    was dropped: a stage colliding only with one that is not going to run has
+    nothing to collide with. The earlier of a pair wins, because it is the one
+    already accepted.
+
+    That is sound because the rule itself removes ordering. A kept stage names
+    nothing any other kept stage writes, so its spec is as true after the
+    others run as before, and removing something from the middle cannot
+    invalidate what follows. What it *cannot* see is a stage whose instruction
+    refers to another in prose — "extend the helper the previous stage adds" —
+    because that dependency touches no file. Batched stages must therefore
+    stand alone, and the schema has to say so, since any one of them may be the
+    one dropped.
+
+    Returns the kept stages and one note per drop, each naming both stages and
+    the shared path: an operator reading it should not have to re-derive the
+    collision.
     """
     kept: list = []
+    dropped: list[str] = []
     for stage in stages:
         writes = _paths_written(stage, tracked)
         relies = _paths_relied_on(stage, tracked)
+        conflict = None
         for earlier in kept:
             clash = (writes & _paths_relied_on(earlier, tracked)) or (
                 _paths_written(earlier, tracked) & relies
             )
             if clash:
-                path = sorted(clash)[0]
-                return kept, (
-                    f"stage {stage.id!r} was dropped from the batch: it shares "
-                    f"{path!r} with stage {earlier.id!r}, so one of them would "
-                    "be drawn against a tree the other changes. The stages "
-                    "after it were dropped too; the planner will derive them "
-                    "again against what actually landed."
-                )
-        kept.append(stage)
-    return kept, ""
+                conflict = (earlier.id, sorted(clash)[0])
+                break
+        if conflict is None:
+            kept.append(stage)
+            continue
+        earlier_id, path = conflict
+        dropped.append(
+            f"stage {stage.id!r} was dropped from the batch: it shares "
+            f"{path!r} with stage {earlier_id!r}, so one of them would be "
+            "drawn against a tree the other changes. The planner will derive "
+            "it again against what actually landed."
+        )
+    return kept, dropped
 
 
 RETIRED_KEYS: dict[str, dict[str, str]] = {
