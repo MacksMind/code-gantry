@@ -710,3 +710,63 @@ class TestALineIsNotAUnitOfSize:
         assert "class OrdersController" in reader(repo).read_file(
             "app/controllers/orders_controller.rb"
         )
+
+
+class TestTheTotalIsBoundedInCharactersToo:
+    """`max_chars_per_call` was the second dimension, and only per call.
+
+    `TestALineIsNotAUnitOfSize` above records why the char ceiling exists: a
+    derivation whose searches returned 106 and 160 "lines" was followed by a
+    call the provider rejected at `1103000 tokens > 1000000 maximum`. The fix
+    bounded each *call* at 12,000 characters and left the step's total counted
+    in lines alone — so the same argument, one level up, had no answer.
+
+    It matters most for the cheap tools. `search` returns few lines per call
+    and each line can be a whole minified file, so a sweep spends almost no
+    line budget while spending arbitrary context. Under this project's target
+    config the executor may make 200 calls against a 20,000-line total: a
+    search-heavy attempt exhausts neither and can still pull megabytes.
+
+    The default is the line budget at eighty characters a line, so nothing that
+    was already reasonable changes and only the pathological case is caught —
+    the same argument `max_chars_per_call` was chosen by.
+    """
+
+    def _huge(self, repo, name="app/bundle.js", n=200_000):
+        (repo / name).write_text("var x=" + "a" * n + ";\n")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "-c", "commit.gpgsign=false", "commit", "-qm", "bundle"],
+            cwd=repo, check=True, capture_output=True,
+        )
+
+    def test_the_default_tracks_the_line_budget(self):
+        b = ReadBudget()
+        assert b.max_total_chars == b.max_total_lines * 80
+
+    def test_a_sweep_of_cheap_calls_is_stopped(self, repo):
+        # Each call spends one line and 12,000 characters. The line budget is
+        # untouched; the char budget is what notices.
+        self._huge(repo)
+        r = reader(repo, max_total_lines=10_000, max_calls=100, max_total_chars=30_000)
+        for _ in range(3):
+            r.read_file("app/bundle.js")
+        with pytest.raises(ToolError) as exc:
+            r.read_file("app/bundle.js")
+        assert "characters" in str(exc.value)
+        assert r._lines_used < 10_000, "the line budget never came close"
+
+    def test_an_ordinary_step_is_unaffected(self, repo):
+        r = reader(repo)
+        for _ in range(5):
+            r.read_file("docs/plan.md")
+        assert r._chars_used < r.budget.max_total_chars
+
+    def test_a_refusal_is_not_charged(self, repo):
+        # Same rule the call ceiling follows: recording a denial must not make
+        # the next one more likely.
+        r = reader(repo, max_total_chars=200)
+        before = r._chars_used
+        with pytest.raises(ToolError):
+            r.read_file("docs/nope.md")
+        assert r._chars_used == before

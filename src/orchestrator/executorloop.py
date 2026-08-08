@@ -327,6 +327,7 @@ def build_loop_parts(stage: Stage, cfg: ProjectConfig, repo: Path):
         ReadBudget(
             max_lines_per_call=cfg.executor.max_read_lines_per_call,
             max_total_lines=cfg.executor.max_read_lines_total,
+                max_total_chars=cfg.executor.max_read_chars_total,
             max_calls=cfg.executor.max_read_calls,
         ),
     )

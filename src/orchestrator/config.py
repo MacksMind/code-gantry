@@ -242,6 +242,7 @@ class ExecutorConfig(_EndpointConfig):
     # say so without silently moving the other two.
     max_read_lines_per_call: int = 400
     max_read_lines_total: int = 6000
+    max_read_chars_total: int = 480000
     max_read_calls: int = 60
     # Complete edit → lint → commit → test passes before the attempt gives up
     # and hands what it has to the gate. Deliberately low: an attempt is now a
@@ -360,6 +361,7 @@ class PlannerConfig(_EndpointConfig):
     repo_access: bool = False
     max_read_lines_per_call: int = 400
     max_read_lines_total: int = 3000
+    max_read_chars_total: int = 240000
     max_read_calls: int = 25
     # Semantic search over a Qdrant index, when the project maintains one.
     # Endpoints come from the environment because they carry a host name, which
@@ -433,6 +435,7 @@ class ReviewerConfig(_EndpointConfig):
     repo_access: bool = False
     max_read_lines_per_call: int = 400
     max_read_lines_total: int = 3000
+    max_read_chars_total: int = 240000
     max_read_calls: int = 25
     # See `PlannerConfig.semantic_search`. Same shape, same reason for keeping
     # the endpoints in the environment.

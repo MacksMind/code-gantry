@@ -945,6 +945,7 @@ def make_planner(cfg: PlannerConfig, target_repo=None) -> PlannerClient:
             ReadBudget(
                 max_lines_per_call=cfg.max_read_lines_per_call,
                 max_total_lines=cfg.max_read_lines_total,
+                max_total_chars=cfg.max_read_chars_total,
                 max_calls=cfg.max_read_calls,
             ),
         )

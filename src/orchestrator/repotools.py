@@ -133,6 +133,22 @@ class ReadBudget:
     # lines, so nothing that was already reasonable changes, and three orders
     # of magnitude below what one minified line can carry.
     max_chars_per_call: int = 12_000
+    # And the same dimension applied to the step, which the ceiling above did
+    # not cover. Bounding each call at 12,000 characters says nothing about a
+    # hundred of them, and `max_total_lines` is the proxy the char ceiling was
+    # added to replace — so the total was still counted in the unit that had
+    # already been shown not to measure anything.
+    #
+    # It bites on the cheap tools. `search` returns few lines per call and each
+    # of those lines can be a whole minified file, so a sweep spends almost no
+    # line budget while spending arbitrary context. Under this project's target
+    # config the executor may make 200 calls against a 20,000-line total: a
+    # search-heavy attempt exhausts neither and can still pull megabytes.
+    #
+    # The default is the line budget at eighty characters a line, which is the
+    # argument `max_chars_per_call` was chosen by — nothing already reasonable
+    # changes, and only the pathological case is caught.
+    max_total_chars: int = 3000 * 80
 
 
 def _read_detail(
@@ -233,6 +249,7 @@ class RepoReader:
     # would make a file the operator can see unreadable to the pipeline.
     search_exclude_globs: list[str] = field(default_factory=list)
     _lines_used: int = 0
+    _chars_used: int = 0
 
     # --- boundaries -----------------------------------------------------
 
@@ -336,6 +353,10 @@ class RepoReader:
     def _spend(self, tool: str, detail: str, text: str) -> str:
         used = text.count("\n") + (0 if text.endswith("\n") or not text else 1)
         self._lines_used += used
+        # Charged where the lines are, and only on an answered call — a refusal
+        # costs nothing here for the same reason it costs no call: recording a
+        # denial must not make the next one more likely.
+        self._chars_used += len(text)
         self.calls.append(ToolCall(tool=tool, detail=detail, lines=used))
         return text
 
@@ -375,6 +396,12 @@ class RepoReader:
             raise ToolError(
                 f"read budget spent for this step "
                 f"({self.budget.max_total_lines} lines). Work with what you have."
+            )
+        if self._chars_used >= getattr(self.budget, "max_total_chars", 0) > 0:
+            raise ToolError(
+                f"read budget spent for this step "
+                f"({self.budget.max_total_chars} characters). Work with what "
+                "you have."
             )
 
     def _clip(self, lines: list[str]) -> tuple[list[str], bool]:
