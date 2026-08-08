@@ -137,6 +137,9 @@ class RunState(TypedDict, total=False):
     revision: int
     verify_attempt: int
     rework_attempt: int
+    # Whether approval has already refunded the rework budget this revision.
+    # See `clear_rework_after_approval` — it is the bound on that refund.
+    rework_refunded: bool
 
     stage_start_sha: str
     stage_started_at: float
@@ -274,6 +277,7 @@ def new_state(
         revision=0,
         verify_attempt=0,
         rework_attempt=0,
+        rework_refunded=False,
         stage_start_sha="",
         stage_started_at=0.0,
         started_at=started_at,
@@ -366,6 +370,7 @@ def fresh_stage_fields() -> dict:
         "stage_started_at": 0.0,
         "verify_attempt": 0,
         "rework_attempt": 0,
+        "rework_refunded": False,
         "flake_reruns": 0,
         "flake_reruns_review_gate": 0,
         "test_seconds": 0.0,
@@ -449,6 +454,7 @@ def fresh_revision_fields() -> dict:
     return {
         "verify_attempt": 0,
         "rework_attempt": 0,
+        "rework_refunded": False,
         # A redrawn stage is a different instruction, so reproducing the old
         # diff under it is not evidence of being stuck.
         "last_diff_digest": "",
@@ -541,3 +547,34 @@ def resume_entry_point(state: RunState) -> str:
     if state.get("current"):
         return "verify" if state.get("stage_has_work") else "precheck"
     return "plan"
+
+
+def clear_rework_after_approval(state) -> dict:
+    """Refund the rework budget once the reviewer has approved the diff.
+
+    Approval is a real milestone: as far as the reviewer can tell, the diff is
+    right. What the full suite finds *after* it is a different question from
+    "this diff is not there yet", and the budget spent reaching approval should
+    not decide how the run answers it.
+
+    Measured on `order-edit-item-personalization-explicit-scope`. Two reviewer
+    reworks — a stale explanatory comment, and a route id that should have been
+    optional — spent `max_rework_retries: 2`. The stage was then approved, the
+    full suite failed on one spec that failed twice more when re-run alone, and
+    with no budget left it escalated to the planner, which spent 884 seconds and
+    chose `restart` on an approved diff. Neither rework had anything to do with
+    what the suite found.
+
+    Deliberately not a judgement about how serious a finding was. Severity is
+    not decidable mechanically, and a rule that tried would be wrong in the
+    cases that matter.
+
+    **Once per revision, and that is the bound.** Without it: rework, approve,
+    red suite, refund, rework, approve, red suite … a cycle that never reaches
+    the planner and pays for a full suite run every lap. With it, a revision is
+    worth at most two attempts to reach approval and two to answer the suite.
+    `fresh_stage_fields` clears the flag, so a redraw starts over.
+    """
+    if state.get("rework_refunded"):
+        return {}
+    return {"rework_attempt": 0, "rework_refunded": True}

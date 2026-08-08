@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from orchestrator.globs import matches_any
 
@@ -522,6 +522,19 @@ class Stage(_Strict):
     # Empty on the stage being started now — it was derived against the tree as
     # it stands, so there is no window in which anything could have moved.
     excerpt_base_sha: str = ""
+    # Specs the full suite failed on, after the reviewer had approved the diff.
+    #
+    # Recorded so the executor's inner loop runs them while it works. Handing
+    # back "the suite was red" without them asks it to fix something it cannot
+    # run, and `resolve_test_paths` builds the loop's command from the stage
+    # alone. Machinery-recorded for the same reason as the sha above: the suite
+    # already said which file failed, so asking a model to name it would be
+    # taking a claim in place of a fact.
+    #
+    # Running is not editing. A spec outside `edit_files` still cannot be
+    # modified, which leaves the executor fixing the code — the right outcome
+    # when the failure is real.
+    suite_failing_paths: list[str] = []
 
     # --- operator-only (executable) ---
     command: str | None = None
@@ -671,6 +684,18 @@ class ProjectConfig(_Strict):
     flake_rerun_attempts: int = 2
 
     # What counts as a test file for `require_new_tests`.
+    # Globs the `search` tool must never read, for every role.
+    #
+    # A hit in a vendored, minified or generated file is not actionable — no
+    # stage can edit it — so the cost of reading it has no matching benefit.
+    # Measured on one project: a single vendored editor bundle holds 240,181
+    # characters across 108 lines, and a minified jQuery averages 23,157 per
+    # line, so three hits return more text than an entire planner prompt.
+    #
+    # No default, deliberately. Which paths those are is a property of the
+    # project, and a default naming `vendor/` or `public/` would be one
+    # repository's shape shipped to every other one's planner.
+    search_exclude_globs: list[str] = Field(default_factory=list)
     test_file_patterns: list[str] = [
         "**/test_*.py",
         "**/*_test.py",

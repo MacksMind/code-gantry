@@ -224,6 +224,14 @@ class RepoReader:
     # deletion because a permit list landed later — the right answer for the
     # wrong reason, and indistinguishable from judgement.
     at_sha: str = ""
+    # Globs a search must never read, from operator config. Which paths are
+    # vendored, minified or generated is project knowledge, so there is no
+    # default — one here would ship this repository's layout to every project.
+    #
+    # Search only. `read_file` is the planner naming a path deliberately, and an
+    # exclusion is about what a sweep pulls in by accident; conflating them
+    # would make a file the operator can see unreadable to the pipeline.
+    search_exclude_globs: list[str] = field(default_factory=list)
     _lines_used: int = 0
 
     # --- boundaries -----------------------------------------------------
@@ -562,7 +570,16 @@ class RepoReader:
         # `.git/logs` and `.git/COMMIT_EDITMSG` — reflog lines and commit
         # messages returned as if they were source. The exclusion has to
         # outrank anything the model can write, which means going after it.
-        argv += ["-g", "!.git", "-e", pattern]
+        # Exclusions last, all of them, for the reason `!.git` is last: ripgrep
+        # resolves overlapping globs in order and the last match wins, so an
+        # operator's exclusion placed before a model's `-g '**/*'` is silently
+        # overridden.
+        argv += ["-g", "!.git"]
+        for excluded in self.search_exclude_globs:
+            cleaned = (excluded or "").strip()
+            if cleaned:
+                argv += ["-g", f"!{cleaned.lstrip('!')}"]
+        argv += ["-e", pattern]
 
         proc = subprocess.run(
             argv,

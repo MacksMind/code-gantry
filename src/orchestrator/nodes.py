@@ -48,6 +48,7 @@ from orchestrator.prompts import (
 from orchestrator.reviewer import issues_as_feedback
 from orchestrator.runtime import Runtime
 from orchestrator.state import (
+    clear_rework_after_approval,
     RunState,
     accumulate_usage,
     fresh_revision_fields,
@@ -1248,6 +1249,13 @@ def review(state: RunState, rt: Runtime) -> dict:
         )
         return {**base, "next_hop": "advance"}
 
+    # The refund goes here, before the suite runs, because both exits below
+    # need it: a red suite routes back to the executor with a fresh budget, and
+    # a green one lands and clears everything anyway. See
+    # `clear_rework_after_approval` for why approval is the right trigger and
+    # why it happens once.
+    base = {**base, **clear_rework_after_approval(state)}
+
     rt.log(f"[review] {stage.id}: approved; running the full suite")
     result = rt.runner.run(rt.cfg.full_test_command)
     seconds = result.duration_seconds
@@ -1355,8 +1363,18 @@ def review(state: RunState, rt: Runtime) -> dict:
         )
         if baseline.checked and baseline.files:
             feedback.append(f"Baseline check: {baseline.summary}")
+        # Onto the stage, so the executor's inner loop *runs* the spec rather
+        # than only being told about it. The command is assembled by code from
+        # the filename the suite produced — no model is asked to name it, which
+        # is the difference between a fact and a claim.
+        current = dict(state.get("current") or {})
+        if verdict.files:
+            current["suite_failing_paths"] = sorted(
+                {*(current.get("suite_failing_paths") or []), *verdict.files}
+            )
         return {
             **base,
+            "current": current,
             "test_seconds": state.get("test_seconds", 0.0) + seconds,
             **_rework_or_plan(
                 state, rt, feedback, "approved but the full suite was red",

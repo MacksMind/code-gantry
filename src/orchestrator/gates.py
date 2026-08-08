@@ -220,6 +220,17 @@ def resolve_test_paths(
 
     if for_loop:
         paths.extend(tests_the_stage_may_edit(stage, cfg))
+        # What the full suite failed on after the reviewer approved the diff.
+        # Only the loop wants these: the gate reads the diff, and a spec the
+        # suite happened to fail is not part of this stage's scope question.
+        # Existence is required rather than `runnable` — this is a file the
+        # suite has already executed, so if it is gone the stage deleted it and
+        # naming it would make the command unable to pass.
+        paths.extend(
+            p
+            for p in getattr(stage, "suite_failing_paths", [])
+            if p and (cfg.target_repo / p).exists()
+        )
 
     # Deduplicate while preserving order. Diff-derived paths come first on the
     # gate's side because those definitely exist.
