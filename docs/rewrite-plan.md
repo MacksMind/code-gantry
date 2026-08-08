@@ -339,6 +339,20 @@ Each step keeps the suite green.
     per failure" is in the measurements below for that reason — it is the
     number that decides whether the feature pays.
 
+    **This is not parallelism, and the distinction is the whole design.**
+    Stages still run strictly one at a time. Many of them need a tree that does
+    not move underneath them, which is exactly why `verify` compares against
+    `stage_start_sha` and why the executor commits before it tests. What the
+    batch amortises is the *derivation*, not the execution. The disjointness
+    rule is not there to permit concurrency — it is there so that stage 3's
+    spec, written before stages 1 and 2 ran, is still true when its turn comes.
+
+    **Discarding the queue discards no work.** A stage that fails routes to
+    `plan` with its child branch intact, and the planner still chooses
+    `extend` (keep it) or `restart` (cut fresh) as it does today — the branch
+    is only deleted when it asks for that. So what a discarded queue throws
+    away is predictions about stages that never started, never a diff.
+
     **The planner owns the order.** The batch is filtered, never reordered: a
     conflicting stage is dropped and the earlier of the pair wins, because it
     is the one already accepted. `safe_batch_prefix` filters rather than
