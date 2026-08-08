@@ -519,7 +519,13 @@ def build_repo(root: Path) -> Path:
     (repo / "docs" / "plan_detail.md").write_text(PLAN_DETAIL)
     # Without this the caches pytest writes fail the scope guard on every
     # stage — which is precisely what preflight's tidiness check warns about.
-    (repo / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
+    # `.orchestrator/` because the work dir defaults inside the repo, beside
+    # the plan, and preflight blocks a run whose data directory is tracked.
+    # Every real project needs this line; the smoke test is the one place that
+    # proves a project set up from scratch actually starts.
+    (repo / ".gitignore").write_text(
+        "__pycache__/\n.pytest_cache/\n.orchestrator/\n"
+    )
 
     git(repo, "init", "-b", "main")
     # Persisted locally, not just passed per-invocation: the executor commits

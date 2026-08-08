@@ -67,6 +67,24 @@ class Git:
     def is_repo(self) -> bool:
         return self._run("rev-parse", "--git-dir", check=False).returncode == 0
 
+    def is_ignored(self, path: str) -> bool:
+        """Does .gitignore cover this path?
+
+        `check-ignore` exits 0 when it matches, 1 when it does not, and 128 on
+        a bad invocation — so the exit code has three meanings and only one of
+        them is "no". Compared against 0 explicitly rather than treating
+        non-zero as "not ignored", which is the shape that turned a broken
+        command into a confident answer elsewhere in this codebase.
+
+        `--no-index` so a path that is *already tracked* still reports its
+        ignore status. Without it git answers about the index instead, which
+        would call an accidentally-committed work dir "not ignored" for the
+        one reason the operator most needs told apart.
+        """
+        return self._run(
+            "check-ignore", "--no-index", "-q", "--", path, check=False
+        ).returncode == 0
+
     def is_clean(self) -> bool:
         """Ignored files do not count. A target repo legitimately carries env
         files, caches, and test databases."""

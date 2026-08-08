@@ -345,6 +345,16 @@ def _is_plan_document(path: str, ctx: _Context) -> bool:
     if addendum and (path == addendum or path.startswith(addendum.rstrip("/") + "/")):
         return True
 
+    # The config itself, which now lives inside the repository it describes.
+    # `checks`, `test_command` and `setup_command` are arbitrary operator shell
+    # that runs unattended; before the move they sat in a repository no stage
+    # could reach, and after it they are one `edit_files` glob away. The same
+    # sentence as the agent-context documents below, with the most force it
+    # gets: a stage able to edit this one chooses what the machine runs.
+    config_rel = ctx.cfg.config_rel_path
+    if config_rel and path == config_rel:
+        return True
+
     # The agent-context documents, for the same reason and with more force: the
     # planner reads them for what the machine can do, so a stage able to edit
     # one could retire its own constraints — "the pipeline cannot run bundle

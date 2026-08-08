@@ -20,6 +20,7 @@ import os
 import shutil
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from datetime import datetime
 
 from orchestrator.apistatus import classify
@@ -127,6 +128,46 @@ def _ripgrep_check() -> Check:
     )
 
 
+def _work_dir_is_ignored(cfg: ProjectConfig, git: Git) -> Check:
+    """Run data inside the target repo must not be tracked by it.
+
+    The work dir defaults under the plan directory, which is committed — the
+    plan and the record of what was done to it are one project and belong
+    together. The data beside them is not: it is written on every node, and
+    every stage would find a dirty tree.
+
+    That failure is self-inflicted and confusing rather than loud. `precheck`
+    refuses to cut a stage branch over changes it cannot attribute, so the
+    first symptom is a run that stops on a stage with nothing wrong with it —
+    which `CLAUDE.md` already records happening for an uncommitted `checks`
+    rewrite. Blocking here says it once, at the only moment it is cheap to fix.
+
+    Not a check at all when the work dir is outside the repo, which is where
+    this project's own history still lives.
+    """
+    name = "work dir is git-ignored"
+    work = Path(cfg.work_dir)
+    if not work.is_relative_to(cfg.target_repo):
+        return Check(name, True, f"outside the target repo: {work}", fatal=False)
+
+    rel = work.relative_to(cfg.target_repo)
+    # Queried with a trailing slash. `.orchestrator/` is a directory pattern,
+    # and for a path that does not exist yet git cannot tell a directory from a
+    # file — so the pattern misses without it. Measured: `check-ignore` on
+    # `.orchestrator` exits 1 and on `.orchestrator/` exits 0, against the same
+    # `.gitignore`. The work dir never exists at the moment this runs for the
+    # first time, which is the only moment the check matters.
+    if git.is_ignored(f"{rel}/"):
+        return Check(name, True, str(rel))
+    return Check(
+        name,
+        False,
+        f"{rel} is inside the target repo and not ignored. Every run writes "
+        f"there, so the tree would never be clean and no stage could cut a "
+        f"branch. Add `{rel.name}/` to a .gitignore beside it.",
+    )
+
+
 def _repo_checks(cfg: ProjectConfig, git: Git, *, for_resume: bool) -> list[Check]:
     checks = [_ripgrep_check()]
 
@@ -137,6 +178,8 @@ def _repo_checks(cfg: ProjectConfig, git: Git, *, for_resume: bool) -> list[Chec
     if not git.is_repo():
         return checks + [Check("target repo is a git repo", False, str(cfg.target_repo))]
     checks.append(Check("target repo is a git repo", True))
+
+    checks.append(_work_dir_is_ignored(cfg, git))
 
     if for_resume:
         # Start-only. A run is resumed precisely because a human just fixed

@@ -595,7 +595,27 @@ class ProjectConfig(_Strict):
     # running this config elsewhere and misreading the failures.
     host: str | None = None
 
-    target_repo: Path
+    # Optional because the config now lives inside the repository it describes,
+    # so the repository is wherever the config was read from — one fewer
+    # absolute path in a file that is tracked and shared, and one that cannot
+    # disagree with reality. Still settable: the tests build configs from no
+    # file at all, and an operator may point at a worktree.
+    target_repo: Path | None = None
+    # Everything the orchestrator writes: runs, logs, the flake and cost
+    # ledgers, the approval record. Named here so the orchestrator's own tree
+    # holds code and nothing else, and defaults to the config's directory,
+    # which is inside the repo and gitignorable there.
+    #
+    # `~` and `${VAR}` are expanded, because this file is tracked in a shared
+    # repository and cannot carry one machine's home directory. An unset
+    # variable is an error rather than a directory literally named `${VAR}`: a
+    # run that writes its whole record somewhere unintended is worse than one
+    # that refuses to start.
+    work_dir: Path | None = None
+    # Repo-relative path of this config, when it was read from inside the
+    # target repo. What `_is_plan_document` matches against; `None` when the
+    # config lives elsewhere, which is the case every test builds.
+    config_rel_path: str | None = None
     base_ref: str = "main"
     project_branch: str
 
@@ -977,9 +997,61 @@ def _retired_key_problems(data: dict) -> list[str]:
     return problems
 
 
-def parse_config(data: dict) -> ProjectConfig:
+def _git_root(start: Path) -> Path | None:
+    """The repository `start` is in, or None.
+
+    Walked rather than shelled out to: this runs during config parsing, which
+    the tests call thousands of times, and `git rev-parse` is a process each.
+    """
+    for candidate in [start, *start.parents]:
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+
+def _expanded(value: str, field: str) -> Path:
+    """A path from a shared, tracked file: `~` and `${VAR}` resolved."""
+    text = os.path.expanduser(str(value))
+    missing = [
+        name for name in re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", text)
+        if name not in os.environ
+    ]
+    if missing:
+        raise ConfigError(
+            [f"{field}: {', '.join(missing)} is not set in the environment"]
+        )
+    return Path(os.path.expandvars(text))
+
+
+def parse_config(data: dict, source: Path | str | None = None) -> ProjectConfig:
+    """`source` is the file it was read from, which locates the repo.
+
+    Passed rather than stored on the config so that building one in a test, or
+    from a dict, stays a pure function of its argument.
+    """
     if not isinstance(data, dict):
         raise ConfigError(["config must be a YAML mapping"])
+
+    data = dict(data)
+    for field in ("target_repo", "work_dir"):
+        if data.get(field) is not None:
+            data[field] = _expanded(data[field], field)
+    # The enclosing git repository, found by walking up. Not a fixed depth:
+    # the config sits beside the plan documents it belongs with, and a plan
+    # root is commonly several directories down.
+    if source is not None:
+        source = Path(source).resolve()
+        root = _git_root(source.parent)
+        if root is not None:
+            data.setdefault("target_repo", root)
+        repo = data.get("target_repo")
+        if repo is not None and source.is_relative_to(Path(repo).resolve()):
+            data.setdefault("config_rel_path", str(source.relative_to(Path(repo).resolve())))
+    if data.get("target_repo") is None:
+        raise ConfigError(
+            ["target_repo is not set and the config was not read from a file, "
+             "so the repository it describes cannot be derived"]
+        )
 
     # Before validation, so a retired key is explained rather than reported as
     # an unknown one. A genuine typo still falls through to pydantic.
@@ -991,6 +1063,18 @@ def parse_config(data: dict) -> ProjectConfig:
         cfg = ProjectConfig.model_validate(data)
     except ValidationError as e:
         raise ConfigError(_format_pydantic_errors(e)) from e
+
+    if cfg.work_dir is None:
+        # Beside the plan documents, because they are the same project: the
+        # plan says what the migration is, the run data says what happened to
+        # it, and a later reader wants them in one place. `plan_root` is a
+        # document, so its directory is the project's.
+        cfg = cfg.model_copy(
+            update={
+                "work_dir": cfg.target_repo / Path(cfg.plan_root).parent
+                / ".orchestrator"
+            }
+        )
 
     problems = _structural_problems(cfg)
     if problems:
@@ -1013,7 +1097,7 @@ def load_config(path: Path | str) -> ProjectConfig:
     if not isinstance(data, dict):
         raise ConfigError([f"{path} must contain a YAML mapping at the top level"])
 
-    return parse_config(data)
+    return parse_config(data, source=path)
 
 
 def _glob_could_match_a_test(glob: str, test_patterns: list[str]) -> bool:
