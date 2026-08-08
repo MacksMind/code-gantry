@@ -814,3 +814,60 @@ class TestARetiredLimitIsNamedLikeARetiredExecutorKey:
                 assert not re.search(rf"^\s*{re.escape(key)}\s*:", draft, re.M), (
                     f"{section}.{key} drafted into a new config"
                 )
+
+
+class TestThePlannerOutputBudgetIsASetting:
+    """`_call_failure` tells the operator to raise it. It could not be raised.
+
+    A truncated structured response arrives as a pydantic dump — the SDK parses
+    before returning, so a verdict cut mid-JSON raises inside the call — and
+    `_call_failure` translates that into the one useful instruction: "the
+    output budget is too small for the stage instruction it was writing — raise
+    the planner's max_tokens rather than retrying". The value was hardcoded, so
+    an operator following that advice had nowhere to go.
+
+    It also has to move for step 10. Five stage specs at the measured p90
+    instruction length is ~12,200 tokens of output before any reasoning, and
+    thinking comes out of the same budget.
+    """
+
+    def _cfg(self, **planner):
+        from orchestrator.config import parse_config
+
+        base = {"model": "claude-opus-5"}
+        base.update(planner)
+        return parse_config({
+            "target_repo": ".", "base_ref": "main", "project_branch": "p",
+            "plan_root": "PLAN.md", "test_command": "true",
+            "executor": {"model": "m"}, "planner": base,
+            "reviewer": {"model": "gpt-5.6-sol"},
+        })
+
+    def test_it_defaults_to_what_was_hardcoded(self):
+        # Unchanged behaviour for every project that does not set it.
+        assert self._cfg().planner.max_tokens == 32_000
+
+    def test_an_operator_can_raise_it(self):
+        assert self._cfg(max_tokens=64_000).planner.max_tokens == 64_000
+
+    def test_the_client_sends_the_configured_value(self):
+        """Pinned at the call, not at the config.
+
+        A setting that is declared and never passed is the same as no setting,
+        and this codebase has shipped that shape before — a field read by
+        nothing, and a guard that never fired.
+        """
+        from orchestrator.planner import AnthropicPlanner
+
+        sent = {}
+
+        class Client:
+            class messages:
+                @staticmethod
+                def parse(**kwargs):
+                    sent.update(kwargs)
+                    raise RuntimeError("stop here")
+
+        p = AnthropicPlanner(self._cfg(max_tokens=51_000).planner, client=Client())
+        p.plan([{"role": "user", "content": "x"}])
+        assert sent["max_tokens"] == 51_000

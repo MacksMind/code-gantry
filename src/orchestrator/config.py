@@ -278,6 +278,18 @@ class PlannerConfig(_EndpointConfig):
     # change how the planner behaves without invalidating anything.
     guidance: str | None = None
     request_timeout_seconds: float = 900.0
+    # What the planner may spend on one answer, thinking included. Not a model
+    # limitation — the SDK takes a plain int and the real ceiling is enforced
+    # server-side — and it was hardcoded, which made `_call_failure`'s advice
+    # unfollowable: a truncated verdict tells the operator to "raise the
+    # planner's max_tokens", and there was nothing to raise.
+    #
+    # Generous by default because it is a ceiling rather than an allocation.
+    # 16,000 was not enough once already: stage instructions on a real project
+    # reach 15,167 characters and a derivation died mid-string at 11,710 with
+    # the reasoning already spent. The cost of headroom is nothing; the cost of
+    # hitting it is a whole derivation discarded.
+    max_tokens: int = 32_000
     max_retries: int = 2
     # How long a network outage should be survivable, in seconds. Zero turns
     # retrying off rather than being an unsupported value found out about

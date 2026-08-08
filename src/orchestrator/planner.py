@@ -727,7 +727,7 @@ class AnthropicPlanner:
                         # headroom is nothing — this is a ceiling, not an
                         # allocation — and the cost of hitting it is a whole
                         # derivation discarded.
-                        max_tokens=32_000,
+                        max_tokens=self.cfg.max_tokens,
                         output_config=_output_config(self.cfg),
                         system=_system_blocks(self.cfg.cache_ttl, self.cfg.guidance),
                         messages=_with_loop_breakpoint(conversation),
