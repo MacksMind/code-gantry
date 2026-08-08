@@ -323,11 +323,35 @@ Each step keeps the suite green.
     That keeps the feedback loop — the reviewer's `record` and the progress log
     informing the next stage — for the case where it matters.
 
-    Measure: batch size actually produced, stages discarded per failure, and
-    the failure rate of position-2+ stages against position-1. If position-2+
-    fails materially more, the lost feedback is real and the cap comes down.
-    Do not report the saving from token cost alone; a batch that fails at
-    position 2 costs a derivation *and* an attempt.
+    **Watch for the ceiling becoming a target.** The likeliest way this fails
+    is not a bad stage but a slower derivation: asked for up to five, the
+    planner surveys as though it needs five, and one call that costs five
+    calls' worth of thinking has saved nothing. The read cap is 100 now, so
+    there is ample room to overthink into, and the risk grew when that was
+    raised.
+
+    The saving being claimed is amortising **one survey**, so the measurement
+    has to be **derivation seconds per stage produced**, not per derivation.
+    The baseline is on the record: single-stage derivations on this project ran
+    171, 264, 268, 311, 339 and 435 seconds, so roughly 5 minutes a stage. A
+    five-stage batch at 25 minutes is exactly break-even and a worse artifact,
+    because four of those stages were drawn before the first one ran. The run
+    log prints `read N thing(s) over Ns` beside every derivation, which is the
+    instrument — it exists because a 19-minute derivation had nothing to look
+    at, and it turns out to be what tells us whether this feature works.
+
+    Frame the field as a ceiling that is normally 1. This is the *inverse* of
+    the `observations` lesson: there, an optional field with a conditional
+    trigger came back empty 278 times out of 278, and the fix was to make it
+    required and always answerable. Here declining is the good outcome, so the
+    conditional trigger is the right shape and the schema should make one stage
+    the unremarkable answer — a number in the prose invites filling it.
+
+    Also measure: batch size actually produced, stages discarded per failure,
+    and the failure rate of position-2+ stages against position-1. If
+    position-2+ fails materially more, the lost feedback is real and the cap
+    comes down. Do not report the saving from token cost alone; a batch that
+    fails at position 2 costs a derivation *and* an attempt.
 
 ## Verification
 
