@@ -884,6 +884,22 @@ def execute(state: RunState, rt: Runtime) -> dict:
         )
         return {"next_hop": "verify", **measured}
 
+    # The ceiling, said in its own words. `verify` will report "the attempt
+    # produced no changes", which is observably true and points the planner at
+    # a badly drawn stage — the wrong problem when the executor was still
+    # working and simply ran out of turns.
+    if result.turns_exhausted and not result.edits_applied:
+        reason = _no_change_reason(True, result.model_turns)
+        rt.log(f"[execute] {stage.id}: {reason}")
+        return {
+            **_retry_or_plan(
+                state, rt, Layer.EXECUTOR,
+                "the executor ran out of model turns before it edited anything",
+                reason, reason,
+            ),
+            **measured,
+        }
+
     what = "timed out" if result.timed_out else "stopped without finishing"
     advice = ""
 
@@ -1726,6 +1742,35 @@ def _requeue_after_revision(cfg, git, revised, queue: list[dict]) -> tuple[list[
     stages = [revised] + [cfg.stage_from_planner(f) for f in queue]
     kept, dropped = orthogonal_stages(stages, tracked)
     return [s.model_dump() for s in kept[1:]], dropped
+
+
+def _no_change_reason(turns_exhausted: bool, turns: int) -> str:
+    """Why an attempt produced nothing, said so the planner fixes the right thing.
+
+    Two different problems wore the same sentence for a while. A model that
+    stops having changed nothing has decided there is nothing to do — that is a
+    stage drawn wrongly, and redrawing it is the answer. A model still asking
+    for things when its turns run out was working: the stage is too large to
+    survey inside the budget it was given.
+
+    Live cost of not distinguishing them: `cart-explicit-routes` spent four
+    attempts making 85, 103, 76 and 138 tool calls, every one a read, and hit
+    the ceiling each time. The planner was told "the attempt produced no
+    changes" and went looking for a badly drawn stage.
+    """
+    if not turns_exhausted:
+        return (
+            "The executor stopped without changing anything, which means it "
+            "decided there was nothing to do. Either the work is already done "
+            "or the instruction did not describe something it could act on."
+        )
+    return (
+        f"The executor was still working when it hit its ceiling of {turns} "
+        "model turns, so it never got as far as editing. It was not stuck and "
+        "the instruction was not wrong — it could not finish surveying the "
+        "code in the budget it had. Draw this smaller, or narrow what it has "
+        "to read to answer the question."
+    )
 
 
 def _next_from_queue(state: RunState, landed_index: int) -> dict:

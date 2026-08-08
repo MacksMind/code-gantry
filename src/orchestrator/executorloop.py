@@ -110,6 +110,10 @@ def run_loop(
             f"{c.tool}({c.detail}): {c.refusal}" for c in editor.calls if c.refusal
         ]
 
+        # Read at last. Its own comment said the loop must not treat this as
+        # finished, and the loop did exactly that because nothing consulted it.
+        out.turns_exhausted = not turn.stopped
+
         if not editor.touched:
             # The model stopped without changing anything. Not adjudicated
             # here: the scope gate already owns the sentence "the attempt

@@ -96,6 +96,12 @@ class ExecutionResult:
     # actually is: everything after it in an attempt reads what it wrote.
     first_prompt_tokens: int = 0
     first_cached_tokens: int = 0
+    # The model was still calling tools when the turn ceiling stopped it. A
+    # different problem from a model that stopped having changed nothing, and
+    # for a while they were reported identically: `ExecutorTurn.stopped` was
+    # set in three places and read in none, so an attempt cut off mid-survey
+    # arrived at the gate as "the attempt produced no changes".
+    turns_exhausted: bool = False
     # What it asked for, by tool, and what was refused, by reason. Counts
     # rather than the rendered calls the other two loops log: the planner's
     # 40-call line is already hard to read, and this one makes sixty a cycle.

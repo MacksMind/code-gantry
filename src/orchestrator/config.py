@@ -208,7 +208,18 @@ class ExecutorConfig(_EndpointConfig):
     # backstop for one that ignores them and keeps asking, which would
     # otherwise hold a stage open until the request timeout. Same role as
     # `AnthropicPlanner._max_tool_turns`.
-    max_model_turns: int = 20
+    # A backstop against a model that ignores every refusal and keeps asking,
+    # and nothing more. The real bounds are elsewhere and bind first: the read
+    # budget refuses past its own ceiling, and `run_loop` stops the whole cycle
+    # at `request_timeout_seconds` whatever the turn count.
+    #
+    # It was 20 and was silently deciding whether stages could be done at all.
+    # Measured on one stage of a live run: four attempts made 85, 103, 76 and
+    # 138 tool calls, every one a read, and each stopped at exactly 20 turns
+    # having edited nothing — reported to the planner as "the attempt produced
+    # no changes", which sent it to redraw a stage that was never the problem.
+    # A ceiling that decides outcomes is not a backstop.
+    max_model_turns: int = 200
     # A file holding the executor's system prompt, replacing the built-in one.
     #
     # A path rather than the text, for the reason that cost more than the rule
