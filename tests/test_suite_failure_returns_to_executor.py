@@ -76,10 +76,33 @@ class TestTheFailingSpecReachesTheInnerLoop:
         assert "spec/features/big_spec.rb" in paths
         assert "spec/a_spec.rb" in paths
 
-    def test_the_gate_does_not_use_them(self, repo):
-        # The gate reads the diff: after the work exists the tree says what was
-        # touched, and a spec the suite happened to fail is not part of this
-        # stage's scope question.
+    def test_the_gate_uses_them_too(self, repo):
+        """This assertion used to be its inverse, and the reversal is measured.
+
+        It read: "the gate reads the diff, and a spec the suite happened to
+        fail is not part of this stage's scope question." True of a spec the
+        suite *happened* to fail — and that is not what lands in this field.
+        `advance` records it only after the reviewer approved the diff, the
+        full suite went red, and the baseline check attributed the failure to
+        this stage rather than to the tree it started from; the predates case
+        routes to the planner several lines earlier and never gets here. So by
+        construction these are the specs this stage's own approved diff broke,
+        and the retry exists for them.
+
+        Measured on `remove-non-admin-catch-all-retry`, attempt 2: the loop ran
+        its 25-file list — six declared paths plus nineteen recorded here — and
+        it was red at 15:45:38 and red again at 15:47:41, both recorded in
+        `in_loop_failures`. The gate then ran the six alone, passed in 10.3s,
+        and the reviewer approved. The 246s full suite and the 106s baseline
+        re-run rediscovered what the loop had held for eight and a half
+        minutes, and it cost a reviewer call and a 603s planner revision.
+
+        A gate narrower than the loop it follows can only ever ratify. This is
+        `CLAUDE.md`'s "an inner loop that skips the file under edit is worse
+        than none" seen from the other end: there the loop was blind to what
+        the gate would judge, here the gate is blind to what the loop already
+        proved, and both end with an attempt believing it succeeded.
+        """
         from orchestrator.gitops import Git
         from orchestrator.gates import resolve_test_paths
 
@@ -90,7 +113,24 @@ class TestTheFailingSpecReachesTheInnerLoop:
         paths = resolve_test_paths(
             stage, _cfg(repo), Git(repo), "HEAD", for_loop=False
         )
-        assert "spec/features/big_spec.rb" not in paths
+        assert "spec/features/big_spec.rb" in paths
+
+    def test_the_gate_still_drops_one_the_stage_deleted(self, repo):
+        # The loop's reason for requiring existence rather than `runnable`
+        # holds identically here: naming a file the stage removed makes the
+        # command unable to pass, and the gate has no more room to survive
+        # that than the loop does.
+        from orchestrator.gitops import Git
+        from orchestrator.gates import resolve_test_paths
+
+        stage = Stage(
+            id="s", instruction="do it", edit_files=["app/a.rb"],
+            suite_failing_paths=["spec/gone_spec.rb"],
+        )
+        paths = resolve_test_paths(
+            stage, _cfg(repo), Git(repo), "HEAD", for_loop=False
+        )
+        assert "spec/gone_spec.rb" not in paths
 
     def test_a_path_that_no_longer_exists_is_dropped(self, repo):
         from orchestrator.gates import resolve_test_paths
@@ -100,6 +140,33 @@ class TestTheFailingSpecReachesTheInnerLoop:
             suite_failing_paths=["spec/gone_spec.rb"],
         )
         assert resolve_test_paths(stage, _cfg(repo), for_loop=True) == []
+
+    def test_an_extend_keeps_them(self):
+        # The branch survives, so the failures on it survive; the record of
+        # what they were has to survive with them or the gate that is supposed
+        # to catch them has nothing to run. Driven through `nodes.plan` in
+        # `test_nodes.TestRevision` — this pins the seam.
+        from orchestrator.state import evidence_surviving_a_revision
+
+        previous = {"id": "s", "suite_failing_paths": ["spec/b_spec.rb"]}
+        assert evidence_surviving_a_revision(previous, keep_branch=True) == {
+            "suite_failing_paths": ["spec/b_spec.rb"]
+        }
+
+    def test_a_restart_drops_them(self):
+        # The branch is discarded and re-cut from the project tip, so the diff
+        # that caused those failures is gone. Naming them would send the next
+        # attempt after a problem that is no longer there.
+        from orchestrator.state import evidence_surviving_a_revision
+
+        previous = {"id": "s", "suite_failing_paths": ["spec/b_spec.rb"]}
+        assert evidence_surviving_a_revision(previous, keep_branch=False) == {}
+
+    def test_nothing_recorded_stays_nothing(self):
+        from orchestrator.state import evidence_surviving_a_revision
+
+        assert evidence_surviving_a_revision({"id": "s"}, keep_branch=True) == {}
+        assert evidence_surviving_a_revision(None, keep_branch=True) == {}
 
     def test_the_planner_cannot_author_it(self):
         # Machinery-recorded, like `excerpt_base_sha`. A model naming the spec

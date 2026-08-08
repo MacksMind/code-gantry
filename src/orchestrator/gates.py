@@ -183,6 +183,19 @@ def resolve_test_paths(
     **Third — the union with `tests_the_stage_may_edit`.** The loop adds them;
     the gate does not need to, because they are already in the diff if the
     stage touched them.
+
+    `suite_failing_paths` is the one thing both sides take. It was the loop's
+    alone, on the reasoning that the gate reads the diff and a spec the suite
+    happened to fail is not this stage's scope question — right about a spec
+    that happened to fail, and that is not what reaches the field. `advance`
+    records it only after the reviewer approved, the full suite went red, and
+    the baseline check attributed the failure to this stage; the predates case
+    routes to the planner and never arrives here. These are the specs this
+    stage broke, and a gate narrower than the loop that precedes it can only
+    ratify. Measured on one stage: the loop ran the wider list red twice, the
+    gate ran the narrower one green in 10.3s, and the reviewer approved — then
+    a 246s suite, a 106s baseline and a 603s revision established what the loop
+    had already said eight and a half minutes earlier.
     """
     paths: list[str] = []
 
@@ -220,17 +233,18 @@ def resolve_test_paths(
 
     if for_loop:
         paths.extend(tests_the_stage_may_edit(stage, cfg))
-        # What the full suite failed on after the reviewer approved the diff.
-        # Only the loop wants these: the gate reads the diff, and a spec the
-        # suite happened to fail is not part of this stage's scope question.
-        # Existence is required rather than `runnable` — this is a file the
-        # suite has already executed, so if it is gone the stage deleted it and
-        # naming it would make the command unable to pass.
-        paths.extend(
-            p
-            for p in getattr(stage, "suite_failing_paths", [])
-            if p and (cfg.target_repo / p).exists()
-        )
+
+    # What the full suite failed on after the reviewer approved the diff, and
+    # what the baseline check then attributed to this stage. Both sides take
+    # them, for the reason in the docstring. Existence is required rather than
+    # `runnable` — this is a file the suite has already executed, so if it is
+    # gone the stage deleted it and naming it would make the command unable to
+    # pass.
+    paths.extend(
+        p
+        for p in getattr(stage, "suite_failing_paths", [])
+        if p and (cfg.target_repo / p).exists()
+    )
 
     # Deduplicate while preserving order. Diff-derived paths come first on the
     # gate's side because those definitely exist.

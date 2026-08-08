@@ -616,6 +616,46 @@ class TestRevision:
         out = nodes.plan(state, rt)
         assert "stage_branch" not in out
 
+    def test_extend_carries_the_suite_failures_onto_the_revised_stage(
+        self, repo, tmp_path
+    ):
+        """The branch survives a revision; the record of what is red on it must.
+
+        `extend` routes to `verify` rather than to the executor, and the only
+        thing making that safe is that the gates read state — so if the gate is
+        handed a narrower selection than the failure, it ratifies. The revised
+        stage is rebuilt from the planner's fields and the planner may not
+        write this one, so without carrying it the rebuild silently drops the
+        evidence at exactly the moment the branch is kept.
+
+        Observed live on `remove-non-admin-catch-all-retry` revision 1: ~30
+        specs attributed to the stage, dropped by the rebuild, one path
+        declared, verify green in 5.2s, approved, and a 228.5s full suite spent
+        rediscovering it.
+        """
+        planner = StubPlanner(
+            [PlannerOutcome("revise", "r", "e", stage_fields=planned_stage(),
+                            revision_mode="extend")]
+        )
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        state = with_stage(state, rt)
+        state["current"]["suite_failing_paths"] = ["spec/red_spec.rb"]
+        out = nodes.plan(state, rt)
+        assert out["current"]["suite_failing_paths"] == ["spec/red_spec.rb"]
+
+    def test_restart_drops_the_suite_failures_with_the_branch(
+        self, repo, tmp_path
+    ):
+        planner = StubPlanner(
+            [PlannerOutcome("revise", "r", "e", stage_fields=planned_stage(),
+                            revision_mode="restart")]
+        )
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        state = with_stage(state, rt)
+        state["current"]["suite_failing_paths"] = ["spec/red_spec.rb"]
+        out = nodes.plan(state, rt)
+        assert out["current"]["suite_failing_paths"] == []
+
     def test_restart_discards_the_branch(self, repo, tmp_path):
         planner = StubPlanner(
             [PlannerOutcome("revise", "r", "e", stage_fields=planned_stage(), revision_mode="restart")]

@@ -51,6 +51,7 @@ from orchestrator.state import (
     clear_rework_after_approval,
     RunState,
     accumulate_usage,
+    evidence_surviving_a_revision,
     fresh_revision_fields,
     fresh_stage_fields,
     merge_deferrals,
@@ -465,7 +466,10 @@ def plan(state: RunState, rt: Runtime) -> dict:
         update = {
             **base,
             **fresh_revision_fields(),
-            "current": new_stage.model_dump(),
+            "current": {
+                **new_stage.model_dump(),
+                **evidence_surviving_a_revision(state.get("current"), keep_branch),
+            },
             "revision": state.get("revision", 0) + 1,
             "planner_interventions": interventions,
             "interventions_since_landing": stuck + 1,

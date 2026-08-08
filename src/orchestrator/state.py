@@ -468,6 +468,39 @@ def fresh_revision_fields() -> dict:
     }
 
 
+def evidence_surviving_a_revision(previous: dict | None, keep_branch: bool) -> dict:
+    """What a revised stage inherits from the stage it replaces.
+
+    A revised stage is rebuilt from the planner's fields, and the planner may
+    not write `suite_failing_paths` — the suite said which files failed, and a
+    model naming them would be a claim where there is already a fact. So the
+    rebuild dropped them, and on an `extend` that is exactly backwards: `extend`
+    *keeps the branch*, which means it keeps the failures, and it discards the
+    only record of what they were.
+
+    That record is what the routing depends on. `plan` sends an `extend`
+    straight to `verify` rather than to the executor, on the argument that the
+    work may already be done and the gates read state rather than intent — "if
+    the revision did add work, residue or the tests fail and route to the
+    executor then, with the gap named". The tests can only fail if the gate is
+    given them to run. Measured on `remove-non-admin-catch-all-retry` revision
+    1: the branch carried ~30 specs the full suite had attributed to this
+    stage, the rebuild dropped them, the revised spec declared one path, and
+    verify passed it in 5.2s. The reviewer approved on that, and a 228.5s suite
+    and a 120.9s baseline re-established the failure before the executor was
+    reached at all — six minutes after the evidence to route it had been
+    thrown away.
+
+    Not carried when the branch is not: `restart` re-cuts from the project tip,
+    so the diff that caused those failures no longer exists and naming them
+    would send the next attempt after somebody else's problem.
+    """
+    if not keep_branch or not previous:
+        return {}
+    paths = [p for p in (previous.get("suite_failing_paths") or []) if p]
+    return {"suite_failing_paths": sorted(set(paths))} if paths else {}
+
+
 def merge_deferrals(existing: list[dict], reported: list[dict]) -> list[dict]:
     """Union by plan_step, keeping insertion order.
 
