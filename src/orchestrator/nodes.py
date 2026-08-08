@@ -2083,15 +2083,36 @@ def _rework_or_plan(
     summary: str,
     layer: str = "review",
 ) -> dict:
-    """Rework while the budget holds, then the planner."""
+    """Rework while the budget holds, then the planner.
+
+    The handoff is where the planner's judgement is formed, so what it says has
+    to be what happened. Two corrections, both measured on
+    `order-edit-item-personalization-explicit-scope`, which spent 884 seconds of
+    planning to reach `restart` on a diff the reviewer had just approved.
+
+    **A rework is not a rejection.** The old summary read "rejected 3 times" for
+    a stage reworked twice — a missing comment, and a route id that should have
+    been optional — both fixed and approved, followed by one red spec. "Rejected
+    three times" describes a stage going badly; the record was a stage that
+    converged and then hit a single real failure, and `restart` is a sensible
+    answer to the first description and an expensive one to the second.
+
+    **The newest feedback leads.** `feedback[-2:]` joined in order put the
+    already-fixed reviewer findings ahead of the failure that actually ended the
+    stage, so the red spec read as a footnote to complaints that no longer
+    applied. Earlier feedback is still carried — two reworks for the same thing
+    is a different situation from two for different things — but it follows.
+    """
     consumed = state.get("rework_attempt", 0)
     if consumed >= rt.cfg.limits.max_rework_retries:
+        recent = list(reversed(feedback[-2:]))
         return _planner_failure(
             state,
             layer,
-            f"{summary} — rejected {consumed + 1} times "
-            f"(max_rework_retries={rt.cfg.limits.max_rework_retries})",
-            "\n\n".join(feedback[-2:]),
+            f"{summary} — after {consumed} rework attempt(s) "
+            f"(max_rework_retries={rt.cfg.limits.max_rework_retries}, so "
+            "another executor pass is not available)",
+            "\n\n".join(recent),
         )
 
     if rt.cfg.rework_reset:
