@@ -121,7 +121,22 @@ def run_loop(
 
         failure = _gate_cycle(stage, cfg, git, runner, out, since_sha, log=log)
         if failure is None:
-            return out
+            # `break`, not `return`. Returning here skipped the two statements
+            # below, so the *success* path — an attempt whose gates passed
+            # first try — was the one that never got priced, and only attempts
+            # that failed a gate or edited nothing carried a cost at all.
+            # Measured across one run's 57 recorded attempts: 41 had real usage
+            # and `cost_usd == 0`, together 17,943,722 prompt tokens against
+            # 77,402,051 billed, the largest single one 2,319,957.
+            #
+            # Three tests asserted the pricing and all were green, because
+            # their fixture makes no edits and so leaves on `not
+            # editor.touched` — out of the bottom, where the pricing is. The
+            # branch they were written for was never the branch that ran.
+            #
+            # `_commit_if_dirty` running now is a no-op: `_gate_cycle` commits
+            # before it gates, so a passing gate leaves a clean tree.
+            break
 
         out.in_loop_failures.append(f"cycle {cycle + 1}: {failure.summary}")
 

@@ -723,3 +723,42 @@ class TestTheContextHighWaterMarkAndCostReachTheResult:
         out = drive(repo, cfg, stage, self._model([9000]))
         # 9000 prompt @ 1e-6 + 100 completion @ 2e-6
         assert out.cost_usd == pytest.approx(0.0092)
+
+    def test_an_attempt_whose_gate_passes_is_priced_too(
+        self, repo, monkeypatch, tmp_path
+    ):
+        """The success path skipped pricing entirely, and nothing here saw it.
+
+        `run_loop` returned early the moment `_gate_cycle` came back clean —
+        before `out.cost_usd = _price(...)` at the bottom. So every attempt
+        that worked first time was billed at zero, and only attempts that
+        failed a gate or edited nothing were priced at all.
+
+        Invisible to the two tests above because `_model` defaults to no edits,
+        which breaks the loop on `not editor.touched` and falls out of the
+        bottom — the same shape as `CLAUDE.md`'s "an earlier branch can eat
+        every fixture", one branch later. Both were green throughout.
+
+        Measured across one run's 57 recorded attempts: 41 carried real usage
+        and `cost_usd == 0`, together 17,943,722 prompt tokens against
+        77,402,051 billed, the largest single unbilled attempt 2,319,957.
+        """
+        import orchestrator.pricing as pricing
+        from orchestrator import executorloop
+        monkeypatch.setattr(pricing, "_fetch", lambda url: (_ for _ in ()).throw(OSError()))
+        monkeypatch.setattr(executorloop, "_PRICES", None)
+        table = tmp_path / "prices.json"
+        table.write_text(json.dumps({
+            "m": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}
+        }))
+        monkeypatch.setenv("ORCHESTRATOR_PRICE_MAP", str(table))
+        cfg, stage = build(repo)
+        out = drive(
+            repo, cfg, stage,
+            self._model(
+                [9000],
+                edits=[lambda ed: edit_file("app/a.rb", "class A", "class B")(ed)],
+            ),
+        )
+        assert out.commits, "the fixture must reach the gate, not break before it"
+        assert out.cost_usd == pytest.approx(0.0092)
