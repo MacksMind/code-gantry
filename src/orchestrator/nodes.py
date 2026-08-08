@@ -30,7 +30,7 @@ from orchestrator.addendum import (
     decode_escapes,
 )
 from orchestrator.commands import clip_for_model
-from orchestrator.config import Stage, validate_stage
+from orchestrator.config import Stage, orthogonal_stages, validate_stage
 from orchestrator.executor import (
     TRANSCRIPT_FILENAME,
     ExcerptError,
@@ -216,6 +216,11 @@ def plan(state: RunState, rt: Runtime) -> dict:
         # and nothing to reconcile. Read from the same sha the reviewer's diff
         # is taken from, because the point of showing it is that the two agree.
         stage_diff=_stage_diff(state, rt) if stage else None,
+        # What is already drawn and waiting, so it is not derived twice — a
+        # second copy of a queued stage collides with the first and one is
+        # discarded, which is a whole stage of planning for nothing.
+        stage_queue=state.get("stage_queue") or [],
+        batch_notes=state.get("batch_notes") or [],
     )
 
     rt.log(f"[plan] {'revising ' + stage.id if stage else 'deriving next stage'}")
@@ -378,6 +383,15 @@ def plan(state: RunState, rt: Runtime) -> dict:
             f"{state.get('revision', 0) + 1}, {outcome.revision_mode})"
         )
 
+        # The queue is unaffected work and is kept, but a revision can widen
+        # scope into it. Re-checked rather than discarded: the invariant needs
+        # re-checking, not forgetting.
+        requeued, dropped_by_revision = _requeue_after_revision(
+            rt.cfg, rt.git, new_stage, state.get("stage_queue") or []
+        )
+        for note in dropped_by_revision:
+            rt.log(f"[plan] {note}")
+
         update = {
             **base,
             **fresh_revision_fields(),
@@ -385,6 +399,8 @@ def plan(state: RunState, rt: Runtime) -> dict:
             "revision": state.get("revision", 0) + 1,
             "planner_interventions": interventions,
             "interventions_since_landing": stuck + 1,
+            "stage_queue": requeued,
+            "batch_notes": dropped_by_revision,
         }
 
         if not keep_branch:
@@ -426,6 +442,22 @@ def plan(state: RunState, rt: Runtime) -> dict:
     else:
         interventions = state.get("planner_interventions", 0)
 
+    # The rest of a batch, if the planner offered one. Checked here rather
+    # than in the planner because the check resolves globs against the files
+    # that exist, and only this side of the boundary can list them.
+    queue, dropped_from_batch = _queue_from_batch(
+        rt.cfg, rt.git, new_stage, outcome.additional_stage_fields
+    )
+    if queue:
+        rt.log(
+            f"[plan] {len(queue)} further stage(s) queued from this derivation: "
+            + ", ".join(s["id"] for s in queue)
+        )
+    for note in dropped_from_batch:
+        # Logged rather than swallowed. A batch quietly shrinking is how a
+        # feature that is not working looks exactly like one that is.
+        rt.log(f"[plan] {note}")
+
     derived = {
         **base,
         **fresh_stage_fields(),
@@ -433,6 +465,11 @@ def plan(state: RunState, rt: Runtime) -> dict:
         "revision": 0,
         "stage_index": index,
         "planner_interventions": interventions,
+        "stage_queue": queue,
+        # Replaced, not appended: these describe the batch just derived, and
+        # the call that reads them has now happened. Carrying them forward
+        # would report one overlap on every derivation for the rest of the run.
+        "batch_notes": dropped_from_batch,
         "next_hop": "precheck",
     }
 
@@ -1624,6 +1661,71 @@ def _wall_clock_overrun(state: RunState, limits) -> str | None:
         # for time must not swallow why.
         reason += f" The stage in flight was being revised because: {failure}"
     return reason
+
+
+def _queue_from_batch(cfg, git, first, extra_fields: list[dict]) -> tuple[list[dict], list[str]]:
+    """The stages to hold behind the one being started, and what was dropped.
+
+    The orthogonality check runs here rather than in the planner because it
+    needs the repository: globs are resolved against the files that exist, not
+    compared as strings, and only this side of the boundary can list them.
+
+    The first stage is never dropped. It is the one about to run, and the check
+    exists to protect what is queued behind it.
+
+    A failure to list the repository drops the batch rather than the run: a
+    stage the planner has already produced is worth more than the saving, and
+    the queue is an optimisation over asking again.
+    """
+    if not extra_fields:
+        return [], []
+    # The cap counts the stage being started, so `max_batch_stages: 2` means
+    # one now and one queued. Reported rather than trimmed in silence — a
+    # planner spending output on stages that are discarded is exactly the
+    # overthinking this feature has to be watched for, and an operator cannot
+    # see it happening if the trim says nothing.
+    allowed = max(cfg.planner.max_batch_stages - 1, 0)
+    notes: list[str] = []
+    if len(extra_fields) > allowed:
+        notes.append(
+            f"the planner offered {len(extra_fields) + 1} stages and the cap "
+            f"(planner.max_batch_stages) is {cfg.planner.max_batch_stages}; "
+            f"{len(extra_fields) - allowed} were discarded"
+        )
+        extra_fields = extra_fields[:allowed]
+    if not extra_fields:
+        return [], notes
+    try:
+        tracked = git.tracked_paths_now()
+    except GitError:  # pragma: no cover - defensive
+        return [], notes
+    candidates = [first] + [cfg.stage_from_planner(f) for f in extra_fields]
+    kept, dropped = orthogonal_stages(candidates, tracked)
+    return [s.model_dump() for s in kept[1:]], notes + dropped
+
+
+def _requeue_after_revision(cfg, git, revised, queue: list[dict]) -> tuple[list[dict], list[str]]:
+    """The queue that survives a revision of the stage in front of it.
+
+    Rework is never batched — a failed stage owns a branch and a branch belongs
+    to one stage — but the stages queued behind it are unaffected work and are
+    kept. What can change is the revised stage: widening `edit_files` to fix a
+    scope violation may make it name a file a queued stage was drawn against.
+
+    So the check is re-run rather than the queue discarded. Putting the revised
+    stage at the head asks exactly the right question: it is first so it is
+    never dropped, the queue was already pairwise orthogonal, and the only
+    drops that can appear are the ones the revision caused.
+    """
+    if not queue:
+        return [], []
+    try:
+        tracked = git.tracked_paths_now()
+    except GitError:  # pragma: no cover - defensive
+        return [], []
+    stages = [revised] + [cfg.stage_from_planner(f) for f in queue]
+    kept, dropped = orthogonal_stages(stages, tracked)
+    return [s.model_dump() for s in kept[1:]], dropped
 
 
 def _next_from_queue(state: RunState, landed_index: int) -> dict:

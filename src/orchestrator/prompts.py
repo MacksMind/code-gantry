@@ -906,6 +906,8 @@ def build_planner_messages(
     stage_costs: list[dict] | None = None,
     agent_context: str | None = None,
     stage_diff: str | None = None,
+    stage_queue: list[dict] | None = None,
+    batch_notes: list[str] | None = None,
 ) -> list[dict[str, str]]:
     """Chat messages for the planner.
 
@@ -1028,6 +1030,37 @@ def build_planner_messages(
     # History and deferrals lead the situational half: they are the run's state
     # rather than its instructions, and the planner reads them before deciding.
     current: list[str] = [volatile]
+
+    # What became of a batch, when there was one. A single cycle can produce
+    # several facts at once — one stage landed, another was rejected, the ones
+    # behind it are still queued, one was dropped for sharing a file — and a
+    # failure block describes one stage. Without this the planner re-derives
+    # blind and can return the same collision, at a whole derivation per round
+    # trip.
+    #
+    # After the breakpoint with the rest of the situational material: it
+    # changes every derivation, and a churning block ahead of the mark re-bills
+    # the plan and the history behind it.
+    if stage_queue:
+        listed = ", ".join(f"`{s.get('id')}`" for s in stage_queue)
+        current.append(
+            "## Stages already queued from an earlier derivation\n\n"
+            f"{listed}\n\n"
+            "These are drawn and waiting; they run in order once the current "
+            "stage lands, without another call to you. **Do not derive them "
+            "again** — a second copy of a queued stage collides with the first "
+            "and one of them is discarded."
+        )
+    if batch_notes:
+        listed = "\n".join(f"- {n}" for n in batch_notes)
+        current.append(
+            "## What happened to the last batch you offered\n\n"
+            f"{listed}\n\n"
+            "Stages are dropped rather than rejected, so the rest of the batch "
+            "ran. Nothing here needs apologising for; it is here so the next "
+            "batch can avoid the same overlap, and so a stage that was dropped "
+            "is drawn again when its turn comes."
+        )
 
     if status_tail:
         current.append(

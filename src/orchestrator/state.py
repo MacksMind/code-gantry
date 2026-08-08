@@ -235,6 +235,11 @@ class RunState(TypedDict, total=False):
     # the pause is checked immediately after the squash, so a run stops between
     # queued stages rather than mid-batch.
     stage_queue: list[dict]
+    # What became of the last batch — stages dropped for overlap, or trimmed by
+    # the cap. Held until the next planner call reads them, then cleared by the
+    # node that consumed them, so a note is reported once rather than on every
+    # derivation for the rest of the run.
+    batch_notes: list[str]
     resuming: bool
     # Set by `resume` from the stage branch: does the interrupted stage already
     # have commits? Decides whether an interrupted attempt is re-run or checked.
@@ -298,6 +303,7 @@ def new_state(
         status="running",
         escalation_reason=None,
         stage_queue=[],
+        batch_notes=[],
         resuming=False,
         next_hop="",
     )

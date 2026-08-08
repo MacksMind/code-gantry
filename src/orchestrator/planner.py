@@ -436,6 +436,10 @@ class PlannerOutcome:
     reasoning: str
     status_entry: str
     stage_fields: dict | None = None
+    # The rest of a batch, unfiltered planner output like `stage_fields`. Built
+    # into stages and checked for orthogonality by `nodes.plan`, which is the
+    # participant that can reach the repository.
+    additional_stage_fields: list[dict] = field(default_factory=list)
     revision_mode: RevisionMode | None = None
     usage: PlannerUsage = field(default_factory=PlannerUsage)
     deferred: list[dict] = field(default_factory=list)
@@ -666,6 +670,9 @@ class AnthropicPlanner:
                     reasoning=parsed.reasoning,
                     status_entry=parsed.status_entry,
                     stage_fields=parsed.stage.model_dump() if parsed.stage else None,
+                    additional_stage_fields=[
+                        st.model_dump() for st in parsed.additional_stages
+                    ],
                     revision_mode=parsed.revision_mode,
                     deferred=[d.model_dump() for d in parsed.deferred],
                     plan_notes=[n.model_dump() for n in parsed.plan_notes],

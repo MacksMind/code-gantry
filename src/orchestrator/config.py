@@ -290,6 +290,12 @@ class PlannerConfig(_EndpointConfig):
     # the reasoning already spent. The cost of headroom is nothing; the cost of
     # hitting it is a whole derivation discarded.
     max_tokens: int = 32_000
+    # How many stages one derivation may produce, the one being started
+    # included. 1 is the default and turns batching off: a project opts in,
+    # because the saving is real only where the work is homogeneous and the
+    # cost of getting it wrong — a planner surveying as though it needs five —
+    # falls on every stage.
+    max_batch_stages: int = 1
     max_retries: int = 2
     # How long a network outage should be survivable, in seconds. Zero turns
     # retrying off rather than being an unsupported value found out about
