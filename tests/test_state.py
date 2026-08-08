@@ -388,3 +388,63 @@ class TestResumingClearsTheStopItIsUndoing:
     def test_the_progress_budget_clears_only_when_asked(self):
         got = self._fields(reset_progress_budget=True)
         assert got["interventions_since_landing"] == 0
+
+
+class TestAResumeStartsFromTheCheckpoint:
+    """The merge `resume_fields` is named for, which did not exist.
+
+    Every test above passes on the delta alone, and the delta was all that
+    `cli.resume` handed to `_drive` — so a resumed run began with a four-key
+    state. `CLAUDE.md` records the shape: a test that pins where a value lives
+    passes while the value is lost. Here the seven tests pinned the contents of
+    the update and nothing asserted what it was applied *to*.
+
+    Measured on a 14-hour run: `stage_index` restarts at zero on each resume
+    (`000…030`, then `000…003`, then `000…003` in the artifact tree),
+    `completed` restarts with it though it is the cacheable prefix of both paid
+    prompts, `report.md` renders `(unknown)` and `None` throughout, and `drive`
+    writes no checkpoint at all because it guards on `state.get("run_id")` —
+    the database froze 31 stages before the run stopped.
+    """
+
+    def _saved(self, **over):
+        base = {
+            "run_id": "r1", "project_slug": "p", "target_repo": "/repo",
+            "project_branch": "b", "base_ref": "main", "base_sha": "abc",
+            "stage_index": 30, "completed": [{"id": "one"}, {"id": "two"}],
+            "status": "escalated", "escalation_reason": "paused",
+            "flaky_files": ["spec/a_spec.rb"],
+        }
+        base.update(over)
+        return base
+
+    def _input(self, **over):
+        from orchestrator.state import resume_input
+
+        return resume_input(
+            self._saved(**over), stage_has_work=False, reset_progress_budget=False
+        )
+
+    def test_the_run_keeps_its_identity(self):
+        # Without this the checkpoint writer never fires: `drive` guards on
+        # `state.get("run_id")`, so a resumed run persists nothing.
+        got = self._input()
+        assert got["run_id"] == "r1"
+        assert got["target_repo"] == "/repo"
+        assert got["project_branch"] == "b"
+
+    def test_it_keeps_counting_from_where_it_stopped(self):
+        got = self._input()
+        assert got["stage_index"] == 30
+        assert [s["id"] for s in got["completed"]] == ["one", "two"]
+
+    def test_the_accumulated_record_survives(self):
+        assert self._input()["flaky_files"] == ["spec/a_spec.rb"]
+
+    def test_the_delta_still_wins_over_the_saved_stop(self):
+        # The whole point of the delta: the previous stop must not be reported
+        # as the current one for the rest of the session.
+        got = self._input()
+        assert got["status"] == "running"
+        assert got["escalation_reason"] is None
+        assert got["resuming"] is True

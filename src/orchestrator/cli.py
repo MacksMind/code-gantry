@@ -47,7 +47,7 @@ from orchestrator.report import build_report
 from orchestrator.reviewer import make_reviewer
 from orchestrator.runlog import RunLog
 from orchestrator.runtime import PROJECTS_ROOT, ProjectPaths, RunPaths, build_runtime
-from orchestrator.state import new_state, resume_fields
+from orchestrator.state import new_state, resume_input
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -496,7 +496,8 @@ def resume(run_id: str, reset_progress_budget: bool) -> None:
             cfg,
             project,
             paths,
-            resume_fields(
+            resume_input(
+                saved,
                 stage_has_work=_stage_has_work(git, saved),
                 reset_progress_budget=reset_progress_budget,
             ),

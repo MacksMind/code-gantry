@@ -417,6 +417,46 @@ def fresh_stage_fields() -> dict:
     }
 
 
+def resume_input(
+    saved: RunState, *, stage_has_work: bool, reset_progress_budget: bool
+) -> dict:
+    """The state a resumed run actually starts from.
+
+    `resume_fields` has always said it was "what a resume merges over the saved
+    checkpoint" and the merge did not exist: `cli.resume` handed the delta to
+    `_drive` on its own, so every resumed run began with a four-key state. Its
+    seven tests all passed, because each asserts what the delta *contains* —
+    `CLAUDE.md`'s "a test that pins where a value lives passes while the value
+    is lost", and the lesson landed one function short of the defect it was
+    written about.
+
+    Measured on a 14-hour run. `stage_index` restarts at zero on every resume,
+    which is visible in the artifact tree as `000…030` followed by `000…003`
+    twice more. `completed` restarts with it — and that list is documented here
+    as the cacheable prefix of both paid prompts, so a resume rebuilds it from
+    empty. `run_usage`, `executor_cost_usd`, `flaky_files` and the rest of the
+    accounting restart too, which is why `report.md` renders `(unknown)` and
+    `None` for a run whose checkpoint holds all of it.
+
+    Worse, and silent: `drive` writes a checkpoint only `if state.get("run_id")`,
+    so a resumed run writes none at all. That database froze 31 stages ago while
+    the run went on landing work. A crash after a resume would come back to a
+    checkpoint naming a stage that landed hours earlier.
+
+    What kept it working is that the continuity lives elsewhere — the project
+    branch holds the code and the progress log holds the history the planner
+    reads — so the loss is in the record rather than the work. That is exactly
+    what made it survive fourteen hours of being watched.
+    """
+    return {
+        **saved,
+        **resume_fields(
+            stage_has_work=stage_has_work,
+            reset_progress_budget=reset_progress_budget,
+        ),
+    }
+
+
 def resume_fields(*, stage_has_work: bool, reset_progress_budget: bool) -> dict:
     """What a resume merges over the saved checkpoint.
 
