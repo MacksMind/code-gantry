@@ -608,6 +608,14 @@ The measurement was correct and answered a question nobody asked. A tree is not
 a fixed thing; before reporting an absence, establish that what you are looking
 at is what the claim was made about.
 
+**A pipeline exits with the status of its last stage.** `pytest | tail -2 &&
+git commit` committed a red suite, because `tail` succeeded. The gate was
+decorative and the failure it hid was a real one — a new module missing from
+`pin_modules`. Redirect and check `$?`. This is the "check what a command
+actually returns" rule pointed at the tooling around the tests rather than at
+the tests, and it is worth noticing that the rule keeps being broken one level
+out from wherever it was last learned.
+
 **A monitor over an append-only log must be anchored to this run.**
 `last-run.out` is appended across every resume, so grepping it for "Paused at
 your request" matched **24 historical pauses** and reported a stop that had not
@@ -670,6 +678,48 @@ failed at import. Python's own `ast` gives exact `lineno`/`end_lineno` for
 every symbol and costs three lines to use. This is the "read artifacts; do not
 regex them" rule pointed at source instead of output, and the same answer:
 when a structure has a parser, the pattern is a guess.
+
+**A ceiling that binds first is a policy nobody chose.** Read budgets and the
+turn ceiling exist to stop a runaway; the moment one of them decides an
+*outcome* it has become something else. `max_model_turns: 20` was silently
+deciding whether stages could be done at all — one stage spent four attempts
+making 85, 103, 76 and 138 tool calls, every one a read, each stopping at
+exactly 20 turns having edited nothing. Eleven minutes and $0.68, and the only
+thing anyone saw was the scope gate's "the attempt produced no changes", which
+sent the planner to redraw a stage that was never the problem. The tell is
+arithmetic: if the limit is being hit at all in normal operation, it is not a
+backstop. Check what else already bounds the thing — here `run_loop` stops the
+whole cycle at `request_timeout_seconds` regardless of turns, so the ceiling
+never needed to be tight.
+
+**A distribution measured under a cap cannot choose the next cap.** The
+reviewer's reads were "median 5, p90 11, p99 25" against a limit of 25, and I
+used those numbers to pick 80. They describe what the cap *allowed*, not what
+the reviewer *wanted*, and within the hour two reviews spent 80 answered calls
+and were refused ten more. The same reasoning one step out: a ceiling is set
+from the tail, not the median — 8,000 lines came from multiplying the median
+by the new call cap and was wrong before it shipped, because a ceiling exists
+precisely so the cases above the middle are not cut off. And a limit is only
+measurable once something records being refused by it, which is why the
+reviewer's ledger had to be fixed before its cap could be tuned at all.
+
+**A value written in three places and read in none.** `ExecutorTurn.stopped`
+carried the comment "the loop must not treat this as 'finished'" and nothing
+ever consulted it. `executor.log` was declared "assigned by `build_runtime`"
+and never assigned. `aider_timeout_seconds` survived the deletion of the tool
+it was named for, read by nothing and still written into every drafted config.
+Three shapes of the same defect in one session, all of which review as correct
+— the field exists, the comment explains it, the caller is right there. Only
+grepping for the *reader* finds them: after adding a field, or deleting a
+component, search for who consumes it and expect an answer.
+
+**A reader that writes destroys the evidence it was about to look for.**
+`load_state` ran `CREATE TABLE IF NOT EXISTS` before reading, so a single
+read against a live run's database left our table inside it — and the check
+for "is this the older format", written as "is our table missing", then saw
+both and reported the run as merely empty. Two lessons in one: a reader must
+not mutate, and a check that names what a thing *is* survives contamination
+that a check naming what it is *not* does not.
 
 **Deleting a producer leaves its consumers guarded on a value nobody sets.**
 `context_tokens` and `cost_usd` are assigned in exactly one place — from
