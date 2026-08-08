@@ -27,6 +27,8 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from orchestrator.globs import matches_any
+
 
 StageKind = Literal["agent", "script"]
 
@@ -844,6 +846,83 @@ def denylist_violations(commands: list[tuple[str, str]]) -> list[str]:
 # The failure is right and only the wording is wrong; a config that *ignored*
 # them would be worse, leaving someone believing `map_tokens` still bounds
 # something.
+def _paths_written(stage, tracked: list[str]) -> set[str]:
+    """Files a stage may change: tracked files its globs select, plus literals.
+
+    The literals matter on their own. A stage that creates a file names a path
+    git has never seen, so glob expansion finds nothing and two stages creating
+    the same file would look disjoint — the one collision expansion cannot see.
+    """
+    selected = {p for p in tracked if matches_any(p, stage.edit_files)}
+    literal = {g for g in stage.edit_files if not any(c in g for c in "*?[")}
+    return selected | literal
+
+
+def _paths_relied_on(stage, tracked: list[str]) -> set[str]:
+    """Files a stage's spec is drawn against, and would be invalidated by.
+
+    Its own writes are included: two stages writing the same file conflict for
+    the same reason one reading another's target does — the second was drawn
+    against a state the first destroys.
+    """
+    relied = _paths_written(stage, tracked)
+    relied |= {p for p in tracked if matches_any(p, stage.read_files)}
+    relied |= {e.path for e in stage.read_excerpts}
+    return relied
+
+
+def safe_batch_prefix(stages: list, tracked: list[str]) -> tuple[list, str]:
+    """The longest prefix of a batch whose stages cannot invalidate each other.
+
+    One derivation may answer with several stages, and the saving is real: the
+    planner is the expensive participant and a derivation is a third of a
+    stage's wall clock. But a stage spec is a prediction — stage 3 of 5 is
+    drawn against a tree stages 1 and 2 have not touched — and this project has
+    already paid for that twice, once as an unresolvable `read_excerpts` range
+    failing a stage back to the planner and once as an authored edit that
+    stopped being satisfiable when half of it came true.
+
+    So the batch is constrained rather than trusted: **no stage's `edit_files`
+    may intersect any other batched stage's `edit_files`, `read_files` or
+    `read_excerpts` paths.** Under that rule nothing a batched stage does can
+    invalidate a later one's spec, because no later stage names anything an
+    earlier one can write. It makes the mistake unexpressible instead of
+    discouraged, which is the habit the rest of this file keeps.
+
+    Symmetric, deliberately. A conflict is reported whichever direction it
+    points, because reasoning about which order makes a given pair safe is
+    exactly the thinking this rule exists to remove.
+
+    Globs are resolved against the repository rather than compared as strings:
+    `app/*.rb` and `app/a.rb` have nothing in common as text and everything as
+    files.
+
+    Truncates rather than rejects, so heterogeneous work degrades to one stage
+    and today's behaviour instead of failing. Returns the kept stages and, when
+    something was dropped, a sentence naming the pair and the path — an
+    operator reading it should not have to re-derive the collision.
+    """
+    kept: list = []
+    for stage in stages:
+        writes = _paths_written(stage, tracked)
+        relies = _paths_relied_on(stage, tracked)
+        for earlier in kept:
+            clash = (writes & _paths_relied_on(earlier, tracked)) or (
+                _paths_written(earlier, tracked) & relies
+            )
+            if clash:
+                path = sorted(clash)[0]
+                return kept, (
+                    f"stage {stage.id!r} was dropped from the batch: it shares "
+                    f"{path!r} with stage {earlier.id!r}, so one of them would "
+                    "be drawn against a tree the other changes. The stages "
+                    "after it were dropped too; the planner will derive them "
+                    "again against what actually landed."
+                )
+        kept.append(stage)
+    return kept, ""
+
+
 RETIRED_KEYS: dict[str, dict[str, str]] = {
     "executor": {
     "provider": "there is one executor now; the in-process client is not optional",
