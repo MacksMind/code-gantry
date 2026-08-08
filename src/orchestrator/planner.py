@@ -337,6 +337,33 @@ class PlannerResponse(BaseModel):
     stage: PlannedStage | None = Field(
         default=None, description="Required for next_stage and revise."
     )
+    additional_stages: list[PlannedStage] = Field(
+        default_factory=list,
+        description=(
+            "More stages to run after `stage`, in order. **Normally empty, and "
+            "empty is the right answer** — one stage is the unremarkable "
+            "case.\n\n"
+            "Use it only when the work ahead is plainly several instances of "
+            "the same shape and you already know all of them from the reading "
+            "you have just done. What it saves is the survey, not the work: "
+            "the stages still run one at a time, each with its own branch, "
+            "review and merge. If answering would mean looking at more than "
+            "you otherwise would, it has cost more than it saved — leave it "
+            "empty and derive the next one when its turn comes.\n\n"
+            "**Every stage here must stand alone.** Any one of them may be "
+            "dropped before it runs: they are checked against each other, and "
+            "one that shares a file with another is removed, because a stage "
+            "drawn against a file a earlier stage rewrites is drawn against a "
+            "tree that will not exist. So do not write 'extend the helper the "
+            "previous stage adds' — nothing here may depend on another having "
+            "run.\n\n"
+            "For the same reason, no stage here may edit a file another reads, "
+            "quotes in `read_excerpts`, or edits. Overlapping stages are not "
+            "rejected, they are dropped, and you will be told which.\n\n"
+            "Not for `revise`: a stage being reworked owns a branch, and its "
+            "replacement is a single stage."
+        ),
+    )
     revision_mode: RevisionMode | None = Field(
         default=None,
         description=(
@@ -683,7 +710,15 @@ class AnthropicPlanner:
         """
         if self.validate_stage_fields is None or parsed.stage is None:
             return None
-        problems = self.validate_stage_fields(parsed.stage.model_dump())
+        # Every stage, not the first. A batched stage is not a lesser stage:
+        # were only `stage` checked, the planner could put a fenced code block
+        # or an unusable regex second in the list and have it run unexamined.
+        # Named by id, because "the instruction contains a fenced code block"
+        # is not actionable when three stages came back together.
+        problems: list[str] = []
+        for candidate in [parsed.stage, *parsed.additional_stages]:
+            found = self.validate_stage_fields(candidate.model_dump())
+            problems += [f"stage {candidate.id!r}: {p}" for p in found]
         if not problems:
             return None
         return "; ".join(problems)
