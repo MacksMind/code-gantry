@@ -7,6 +7,7 @@ when the cheap half passed.
 """
 
 import json
+import subprocess
 import time
 
 import pytest
@@ -82,6 +83,7 @@ class StubExecutor:
             path.write_text(text)
 
     log: str = "executor log"
+    edits_applied: int = 0
     dropped_reads: list = field(default_factory=list)
 
     def run_agent_stage(
@@ -99,6 +101,7 @@ class StubExecutor:
         # text would be pinning a journey that no longer exists.
         return ExecutionResult(
             ok=self.ok, log=self.log, timed_out=self.timed_out,
+            edits_applied=self.edits_applied,
             dropped_reads=list(self.dropped_reads),
         )
 
@@ -796,6 +799,72 @@ class TestExecute:
         cfg, rt, state = make(repo, tmp_path)
         state = with_stage(state, rt)
         assert nodes.execute(state, rt)["next_hop"] == "verify"
+
+    def _prior_work(self, repo):
+        """A commit on the stage branch, so `cumulative_diff` is non-empty."""
+        (repo / "app.py").write_text("prior\n")
+        for args in (["add", "-A"], ["commit", "-qm", "prior attempt"]):
+            subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+    def test_a_rework_that_changes_nothing_claims_the_diagnosis(
+        self, repo, tmp_path
+    ):
+        """The executor's account of why it stopped is the opening failure.
+
+        It is the first failure of the sequence by construction — the gate
+        result, the red suite and the exhausted budget that follow are all what
+        it caused — and `opening_failure` is what reaches the planner intact.
+
+        Observed on `remove-non-admin-catch-all-retry` attempt 1: 73 tool calls,
+        zero edits, and a closing paragraph naming the cause precisely. Nothing
+        read it; `result.log` is consumed only on the timeout and turns-
+        exhausted branches. Twenty minutes and a full suite later the planner
+        re-derived it and widened `edit_files` to the directories the executor
+        had already named.
+        """
+        ex = StubExecutor(repo=repo, log="those files are outside my list")
+        cfg, rt, state = make(repo, tmp_path, executor=ex)
+        state = with_stage(state, rt)
+        self._prior_work(repo)
+        out = nodes.execute(state, rt)
+        # Routing is unchanged: the gates decide, not the model's own stop.
+        assert out["next_hop"] == "verify"
+        assert out["opening_failure"]["layer"] == "executor"
+        assert "outside my list" in out["opening_failure"]["detail"]
+
+    def test_a_first_attempt_with_no_edits_is_left_to_the_scope_gate(
+        self, repo, tmp_path
+    ):
+        # Nothing on the branch to have left alone, so "the attempt produced no
+        # changes" is the true sentence and it belongs to one place.
+        ex = StubExecutor(repo=repo, log="I did nothing")
+        cfg, rt, state = make(repo, tmp_path, executor=ex)
+        state = with_stage(state, rt)
+        out = nodes.execute(state, rt)
+        assert out["next_hop"] == "verify"
+        assert "opening_failure" not in out
+
+    def test_an_attempt_that_edited_does_not_claim_it(self, repo, tmp_path):
+        ex = StubExecutor(repo=repo, edits=[("app.py", "new\n")], edits_applied=3,
+                          log="done")
+        cfg, rt, state = make(repo, tmp_path, executor=ex)
+        state = with_stage(state, rt)
+        self._prior_work(repo)
+        assert "opening_failure" not in nodes.execute(state, rt)
+
+    def test_a_real_failure_that_got_there_first_keeps_the_claim(
+        self, repo, tmp_path
+    ):
+        # Write-once. The whole point of `opening_failure` is that the first
+        # diagnosis survives; a later quiet stop must not displace it.
+        ex = StubExecutor(repo=repo, log="those files are outside my list")
+        cfg, rt, state = make(repo, tmp_path, executor=ex)
+        state = with_stage(state, rt)
+        self._prior_work(repo)
+        state["opening_failure"] = {"layer": "tests", "summary": "the real one",
+                                    "detail": "", "out_of_scope_paths": [],
+                                    "failing_paths": []}
+        assert "opening_failure" not in nodes.execute(state, rt)
 
     def test_writes_the_prompt_under_a_revision_scoped_path(self, repo, tmp_path):
         cfg, rt, state = make(repo, tmp_path)

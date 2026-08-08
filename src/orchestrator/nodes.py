@@ -919,6 +919,47 @@ def execute(state: RunState, rt: Runtime) -> dict:
         measured["withheld_reads"] = list(result.dropped_reads)
 
     if result.ok:
+        # A rework that edited nothing has usually just said why, and until now
+        # nobody read it. `result.log` is the model's closing text; on the
+        # normal path it is written to `executor.log` and consumed by nothing,
+        # because the only consumers are the timeout and turns-exhausted
+        # branches below. So the loop breaks on `not editor.touched`, the gates
+        # judge a tree the attempt did not move, and the account of why it did
+        # not move goes to a file.
+        #
+        # Measured on `remove-non-admin-catch-all-retry` attempt 1: 73 tool
+        # calls, zero edits, and a closing paragraph naming the problem exactly
+        # — "the reported full-suite failures require changes to other
+        # application/spec files involving URL generation, but those files are
+        # outside the permitted list". Twenty minutes and a full suite later the
+        # planner re-derived that unaided and widened `edit_files` to the six
+        # directories the executor had named. The revision's planner prompt
+        # contains the sentence zero times.
+        #
+        # `opening_failure` is the right home rather than a new field: this is
+        # a retry sequence's first failure by construction, and everything that
+        # follows — the gate, the suite, the budget running out — is what it
+        # caused. The claim is write-once, so a real failure that got here first
+        # keeps it. Routing is deliberately unchanged: the gates decide, and a
+        # model's voluntary stop does not get to end a stage.
+        #
+        # `cumulative_diff` rather than the attempt counter, because the
+        # question is whether there is prior work to have left alone, and the
+        # tree answers that. A first attempt with no edits is the scope gate's
+        # sentence and not this one.
+        if not result.edits_applied and cumulative_diff and result.log:
+            return {
+                "next_hop": "verify",
+                **measured,
+                **_opening(
+                    state,
+                    _failure_detail(
+                        "executor",
+                        "the executor left the branch unchanged and said why",
+                        _clip(result.log),
+                    ),
+                ),
+            }
         return {"next_hop": "verify", **measured}
 
     # An unapplied edit on a tree that has changed is not a failed attempt.
