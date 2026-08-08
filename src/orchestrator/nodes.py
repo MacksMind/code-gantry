@@ -575,31 +575,7 @@ def precheck(state: RunState, rt: Runtime) -> dict:
     # would be handed our excerpt block as the only code it gets.
     moved = stale_excerpts(rt.git, stage)
     if moved:
-        listed = ", ".join(repr(p) for p in moved)
-        return {
-            **update,
-            **_planner_failure(
-                state,
-                "excerpt",
-                f"stage {stage.id!r} quotes {listed}, which has changed since "
-                "you read it",
-                "You drew this stage as part of a batch, against the tree as "
-                f"it stood at {stage.excerpt_base_sha[:12]}. A stage in front "
-                "of it has landed since, and the file you quoted is not the "
-                "file that is there now — so the line numbers in "
-                "`read_excerpts` no longer point at what you meant.\n\n"
-                "**If an earlier stage of this same batch edited it, that is "
-                "the cause, and it was your own doing.** Batched stages run in "
-                "order and may build on each other freely; a quoted line range "
-                "is the one thing that does not survive an earlier stage "
-                "moving it, because a number cannot be re-derived from the "
-                "file it points into.\n\n"
-                "Redraw this stage against the file as it is now. Re-read the "
-                "range and quote it again, or drop the excerpt and describe "
-                "what you want instead — the executor can read the file "
-                "itself.",
-            ),
-        }
+        return {**update, **_stale_excerpt_failure(state, stage, moved)}
 
     for command in stage.preconditions:
         result = rt.runner.run(command)
@@ -1708,6 +1684,57 @@ def _wall_clock_overrun(state: RunState, limits) -> str | None:
         # for time must not swallow why.
         reason += f" The stage in flight was being revised because: {failure}"
     return reason
+
+
+def _stale_excerpt_failure(state: RunState, stage, moved: list[str]) -> dict:
+    """Back to the planner, and the rest of the batch goes with it.
+
+    Discarding the queue is the other half of letting batched stages stack.
+    The prompt tells the planner its stages run in order and may build on each
+    other; the obligation that buys is that a stage which does not run as drawn
+    invalidates everything written behind it. Whatever the planner returns for
+    this one is a different stage from the one the tail assumed, so keeping the
+    queue would leave stages standing on a premise nothing established — the
+    exact failure this check exists to prevent, one level up.
+
+    Cheap to be safe about: the tail costs one derivation to redraw, and the
+    planner is told it was discarded rather than left to notice.
+    """
+    queue = list(state.get("stage_queue") or [])
+    listed = ", ".join(repr(p) for p in moved)
+    detail = (
+        "You drew this stage as part of a batch, against the tree as it stood "
+        f"at {stage.excerpt_base_sha[:12]}. A stage in front of it has landed "
+        "since, and the file you quoted is not the file that is there now — so "
+        "the line numbers in `read_excerpts` no longer point at what you "
+        "meant.\n\n"
+        "**If an earlier stage of this same batch edited it, that is the "
+        "cause, and it was your own doing.** Batched stages run in order and "
+        "may build on each other freely; a quoted line range is the one thing "
+        "that does not survive an earlier stage moving it, because a number "
+        "cannot be re-derived from the file it points into.\n\n"
+        "Redraw this stage against the file as it is now. Re-read the range "
+        "and quote it again, or drop the excerpt and describe what you want "
+        "instead — the executor can read the file itself."
+    )
+    if queue:
+        behind = ", ".join(f"`{s.get('id')}`" for s in queue)
+        detail += (
+            f"\n\nThe stages queued behind it — {behind} — have been "
+            "discarded along with it. They were drawn assuming this stage ran "
+            "as written, and it did not. Draw them again if they are still the "
+            "work you want."
+        )
+    return {
+        **_planner_failure(
+            state,
+            "excerpt",
+            f"stage {stage.id!r} quotes {listed}, which has changed since you "
+            "read it",
+            detail,
+        ),
+        "stage_queue": [],
+    }
 
 
 def stale_excerpts(git, stage) -> list[str]:

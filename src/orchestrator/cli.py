@@ -327,15 +327,41 @@ def run(slug: str, run_id: str | None, skip_preflight_tests: bool) -> None:
         _startup_banner("run", slug, cfg, run_tests=not skip_preflight_tests)
     )
 
-    checks = run_preflight(cfg, project_dir=project, run_tests=not skip_preflight_tests)
-    click.echo(format_checks(checks))
-    if any(c.blocking for c in checks):
-        click.echo("\npreflight failed; nothing was run", err=True)
-        sys.exit(EXIT_FAILED)
-
+    # And the run's own log exists before preflight too, which is the half that
+    # was missing. The banner above goes to stdout, so it lands in whatever the
+    # operator redirected — a file appended across every run, where the only
+    # way to tell this run's lines from the last one's is to count. The file
+    # named after this run held nothing at all until preflight returned, which
+    # on this project is three minutes of suites: tailing it showed an empty
+    # file, which is what a hung run also shows.
+    #
+    # Safe to create early. `_locate_run` keys on `run.json`, written only once
+    # preflight has passed, so a directory left by a refused start is a record
+    # rather than something `resume` or `status` can trip over.
     run_id = run_id or _generate_run_id(cfg)
     paths = RunPaths(project, run_id)
     paths.ensure()
+    start_log = RunLog(paths.run_log, echo=None)
+    start_log.record(
+        f"=== {run_id} — {datetime.now(timezone.utc).isoformat(timespec='seconds')} "
+        f"pid {os.getpid()} ==="
+    )
+    start_log("[preflight] starting" + (
+        "" if skip_preflight_tests else " (running the suites, which take minutes)"
+    ))
+
+    checks = run_preflight(cfg, project_dir=project, run_tests=not skip_preflight_tests)
+    click.echo(format_checks(checks))
+    blocking = [c for c in checks if c.blocking]
+    start_log(
+        f"[preflight] {'failed' if blocking else 'passed'}: "
+        f"{len(checks)} check(s)"
+        + ("; " + "; ".join(c.name for c in blocking) if blocking else "")
+    )
+    start_log.close()
+    if blocking:
+        click.echo("\npreflight failed; nothing was run", err=True)
+        sys.exit(EXIT_FAILED)
 
     git = Git(cfg.target_repo)
     # Rework discards child branches, and the reflog is the only recovery path

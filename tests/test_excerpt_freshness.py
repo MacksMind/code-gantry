@@ -125,3 +125,54 @@ class TestStaleExcerptsAreDetected:
         _commit(repo, "app/b.rb", "unrelated\n")
         _commit(repo, "app/b.rb", "unrelated again\n")
         assert stale_excerpts(git, _stage("s", ["app/a.rb"], base)) == []
+
+
+class TestARejectedStageTakesTheQueueWithIt:
+    """The contract the batch was written under.
+
+    Batched stages may build on each other — that is the point of letting them
+    stack, and the prompt tells the planner so explicitly. The obligation runs
+    the other way: if a stage does not run as drawn, everything queued behind
+    it was written against a sequence that did not happen.
+
+    A stale excerpt is precisely that case. The stage goes back to the planner
+    to be redrawn, and whatever comes back is a different stage from the one
+    the tail assumed. Keeping the queue would leave stages standing on a
+    premise nothing established — the failure this whole mechanism exists to
+    prevent, reintroduced one level up.
+
+    Cheap to be safe about: the tail is re-derived by one planner call, and the
+    planner is told it was discarded so it knows to draw them again.
+    """
+
+    def test_the_queue_is_discarded(self, repo, monkeypatch):
+        from orchestrator import nodes
+
+        monkeypatch.setattr(nodes, "stale_excerpts", lambda *_: ["app/a.rb"])
+        update = nodes._stale_excerpt_failure(
+            {"stage_queue": [{"id": "two"}, {"id": "three"}]},
+            _stage("one", ["app/a.rb"], "abc123"),
+            ["app/a.rb"],
+        )
+        assert update["stage_queue"] == []
+
+    def test_the_planner_is_told_the_tail_went_with_it(self):
+        from orchestrator.nodes import _stale_excerpt_failure
+
+        update = _stale_excerpt_failure(
+            {"stage_queue": [{"id": "two"}, {"id": "three"}]},
+            _stage("one", ["app/a.rb"], "abc123"),
+            ["app/a.rb"],
+        )
+        detail = update["last_failure"]["detail"]
+        assert "two" in detail and "three" in detail
+        assert "your own doing" in detail
+
+    def test_an_empty_queue_says_nothing_about_one(self):
+        from orchestrator.nodes import _stale_excerpt_failure
+
+        update = _stale_excerpt_failure(
+            {"stage_queue": []}, _stage("one", ["app/a.rb"], "abc123"), ["app/a.rb"]
+        )
+        assert update["stage_queue"] == []
+        assert "queued behind" not in update["last_failure"]["detail"]

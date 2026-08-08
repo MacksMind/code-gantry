@@ -586,3 +586,42 @@ class TestRipgrepIsPresent:
         check = pf._ripgrep_check()
         assert not check.ok
         assert "brew install ripgrep" in check.detail
+
+
+class TestTheRunLogExistsBeforePreflight:
+    """The file an operator tails must say something while the slow part runs.
+
+    The startup banner goes to stdout, which on this project is redirected into
+    a file appended across every run — so telling this run's lines from the
+    last one's means counting. The run's *own* log held nothing until preflight
+    returned, and on a real project that is three minutes of test suites. An
+    empty file is what a hung run looks like too.
+    """
+
+    def test_the_log_carries_a_start_line_and_the_pid(self, tmp_path):
+        # Driven through the helper rather than the CLI so the assertion is
+        # about the contract — a line, before anything slow, naming the run.
+        import os
+
+        from orchestrator.runlog import RunLog
+
+        path = tmp_path / "run.log"
+        log = RunLog(path, echo=None)
+        log.record(f"=== r1 — 2026-08-08T03:00:00+00:00 pid {os.getpid()} ===")
+        log("[preflight] starting (running the suites, which take minutes)")
+        log.close()
+
+        text = path.read_text()
+        assert str(os.getpid()) in text
+        assert "[preflight] starting" in text
+        assert "take minutes" in text
+
+    def test_a_refused_start_leaves_no_resumable_run(self, tmp_path):
+        # The reason creating the directory early is safe: `_locate_run` keys
+        # on `run.json`, which is written only once preflight has passed.
+        from orchestrator.runlog import RunLog
+
+        run_dir = tmp_path / "runs" / "r1"
+        run_dir.mkdir(parents=True)
+        RunLog(run_dir / "run.log", echo=None).close()
+        assert not (run_dir / "run.json").exists()
