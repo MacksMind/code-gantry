@@ -696,6 +696,23 @@ class ProjectConfig(_Strict):
     # project, and a default naming `vendor/` or `public/` would be one
     # repository's shape shipped to every other one's planner.
     search_exclude_globs: list[str] = Field(default_factory=list)
+    # Paths the scope gate must not fail a stage over.
+    #
+    # Some files rewrite themselves as a side effect of running the suite, and
+    # no instruction to the executor can prevent it: a VCR cassette configured
+    # to re-record after six months changes because a spec *ran*, not because
+    # anything edited it. `commit_all` sweeps it onto the stage branch and the
+    # gate — correctly comparing the diff against `edit_files` — fails a stage
+    # that did nothing wrong. Measured: three redraws, 884 seconds of planning
+    # and a `restart` verdict on an approved diff, all opened by one cassette.
+    #
+    # An exemption says "changing this is not evidence the executor wandered".
+    # It is not `edit_files`: it grants no permission and belongs to the
+    # operator rather than the planner, which cannot widen it.
+    #
+    # No default. That cassettes auto-refresh at six months is a fact about one
+    # repository's VCR configuration.
+    scope_exempt_globs: list[str] = Field(default_factory=list)
     test_file_patterns: list[str] = [
         "**/test_*.py",
         "**/*_test.py",

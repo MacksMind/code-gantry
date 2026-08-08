@@ -304,6 +304,30 @@ def _layer_branch(ctx: _Context, outcome: VerifyOutcome):
 # --- layer 2: scope guard ------------------------------------------------
 
 
+def out_of_scope_paths(changed: list[str], ctx) -> list[str]:
+    """Changed paths the stage was not allowed to touch.
+
+    Named and separated so the exemption below is testable without a git
+    repository, a stage branch and an executor attempt in front of it.
+
+    `scope_exempt_globs` is the operator's list of paths that move on their own
+    — see its config comment. It is checked *after* `edit_files` rather than
+    merged into it, because the two mean different things: `edit_files` grants
+    the executor permission, and an exemption only says that a change here is
+    not evidence of wandering. Merging them would let an exemption widen what a
+    stage may deliberately rewrite.
+
+    Plan documents are unreachable from here: that check runs earlier and
+    returns before this is called, so no exemption can excuse one.
+    """
+    exempt = getattr(ctx.cfg, "scope_exempt_globs", None) or []
+    return [
+        p
+        for p in changed
+        if not matches_any(p, ctx.stage.edit_files) and not matches_any(p, exempt)
+    ]
+
+
 def _is_plan_document(path: str, ctx: _Context) -> bool:
     """Is this one of the documents the planner is drawing from?
 
@@ -383,7 +407,7 @@ def _layer_scope(ctx: _Context, outcome: VerifyOutcome):
             out_of_scope_paths=sorted(plan_edits),
         )
 
-    out_of_scope = [p for p in changed if not matches_any(p, ctx.stage.edit_files)]
+    out_of_scope = out_of_scope_paths(changed, ctx)
     if not out_of_scope:
         return None
 
