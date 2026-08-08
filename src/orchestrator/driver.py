@@ -132,6 +132,34 @@ def open_checkpointer(db_path: Path | str) -> tuple[Callable, sqlite3.Connection
     return write, conn
 
 
+def last_step(db_path: Path | str, run_id: str) -> int:
+    """How far this run's checkpoint sequence has already got.
+
+    So a resume appends rather than renumbering from one. Read separately from
+    `load_state` because `status` wants the state and only `drive` wants the
+    counter, and a reader that returns both invites a caller to take the one it
+    did not mean.
+    """
+    path = Path(db_path)
+    if not path.exists():
+        return 0
+    conn = sqlite3.connect(str(path))
+    try:
+        tables = {
+            name for (name,) in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        if "steps" not in tables:
+            return 0
+        row = conn.execute(
+            "SELECT MAX(step) FROM steps WHERE run_id = ?", (run_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return int(row[0]) if row and row[0] is not None else 0
+
+
 def load_state(db_path: Path | str, run_id: str) -> RunState | None:
     """The state after the last node that finished, or None for an unknown run.
 
@@ -164,8 +192,21 @@ def load_state(db_path: Path | str, run_id: str) -> RunState | None:
             )
         if "steps" not in tables:
             return None
+        # By write order, not by step number. `step` counts from zero inside
+        # one `drive` call, so a resumed session renumbers from 1 and — the
+        # primary key being `(run_id, step)` — overwrites the beginning of the
+        # previous session while its tail survives at higher numbers. Ordering
+        # by `step` then returns whichever session ran *longest*, which on a
+        # resumed run is reliably the older one.
+        #
+        # Measured on a 14-hour run: rows 1-65 were the live session with
+        # `completed` climbing to 39, rows 66-210 were nine hours stale, and
+        # this query returned row 210 — `completed` 31, naming a stage that
+        # never ran. `REPLACE` deletes and reinserts, so `rowid` is assigned
+        # afresh and its order is write order, which is the question this was
+        # always asking.
         row = conn.execute(
-            "SELECT state FROM steps WHERE run_id = ? ORDER BY step DESC LIMIT 1",
+            "SELECT state FROM steps WHERE run_id = ? ORDER BY rowid DESC LIMIT 1",
             (run_id,),
         ).fetchone()
     finally:
@@ -227,6 +268,7 @@ def drive(
     entry: Callable[[dict], str] = resume_entry_point,
     checkpoint: Callable | None = None,
     max_steps: int = 100_000,
+    start_step: int = 0,
 ) -> dict:
     """Walk the graph from `entry` until a node routes to `end`.
 
@@ -237,9 +279,16 @@ def drive(
     nodes = NODES if nodes is None else nodes
     edges = EDGES if edges is None else edges
     hop = entry(state)
-    step = 0
+    # Two counters, because they answer different questions and sharing one
+    # made both wrong. `step` is the run's checkpoint sequence and continues
+    # where the last session left off, so a resume appends rather than
+    # overwriting rows 1..n of the session before it. `taken` is this
+    # session's work and is what the runaway guard bounds — seeded from the
+    # sequence it would trip immediately on any resumed run.
+    step = start_step
+    taken = 0
     while True:
-        if step >= max_steps:
+        if taken >= max_steps:
             # Not an exception. The ceiling exists to catch a loop that is not
             # making progress, and an operator needs to be told that in the
             # run's own vocabulary — which means going through `escalate` like
@@ -256,11 +305,12 @@ def drive(
                 },
             )
             hop = "escalate"
-            max_steps = step + 2  # let escalate and its exit run
+            max_steps = taken + 2  # let escalate and its exit run
 
         update = nodes[hop](state, rt)
         state = _merge(state, update)
         step += 1
+        taken += 1
         if checkpoint is not None and state.get("run_id"):
             checkpoint(state["run_id"], step, hop, state)
 

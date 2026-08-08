@@ -37,6 +37,7 @@ from orchestrator.driver import (
     UnreadableCheckpoint,
     default_max_steps,
     drive,
+    last_step,
     load_state,
     open_checkpointer,
 )
@@ -574,6 +575,7 @@ def _drive(
             rt,
             graph_input,
             checkpoint=checkpoint,
+            start_step=last_step(paths.state_db, graph_input.get("run_id", "")),
             max_steps=default_max_steps(
                 cfg.limits.max_stages,
                 cfg.limits.max_test_retries,

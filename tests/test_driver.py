@@ -345,3 +345,72 @@ class TestAnOldCheckpointSaysWhatItIs:
         from orchestrator.driver import load_state
 
         assert load_state(tmp_path / "nope.db", "r") is None
+
+
+class TestTheCheckpointSequenceSurvivesAResume:
+    """`step` counted from zero inside one `drive` call, and the key is
+    `(run_id, step)` — so a resumed session overwrote rows 1..n of the session
+    before it while that session's tail survived at higher numbers. `load_state`
+    ordered by `step`, so it returned whichever session had run *longest*, which
+    on a resumed run is reliably the older one.
+
+    Measured on a 14-hour run: rows 1-65 were the live session with `completed`
+    climbing to 39, rows 66-210 were nine hours stale, and `load_state` returned
+    row 210 — `completed` 31, naming a stage that had never run.
+    """
+
+    def _write(self, tmp_path, run_id, steps):
+        from orchestrator.driver import open_checkpointer
+
+        write, conn = open_checkpointer(tmp_path / "s.db")
+        try:
+            for i, completed in enumerate(steps, start=1):
+                write(run_id, i, "plan", {"run_id": run_id, "completed": completed})
+        finally:
+            conn.close()
+
+    def test_a_resume_appends_rather_than_renumbering(self, tmp_path):
+        from orchestrator.driver import last_step
+
+        self._write(tmp_path, "r", [1, 2, 3])
+        assert last_step(tmp_path / "s.db", "r") == 3
+
+    def test_an_unknown_run_starts_at_zero(self, tmp_path):
+        from orchestrator.driver import last_step, open_checkpointer
+
+        write, conn = open_checkpointer(tmp_path / "s.db")
+        conn.close()
+        assert last_step(tmp_path / "s.db", "r") == 0
+        assert last_step(tmp_path / "missing.db", "r") == 0
+
+    def test_the_latest_write_wins_even_when_its_step_is_lower(self, tmp_path):
+        # The live shape: a long old session, then a short new one that
+        # renumbered over its head. Ordering by `step` picks the stale tail.
+        from orchestrator.driver import load_state, open_checkpointer
+
+        self._write(tmp_path, "r", list(range(1, 11)))     # old session, steps 1-10
+        write, conn = open_checkpointer(tmp_path / "s.db")
+        try:
+            write("r", 1, "plan", {"run_id": "r", "completed": 99})
+        finally:
+            conn.close()
+        assert load_state(tmp_path / "s.db", "r")["completed"] == 99
+
+    def test_the_runaway_guard_counts_this_session_not_the_sequence(self, tmp_path):
+        # Seeded from the sequence it would trip on the first node of any
+        # resumed run, which is a ceiling deciding an outcome rather than
+        # catching a loop.
+        from orchestrator.driver import drive
+
+        seen = []
+
+        def node(state, rt):
+            seen.append(1)
+            return {"next_hop": "end"}
+
+        out = drive(
+            None, {"run_id": "r"}, nodes={"plan": node}, edges={"plan": ["end"]},
+            entry=lambda s: "plan", max_steps=5, start_step=500,
+        )
+        assert seen == [1], "the guard fired on a run that had taken one step"
+        assert out["next_hop"] == "end"
