@@ -628,20 +628,31 @@ to the tail, or to a line count taken at the start.
 normalises line endings on every write, the rule above says the machinery must
 declare that rather than let each planner rediscover it, and `gitops`'
 `ignore_line_endings` duly keeps the churn out of the diff the reviewer judges.
-All correct, and the consequence was not noticed for 77 stages: the target
-repository has **542 tracked files containing CRLF and no `.gitattributes`**,
-and **10 of them have been silently converted to LF** — 4 `.js`, 5 `.erb`, one
-`.haml` — each landing as a whole-file rewrite that no participant ever saw. The
-damage is not the conversion, which is probably an improvement; it is that the
-repository is now *mixed* where it was uniform, and `git blame` on those ten
-files is useless for every line.
+All correct, and the consequence was not noticed for 77 stages: **10 tracked
+files were silently converted from CRLF to LF** — 4 `.js`, 5 `.erb`, one
+`.haml` — each landing as a whole-file rewrite that no participant ever saw.
 
-Declaring a behaviour to the one participant that would otherwise reject it is
-not the same as accounting for it. A gate exemption suppresses the complaint,
-and the effect keeps accruing where nothing is looking — so an exemption wants
-a counter, or a periodic look at what it has been swallowing. The question to
-ask when adding one is not "will this stop the false rejection" but "who finds
-out if this fires ten thousand times".
+**The follow-up measurement is the more useful half, because it refuted the
+reason first given for caring.** That reason was that the repository had been
+made *mixed* where it was uniform. It was never uniform: 552 of 3,184 tracked
+text files carried CRLF at the run's base sha, 17%, and the count is 542 now.
+Ten files moving to the majority convention does not meaningfully change a
+repository that has been 17% CRLF for years. The count has also not moved since
+— this was a burst, not a rate — so there was nothing accruing to stop. The
+residual cost is `git blame` on ten files, already spent, and unrecoverable by
+acting now. The right answer was to do nothing, and the operator's default of
+doing nothing was better calibrated than the write-up that prompted the
+question.
+
+Keep the rule and distrust the alarm. Declaring a behaviour to the one
+participant that would otherwise reject it is not the same as accounting for
+it: a gate exemption suppresses the complaint while the effect keeps accruing
+where nothing is looking, so an exemption wants a counter or a periodic look at
+what it has been swallowing. That is exactly how the ten were found. But a
+finding produced that way arrives without a magnitude, and the instinct is to
+supply one from the shape of the thing rather than from a measurement — *mixed
+where it was uniform* was written without ever counting the base. Ask what the
+number was before, not only what it is now.
 
 **A test suite can be exercising the path you are about to delete.** The
 integration tests drove a fake `aider` binary on `PATH`, and they were green
