@@ -2,7 +2,7 @@
 
 ## Where this stands
 
-Steps 0–9 are done; only 10 remains. Each entry
+All ten steps are done. Each entry
 below names the commit that did it, because a status line in a document is a
 claim and a sha is checkable — the same reason a figure here has to name the
 artifact it came from.
@@ -19,7 +19,44 @@ artifact it came from.
 | 7 · delete Aider | done | `5c298c4`, `57c3b39` |
 | 8 · replace LangGraph with `driver.py` | done | `6a3225d`, this commit |
 | 9 · simplify `nodes.execute` | done, absorbed | `5c298c4`, `5192d1a` |
-| 10 · up to five stages per derivation | pending | — |
+| 10 · up to five stages per derivation | done | `c15e5ee`, `f36f746`, then `10f87d8`, `0d6be66`, `553de02` |
+
+**Step 10 is done and measured.** One run, 17 derivations, 32 stages:
+
+| | derivations | stages | seconds/stage |
+|---|---|---|---|
+| single | 9 | 9 | 524 |
+| batched | 8 | 23 | 228 |
+
+**57% of derivation time saved per stage**, with 0 stages dropped from any
+batch. Batch sizes were 2, 2, 2, 2, 3, 3, 4 and 5 — sized to the work rather
+than filling the cap, which was the failure the feature had to be watched for.
+The 5-stage derivation cost 882s against a 524s mean for a single one: asking
+for five cost 1.7× and returned 5×, so the planner did not survey as though it
+needed five.
+
+Three things had to change before any of it worked, and each is worth more than
+the throughput:
+
+- **The prompt, not just the contract.** `additional_stages` shipped as an
+  optional field described as best left empty, with the cap reachable only in
+  `config.py` and a silent trim. Two derivations under a cap of five returned
+  one stage each. Same shape as `observations`, empty 278 times out of 278.
+- **The conflict rule was far too broad.** It forbade any shared file. Reads are
+  live and self-correcting; `instruction` is required to state an end state, so
+  writes are too; batched stages run in order and are each reviewed on their own
+  diff, so they may stack. Only a quoted line range cannot re-derive itself.
+- **And then that rule went too.** `edit_files` is a permission rather than a
+  record, so predicting from it fired over a superset of what happened.
+  `stale_excerpts` compares the blob the planner read against the blob at the
+  stage's start — a measurement, at the moment it matters, that also catches a
+  human edit, a `checks` rewrite or a resume onto an advanced branch.
+
+Not observed in production: a revision with stages still queued behind it. Both
+redrawn stages happened to be last in their batch, so the queue-preservation
+path has never run live. What did hold is the premise under it —
+`catalog-explicit-routes` sat queued for 49 minutes while three siblings landed
+ahead of it and its spec was still valid when its turn came.
 
 **Step 9 was absorbed into step 7 rather than done on its own.** Both removals
 it named — the attach block and the `is_clean()` dance — went with Aider, and
