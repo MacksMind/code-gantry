@@ -648,10 +648,10 @@ class ProjectConfig(_Strict):
     # single file is not worth starting workers for. Both strings are yours —
     # this only chooses between them, on a fact about the filesystem.
     directory_test_command: str | None = None
-    # What Aider runs inside its own edit loop, when `executor.auto_test` is on.
+    # What the executor runs inside its own edit loop.
     # Separate from the above because the two have opposite needs from the same
     # runner: verify *parses* the output to find which files failed, so it needs
-    # the full failed-examples block, while Aider's output lands in the model's
+    # the full failed-examples block, while the loop's output lands in the model's
     # context — a directory-scoped run put 138k-152k tokens into a single
     # request, most of it passing-example lines, a profile and a deprecation
     # tally. Quiet it here, not there.

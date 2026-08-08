@@ -12,9 +12,10 @@ after an escalation does too. Either would produce an empty diff, and every
 gate downstream — scope guard, forbidden patterns, reviewer — would pass on
 nothing.
 
-**A stage lands by squash merge.** Aider commits before it tests, so a child
-branch contains red intermediate commits. Squashing is what makes "every commit
-on the project branch is green" and "Aider commits before testing" both true.
+**A stage lands by squash merge.** The executor commits before it tests, so a
+child branch contains red intermediate commits. Squashing is what makes "every
+commit on the project branch is green" and "the executor commits before it
+tests" both true.
 A `--no-ff` merge would drag the red commits onto the project branch.
 """
 

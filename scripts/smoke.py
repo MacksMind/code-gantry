@@ -8,13 +8,18 @@ repository in the state the design promises.
 
 Three things stand in for the outside world, and nothing else does:
 
-- **The executor.** A fake `aider` on PATH that appends a function and a test.
-  It speaks the flag surface the real one does, so `preflight`'s
-  `aider --help` check is exercised rather than skipped.
-- **The planner and reviewer.** One HTTP server on localhost answering
-  `/v1/messages` in Anthropic's wire format and `/v1/chat/completions` in
-  OpenAI's, with usage figures in both. The real SDKs, the real parsing, the
-  real defensive paths — only the inference is fake.
+- **All three models.** One HTTP server on localhost answering `/v1/messages`
+  in Anthropic's wire format for the planner, `/v1/chat/completions` in
+  OpenAI's for the reviewer, and `/v1/responses` for the executor. The real
+  SDKs, the real parsing, the real defensive paths — only the inference is fake.
+
+  The executor used to be a fake `aider` script on PATH, back when it shelled
+  out to one. It is in-process now and calls `responses.create`, so a binary on
+  PATH stood in for nothing: the smoke test would have driven a code path
+  production no longer takes, which is the "a test suite can be exercising the
+  path you are about to delete" failure with the roles reversed. The stand-in is
+  a stub endpoint that answers with a `function_call` to the real `edit` tool,
+  so `executortools`, `edittools` and the dispatch loop all run for real.
 
 Everything else is real: git, the branch topology, the squash merges, the
 checkpointer, the verify layers, the subprocess runner, the report.
@@ -56,13 +61,12 @@ EXECUTOR_API_BASE_VAR = "ORCHESTRATOR_EXECUTOR_API_BASE"
 # patch_config rather than silently pointing a live run at nothing.
 PLANNER_MODEL = "claude-opus-5"
 REVIEWER_MODEL = "gpt-5.6-sol"
-# Live mode still uses the fake Aider, but names a real model so preflight's
+# Live mode still stubs the executor, but names a real model so preflight's
 # endpoint check verifies against the real server.
 LIVE_EXECUTOR_MODEL = "qwen3-coder-next"
 
-# What llama.cpp reports as n_ctx_slot for that model. litellm has no entry for
-# a local model id, so without this Aider guesses the context window and warns
-# about it — and with --yes-always the warning opens a browser tab.
+# What llama.cpp reports as n_ctx_slot for that model — the ceiling the
+# executor's read and output budgets are sized against.
 #
 # The input budget is the slot size minus the output budget, deliberately: they
 # share one window, so declaring the full slot as input invites an overflow at
@@ -98,101 +102,70 @@ STAGES = [
     },
 ]
 
-FAKE_AIDER = '''#!/usr/bin/env python3
-"""A stand-in for Aider: implements whichever operation the message names."""
-import pathlib
-import sys
-
-if "--help" in sys.argv:
-    # preflight parses this. The real flag surface, so a renamed flag in
-    # executor.AIDER_FLAGS fails the smoke test rather than passing it.
-    print(
-        "--message --yes-always --no-stream --model --openai-api-base "
-        "--test-cmd --auto-test --lint-cmd --map-tokens --file --read "
-        "--no-gitignore --no-show-model-warnings --edit-format "
-        "--model-metadata-file --chat-history-file --input-history-file "
-        "--llm-history-file"
-    )
-    sys.exit(0)
-
-message = sys.argv[sys.argv.index("--message") + 1] if "--message" in sys.argv else ""
-calc = pathlib.Path("src/calc.py")
-body = calc.read_text()
-
-# Tests are appended to the *existing* test file rather than written to a new
-# one. A real planner scopes a stage to the files it expects to change and says
-# "add tests in the existing test file"; inventing tests/test_multiply.py
-# violated that scope on every attempt, which is a stand-in that ignores its
-# instructions rather than an orchestrator that mis-scoped.
+# What the stub executor implements, and where. Tests are appended to the
+# *existing* test file rather than written to a new one: a real planner scopes a
+# stage to the files it expects to change and says "add tests in the existing
+# test file", so inventing `tests/test_multiply.py` violated that scope on every
+# attempt — a stand-in ignoring its instructions rather than an orchestrator
+# mis-scoping.
 TEST_FILE = "tests/test_calc.py"
+
+# Anchors the stub edits against. Both are lines the seeded repository already
+# contains and neither stage removes, so the same two work for `multiply` and
+# for `divide` after it — an anchored insertion, which is the shape a real stage
+# produces, rather than a whole-file rewrite that would hide whether the edit
+# tool located anything.
+CALC_ANCHOR = "    return a + b\n"
+TEST_ANCHOR = "    assert add(2, 2) == 4\n"
 
 IMPLEMENTATIONS = {
     "multiply": (
-        "\\n\\ndef multiply(a, b):\\n    return a * b\\n",
-        "\\n\\ndef test_multiply():\\n"
-        "    from src.calc import multiply\\n"
-        "    assert multiply(3, 4) == 12\\n"
-        "    assert multiply(-2, 3) == -6\\n"
-        "    assert multiply(0, 5) == 0\\n",
+        "\n\ndef multiply(a, b):\n    return a * b\n",
+        "\n\ndef test_multiply():\n"
+        "    from src.calc import multiply\n"
+        "    assert multiply(3, 4) == 12\n"
+        "    assert multiply(-2, 3) == -6\n"
+        "    assert multiply(0, 5) == 0\n",
     ),
     "divide": (
-        "\\n\\ndef divide(a, b):\\n"
-        "    if b == 0:\\n"
-        "        raise ValueError('divide by zero')\\n"
-        "    return a / b\\n",
-        "\\n\\ndef test_divide():\\n"
-        "    import pytest\\n"
-        "    from src.calc import divide\\n"
-        "    assert divide(8, 2) == 4\\n"
-        "    with pytest.raises(ValueError):\\n        divide(1, 0)\\n",
+        "\n\ndef divide(a, b):\n"
+        "    if b == 0:\n"
+        "        raise ValueError('divide by zero')\n"
+        "    return a / b\n",
+        "\n\ndef test_divide():\n"
+        "    import pytest\n"
+        "    from src.calc import divide\n"
+        "    assert divide(8, 2) == 4\n"
+        "    with pytest.raises(ValueError):\n        divide(1, 0)\n",
     ),
 }
 
-# Which operation is this stage about? Not "which is mentioned" — a real
-# planner's constraints name what must NOT be built ("reject the stage if the
-# diff adds division"), and a plain keyword match implemented the prohibition.
-#
-# Nor "which is mentioned most": a live planner produced a multiply stage
-# mentioning both exactly five times, because every prohibition it wrote about
-# division was matched by a requirement about multiplication.
-#
-# Position is the reliable signal. The prompt states the task before it
-# constrains it, so whichever operation is named *first* is the subject.
-lowered = message.lower()
-SYNONYMS = {"multiply": ("multiply", "multiplication"), "divide": ("divide", "division")}
 
-positions = {}
-for op, words in SYNONYMS.items():
-    found = [lowered.find(word) for word in words if lowered.find(word) >= 0]
-    if found:
-        positions[op] = min(found)
+def stage_subject(text: str) -> str | None:
+    """Which operation a stage instruction is about.
 
-subject = min(positions, key=positions.get) if positions else None
-named = [subject] if subject and f"def {subject}" not in body else []
+    Not "which is mentioned" — a real planner's constraints name what must NOT
+    be built ("reject the stage if the diff adds division"), and a plain keyword
+    match implemented the prohibition. Nor "which is mentioned most": a live
+    planner produced a multiply stage naming both exactly five times, because
+    every prohibition about division was matched by a requirement about
+    multiplication.
 
-if named:
-    op = named[0]
-    source, test_source = IMPLEMENTATIONS[op]
-    calc.write_text(body + source)
-    tests = pathlib.Path(TEST_FILE)
-    tests.write_text(tests.read_text() + test_source)
-    print(f"aider: implemented {op}, with tests in {TEST_FILE}")
-    sys.exit(0)
+    Position is the reliable signal. The prompt states the task before it
+    constrains it, so whichever operation is named *first* is the subject.
+    """
+    lowered = text.lower()
+    synonyms = {
+        "multiply": ("multiply", "multiplication"),
+        "divide": ("divide", "division"),
+    }
+    positions = {}
+    for op, words in synonyms.items():
+        found = [lowered.find(w) for w in words if lowered.find(w) >= 0]
+        if found:
+            positions[op] = min(found)
+    return min(positions, key=positions.get) if positions else None
 
-if subject:
-    print(f"aider: {subject} is already implemented; nothing to do")
-    sys.exit(0)
-
-# Report the counts. Saying "already implemented" here would be a lie — the
-# real situation is that no operation clearly dominates the instruction, and a
-# stand-in that misreports why it did nothing wastes a debugging session.
-print(
-    f"aider: cannot tell which operation this stage is about (first mentions: "
-    f"{positions}); this stand-in implements only {sorted(IMPLEMENTATIONS)}",
-    file=sys.stderr,
-)
-sys.exit(1)
-'''
 
 PLAN_DOC = """# Calculator capability plan
 
@@ -247,6 +220,16 @@ class ModelStub(BaseHTTPRequestHandler):
 
         if "/messages" in self.path:
             self._respond(self._anthropic(model))
+        elif "/responses" in self.path:
+            # Both the executor and the reviewer speak the Responses API, on
+            # the same path, so the model id is what tells them apart. Splitting
+            # on the path alone sent the reviewer the executor's "Implemented,
+            # with tests." and it failed to parse as a verdict — the stand-in
+            # answering the wrong role rather than anything wrong upstream.
+            if model == REVIEWER_MODEL:
+                self._respond(self._reviewer_response(model))
+            else:
+                self._respond(self._executor(model, body))
         else:
             self._respond(self._openai(model))
 
@@ -257,6 +240,156 @@ class ModelStub(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
         self.wfile.write(raw)
+
+    def _reviewer_response(self, model: str) -> dict:
+        """The reviewer's verdict, in the Responses shape rather than chat's.
+
+        `reviewer.py` calls `responses.parse`, so the verdict has to arrive as
+        output text that its schema accepts. The chat-completions branch below
+        stays: `_openai` still serves anything that asks for it, and dropping it
+        would remove coverage of a wire format the code still knows.
+        """
+        # Every required field of `ReviewVerdict`, built from the model rather
+        # than from memory — a stand-in that drifts from the schema fails the
+        # smoke test for a reason that has nothing to do with the pipeline.
+        verdict = {
+            "verdict": "approved",
+            "summary": "Implements the stage as specified, with tests.",
+            "record": "Adds the operation to src/calc.py and a test for it.",
+            "issues": [],
+        }
+        return {
+            "id": "resp_smoke_review",
+            "object": "response",
+            "model": model,
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [
+                        {"type": "output_text", "text": json.dumps(verdict)}
+                    ],
+                }
+            ],
+            "usage": {
+                "input_tokens": 9_000,
+                "output_tokens": 40,
+                "input_tokens_details": {"cached_tokens": 8_600},
+            },
+        }
+
+    def _executor(self, model: str, body: dict) -> dict:
+        """The executor, in the Responses shape its client actually parses.
+
+        Two turns, told apart by the conversation itself rather than by state
+        the server keeps: the first asks for an `edit`, and once a
+        `function_call_output` comes back the work is done and a plain message
+        ends the loop. A stateless stand-in cannot be desynchronised by a retry.
+
+        The tool call is real. `executortools` validates it, `edittools` applies
+        it, and the scope guard judges the result — which is the point of
+        replacing the old fake `aider` binary rather than deleting it: that
+        stood outside every one of those, so the smoke test exercised a path
+        production no longer takes.
+        """
+        items = body.get("input") or []
+        text = " ".join(
+            str(block.get("text", ""))
+            for item in items
+            if isinstance(item, dict)
+            for block in (item.get("content") or [])
+            if isinstance(block, dict)
+        )
+        answered = any(
+            isinstance(i, dict) and i.get("type") == "function_call_output"
+            for i in items
+        )
+        usage = {
+            "input_tokens": 8_000,
+            "output_tokens": 120,
+            "input_tokens_details": {"cached_tokens": 7_400},
+        }
+        if answered:
+            return {
+                "id": "resp_smoke_done",
+                "object": "response",
+                "model": model,
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [
+                            {"type": "output_text", "text": "Implemented, with tests."}
+                        ],
+                    }
+                ],
+                "usage": usage,
+            }
+
+        op = stage_subject(text)
+        calls = []
+        if op:
+            source, test_source = IMPLEMENTATIONS[op]
+            # Appended, so the edit is an anchored insertion rather than a
+            # whole-file rewrite — the shape a real stage produces.
+            calls = [
+                {
+                    "type": "function_call",
+                    "call_id": "call_smoke_1",
+                    "name": "edit",
+                    "arguments": json.dumps(
+                        {
+                            "path": "src/calc.py",
+                            "edits": [
+                                {"old_string": CALC_ANCHOR, "new_string": CALC_ANCHOR + source}
+                            ],
+                        }
+                    ),
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_smoke_2",
+                    "name": "edit",
+                    "arguments": json.dumps(
+                        {
+                            "path": TEST_FILE,
+                            "edits": [
+                                {
+                                    "old_string": TEST_ANCHOR,
+                                    "new_string": TEST_ANCHOR + test_source,
+                                }
+                            ],
+                        }
+                    ),
+                },
+            ]
+        return {
+            "id": "resp_smoke",
+            "object": "response",
+            "model": model,
+            "output": calls
+            or [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            # Not "already implemented": a stand-in that
+                            # misreports why it did nothing wastes a debugging
+                            # session. Say which operations it knows.
+                            "text": "cannot tell which operation this stage is "
+                            f"about; this stand-in implements only "
+                            f"{sorted(IMPLEMENTATIONS)}",
+                        }
+                    ],
+                }
+            ],
+            "usage": usage,
+        }
 
     def _anthropic(self, model: str) -> dict:
         # Cache figures are deliberately high: report.md warns below 50%, and a
@@ -279,6 +412,7 @@ class ModelStub(BaseHTTPRequestHandler):
         verdict = {
             "verdict": "approved",
             "summary": "Implements the stage as specified, with tests.",
+            "record": "Adds the operation to src/calc.py and a test for it.",
             "issues": [],
         }
         return {
@@ -388,10 +522,10 @@ def build_repo(root: Path) -> Path:
     (repo / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
 
     git(repo, "init", "-b", "main")
-    # Persisted locally, not just passed per-invocation: with a real Aider it is
-    # Aider that commits, and it would otherwise inherit the operator's global
-    # identity and signing settings. An unattended run cannot answer a pinentry
-    # prompt, so a signed commit is a hang, not an error.
+    # Persisted locally, not just passed per-invocation: the executor commits
+    # its own work, and it would otherwise inherit the operator's global identity
+    # and signing settings. An unattended run cannot answer a pinentry prompt,
+    # so a signed commit is a hang, not an error.
     git(repo, "config", "user.name", "Smoke Test")
     git(repo, "config", "user.email", "smoke@example.invalid")
     git(repo, "config", "commit.gpgsign", "false")
@@ -441,41 +575,6 @@ def git_config(repo: Path, key: str) -> str | None:
     return done.stdout.strip() if done.returncode == 0 else None
 
 
-def write_model_metadata(root: Path) -> Path:
-    """Aider's own metadata schema, for a model litellm has never heard of.
-
-    Kept outside the target repository. Aider would discover a
-    `.aider.model.metadata.json` at the repo root by accident, which would put
-    orchestrator-host configuration into the repository under test — against the
-    rule that the target repo receives product code and plan revisions, nothing
-    else. Passing the path keeps that boundary intact.
-    """
-    path = root / "model-metadata.json"
-    path.write_text(
-        json.dumps(
-            {
-                f"openai/{LIVE_EXECUTOR_MODEL}": {
-                    "max_input_tokens": LIVE_CONTEXT_TOKENS - LIVE_OUTPUT_TOKENS,
-                    "max_output_tokens": LIVE_OUTPUT_TOKENS,
-                    "input_cost_per_token": 0,
-                    "output_cost_per_token": 0,
-                    "litellm_provider": "openai",
-                    "mode": "chat",
-                }
-            },
-            indent=2,
-        )
-    )
-    return path
-
-
-def write_fake_aider(bin_dir: Path) -> None:
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    aider = bin_dir / "aider"
-    aider.write_text(FAKE_AIDER)
-    aider.chmod(0o755)
-
-
 # --- driving the CLI -----------------------------------------------------
 
 
@@ -497,7 +596,7 @@ def cli(work: Path, env: dict, *args: str, expect: int = 0) -> str:
     return output
 
 
-def patch_config(config: Path, live: bool = False, metadata_file: Path | None = None) -> None:
+def patch_config(config: Path, live: bool = False) -> None:
     """Do what an operator does after `init`: fill in what it could not infer.
 
     Each replacement asserts the placeholder was there. If `init`'s draft
@@ -517,18 +616,22 @@ def patch_config(config: Path, live: bool = False, metadata_file: Path | None = 
         text = text.replace(old, new, 1)
 
     swap("project_branch: refactor/CHANGE-ME", f"project_branch: {BRANCH}")
+    # No `openai/` prefix. That was litellm routing, which the executor needed
+    # while it was Aider in a subprocess; in-process it calls the SDK directly
+    # and the model id is the endpoint's own.
     swap(
-        'model: "openai/<model-id-from-/v1/models>"',
-        f'model: "openai/{LIVE_EXECUTOR_MODEL if live else "local-model"}"',
+        'model: "<model-id-from-/v1/models>"',
+        f'model: "{LIVE_EXECUTOR_MODEL if live else "local-model"}"',
     )
-    # The executor's address is left exactly as drafted — `api_base_env`,
-    # resolved from the environment at run time. That is the form `init` emits,
-    # so it is the form worth covering.
-    if f'api_base_env: "{EXECUTOR_API_BASE_VAR}"' not in text:
-        fail(
-            f"`init` no longer drafts api_base_env: {EXECUTOR_API_BASE_VAR}; "
-            "scripts/smoke.py needs updating"
-        )
+    # `init` drafts the executor's `api_base_env` commented out, because talking
+    # to the provider directly is the common case. Uncommenting it is exactly
+    # what an operator does when the executor lives on their own endpoint, and
+    # here it is what points the executor at the stand-in server — so the form
+    # covered is both the one `init` emits and the one this test needs.
+    swap(
+        f'  # api_base_env: "{EXECUTOR_API_BASE_VAR}"',
+        f'  api_base_env: "{EXECUTOR_API_BASE_VAR}"',
+    )
 
     if not live:
         # The planner's base has no /v1: the Anthropic SDK appends it.
@@ -548,18 +651,6 @@ def patch_config(config: Path, live: bool = False, metadata_file: Path | None = 
                     "updating"
                 )
 
-    if metadata_file:
-        # `whole` because the first real run ended in "the LLM did not conform
-        # to the edit format": a 3B-active MoE could not produce a valid diff.
-        # Whole-file rewrites cost tokens and buy reliability, which is the
-        # right trade at 256k of context on a toy repo.
-        text = text.replace(
-            "  map_tokens: 0",
-            f'  edit_format: "whole"\n'
-            f'  model_metadata_file: "{metadata_file}"\n'
-            "  map_tokens: 0",
-            1,
-        )
 
     swap("max_stages: 60", "max_stages: 6")
     config.write_text(text)
@@ -704,19 +795,11 @@ def main() -> int:
     parser.add_argument(
         "--live",
         action="store_true",
-        help="Use the real planner, reviewer, and endpoint. Aider stays fake, so "
-        "this exercises planning and review without generating code. Costs money.",
-    )
-    parser.add_argument(
-        "--real-aider",
-        action="store_true",
-        help="Use the installed aider against the configured local model, "
-        "instead of the stand-in. Implies --live.",
+        help="Use the real planner, reviewer, and endpoint. The executor stays "
+        "stubbed, so this exercises planning and review without generating "
+        "code. Costs money.",
     )
     args = parser.parse_args()
-    if args.real_aider:
-        args.live = True
-
     if args.live:
         missing = [
             name
@@ -731,13 +814,7 @@ def main() -> int:
 
     try:
         repo = build_repo(root)
-        metadata_file = None
-        if not args.real_aider:
-            write_fake_aider(root / "bin")
-        else:
-            (root / "bin").mkdir(parents=True, exist_ok=True)
-            metadata_file = write_model_metadata(root)
-            print("using the installed aider against the configured local model\n")
+        (root / "bin").mkdir(parents=True, exist_ok=True)
         # In live mode nothing talks to the stand-in: both paid models go to
         # their real APIs and the executor endpoint check goes to the real one.
         server = None if args.live else serve(repo)
@@ -767,7 +844,7 @@ def main() -> int:
         cli(work, env, "init", str(repo / "docs" / "plan.md"), "--slug", SLUG)
         config = work / "projects" / SLUG / "config.yaml"
         check(config.is_file(), "drafted a config")
-        patch_config(config, live=args.live, metadata_file=metadata_file)
+        patch_config(config, live=args.live)
 
         print("\nrun, before approval")
         refused = cli(work, env, "run", SLUG, expect=1)
@@ -780,7 +857,6 @@ def main() -> int:
         print("\nvalidate")
         checks = cli(work, env, "validate", SLUG)
         check("[FAIL]" not in checks, "no blocking problems", checks)
-        check("aider still accepts the flags we build" in checks, "checked aider's flags")
         check(
             f"executor endpoint resolves from {EXECUTOR_API_BASE_VAR}" in checks
             and "127.0.0.1" not in checks.split("endpoint resolves")[1][:200],
