@@ -120,3 +120,53 @@ class TestEachRoleWritesThere:
         p.reader.calls.append(ToolCall(tool="search", detail="X", lines=1))
         AnthropicPlanner._log_new_calls(p, 0)
         assert timeline == ["[plan] search(X) -> 1 line(s)"]
+
+
+class TestTheTimelineIsOutputNotDiagnostics:
+    """The run log echoes to stdout; errors keep stderr.
+
+    It echoed to stderr, so `orchestrator run <project> > out.txt` captured the
+    final report and lost the entire timeline — the timeline being the only
+    thing the command actually produces while it works. stderr is for what went
+    wrong, and `cli.py` already uses `click.echo(..., err=True)` for that in
+    fourteen places; nothing was left for stdout but the last few lines.
+
+    The earlier justification for moving the report into `run.log` — that a
+    nohup file goes unread — was the weaker argument and Mack said so: anyone
+    running this from a terminal sees stdout regardless. The argument that
+    survives is about the artifact rather than the terminal, and is why the
+    report is written to the file without being echoed twice: `run.log` is the
+    durable per-run record, and a record that stops before the conclusion is
+    missing the part a reader came for.
+    """
+
+    def test_the_timeline_goes_to_stdout(self, tmp_path, capsys):
+        from orchestrator.runlog import RunLog
+
+        log = RunLog(tmp_path / "run.log")
+        log("[plan] deriving next stage")
+        log.close()
+        captured = capsys.readouterr()
+        assert "deriving next stage" in captured.out
+        assert "deriving next stage" not in captured.err
+
+    def test_a_file_only_write_does_not_echo(self, tmp_path, capsys):
+        # So the report can reach `run.log` without appearing twice on the
+        # terminal, now that the timeline shares stdout with it.
+        from orchestrator.runlog import RunLog
+
+        log = RunLog(tmp_path / "run.log")
+        log.record("## Report\n\nlanded 3 stages")
+        log.close()
+        captured = capsys.readouterr()
+        assert captured.out == "" and captured.err == ""
+        assert "landed 3 stages" in (tmp_path / "run.log").read_text()
+
+    def test_a_file_only_write_is_not_timestamped(self, tmp_path):
+        # A markdown report prefixed line by line with a clock is not a report.
+        from orchestrator.runlog import RunLog
+
+        log = RunLog(tmp_path / "run.log")
+        log.record("## Report")
+        log.close()
+        assert (tmp_path / "run.log").read_text().startswith("## Report")

@@ -3,6 +3,12 @@
 Written to `runs/<run_id>/run.log` and echoed to the terminal. Deliberately
 plain text rather than structured logging — its reader is a person
 reconstructing why a run stopped.
+
+**Echoed to stdout, not stderr.** The timeline is what this command produces
+while it works; stderr is for what went wrong, and `cli.py` uses
+`click.echo(..., err=True)` for that in fourteen places. Echoing here to stderr
+meant `orchestrator run <project> > out.txt` captured the closing report and
+lost everything before it.
 """
 
 from __future__ import annotations
@@ -16,10 +22,10 @@ from typing import Callable, TextIO
 _TERMINAL = object()
 """Default for `echo`, so `None` can mean "nowhere" rather than "the default".
 
-`echo=None` previously selected stderr, which left no way to ask for a log that
-writes only to its file. The tool log needs exactly that: the terminal is where
-the timeline goes, and a role's reads are what the timeline is being kept free
-of.
+`echo=None` previously selected the terminal, which left no way to ask for a
+log that writes only to its file. The tool log needs exactly that: the terminal
+is where the timeline goes, and a role's reads are what the timeline is being
+kept free of.
 """
 
 
@@ -30,7 +36,7 @@ class RunLog:
         # Append, so a resumed run continues the same timeline rather than
         # truncating the history of why it paused.
         self._handle = self.path.open("a", encoding="utf-8")
-        self._echo = sys.stderr if echo is _TERMINAL else echo
+        self._echo = sys.stdout if echo is _TERMINAL else echo
 
     def __call__(self, message: str) -> None:
         stamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
@@ -39,6 +45,18 @@ class RunLog:
         self._handle.flush()
         if self._echo:
             print(line, file=self._echo, flush=True)
+
+    def record(self, text: str) -> None:
+        """Into the file, and nowhere else.
+
+        For the closing report, which is echoed by the caller and would
+        otherwise appear twice now that the timeline shares stdout with it.
+        Unstamped and unprefixed: a markdown report with a clock on every line
+        is not a report, and this is the one thing written here that is a
+        document rather than an event.
+        """
+        self._handle.write(text.rstrip("\n") + "\n")
+        self._handle.flush()
 
     def close(self) -> None:
         self._handle.close()

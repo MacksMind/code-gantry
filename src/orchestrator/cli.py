@@ -581,9 +581,12 @@ def _drive(
         # report was built after `log.close()`.
         report = build_report(final, cfg)
         paths.report.write_text(report)
-        for line in report.splitlines():
-            log(f"[report] {line}")
-        log(f"[report] written to {paths.report}")
+        # Into `run.log` without echoing: the caller prints it below, and the
+        # timeline now shares stdout with it. The reason it belongs in the file
+        # is the artifact rather than the terminal — `run.log` is the durable
+        # per-run record, and one that stops before the conclusion is missing
+        # the part a reader came for.
+        log.record("\n" + report)
     finally:
         log.close()
         tools.close()
