@@ -561,3 +561,28 @@ class TestFilesTooLargeToEverBeReference:
         run_git(repo, "add", "-A")
         run_git(repo, "commit", "-qm", "blob")
         assert self._check(repo, 100).ok, "a binary blob is not a candidate reference"
+
+
+class TestRipgrepIsPresent:
+    """The one external binary the pipeline itself requires.
+
+    Everything else it runs — the suite, the linter, the setup command — the
+    operator named in config, so a missing one fails as that command failing.
+    `rg` is ours, called from inside a tool loop, where a `FileNotFoundError`
+    would reach the model as an exception rather than a result.
+    """
+
+    def test_it_reports_where_rg_was_found(self):
+        from orchestrator.preflight import _ripgrep_check
+
+        check = _ripgrep_check()
+        assert check.ok
+        assert check.detail.endswith("rg")
+
+    def test_it_fails_with_a_fix_when_rg_is_absent(self, monkeypatch):
+        import orchestrator.preflight as pf
+
+        monkeypatch.setattr(pf.shutil, "which", lambda _: None)
+        check = pf._ripgrep_check()
+        assert not check.ok
+        assert "brew install ripgrep" in check.detail

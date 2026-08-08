@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime
@@ -108,8 +109,26 @@ def run_preflight(
     return checks
 
 
+def _ripgrep_check() -> Check:
+    """`rg` is on PATH.
+
+    The `search` tool shells out to it for all three roles, and a missing
+    binary would surface as a bare `FileNotFoundError` inside a planner tool
+    loop — an exception where the model expects a result, forty minutes into a
+    stage. It is the only external command the pipeline itself requires that
+    the operator did not name in config, so it is the only one that has to be
+    checked rather than simply run.
+    """
+    found = shutil.which("rg")
+    return Check(
+        "ripgrep is installed",
+        bool(found),
+        found or "the search tool needs `rg` on PATH (brew install ripgrep)",
+    )
+
+
 def _repo_checks(cfg: ProjectConfig, git: Git, *, for_resume: bool) -> list[Check]:
-    checks = []
+    checks = [_ripgrep_check()]
 
     if not cfg.target_repo.is_dir():
         return [Check("target repo exists", False, f"{cfg.target_repo} is not a directory")]

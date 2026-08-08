@@ -43,6 +43,7 @@ the call would discard the reasoning already done.
 from __future__ import annotations
 
 import fnmatch
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -412,70 +413,143 @@ class RepoReader:
         self._spend("list_files", glob or "(all)", "\n".join(paths))
         return paths
 
+    def _search_globs(self, path_glob: str | None) -> list[str]:
+        """The `-g` filters for one `path_glob`, in ripgrep's dialect.
+
+        Two normalisations, both measured against what models actually wrote
+        rather than what the field description asks for.
+
+        `|` separates alternatives. The `pattern` argument beside this one is
+        alternated that way, so the path gets alternated the same way — seven
+        times in one run's log. git read the pipe as a literal character in a
+        single pathspec and matched nothing.
+
+        A bare directory name means everything under it. It was 91 of the 332
+        globs in that log, and as a ripgrep glob it matches the directory entry
+        and none of its contents — which would have swapped one silent empty
+        answer for another while looking like a fix.
+        """
+        raw = (path_glob or "").strip()
+        if not raw or raw == ".":
+            return []
+        globs = []
+        for part in raw.split("|"):
+            part = part.strip().strip("/")
+            if not part:
+                continue
+            # `..` never reaches the filesystem here. It cannot escape the
+            # search either — a glob is a filter over a walk rooted at the
+            # repository, not a path to walk.
+            if (
+                ".." not in part
+                and not any(c in part for c in "*?[")
+                and (self._root() / part).is_dir()
+            ):
+                part = f"{part}/**"
+            globs.append(part)
+        return globs
+
     def search(self, pattern: str, path_glob: str | None = None) -> list[str]:
         """Matching lines, as `path:line:text`.
 
-        `git grep` rather than a walk: it is tracked-only by construction, it is
-        fast on a large repository, and its runtime is bounded in a way a
-        model-supplied regex evaluated in-process is not.
+        `rg` rather than `git grep`, and the reason is the glob rather than the
+        speed. A pathspec is not a glob: git's default matching lets `*` cross
+        `/` and requires `**/` to consume a directory component, so
+        `app/controllers/**/*` matches only what is two levels down and never
+        sees the controller sitting directly in `app/controllers`. Measured
+        over one run's tool log: of 337 searches, 76 came back empty, and **27
+        of them had matches** the model was never shown — 8% of every search it
+        made, and 36% of every empty answer it was given. The cost is not the
+        wasted call. An empty result is evidence, and these were false
+        evidence: the executor that hit a run of them went off to
+        `semantic_search` and asked the same question ten times.
 
-        The pattern is data. It is passed after `-e`, and `--` closes the option
-        list, so a leading dash is a pattern rather than a flag. There is no
-        shell anywhere in `Git._run`.
+        ripgrep's globset is what the models are already writing for, `-g`
+        repeats so alternatives need no encoding, and `--engine auto` retries
+        under PCRE2 rather than failing on the lookaround a model reaches for.
+
+        The tracked-only boundary is now ripgrep's ignore handling rather than
+        git's index, and it lands in the same place for the case that matters:
+        this operator keeps identifiable infrastructure values in gitignored
+        files, and ripgrep skips those by default. It is in fact the old
+        `--untracked` behaviour exactly — ignored files out, untracked-but-not
+        -ignored in, which is what a spec this attempt just wrote needs.
+
+        `--hidden` because ripgrep skips dotfiles and git grep does not. Left
+        off, the swap would have silently removed every `.rubocop.yml`,
+        `.ruby-version` and CI config from view — a new blind spot in the same
+        change that closed one. It does not reopen the boundary: those files
+        are hidden, not ignored.
+
+        `.git` has to be excluded by hand, and finding that out is the whole
+        argument for testing the layer you call. A scratch repository said
+        `--hidden` was safe; it only said so because no hook sample happened to
+        match the probe pattern. The suite searched for `version` and got seven
+        hits out of `.git/hooks/fsmonitor-watchman.sample`. Nothing about the
+        flag's description suggests it, and no amount of reading would have
+        produced it.
+
+        The pattern is still data, passed after `-e`, so a leading dash is a
+        pattern rather than a flag. There is no shell here.
         """
         self._charge_call("search")
         if not (pattern or "").strip():
             raise ToolError("no search pattern given")
-
-        target = path_glob.strip() if path_glob else "."
-
-        # `-P` because a model writes Perl-flavoured regex. Measured on the
-        # first live run of this tool: six of twenty-four searches returned
-        # nothing because `\s`, `\b` and `(:|=>)` mean nothing to git's default
-        # basic-regex engine, and every one of those was a wasted call against
-        # a budget of twenty-five. The pattern that found the real answer,
-        # `render[^_]*\btext:`, matches 7 sites with `-P` and 0 without.
-        #
-        # Not every git is built with PCRE, so fall back rather than fail: `-E`
-        # at least gives alternation and quantifiers.
-        # Searching a commit rather than the tree puts the ref before `--`, and
-        # git then prefixes every hit with `<ref>:`. Stripped below, so a
-        # pinned reader and a live one return the same `path:line:text`.
-        ref = [self.at_sha] if self.at_sha else []
-        # Live, so include files not yet committed. `git grep` reads the
-        # working tree but only for *tracked* paths, so an edit is found
-        # and a newly created file is not — and the ones that matter here
-        # are precisely the new ones: a spec this attempt just wrote, or a
-        # file a human left before resuming.
-        #
-        # `--untracked` excludes ignored paths by default, which is the
-        # boundary that matters and the only one: this repository has
-        # 617,485 untracked files and 0 untracked-but-not-ignored, so the
-        # flag never walks the ignored tree. Measured, it is *faster* than
-        # the plain search — 0.078s against 0.157s.
-        untracked = [] if self.at_sha else ["--untracked"]
-        for flavour in ("-P", "-E"):
-            proc = self.git._run(
-                "grep", "-n", "-I", "--no-color", *untracked, flavour,
-                "-e", pattern, *ref, "--", target,
-                check=False,
+        if self.at_sha:
+            # ripgrep walks a filesystem and cannot read a commit. Nothing in
+            # `src/` has ever pinned a search — the capability existed for the
+            # tests alone — and answering from the working tree would make a
+            # pinned reader report unpinned results, which is worse than
+            # refusing.
+            raise ToolError(
+                "search cannot be pinned to a commit; this reader is pinned at "
+                f"{self.at_sha[:12]}. read_file and list_files are pinned and "
+                "answer from that tree."
             )
-            if proc.returncode in (0, 1):
-                break
-            if "-P" not in (proc.stderr or "") and flavour == "-P":
-                # A real error — a bad pattern, a bad path — not a missing
-                # engine. Retrying in another dialect would only confuse it.
-                break
 
-        # git grep exits 1 for "no matches", which is an answer.
+        argv = [
+            "rg", "--line-number", "--no-heading", "--with-filename",
+            "--color", "never", "--hidden", "--engine", "auto",
+        ]
+        for glob in self._search_globs(path_glob):
+            argv += ["-g", glob]
+        # Last, and that is the whole of it: ripgrep resolves overlapping
+        # globs in order and the last match wins, so `-g '!.git'` placed
+        # before a model's `-g '**/*'` is silently overridden and the walk
+        # goes back into `.git`. Measured on a fixture: eight hits out of
+        # `.git/logs` and `.git/COMMIT_EDITMSG` — reflog lines and commit
+        # messages returned as if they were source. The exclusion has to
+        # outrank anything the model can write, which means going after it.
+        argv += ["-g", "!.git", "-e", pattern]
+
+        proc = subprocess.run(
+            argv,
+            cwd=str(self._root()),
+            capture_output=True,
+            text=True,
+            # A repository is not obliged to be UTF-8, and `Git._run` carries
+            # this same guard for the same reason: one Windows-1252 quote in
+            # one tracked file used to crash the process mid-search.
+            errors="replace",
+        )
+        # 1 is "no matches", which is an answer.
         if proc.returncode not in (0, 1):
+            # ripgrep folds "your glob selected nothing" into the same exit
+            # code as a bad pattern, and the two want opposite next moves —
+            # widen the path, or fix the regex. Left merged, a model reads
+            # `search failed` and re-runs the same glob with a different
+            # pattern. It is the same distinction `read_file` already draws
+            # between a path that is absent and one that is forbidden.
+            if "No files were searched" in (proc.stderr or ""):
+                raise ToolError(
+                    f"no files matched the path {path_glob!r}; the pattern was "
+                    "never tried. Check the path with list_files, or drop it to "
+                    "search the whole repository."
+                )
             raise ToolError(
                 f"search failed: {proc.stderr.strip() or 'invalid pattern'}"
             )
         hits = [line for line in proc.stdout.splitlines() if line.strip()]
-        if self.at_sha:
-            prefix = self.at_sha + ":"
-            hits = [h[len(prefix):] if h.startswith(prefix) else h for h in hits]
         hits, clipped = self._clip(hits)
         if clipped:
             hits = hits + ["... truncated; narrow the pattern or the path"]

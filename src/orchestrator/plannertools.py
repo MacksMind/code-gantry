@@ -89,7 +89,7 @@ READ_TOOLS: list[dict[str, Any]] = [
         "name": "list_files",
         "description": (
             "List tracked files, optionally filtered by a glob such as "
-            "'spec/**/*.rb'.\n\n"
+            "'dir/**/*.ext'.\n\n"
             "This is the only tool that answers whether something exists. An "
             "empty list means it does not — do not infer a path from a naming "
             "convention and do not treat a semantic hit as proof of one. A "
@@ -127,7 +127,14 @@ READ_TOOLS: list[dict[str, Any]] = [
                 "pattern": {"type": "string", "description": "Regular expression."},
                 "path_glob": {
                     "type": "string",
-                    "description": "Optional path restriction, e.g. app/controllers.",
+                    "description": (
+                        "Optional path restriction, as a glob. `*` stays within "
+                        "one path segment and `**` crosses them, so "
+                        "`dir/**/*` is everything beneath `dir` at any depth "
+                        "and `dir/*` is only what sits directly in it. A bare "
+                        "directory name means everything under it. Separate "
+                        "alternatives with `|`."
+                    ),
                 },
             },
             "required": ["pattern"],

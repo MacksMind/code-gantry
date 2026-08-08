@@ -56,6 +56,9 @@ def repo(tmp_path):
     )
     (r / "spec" / "models" / "order_spec.rb").write_text("describe Order do\nend\n")
     (r / "docs" / "plan.md").write_text("# Plan\n\nStep one.\n")
+    # Tracked, and hidden — the two properties that pull in opposite
+    # directions once the search tool walks a filesystem instead of an index.
+    (r / ".rubocop.yml").write_text("Metrics/LineLength:\n  Max: 120\n")
     (r / ".gitignore").write_text(".agent.env\nsecrets/\n")
     (r / ".agent.env").write_text("AWS_ACCOUNT_ID=123456789012\n")
 
@@ -240,6 +243,71 @@ class TestSearch:
     def test_scopes_to_a_path_glob(self, repo):
         assert reader(repo).search(r"render", "spec/**") == []
 
+    def test_a_double_star_glob_reaches_the_top_of_the_directory(self, repo):
+        # The defect this tool was rewritten for. `git grep` was handed the
+        # glob as a bare pathspec, where `*` crosses `/` and `**/` must match a
+        # directory component — so `app/controllers/**/*` could match only
+        # files two levels down and never saw the controller sitting directly
+        # in `app/controllers`. Measured on one run's tool log: 27 of the 29
+        # zero-result `**/*` searches had matches the model was never shown,
+        # 8% of every search it made. A wrong answer would have been noticed;
+        # an empty one reads as "not there".
+        hits = reader(repo).search(r"render text:", "app/controllers/**/*")
+        assert len(hits) == 2
+        assert all("orders_controller.rb" in h for h in hits)
+
+    def test_alternated_globs_are_separate_filters(self, repo):
+        # The `pattern` field is alternated with `|`, so models alternate the
+        # path the same way. git read the whole thing as one literal pathspec
+        # containing a pipe, which matches nothing at all.
+        hits = reader(repo).search(r"render text:|describe", "app/**/*|spec/**/*")
+        assert any("orders_controller.rb" in h for h in hits)
+        assert any("order_spec.rb" in h for h in hits)
+
+    def test_a_bare_directory_means_everything_under_it(self, repo):
+        # A third of the globs in that log were a bare name. As a ripgrep glob
+        # it matches the directory entry and none of its contents, which would
+        # have traded one silent empty answer for another.
+        hits = reader(repo).search(r"render text:", "app")
+        assert len(hits) == 2
+
+    def test_a_tracked_dotfile_is_searchable(self, repo):
+        # ripgrep skips hidden files by default and git grep does not, so the
+        # swap would have quietly removed every dotfile from view — the
+        # linter, CI and editor configs a migration reads constantly.
+        hits = reader(repo).search(r"Metrics")
+        assert hits == [".rubocop.yml:1:Metrics/LineLength:"]
+
+    def test_the_git_directory_is_never_searched(self, repo):
+        # `--hidden` walks `.git` unless it is excluded, and the exclusion is
+        # order-sensitive: ripgrep lets the last matching glob win, so a
+        # model's own `**/*` placed after it puts the walk straight back in.
+        # What comes out is reflog lines and commit messages presented as
+        # source — `.git/logs/HEAD` and `.git/COMMIT_EDITMSG` both matched a
+        # commit message in the fixture that found this.
+        for glob in (None, "**/*", "**"):
+            hits = reader(repo).search("first", glob)
+            assert not any(h.startswith(".git/") for h in hits), glob
+        # Asked for directly, it is not quietly empty — it selected no files,
+        # which is a different answer from "the pattern is not there".
+        with pytest.raises(ToolError, match="no files matched"):
+            reader(repo).search("first", ".git/**/*")
+
+    def test_a_glob_that_selects_nothing_says_so(self, repo):
+        # Distinct from an empty result, and the distinction is the next move:
+        # widen the path, or fix the pattern. ripgrep gives both the same exit
+        # code.
+        with pytest.raises(ToolError, match="no files matched"):
+            reader(repo).search("render", "nonexistent_dir/**/*")
+        assert reader(repo).search("nothing_matches_this", "app/**/*") == []
+
+    def test_a_pattern_needing_lookaround_still_matches(self, repo):
+        # Models write Perl-flavoured regex. ripgrep's default engine rejects
+        # lookaround outright rather than silently matching nothing, and
+        # `--engine auto` retries such a pattern under PCRE2.
+        hits = reader(repo).search(r"render(?= text:)")
+        assert len(hits) == 2
+
     def test_searches_only_tracked_files(self, repo):
         (repo / "secrets").mkdir()
         (repo / "secrets" / "keys.txt").write_text("render text: leaked\n")
@@ -420,12 +488,21 @@ class TestPinnedToACommit:
         assert RepoReader(git, repo, at_sha=first).list_files() == ["a.rb"]
         assert RepoReader(git, repo).list_files() == ["a.rb", "b.rb"]
 
-    def test_search_is_pinned_and_keeps_the_live_output_shape(self, tmp_path):
-        # git prefixes hits with `<ref>:` when searching a commit. A caller
-        # must not be able to tell which reader it was handed.
+    def test_a_pinned_search_refuses_rather_than_answering_from_the_tree(
+        self, tmp_path
+    ):
+        # ripgrep walks a filesystem and cannot read a git object, so a pinned
+        # reader has no way to answer this. It was answerable under `git grep`
+        # and nothing in `src/` ever asked — the only caller was this test.
+        # Keeping it would have meant two regex dialects and two glob
+        # semantics, one of them exercised by the suite alone, which is the
+        # shape of a path that drifts unnoticed. Refusing is the honest
+        # option: silently searching the working tree would be a pinned reader
+        # reporting unpinned results.
         repo, git, first = self._repo(tmp_path)
-        hits = RepoReader(git, repo, at_sha=first).search("version")
-        assert hits == ["a.rb:1:first version"]
+        with pytest.raises(ToolError) as e:
+            RepoReader(git, repo, at_sha=first).search("version")
+        assert "pinned" in str(e.value)
         assert RepoReader(git, repo).search("version") == ["a.rb:1:second version"]
 
     def test_the_repository_boundary_still_holds_when_pinned(self, tmp_path):
@@ -493,13 +570,19 @@ class TestSearchSeesWhatIsNotCommittedYet:
         # The same boundary as reading, drawn by the same tool.
         assert reader(repo).search("AWS_ACCOUNT_ID") == []
 
-    def test_a_pinned_reader_searches_the_commit_and_nothing_else(self, repo):
-        # Pinned, the tree is irrelevant: a reviewer replaying a stage must not
-        # see work that happened afterwards.
+    def test_a_pinned_reader_refuses_to_search_rather_than_seeing_the_tree(
+        self, repo
+    ):
+        # This test used to assert the opposite — that a pinned reader saw the
+        # commit and not the file written afterwards. ripgrep cannot read a
+        # commit, and the risk it was guarding against is real: a reviewer
+        # replaying a stage must not see work that happened later. So the
+        # answer is a refusal, which cannot be mistaken for "nothing matched".
         (repo / "spec" / "later_spec.rb").write_text("does the needful\n")
         r = reader(repo)
         r.at_sha = Git(repo).head_sha()
-        assert r.search("does the needful") == []
+        with pytest.raises(ToolError, match="cannot be pinned"):
+            r.search("does the needful")
 
     def test_tracked_files_still_answer_as_before(self, repo):
         assert len(reader(repo).search(r"render text:")) == 2

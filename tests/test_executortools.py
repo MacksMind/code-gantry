@@ -123,7 +123,25 @@ class TestInvariants:
         # Project knowledge belongs in config, never in a model-facing string.
         # A tool description naming a framework is a hint shipped to every
         # other project's executor.
-        blob = " ".join(t["description"] for t in EDIT_TOOLS).lower()
+        #
+        # Widened from EDIT_TOOLS to every model-facing tool table, and to the
+        # nested parameter descriptions, after `path_glob` was found reading
+        # "e.g. app/controllers" — a framework hint that had sat one level
+        # below where this test was looking for its whole life. A rule pinned
+        # over half its surface is pinned over the half that was easy to reach.
+        from orchestrator.plannertools import READ_TOOLS
+
+        strings = []
+        for table in (EDIT_TOOLS, READ_TOOLS):
+            for tool in table:
+                strings.append(tool.get("description", ""))
+                schema = tool.get("input_schema", {})
+                for prop in schema.get("properties", {}).values():
+                    strings.append(prop.get("description", ""))
+                    items = prop.get("items", {})
+                    for nested in items.get("properties", {}).values():
+                        strings.append(nested.get("description", ""))
+        blob = " ".join(strings).lower()
         for word in (
             "rails", "django", "rspec", "pytest", "ruby", "python",
             ".rb", ".py", "app/", "spec/", "src/", "controller", "migration",
