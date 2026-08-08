@@ -736,6 +736,68 @@ component, grep for every field only it populated, and check the guards that
 read them: a guard written to suppress noise will suppress the whole channel
 just as quietly.
 
+**A pathspec is not a glob, and an empty answer is evidence.** `search`
+handed `path_glob` to `git grep` as a bare pathspec, where `*` crosses `/` and
+`**/` must consume a directory component — so `app/controllers/**/*` matched
+only what sits two levels down and never saw the controller directly inside
+`app/controllers`. Replayed against one run's tool log at the sha it was taken
+at: 337 searches, 76 empty, 44 using a `**/*` glob, 29 of those empty, and
+**27 of the 29 had matches**. 8% of every search, and 36% of every empty
+answer, were false. The damage is not the wasted call. A model treats "no
+results" as a fact about the repository and reasons forward from it — the
+executor that hit a run of these abandoned `search` and asked
+`semantic_search` the same question ten times in 74 seconds. A tool that
+returns a wrong answer gets caught; one that returns *nothing* gets believed.
+
+**A permission is not a record.** The batch orthogonality pass dropped a stage
+whose excerpt named a file another stage listed in `edit_files`. But
+`edit_files` is what a stage *may* touch, and stages very often do not touch
+what they declared — so the check fired over a superset of what happened and
+discarded usable work for edits that never occurred. It could also only see
+batch-mates, when a file moves just as well by a human's hand, by a `checks`
+entry that rewrites, or by a resume onto an advanced branch. Comparing the
+blob the planner read against the blob at the stage's start answers the only
+question that matters and answers it from the tree. Whenever a check reads a
+declaration to predict an outcome, ask what it would cost to measure the
+outcome instead — usually less, and it is right about causes nobody enumerated.
+
+**The rule you already wrote gets rebuilt in the next feature.** `CLAUDE.md`
+records that an optional field with a conditional trigger is answered with
+nothing: `observations` came back empty 278 times out of 278. Step 10 then
+shipped `additional_stages` as an optional field whose description opened
+"**Normally empty, and empty is the right answer**", with the cap reachable
+only in `config.py` and in a silent trim — and two derivations under a cap of
+five each returned one stage. Nobody ignored the rule; the new field did not
+look like the old one. A written-down failure mode is only load-bearing if
+something checks new work against it, so it is worth reading this file's own
+rules when adding a field, not only when debugging one.
+
+**Do not measure against a tree a live run owns.** Diagnosed at 01:55 that a
+planner had read another run's in-flight working tree, and then spent forty
+minutes on a replay harness that contradicted itself — 13 hits one minute, 0
+the next — because it was searching the same repository while the executor
+rewrote `config/routes.rb` underneath it. Clone to a scratch directory and
+check out the sha the artifact was recorded at. And when a measurement
+disagrees with itself, suspect the instrument before the code: the production
+path was verified in one step by spying on the argv it actually built.
+
+**Know the size of what you are about to walk.** The target repository has 36G
+under one gitignored directory. A bare recursive search over it starved the
+machine for two minutes at a time, and those runs are the ones whose results
+made no sense. ripgrep prunes it — 4,423 files enumerated in 0.02s — because
+the path is in `.gitignore`, and that is worth *verifying* rather than
+assuming before pointing a walking searcher at an unfamiliar repository.
+
+**Two runs on one repository is a five-minute window, not a crash.** A resume
+believed killed was still live; a fresh run started 68 seconds later and both
+ran against the same worktree. Nothing collided only because the second was
+still in its planner call — the collision would have been the moment it tried
+to cut a branch. `orchestrator pause` is checked at two points, and the one
+after derivation and before `precheck` is what makes stopping safe here: it
+holds the derived stage and never touches the tree. "I killed it" is a claim
+to verify with `ps`, not a state to assume, and the run directory rather than
+`last-run.out` is what tells you which run a line belongs to.
+
 ## Where things live
 
 `nodes.py` holds the loop's decisions — which failures route to the executor,
