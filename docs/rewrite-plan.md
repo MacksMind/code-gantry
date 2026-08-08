@@ -490,7 +490,24 @@ Each step keeps the suite green.
 
 ## Not in scope
 
-Qdrant/semantic search and the litellm price map stay. `gitops`'
-`ignore_line_endings` and `strip_added_trailing_whitespace` exist because of
-Aider and should be revisited *after* step 7, not during — they change what the
-reviewer sees.
+Qdrant/semantic search and the litellm price map stay.
+
+`gitops`' `ignore_line_endings` and `strip_added_trailing_whitespace` were
+listed here to be revisited *after* step 7, because they change what the
+reviewer sees. Both were, and both stay.
+
+`strip_added_trailing_whitespace` never depended on Aider: it exists because
+`git diff --cached --check` is the usual form of a pre-commit hook and a linter
+that dispatches on a file's detected language does nothing for ERB, YAML or
+most non-source files. It leaves carriage returns alone, so it has no bearing
+on the question below.
+
+`ignore_line_endings` was the one worth measuring, and the measurement said do
+nothing. Ten files were silently converted CRLF→LF over 77 stages, and the
+argument for acting had been that this made the repository mixed where it was
+uniform. It was never uniform — 552 of 3,184 tracked text files carried CRLF at
+the base sha, 17%, and 542 do now, unchanged since. A burst, not a rate.
+`.gitattributes` would not have prevented it either: `text=auto` normalises
+only content git treats as new, so files already stored with CRLF keep it until
+an explicit `git add --renormalize`, which would convert all 542 in one commit —
+strictly more churn than doing nothing, in a repository mid-migration.
