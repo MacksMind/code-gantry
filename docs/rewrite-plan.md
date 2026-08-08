@@ -29,7 +29,26 @@ artifact it came from.
 | batched | 8 | 23 | 228 |
 
 **57% of derivation time saved per stage**, with 0 stages dropped from any
-batch. Batch sizes were 2, 2, 2, 2, 3, 3, 4 and 5 — sized to the work rather
+batch. Over the full run to date — 19 derivations, 43 stages — the distribution
+is the reassuring part:
+
+| stages per derivation | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|
+| derivations | 5 | 7 | 5 | 1 | 1 |
+
+**74% of derivations batched, 88% of stages**, clustered at 2–3 with a thin
+tail, and the cap of five reached exactly once — so it is not currently
+shaping the distribution and raising it would buy nothing. Not bimodal: the
+planner is sizing to the work rather than declining or filling.
+
+And position in the batch does not predict trouble: stages drawn first hit a
+gate or the reviewer 2 times in 19 (11%), stages drawn second or later 3 times
+in 24 (12%). That is the bet the design rests on — a stage drawn four ahead of
+its turn, against a tree three siblings will modify before it runs, fails at
+the same rate as one drawn immediately before execution. Five events is a small
+denominator and the work here is homogeneous, which is the case batching is
+for; what it rules out is the failure the original broad conflict rule existed
+to prevent, which would have shown up as a visible position penalty. Batch sizes were 2, 2, 2, 2, 3, 3, 4 and 5 — sized to the work rather
 than filling the cap, which was the failure the feature had to be watched for.
 The 5-stage derivation cost 882s against a 524s mean for a single one: asking
 for five cost 1.7× and returned 5×, so the planner did not survey as though it

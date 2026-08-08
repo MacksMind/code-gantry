@@ -839,6 +839,58 @@ never fire again. It is derived now, from one `rg --files` call at 0.02s on a
 dependency on someone else's error taxonomy, and it changed under a fix to
 something else entirely.
 
+**A line is not a unit of size.** Every ceiling in `ReadBudget` counted lines,
+which assumes a line is roughly a line's worth of text — true of source, false
+of a minified bundle, a vendored asset, a `structure.sql` or a fixture with one
+enormous row, and every repository of any age has some. A derivation whose
+searches returned 106 and 160 "lines" was followed by a call the provider
+rejected at `1103000 tokens > 1000000 maximum`, against a recorded initial
+prompt of 611,008 characters: essentially the whole million arrived through
+results that every line-based ceiling called small. `max_chars_per_call` is the
+second dimension. The general form is to ask what unit a budget is denominated
+in and whether the thing it is protecting is measured in that unit — context is
+bytes, and calls, lines and files are all proxies that decouple under load.
+
+**Do not explain the present with a component that is absent.** Roughly thirty
+comments and docstrings still described current behaviour in terms of Aider —
+what it reported, what its linter skipped, what its accounting could not
+distinguish — months after it was deleted. Each reads as an explanation of the
+code in front of you, and none is checkable by anyone who does not already know
+the tool is gone. The reasons were worth keeping and every one restated in
+present terms: "Aider's accounting reports zero for not-priced as often as for
+free" is really a statement about rate tables, which is what the
+`None`-rather-than-`0.0` distinction guards. The first instinct — that deleting
+the history leaves the code looking arbitrary — is wrong for the same reason
+the prose is: a reason is only useful if the reader can act on it.
+
+The corollary governs deletions. Before removing something, grep for what
+*cites* it: script stages had no caller and five separate docstrings naming
+them as live justification, for decisions that survive on other grounds. Cut
+the code and leave those, and you have manufactured the problem above.
+
+**A field removed from a model strands the run that persisted it.** `current`
+is a dumped `Stage` and `Stage` is `extra="forbid"`, so deleting a field raises
+on the next *resume* — not on the next fresh run, but on one hours deep, as a
+pydantic error from inside a node, for a stage that is perfectly valid. Found
+by reading the live checkpoint before deleting `kind`, which it was carrying on
+a 34-stage run. `current_stage` filters to declared fields now, which is the
+rule `driver._merge` already applied to `RunState`. A fresh run is always the
+fallback, since landed work is on the project branch rather than in the
+checkpoint — but it discards the derived stage and the queue behind it.
+
+**A limit can depend on a setting in another file, enforced by neither.** The
+planner's `max_tokens` was raised to 64,000 after a batched derivation died
+mid-JSON; the API accepts up to 128,000 for this model. What is invisible at
+the call site is that the installed SDK refuses a *non-streaming* request whose
+budget implies a long generation — `3600 * max_tokens / 128_000 > 600` — which
+caps it at 21,333, below even the 32,000 already in use. It never fires only
+because that check runs when no explicit timeout is passed and the planner
+always passes `request_timeout_seconds`. Delete that field and every planner
+call raises before it is sent. The probe that found it also nearly lied: asking
+the API *without* a timeout returns "Streaming is required", which taken at
+face value says our ceiling is 21,333 — a wrong answer about our own
+configuration, produced by measuring a call we do not make.
+
 ## Where things live
 
 `nodes.py` holds the loop's decisions — which failures route to the executor,
