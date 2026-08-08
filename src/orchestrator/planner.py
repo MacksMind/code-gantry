@@ -974,7 +974,7 @@ def _extract_usage(usage) -> PlannerUsage:
 
     The two providers use the same words for different quantities. OpenAI's
     `prompt_tokens` is the total and its cached count is a subset of it.
-    Anthropic reports three *disjoint* numbers: `input_tokens` is only what was
+    Anthropic reports three *orthogonal* numbers: `input_tokens` is only what was
     neither read from nor written to the cache, with reads and writes counted
     separately.
 

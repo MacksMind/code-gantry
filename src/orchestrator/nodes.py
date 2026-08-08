@@ -1487,8 +1487,16 @@ def advance(state: RunState, rt: Runtime) -> dict:
         # starts again. A run that keeps landing work is bounded by the wall
         # clock rather than by an intervention count picked in advance.
         "interventions_since_landing": 0,
+        # Overwritten by `_next_from_queue` when a stage is waiting. Stated
+        # here so the landing has a complete answer of its own and the queue is
+        # an override rather than the only thing that routes.
         "next_hop": "plan",
     }
+
+    # A stage from the same derivation, if one is waiting. Merged after the
+    # landing so `stage_index` is the landed one's when it is read, and before
+    # the pause so an operator's stop still wins.
+    landed = {**landed, **_next_from_queue(state, landed["stage_index"] - 1)}
 
     # Merged onto the landing, never in place of it. The stage is squash-merged
     # and on the branch whatever the run does next; replacing this update with
@@ -1616,6 +1624,34 @@ def _wall_clock_overrun(state: RunState, limits) -> str | None:
         # for time must not swallow why.
         reason += f" The stage in flight was being revised because: {failure}"
     return reason
+
+
+def _next_from_queue(state: RunState, landed_index: int) -> dict:
+    """Where the run goes after a stage lands: the next queued one, or the planner.
+
+    The whole saving of a batch. One derivation answered for several stages, so
+    taking the next from the queue skips a planner call worth 5 to 7 minutes
+    against a stage of about thirteen.
+
+    The queued stage gets its own index — each stage is its own branch and its
+    own log directory, and reusing the index of the stage that just landed
+    would put two stages in one place.
+
+    Returned as an update to merge rather than applied here, so `advance` can
+    join it to the landing bookkeeping and a pause can be merged over the top
+    of both without any of the three losing what the others wrote.
+    """
+    queue = list(state.get("stage_queue") or [])
+    if not queue:
+        return {"next_hop": "plan"}
+    head, rest = queue[0], queue[1:]
+    return {
+        "current": head,
+        "stage_queue": rest,
+        "stage_index": landed_index + 1,
+        "revision": 0,
+        "next_hop": "precheck",
+    }
 
 
 def _pause_escalation(flag, state: RunState, ready_hop: str = "") -> dict | None:

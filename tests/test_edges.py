@@ -27,7 +27,7 @@ class TestEdgeTable:
             "execute": ["verify", "plan", "execute"],
             "verify": ["review", "advance", "execute", "plan", "escalate"],
             "review": ["advance", "execute", "plan"],
-            "advance": ["plan", "escalate"],
+            "advance": ["plan", "precheck", "escalate"],
             "finalize": ["end", "escalate"],
             "escalate": ["end"],
         }

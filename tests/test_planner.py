@@ -262,7 +262,7 @@ class TestMalformedResponseIsRetried:
         outcome = AnthropicPlanner(cfg(), client=client).plan(MESSAGES)
         # 2 x (9,000 uncached + 8,500 cache read). prompt_tokens is total
         # input, normalised to the reviewer's shape — Anthropic reports the
-        # cached read as a separate, disjoint count.
+        # cached read as a separate, orthogonal count.
         assert outcome.usage.prompt_tokens == 35_000
         assert outcome.usage.cached_tokens == 17_000
         assert outcome.usage.completion_tokens == 800
@@ -599,7 +599,7 @@ class TestUsageNormalisation:
 
     OpenAI's `prompt_tokens` is the total and its cached count is a subset of
     it. Anthropic's `input_tokens` is the *uncached* remainder, with cache reads
-    and cache writes reported as two further disjoint counts. Treating them the
+    and cache writes reported as two further orthogonal counts. Treating them the
     same way printed `Uncached prompt tokens: -2,438` and `251%` in a real
     report — on the one metric the whole economic argument rests on.
 

@@ -49,9 +49,9 @@ TRACKED = [
 
 class TestDisjointBatchesSurvive:
     def test_stages_touching_different_files_all_run(self):
-        from orchestrator.config import safe_batch_prefix
+        from orchestrator.config import orthogonal_stages
 
-        kept, dropped = safe_batch_prefix(
+        kept, dropped = orthogonal_stages(
             [_stage("one", edit=["app/a.rb"]), _stage("two", edit=["app/b.rb"])],
             TRACKED,
         )
@@ -59,21 +59,21 @@ class TestDisjointBatchesSurvive:
         assert dropped == []
 
     def test_a_single_stage_is_always_safe(self):
-        from orchestrator.config import safe_batch_prefix
+        from orchestrator.config import orthogonal_stages
 
-        kept, dropped = safe_batch_prefix([_stage("one", edit=["app/**"])], TRACKED)
+        kept, dropped = orthogonal_stages([_stage("one", edit=["app/**"])], TRACKED)
         assert len(kept) == 1 and dropped == []
 
     def test_an_empty_batch_is_empty(self):
-        from orchestrator.config import safe_batch_prefix
+        from orchestrator.config import orthogonal_stages
 
-        assert safe_batch_prefix([], TRACKED) == ([], [])
+        assert orthogonal_stages([], TRACKED) == ([], [])
 
     def test_stages_may_read_the_same_untouched_file(self):
         # Reading in common is fine. Only writing is what invalidates a spec.
-        from orchestrator.config import safe_batch_prefix
+        from orchestrator.config import orthogonal_stages
 
-        kept, _ = safe_batch_prefix(
+        kept, _ = orthogonal_stages(
             [
                 _stage("one", edit=["spec/a_spec.rb"], read=["config/routes.rb"]),
                 _stage("two", edit=["spec/b_spec.rb"], read=["config/routes.rb"]),
@@ -85,9 +85,9 @@ class TestDisjointBatchesSurvive:
 
 class TestAConflictTruncates:
     def test_two_stages_writing_the_same_file(self):
-        from orchestrator.config import safe_batch_prefix
+        from orchestrator.config import orthogonal_stages
 
-        kept, dropped = safe_batch_prefix(
+        kept, dropped = orthogonal_stages(
             [_stage("one", edit=["app/a.rb"]), _stage("two", edit=["app/a.rb"])],
             TRACKED,
         )
@@ -97,9 +97,9 @@ class TestAConflictTruncates:
     def test_a_later_stage_reading_what_an_earlier_one_writes(self):
         # The stale-spec case: stage two was drawn against the file as it is
         # now, and stage one is about to change it.
-        from orchestrator.config import safe_batch_prefix
+        from orchestrator.config import orthogonal_stages
 
-        kept, dropped = safe_batch_prefix(
+        kept, dropped = orthogonal_stages(
             [
                 _stage("one", edit=["config/routes.rb"]),
                 _stage("two", edit=["app/a.rb"], read=["config/routes.rb"]),
@@ -114,9 +114,9 @@ class TestAConflictTruncates:
         # drawn against a file stage two will rewrite. Running one first is
         # fine, but the batch is still unsafe if order ever changes, and the
         # rule is cheaper to state symmetrically than to reason about.
-        from orchestrator.config import safe_batch_prefix
+        from orchestrator.config import orthogonal_stages
 
-        kept, dropped = safe_batch_prefix(
+        kept, dropped = orthogonal_stages(
             [
                 _stage("one", edit=["app/a.rb"], read=["config/routes.rb"]),
                 _stage("two", edit=["config/routes.rb"]),
@@ -133,9 +133,9 @@ class TestAConflictTruncates:
         *edited* it would hand every later stage a range read at a commit that
         no longer describes the file.
         """
-        from orchestrator.config import safe_batch_prefix
+        from orchestrator.config import orthogonal_stages
 
-        kept, dropped = safe_batch_prefix(
+        kept, dropped = orthogonal_stages(
             [
                 _stage("one", edit=["spec/support/helper.rb"]),
                 _stage("two", edit=["spec/a_spec.rb"], excerpts=["spec/support/helper.rb"]),
@@ -153,9 +153,9 @@ class TestAConflictTruncates:
         rule removes ordering: a kept stage names nothing any other kept stage
         writes, so its spec is as true after the others run as before.
         """
-        from orchestrator.config import safe_batch_prefix
+        from orchestrator.config import orthogonal_stages
 
-        kept, dropped = safe_batch_prefix(
+        kept, dropped = orthogonal_stages(
             [
                 _stage("one", edit=["app/a.rb"]),
                 _stage("two", edit=["app/b.rb"]),
@@ -171,9 +171,9 @@ class TestAConflictTruncates:
     def test_a_stage_is_judged_against_what_is_kept_not_what_was_dropped(self):
         # `three` is dropped for clashing with `one`. `four` clashes only with
         # `three`, which is not going to run — so it has nothing to clash with.
-        from orchestrator.config import safe_batch_prefix
+        from orchestrator.config import orthogonal_stages
 
-        kept, _ = safe_batch_prefix(
+        kept, _ = orthogonal_stages(
             [
                 _stage("one", edit=["app/a.rb"]),
                 _stage("three", edit=["app/a.rb", "app/b.rb"]),
@@ -184,9 +184,9 @@ class TestAConflictTruncates:
         assert [s.id for s in kept] == ["one", "four"]
 
     def test_every_drop_is_reported(self):
-        from orchestrator.config import safe_batch_prefix
+        from orchestrator.config import orthogonal_stages
 
-        kept, dropped = safe_batch_prefix(
+        kept, dropped = orthogonal_stages(
             [
                 _stage("one", edit=["app/a.rb"]),
                 _stage("two", edit=["app/a.rb"]),
@@ -202,18 +202,18 @@ class TestGlobsAreResolvedNotCompared:
     def test_different_globs_selecting_the_same_file_conflict(self):
         # `app/*.rb` and `app/a.rb` share nothing as strings and everything as
         # files. Comparing the globs would call this batch safe.
-        from orchestrator.config import safe_batch_prefix
+        from orchestrator.config import orthogonal_stages
 
-        kept, _ = safe_batch_prefix(
+        kept, _ = orthogonal_stages(
             [_stage("one", edit=["app/*.rb"]), _stage("two", edit=["app/a.rb"])],
             TRACKED,
         )
         assert [s.id for s in kept] == ["one"]
 
     def test_similar_globs_selecting_nothing_in_common_are_safe(self):
-        from orchestrator.config import safe_batch_prefix
+        from orchestrator.config import orthogonal_stages
 
-        kept, _ = safe_batch_prefix(
+        kept, _ = orthogonal_stages(
             [_stage("one", edit=["app/**"]), _stage("two", edit=["spec/**"])], TRACKED
         )
         assert [s.id for s in kept] == ["one", "two"]
@@ -221,9 +221,9 @@ class TestGlobsAreResolvedNotCompared:
     def test_a_glob_matching_no_tracked_file_conflicts_with_nothing(self):
         # A stage creating a new file names a path git has never seen. It
         # cannot collide with anything, and must not be treated as a wildcard.
-        from orchestrator.config import safe_batch_prefix
+        from orchestrator.config import orthogonal_stages
 
-        kept, _ = safe_batch_prefix(
+        kept, _ = orthogonal_stages(
             [
                 _stage("one", edit=["spec/brand_new_spec.rb"]),
                 _stage("two", edit=["spec/also_new_spec.rb"]),
@@ -235,9 +235,9 @@ class TestGlobsAreResolvedNotCompared:
     def test_two_stages_creating_the_same_new_file_still_conflict(self):
         # Untracked, so glob expansion finds nothing — the literal paths have
         # to be compared as well, or the one case globs cannot see is missed.
-        from orchestrator.config import safe_batch_prefix
+        from orchestrator.config import orthogonal_stages
 
-        kept, dropped = safe_batch_prefix(
+        kept, dropped = orthogonal_stages(
             [
                 _stage("one", edit=["spec/brand_new_spec.rb"]),
                 _stage("two", edit=["spec/brand_new_spec.rb"]),
@@ -250,9 +250,9 @@ class TestGlobsAreResolvedNotCompared:
 
 class TestTheReasonIsUsable:
     def test_it_names_the_stage_and_the_path(self):
-        from orchestrator.config import safe_batch_prefix
+        from orchestrator.config import orthogonal_stages
 
-        _kept, dropped = safe_batch_prefix(
+        _kept, dropped = orthogonal_stages(
             [
                 _stage("first", edit=["config/routes.rb"]),
                 _stage("second", edit=["app/a.rb"], read=["config/routes.rb"]),
@@ -278,37 +278,37 @@ class TestARevisedStageIsRecheckedAgainstTheQueue:
     are kept, and only those the revision actually collides with are dropped.
 
     No new mechanism: putting the revised stage at the head of the list and
-    passing the queue behind it is the same question `safe_batch_prefix`
+    passing the queue behind it is the same question `orthogonal_stages`
     already answers. The revised stage is first so it is always kept, and the
-    queue was already pairwise-disjoint, so the only drops that can appear are
+    queue was already pairwise orthogonal, so the only drops that can appear are
     the ones the revision caused.
     """
 
     def test_a_revision_that_stays_in_scope_keeps_the_whole_queue(self):
-        from orchestrator.config import safe_batch_prefix
+        from orchestrator.config import orthogonal_stages
 
         revised = _stage("one", edit=["app/a.rb"], read=["spec/support/helper.rb"])
         queue = [_stage("two", edit=["app/b.rb"]), _stage("three", edit=["app/c.rb"])]
-        kept, dropped = safe_batch_prefix([revised, *queue], TRACKED)
+        kept, dropped = orthogonal_stages([revised, *queue], TRACKED)
         assert [s.id for s in kept] == ["one", "two", "three"]
         assert dropped == []
 
     def test_a_widened_revision_drops_only_what_it_now_collides_with(self):
         # The scope-violation case: `one` is revised to also edit `app/c.rb`,
         # which `three` was drawn against. `two` is untouched and survives.
-        from orchestrator.config import safe_batch_prefix
+        from orchestrator.config import orthogonal_stages
 
         widened = _stage("one", edit=["app/a.rb", "app/c.rb"])
         queue = [_stage("two", edit=["app/b.rb"]), _stage("three", edit=["app/c.rb"])]
-        kept, dropped = safe_batch_prefix([widened, *queue], TRACKED)
+        kept, dropped = orthogonal_stages([widened, *queue], TRACKED)
         assert [s.id for s in kept] == ["one", "two"]
         assert len(dropped) == 1 and "three" in dropped[0]
 
     def test_the_revised_stage_is_never_the_one_dropped(self):
         # It owns the branch. Whatever else goes, it stays.
-        from orchestrator.config import safe_batch_prefix
+        from orchestrator.config import orthogonal_stages
 
         widened = _stage("one", edit=["app/**"])
         queue = [_stage("two", edit=["app/b.rb"]), _stage("three", edit=["app/c.rb"])]
-        kept, _ = safe_batch_prefix([widened, *queue], TRACKED)
+        kept, _ = orthogonal_stages([widened, *queue], TRACKED)
         assert [s.id for s in kept] == ["one"]

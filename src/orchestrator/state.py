@@ -227,6 +227,14 @@ class RunState(TypedDict, total=False):
     # in the merge, and the resume would re-derive a stage it already had —
     # the same silent loss `full_suite_digest` shipped with.
     paused_before: str
+    # Stages one derivation produced that have not run yet, in the planner's
+    # order. Held rather than re-derived: the planner is the expensive
+    # participant and a derivation is a third of a stage's wall clock.
+    #
+    # State rather than a local because it must survive a pause — which is why
+    # the pause is checked immediately after the squash, so a run stops between
+    # queued stages rather than mid-batch.
+    stage_queue: list[dict]
     resuming: bool
     # Set by `resume` from the stage branch: does the interrupted stage already
     # have commits? Decides whether an interrupted attempt is re-run or checked.
@@ -289,6 +297,7 @@ def new_state(
         run_usage=_zero_usage(),
         status="running",
         escalation_reason=None,
+        stage_queue=[],
         resuming=False,
         next_hop="",
     )

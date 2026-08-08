@@ -73,7 +73,10 @@ EDGES: dict[str, list[str]] = {
     # rather than only before the next planner call. Those were the same
     # instant while this routed to `plan` alone; a queue of stages from one
     # derivation separates them. See `nodes._pause_escalation`.
-    "advance": ["plan", "escalate"],
+    # `precheck` because a derivation may have produced several stages: when
+    # one is queued, `advance` starts it rather than paying for a planner call
+    # that has already been made.
+    "advance": ["plan", "precheck", "escalate"],
     "finalize": ["end", "escalate"],
     "escalate": ["end"],
 }

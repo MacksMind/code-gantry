@@ -333,9 +333,9 @@ Each step keeps the suite green.
     and only what the revision actually collides with is dropped.
 
     This needs no new mechanism. Putting the revised stage at the head of the
-    list and the queue behind it is the same question `safe_batch_prefix`
+    list and the queue behind it is the same question `orthogonal_stages`
     already answers: the revised stage is first so it is always kept, the queue
-    was already pairwise-disjoint, and the only drops that can appear are the
+    was already pairwise orthogonal, and the only drops that can appear are the
     ones the revision caused. An earlier draft of this plan discarded the whole
     queue on any route to `plan`, which was sound and wasteful — the invariant
     only requires re-checking, not forgetting.
@@ -354,7 +354,7 @@ Each step keeps the suite green.
     Stages still run strictly one at a time. Many of them need a tree that does
     not move underneath them, which is exactly why `verify` compares against
     `stage_start_sha` and why the executor commits before it tests. What the
-    batch amortises is the *derivation*, not the execution. The disjointness
+    batch amortises is the *derivation*, not the execution. The orthogonality
     rule is not there to permit concurrency — it is there so that stage 3's
     spec, written before stages 1 and 2 ran, is still true when its turn comes.
 
@@ -366,7 +366,7 @@ Each step keeps the suite green.
 
     **The planner owns the order.** The batch is filtered, never reordered: a
     conflicting stage is dropped and the earlier of the pair wins, because it
-    is the one already accepted. `safe_batch_prefix` filters rather than
+    is the one already accepted. `orthogonal_stages` filters rather than
     truncates, so a collision at position four still leaves one, two, three and
     five — truncating there would discard later stages for a collision they had
     nothing to do with. Each candidate is judged against what was *kept*, never

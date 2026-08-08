@@ -1556,7 +1556,7 @@ class TestAFailureThatPredatesTheStage:
 class TestPlannerArtifactRecordsCacheWrites:
     """The write premium has to be visible per call, not just collected.
 
-    `PlannerUsage` gained `cache_write_tokens` when Anthropic's disjoint counts
+    `PlannerUsage` gained `cache_write_tokens` when Anthropic's orthogonal counts
     were normalised, but `planner.json` still recorded only prompt, cached and
     completion. Anthropic bills a cache write above base rate, so a run that
     writes the prefix every call and never reads it is more expensive than not

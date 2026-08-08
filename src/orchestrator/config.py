@@ -863,7 +863,7 @@ def _paths_written(stage, tracked: list[str]) -> set[str]:
 
     The literals matter on their own. A stage that creates a file names a path
     git has never seen, so glob expansion finds nothing and two stages creating
-    the same file would look disjoint — the one collision expansion cannot see.
+    the same file would look orthogonal — the one collision expansion cannot see.
     """
     selected = {p for p in tracked if matches_any(p, stage.edit_files)}
     literal = {g for g in stage.edit_files if not any(c in g for c in "*?[")}
@@ -883,8 +883,12 @@ def _paths_relied_on(stage, tracked: list[str]) -> set[str]:
     return relied
 
 
-def safe_batch_prefix(stages: list, tracked: list[str]) -> tuple[list, str]:
-    """The longest prefix of a batch whose stages cannot invalidate each other.
+def orthogonal_stages(stages: list, tracked: list[str]) -> tuple[list, list[str]]:
+    """The stages of a batch that cannot invalidate each other, and what was dropped.
+
+    Orthogonal rather than merely non-overlapping: the property wanted is that
+    no stage's outcome changes what another was drawn against, and file sets
+    being unshared is how that is enforced rather than what it is for.
 
     One derivation may answer with several stages, and the saving is real: the
     planner is the expensive participant and a derivation is a third of a
@@ -910,9 +914,10 @@ def safe_batch_prefix(stages: list, tracked: list[str]) -> tuple[list, str]:
     files.
 
     **Filters rather than truncates.** A conflicting stage is dropped and the
-    walk continues, so a bad pair at position four still leaves one, two,
-    three and five. Truncating there would throw away every later stage for a
-    collision it had nothing to do with.
+    walk continues, so a bad pair at position four still leaves one, two, three
+    and five. Truncating there would throw away every later stage for a
+    collision it had nothing to do with — which is what an earlier version did,
+    and why nothing here is called a prefix any more.
 
     Each candidate is judged against what has been *kept*, never against what
     was dropped: a stage colliding only with one that is not going to run has
