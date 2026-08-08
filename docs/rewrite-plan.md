@@ -319,9 +319,25 @@ Each step keeps the suite green.
     that nearly every batch quotes `spec/support/migrated_controller_inventory.rb`,
     which is exactly the shared file the constraint exists to catch.
 
-    A queued stage that fails discards the rest of the queue and re-derives.
-    That keeps the feedback loop — the reviewer's `record` and the progress log
-    informing the next stage — for the case where it matters.
+    **Any route back to `plan` discards the queue**, and the reason is the
+    invariant rather than staleness. Disjointness is computed at derivation
+    time; a revision that widens stage 1's `edit_files` may make it overlap
+    stage 3's, and the property that made the batch safe no longer holds. So
+    discarding is required, not prudent. It also keeps the feedback loop — the
+    reviewer's `record` and the progress log informing the next stage — for the
+    case where it matters.
+
+    The rule is sharper than "on failure", and the distinctions are worth
+    keeping: a stage that lands keeps the queue, because nothing was rethought.
+    A stage retried by the executor keeps it, because the planner has not
+    touched the spec. Only a route to `plan` discards. And a pause keeps it and
+    persists it — the queue lives in `RunState`, and the pause is checked after
+    the squash, so a run stops between queued stages rather than mid-batch.
+
+    The cost is real: one failure throws away four stages of planning, which
+    could make batching net-negative if failures are common. "Stages discarded
+    per failure" is in the measurements below for that reason — it is the
+    number that decides whether the feature pays.
 
     **Watch for the ceiling becoming a target.** The likeliest way this fails
     is not a bad stage but a slower derivation: asked for up to five, the
