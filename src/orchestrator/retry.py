@@ -103,7 +103,7 @@ def is_transient_status(status: int | None) -> bool:
     return status == 429 or status >= 500
 
 
-def is_spurious_request_status(status: int | None) -> bool:
+def is_spurious_request_status(status: int | None, message: str | None = None) -> bool:
     """A 400 the provider returns for a request that is not malformed.
 
     Everything about this is uncomfortable, so the evidence matters. Three
@@ -115,8 +115,30 @@ def is_spurious_request_status(status: int | None) -> bool:
     Only 400. The neighbouring codes are genuine statements about the request
     — 401 is a wrong key, 404 a wrong path, 422 an unprocessable body — and
     every one of them says the same thing five minutes later.
+
+    And not every 400, which is the correction. The rule above is drawn around
+    the *status code*, and one 400 states a property of the request as plainly
+    as a 422 does: a prompt over the model's context window is the same prompt
+    on the next attempt. Measured — a planner call rejected at 1,138,774 tokens
+    against a 1,000,000 ceiling was retried twice and escalated 300 seconds
+    later than it needed to, on two attempts that could not have succeeded.
+    That is the failure a long unattended run reaches first, and waiting on it
+    only delays the message the operator has to act on.
+
+    Matched on the message rather than on a provider error code because the
+    codes disagree — Anthropic sends `invalid_request_error` for this and for
+    the genuinely spurious ones alike — while the sentence is stable and says
+    what the classification needs to know. Narrow deliberately: anything not
+    recognised keeps its replay, so a new deterministic 400 costs five minutes
+    rather than a wrongly-suppressed retry.
     """
-    return status == 400
+    if status != 400:
+        return False
+    text = (message or "").lower()
+    return not any(
+        phrase in text
+        for phrase in ("prompt is too long", "context length", "too many tokens")
+    )
 
 
 def with_provider_retry(
@@ -155,7 +177,7 @@ def with_provider_retry(
     return with_transport_retry(
         wait_out_outages,
         retry_on=retry_on,
-        retry_if=lambda e: is_spurious_request_status(status_of(e)),
+        retry_if=lambda e: is_spurious_request_status(status_of(e), str(e)),
         backoff=spurious,
         sleep=sleep,
         log=log,

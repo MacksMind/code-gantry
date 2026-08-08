@@ -350,3 +350,43 @@ def _raising(kind, message="boom"):
         raise kind(message)
 
     return call
+
+
+class TestADeterministic400IsNotWaitedOut:
+    """A 400 that says what is wrong with the request is not spurious.
+
+    `is_spurious_request_status` treats every 400 as worth one replay, on
+    measured evidence: three `invalid_request_error` 400s stopped a run in 62
+    minutes and the exact requests replayed 200. That rule is right about the
+    provider having a bad minute and wrong about one case, because the category
+    is drawn around the status code rather than around what the status *means*.
+
+    Measured: a planner prompt that exceeded the model's context was rejected,
+    retried twice, and escalated 300 seconds later than it could have. Every
+    attempt was certain to fail — the prompt is the same prompt. A long
+    unattended run is exactly where this fires, and five minutes of waiting is
+    five minutes before the operator learns the thing they must act on.
+    """
+
+    def test_a_context_overflow_is_not_replayed(self):
+        from orchestrator.retry import is_spurious_request_status
+
+        assert not is_spurious_request_status(
+            400,
+            "prompt is too long: 1138774 tokens > 1000000 maximum",
+        )
+
+    def test_an_unexplained_400_is_still_replayed(self):
+        # The case the replay exists for. Nothing in the message identifies a
+        # property of the request, so the provider may simply have been wrong.
+        from orchestrator.retry import is_spurious_request_status
+
+        assert is_spurious_request_status(400, "invalid_request_error")
+        assert is_spurious_request_status(400, "")
+        assert is_spurious_request_status(400, None)
+
+    def test_neighbouring_codes_are_unaffected(self):
+        from orchestrator.retry import is_spurious_request_status
+
+        for status in (401, 404, 422, 500, None):
+            assert not is_spurious_request_status(status, "prompt is too long")
