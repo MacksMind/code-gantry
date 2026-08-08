@@ -561,7 +561,8 @@ class RepoReader:
             "rg", "--line-number", "--no-heading", "--with-filename",
             "--color", "never", "--hidden", "--engine", "auto",
         ]
-        for glob in self._search_globs(path_glob):
+        globs = self._search_globs(path_glob)
+        for glob in globs:
             argv += ["-g", glob]
         # Last, and that is the whole of it: ripgrep resolves overlapping
         # globs in order and the last match wins, so `-g '!.git'` placed
@@ -579,13 +580,24 @@ class RepoReader:
             cleaned = (excluded or "").strip()
             if cleaned:
                 argv += ["-g", f"!{cleaned.lstrip('!')}"]
-        argv += ["-e", pattern]
+        # The path is not decoration. ripgrep given no path and a stdin that is
+        # not a terminal searches **stdin**, so this tool worked at a shell and
+        # returned nothing from `subprocess.run` with an inherited pipe — every
+        # search silently empty, which reads as "not in this repository". That is
+        # the pathspec bug's failure arriving by a different route, and it would
+        # have struck whichever way a run happened to be launched: cron, CI, or a
+        # shell with stdin redirected. Given a path, ripgrep never consults
+        # stdin.
+        argv += ["-e", pattern, "."]
 
         proc = subprocess.run(
             argv,
             cwd=str(self._root()),
             capture_output=True,
             text=True,
+            # Belt and braces with the path above. It costs nothing and removes
+            # any dependence on how ripgrep classifies the stream.
+            stdin=subprocess.DEVNULL,
             # A repository is not obliged to be UTF-8, and `Git._run` carries
             # this same guard for the same reason: one Windows-1252 quote in
             # one tracked file used to crash the process mid-search.
@@ -599,16 +611,40 @@ class RepoReader:
             # `search failed` and re-runs the same glob with a different
             # pattern. It is the same distinction `read_file` already draws
             # between a path that is absent and one that is forbidden.
-            if "No files were searched" in (proc.stderr or ""):
+            raise ToolError(
+                f"search failed: {proc.stderr.strip() or 'invalid pattern'}"
+            )
+        # "Your glob selected nothing" and "the pattern is not there" want
+        # opposite fixes — widen the path, or fix the regex — so they are
+        # separate answers.
+        #
+        # Derived rather than read off an exit code. ripgrep folds the two into
+        # status 2 only when it is given *no* path; with `.` supplied it searches
+        # normally and exits 1 either way, which made the check that read stderr
+        # unreachable the moment the stdin bug was fixed. Asking which files the
+        # globs select is one extra call at 0.02s on a 4,423-file repository, and
+        # it is true regardless of how ripgrep classifies the run.
+        if proc.returncode == 1 and globs:
+            listing = subprocess.run(
+                ["rg", "--files", "--hidden", *sum((["-g", g] for g in globs), []),
+                 "-g", "!.git", "."],
+                cwd=str(self._root()), capture_output=True, text=True,
+                errors="replace", stdin=subprocess.DEVNULL,
+            )
+            if not listing.stdout.strip():
                 raise ToolError(
                     f"no files matched the path {path_glob!r}; the pattern was "
                     "never tried. Check the path with list_files, or drop it to "
                     "search the whole repository."
                 )
-            raise ToolError(
-                f"search failed: {proc.stderr.strip() or 'invalid pattern'}"
-            )
-        hits = [line for line in proc.stdout.splitlines() if line.strip()]
+
+        # Searching `.` prefixes every hit with `./`. Stripped here so the
+        # `path:line:text` contract every caller parses is unchanged.
+        hits = [
+            line[2:] if line.startswith("./") else line
+            for line in proc.stdout.splitlines()
+            if line.strip()
+        ]
         hits, clipped = self._clip(hits)
         if clipped:
             hits = hits + ["... truncated; narrow the pattern or the path"]

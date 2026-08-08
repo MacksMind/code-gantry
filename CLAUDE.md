@@ -798,6 +798,36 @@ holds the derived stage and never touches the tree. "I killed it" is a claim
 to verify with `ps`, not a state to assume, and the run directory rather than
 `last-run.out` is what tells you which run a line belongs to.
 
+**A tool can read the wrong stream, and the layer was right.** `search` passed
+ripgrep no path argument. Given none, ripgrep searches **stdin** whenever stdin
+is not a terminal — so the tool worked at a shell and returned nothing from
+`subprocess.run` with an inherited pipe. Measured against one literal on a real
+repository: inherited stdin `rc=1, 0 files`; `stdin=DEVNULL` and an explicit
+path both `rc=0, 399 files`. Nothing warns and nothing errors; every search is
+simply empty, which reads as "not in this repository" — the same wrong answer
+the pathspec bug gave, by an unrelated route, and it would strike or spare a run
+according to how it happened to be launched.
+
+The rule above it says to test the layer you are actually going to call, and that
+was followed: the calls went through `RepoReader`. What differed was the
+*stream* the call inherited, which no unit test and no shell probe can see,
+because pytest and a terminal sit on opposite sides of it. Over several hours
+this produced five contradictory measurements that were each blamed on the
+target repository moving under a live run — a plausible story that was true once
+and wrong four times. When a subprocess result varies with nothing you changed,
+suspect what it inherited before you suspect the world: argv, cwd, env, and
+stdin are all inputs, and only the first two are visible in the command you
+think you ran.
+
+**And once a path is passed, a guard that read an exit code may become
+unreachable.** ripgrep folds "your glob selected nothing" into status 2 only
+when it has no path to search; with one supplied it exits 1 like any empty
+result, so the check distinguishing the two — written the same day — could
+never fire again. It is derived now, from one `rg --files` call at 0.02s on a
+4,423-file repository. Reading a condition off an overloaded status is a
+dependency on someone else's error taxonomy, and it changed under a fix to
+something else entirely.
+
 ## Where things live
 
 `nodes.py` holds the loop's decisions — which failures route to the executor,
