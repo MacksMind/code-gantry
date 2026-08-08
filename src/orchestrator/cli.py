@@ -597,29 +597,32 @@ def _drive(
             log(f"[crash] {line}")
         raise
     else:
-        # Built before the log closes, and written into it. The report went to
-        # stdout only — which for an unattended run is a nohup file nobody
-        # opens unless something has gone wrong. That is the argument already
-        # made a few lines up about preflight warnings and about crashes, and
-        # it was never applied to the run's own conclusion: measured on this
-        # project, "per landed stage" appears 36 times in the stdout capture
-        # and zero times in `run.log`. It could not have reached it — the
-        # report was built after `log.close()`.
+        # Built before the log closes so the timeline can name it. The report
+        # is an artifact and `report.md` is where it lives; what the timeline
+        # gets is the event — a report was written, and where.
+        #
+        # It used to go into `run.log` in full, on the argument that a durable
+        # per-run record should not stop before the conclusion. True, and
+        # answered by the file itself: `report.md` is equally durable and sits
+        # in the same directory, so a copy in the timeline is a second thing to
+        # keep in sync rather than a safeguard — and it is the copy that cannot
+        # be re-read as markdown, since a report interleaved with stamped
+        # events is neither.
+        #
+        # Nothing urgent is lost. Why a run stopped reaches the timeline through
+        # `[escalate]` at the moment it happens, well before this.
         report = build_report(final, cfg)
         paths.report.write_text(report)
-        # Into `run.log` without echoing: the caller prints it below, and the
-        # timeline now shares stdout with it. The reason it belongs in the file
-        # is the artifact rather than the terminal — `run.log` is the durable
-        # per-run record, and one that stops before the conclusion is missing
-        # the part a reader came for.
-        log.record("\n" + report)
+        log(f"[run] report written to {paths.report}")
     finally:
         log.close()
         tools.close()
         conn.close()
 
+    # The path, not the document. Same reasoning as the log line above: the
+    # report is a file to open, and reprinting sixty lines of markdown under a
+    # timeline is how the one line that says where it is gets scrolled past.
     click.echo("")
-    click.echo(report)
     click.echo(f"report written to {paths.report}")
     return _exit_code(final)
 

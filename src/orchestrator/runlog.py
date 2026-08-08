@@ -47,13 +47,16 @@ class RunLog:
             print(line, file=self._echo, flush=True)
 
     def record(self, text: str) -> None:
-        """Into the file, and nowhere else.
+        """Into the file, unstamped, and nowhere else.
 
-        For the closing report, which is echoed by the caller and would
-        otherwise appear twice now that the timeline shares stdout with it.
-        Unstamped and unprefixed: a markdown report with a clock on every line
-        is not a report, and this is the one thing written here that is a
-        document rather than an event.
+        For the run header, which is the one thing written here that is not an
+        event: it is the banner the clocked lines follow, and a timestamp on it
+        would be a clock on a title.
+
+        The closing report used to come through here too. It is written to
+        `report.md` now and the timeline gets a stamped line naming the path —
+        two copies of a document in one directory being a synchronisation
+        problem rather than a safeguard.
         """
         self._handle.write(text.rstrip("\n") + "\n")
         self._handle.flush()

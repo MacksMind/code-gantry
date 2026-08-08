@@ -131,13 +131,16 @@ class TestTheTimelineIsOutputNotDiagnostics:
     wrong, and `cli.py` already uses `click.echo(..., err=True)` for that in
     fourteen places; nothing was left for stdout but the last few lines.
 
-    The earlier justification for moving the report into `run.log` — that a
-    nohup file goes unread — was the weaker argument and Mack said so: anyone
-    running this from a terminal sees stdout regardless. The argument that
-    survives is about the artifact rather than the terminal, and is why the
-    report is written to the file without being echoed twice: `run.log` is the
-    durable per-run record, and a record that stops before the conclusion is
-    missing the part a reader came for.
+    The report no longer goes into `run.log` at all. It was put there on the
+    argument that a durable per-run record should not stop before the
+    conclusion, and that was answered by the file it names: `report.md` is
+    equally durable and sits in the same directory, so the copy in the timeline
+    was a second thing to keep in sync — and the one that cannot be re-read as
+    markdown, since a report interleaved with stamped events is neither. The
+    timeline gets the event instead: a report was written, and where.
+
+    `record` survives for the start banner, which is a document-shaped line that
+    must not carry a clock: it *is* the header the clocked lines follow.
     """
 
     def test_the_timeline_goes_to_stdout(self, tmp_path, capsys):
