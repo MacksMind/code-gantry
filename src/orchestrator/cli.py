@@ -570,13 +570,25 @@ def _drive(
         for line in traceback.format_exc().splitlines():
             log(f"[crash] {line}")
         raise
+    else:
+        # Built before the log closes, and written into it. The report went to
+        # stdout only — which for an unattended run is a nohup file nobody
+        # opens unless something has gone wrong. That is the argument already
+        # made a few lines up about preflight warnings and about crashes, and
+        # it was never applied to the run's own conclusion: measured on this
+        # project, "per landed stage" appears 36 times in the stdout capture
+        # and zero times in `run.log`. It could not have reached it — the
+        # report was built after `log.close()`.
+        report = build_report(final, cfg)
+        paths.report.write_text(report)
+        for line in report.splitlines():
+            log(f"[report] {line}")
+        log(f"[report] written to {paths.report}")
     finally:
         log.close()
         tools.close()
         conn.close()
 
-    report = build_report(final, cfg)
-    paths.report.write_text(report)
     click.echo("")
     click.echo(report)
     click.echo(f"report written to {paths.report}")

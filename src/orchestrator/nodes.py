@@ -426,7 +426,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
     else:
         interventions = state.get("planner_interventions", 0)
 
-    return {
+    derived = {
         **base,
         **fresh_stage_fields(),
         "current": new_stage.model_dump(),
@@ -435,6 +435,19 @@ def plan(state: RunState, rt: Runtime) -> dict:
         "planner_interventions": interventions,
         "next_hop": "precheck",
     }
+
+    # The third checkpoint, and the one an operator actually feels. The flag is
+    # read at the top of this node too, but a pause requested *during* a
+    # derivation arrives after that read — so the stage this call just produced
+    # would be cut, run, reviewed and landed before the next read. Measured
+    # once: a pause at 00:29:59 was followed by a stage derived at 00:31:28 and
+    # landed fifteen minutes later.
+    #
+    # Nothing has run here, so the tree is as clean as it is between stages,
+    # and the derived stage is held rather than discarded — re-deriving it
+    # would cost another planner call for an answer already in hand.
+    paused = _pause_escalation(rt.paths.pause_flag, state, "precheck")
+    return {**derived, **paused} if paused else derived
 
 
 def _revert_unadopted(state: RunState, rt: Runtime, revised: Stage) -> None:
@@ -1605,7 +1618,7 @@ def _wall_clock_overrun(state: RunState, limits) -> str | None:
     return reason
 
 
-def _pause_escalation(flag, state: RunState) -> dict | None:
+def _pause_escalation(flag, state: RunState, ready_hop: str = "") -> dict | None:
     """The pause stop, if the operator has asked for one.
 
     Consulted at both points where the run is genuinely between stages: before
@@ -1626,15 +1639,29 @@ def _pause_escalation(flag, state: RunState) -> dict | None:
     if not flag.exists():
         return None
     note = flag.read_text().strip()
-    return _escalate(
-        "paused",
-        "Paused at your request, between stages. Nothing is wrong and "
-        "nothing is half-done: everything that landed is on the project "
-        "branch and no stage was in flight.\n\n"
-        + (f"Your note: {note}\n\n" if note else "")
-        + f"`orchestrator resume {state.get('run_id')}` picks up from the "
-        "next stage.",
+    where = (
+        "with the next stage derived and waiting to start"
+        if ready_hop
+        else "between stages"
     )
+    return {
+        **_escalate(
+            "paused",
+            f"Paused at your request, {where}. Nothing is wrong and nothing is "
+            "half-done: everything that landed is on the project branch and no "
+            "stage was in flight.\n\n"
+            + (f"Your note: {note}\n\n" if note else "")
+            + f"`orchestrator resume {state.get('run_id')}` picks up "
+            + ("that stage." if ready_hop else "from the next stage."),
+        ),
+        # The hop the run was about to take, recorded rather than inferred. A
+        # resume that had to deduce "there is a stage ready" from `current`
+        # being set and no failure recorded would confuse it with a stage
+        # awaiting revision, which must not be re-run unrevised. Written on
+        # every pause, including as empty, so one stop cannot inherit the value
+        # of an earlier one.
+        "paused_before": ready_hop,
+    }
 
 
 def _escalate(layer: str, reason: str) -> dict:

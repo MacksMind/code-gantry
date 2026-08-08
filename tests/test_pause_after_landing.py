@@ -115,3 +115,88 @@ class TestOneMessageForBothCheckpoints:
         src = inspect.getsource(nodes)
         assert src.count("Paused at your request") == 1
         assert src.count("_pause_escalation(") >= 3  # the def and both callers
+
+
+class TestAPauseCaughtAfterDeriving:
+    """The stage is held, not thrown away.
+
+    Observed: a pause requested at 00:29:59 was followed by a whole stage —
+    derived at 00:31:28, executed, reviewed and landed — because the flag is
+    read at the top of `plan` and the planner call had already started. The
+    operator watched fifteen minutes of work they had asked to stop.
+
+    So the flag is read again once the planner has answered, before `precheck`
+    cuts a branch. That is a clean-tree moment too: nothing has run, and the
+    derived stage sits in `current` costing nothing to keep.
+
+    Which checkpoint fired is *recorded* rather than inferred. `paused_before`
+    carries the hop the run was about to take, so a resume knows there is a
+    stage ready without having to deduce it from the presence of `current` and
+    the absence of a failure — two facts that also describe a stage awaiting
+    revision, which must not be re-run unrevised.
+    """
+
+    def test_the_hop_the_run_was_about_to_take_is_recorded(self, tmp_path):
+        from orchestrator.nodes import _pause_escalation
+
+        flag = tmp_path / "paused"
+        flag.write_text("")
+        assert _pause_escalation(flag, {"run_id": "r"}, "precheck")["paused_before"] == "precheck"
+
+    def test_the_other_checkpoints_record_nothing_to_resume_into(self, tmp_path):
+        # Written every time rather than left absent, so a pause caught before
+        # the planner ran cannot inherit a value from an earlier one.
+        from orchestrator.nodes import _pause_escalation
+
+        flag = tmp_path / "paused"
+        flag.write_text("")
+        assert _pause_escalation(flag, {"run_id": "r"})["paused_before"] == ""
+
+    def test_the_message_says_a_stage_is_waiting(self, tmp_path):
+        from orchestrator.nodes import _pause_escalation
+
+        flag = tmp_path / "paused"
+        flag.write_text("")
+        held = _pause_escalation(flag, {"run_id": "r"}, "precheck")["escalation_reason"]
+        between = _pause_escalation(flag, {"run_id": "r"})["escalation_reason"]
+        assert "derived" in held and "derived" not in between
+
+
+class TestResumingIntoAHeldStage:
+    def test_a_held_stage_runs_rather_than_being_re_derived(self):
+        from orchestrator.state import resume_entry_point
+
+        assert resume_entry_point({
+            "resuming": True, "failure_layer": "paused",
+            "paused_before": "precheck", "current": {"id": "s"},
+        }) == "precheck"
+
+    def test_a_pause_with_nothing_held_still_goes_to_the_planner(self):
+        """The rule this refines, and the incident behind it.
+
+        A stage may have been awaiting revision when the stop came, and
+        `precheck` would re-run it unrevised and discard the diagnosis. That is
+        exactly the case where nothing was derived, so `paused_before` is empty
+        and the planner still decides.
+        """
+        from orchestrator.state import resume_entry_point
+
+        assert resume_entry_point({
+            "resuming": True, "failure_layer": "paused",
+            "paused_before": "", "current": {"id": "s"},
+            "last_failure": {"layer": "tests"},
+        }) == "plan"
+
+    def test_a_budget_stop_is_unchanged(self):
+        from orchestrator.state import resume_entry_point
+
+        assert resume_entry_point({
+            "resuming": True, "failure_layer": "budget", "current": {"id": "s"},
+        }) == "plan"
+
+    def test_the_key_is_declared_so_the_driver_keeps_it(self):
+        # The merge filters against the schema; an undeclared key is dropped,
+        # which is how `full_suite_digest` shipped broken.
+        from orchestrator.state import RunState
+
+        assert "paused_before" in RunState.__annotations__

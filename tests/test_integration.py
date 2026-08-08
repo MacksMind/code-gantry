@@ -584,7 +584,7 @@ class TestReportOnRealRun:
         report = build_report(final, cfg)
         assert "Session wall clock" in report
 
-    def test_warns_when_max_stages_cannot_fit_the_budget(self, repo, tmp_path, scripted_edits):
+    def test_reports_how_many_sessions_the_pace_implies(self, repo, tmp_path, scripted_edits):
         scripted_edits.write_text(json.dumps([{"app.py": "a\n"}]))
         planner = ScriptedPlanner([
             PlannerOutcome("next_stage", "r", "e", stage_fields=stage_spec()),
@@ -607,8 +607,15 @@ class TestReportOnRealRun:
         cfg.limits.max_stages = 60
         cfg.limits.wall_clock_hours = 1
         report = build_report(final, cfg)
-        assert "limits disagree" in report or "disagree about how" in report
+        # The pace is the fact worth printing. What it is *not* is a
+        # misconfiguration: `wall_clock_hours` bounds one unattended stretch
+        # and `max_stages` bounds the project, so a long project trips this
+        # arithmetic by design and the run stops on the clock and resumes.
+        # The earlier wording told the operator one of the two "needs
+        # raising", which is advice to change a correctly-set value.
         assert "0.17h per landed stage" in report, report
+        assert "session" in report.lower()
+        assert "needs raising" not in report
 
     def test_a_wall_clock_stop_escalates_with_an_honest_reason(
         self, repo, tmp_path, scripted_edits

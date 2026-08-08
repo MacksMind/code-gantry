@@ -286,12 +286,22 @@ def _wall_clock_lines(state: RunState, cfg: ProjectConfig) -> list[str]:
         per_stage = measured / len(completed) / 3600.0
         projected = per_stage * cfg.limits.max_stages
         if projected > budget:
+            # Reported as a fact about the work, not as a misconfiguration.
+            # These two limits measure different things: `wall_clock_hours`
+            # bounds one unattended stretch — how long the operator is willing
+            # to let the run go without looking at it — and `max_stages` bounds
+            # the project. Stopping on the clock and resuming is the designed
+            # behaviour, so every long project trips this arithmetic. The
+            # earlier wording said "one of them needs raising", which told an
+            # operator to change a setting that was correctly set.
+            sessions = projected / budget if budget else 0
             lines.append(
                 f"> At {per_stage:.2f}h per landed stage, `max_stages` "
-                f"({cfg.limits.max_stages}) projects to {projected:.0f}h — more "
-                f"than the {budget:g}h budget. The two limits disagree about how "
-                "big this project is; one of them needs raising, or the run will "
-                "stop on time rather than on completion."
+                f"({cfg.limits.max_stages}) would take about {projected:.0f}h — "
+                f"roughly {sessions:.0f} sessions at the {budget:g}h "
+                "supervision window. Nothing is wrong: the run stops on the "
+                "clock and `resume` continues it. Raise `wall_clock_hours` only "
+                "if you want longer unattended stretches."
             )
             lines.append("")
 

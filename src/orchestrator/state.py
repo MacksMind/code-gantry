@@ -221,6 +221,12 @@ class RunState(TypedDict, total=False):
 
     status: Status
     escalation_reason: str | None
+    # The hop a pause interrupted, when a stage had been derived but not
+    # started. Declared here because the driver filters every node's update
+    # against this schema: undeclared, it would be written by `plan`, dropped
+    # in the merge, and the resume would re-derive a stage it already had —
+    # the same silent loss `full_suite_digest` shipped with.
+    paused_before: str
     resuming: bool
     # Set by `resume` from the stage branch: does the interrupted stage already
     # have commits? Decides whether an interrupted attempt is re-run or checked.
@@ -497,6 +503,13 @@ def resume_entry_point(state: RunState) -> str:
         return "plan"
     if layer in REPO_STATE_FAILURES:
         return "verify"
+    if layer == "paused" and state.get("paused_before"):
+        # A stage was derived and never started. Run it: nothing about it is
+        # stale, and re-deriving would pay a second planner call for an answer
+        # already in hand. Distinguished by a recorded fact rather than by the
+        # shape of the state, because "a stage is present and nothing failed"
+        # also describes the case below.
+        return state["paused_before"]
     if layer in ("budget", "paused"):
         # Neither is a defect in the repository or the plan, so neither is in
         # either set. But a stage may have been awaiting revision when the stop

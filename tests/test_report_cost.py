@@ -164,3 +164,54 @@ class TestTheExecutorsCacheRateIsReported:
 
         text = "\n".join(_cost_section(state_with(), cfg_with()))
         assert "**Executor**" not in text
+
+
+class TestTheBudgetProjectionDoesNotDemandAChange:
+    """`wall_clock_hours` and `max_stages` measure different things.
+
+    The report compared them and concluded "the two limits disagree about how
+    big this project is; one of them needs raising" — telling the operator to
+    change a setting that is correctly set. `wall_clock_hours` bounds one
+    *unattended stretch*: how long the operator is willing to let the run go
+    without looking at it. `max_stages` bounds the *project*. A run that stops
+    on the clock and is resumed is the designed behaviour, not a
+    misconfiguration, and every long project will trip this arithmetic.
+
+    The projection is still worth printing — how many sessions the work implies
+    is a real fact — so what changes is the conclusion drawn from it.
+    """
+
+    def _report(self, tmp_path, per_stage_hours, budget, max_stages):
+        from orchestrator.config import parse_config
+        from orchestrator.report import build_report
+
+        cfg = parse_config({
+            "target_repo": str(tmp_path), "base_ref": "main",
+            "project_branch": "p", "plan_root": "PLAN.md", "test_command": "true",
+            "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
+            "reviewer": {"model": "gpt-5.6-sol"},
+            "limits": {"wall_clock_hours": budget, "max_stages": max_stages},
+        })
+        state = {
+            "status": "complete", "run_id": "r", "session_seconds": 3600.0,
+            "completed": [
+                {"id": "s1", "wall_seconds": per_stage_hours * 3600.0,
+                 "plan_seconds": 0.0, "merge_sha": "abc", "review_verdict": "approved"}
+            ],
+        }
+        return build_report(state, cfg)
+
+    def test_it_does_not_say_a_limit_needs_raising(self, tmp_path):
+        text = self._report(tmp_path, per_stage_hours=0.25, budget=12, max_stages=1000)
+        assert "needs raising" not in text
+        assert "disagree" not in text
+
+    def test_it_still_reports_what_the_pace_implies(self, tmp_path):
+        # The arithmetic is useful; only the conclusion was wrong.
+        text = self._report(tmp_path, per_stage_hours=0.25, budget=12, max_stages=1000)
+        assert "0.25h per landed stage" in text
+
+    def test_it_frames_the_budget_as_a_supervision_window(self, tmp_path):
+        text = self._report(tmp_path, per_stage_hours=0.25, budget=12, max_stages=1000)
+        assert "session" in text.lower()
+        assert "resume" in text.lower()
