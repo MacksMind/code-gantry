@@ -300,7 +300,23 @@ class PlannerConfig(_EndpointConfig):
     # reach 15,167 characters and a derivation died mid-string at 11,710 with
     # the reasoning already spent. The cost of headroom is nothing; the cost of
     # hitting it is a whole derivation discarded.
-    max_tokens: int = 32_000
+    #
+    # 32,000 was not enough either, once batching landed. A derivation died
+    # mid-JSON after 591 seconds and 27 reads, and the arithmetic is obvious in
+    # hindsight: five stages is five instructions, plus reasoning at `xhigh`,
+    # against a budget sized for one.
+    #
+    # 64,000 measured rather than recalled — the API accepts 64,000 and 128,000
+    # for `claude-opus-5` and rejects 200,000 with "200000 > 128000, which is
+    # the maximum". Half the ceiling leaves room for the next surprise.
+    #
+    # **This depends on `request_timeout_seconds` being set, in a way that is
+    # invisible from here.** The installed SDK refuses a non-streaming request
+    # whose budget implies a long generation — `3600 * max_tokens / 128_000 >
+    # 600` — which caps it at 21,333, below even the old 32,000. The check runs
+    # only when no explicit timeout is passed, and the planner always passes
+    # one. Drop that and every call raises before it is sent.
+    max_tokens: int = 64_000
     # How many stages one derivation may produce, the one being started
     # included. 1 is the default and turns batching off: a project opts in,
     # because the saving is real only where the work is homogeneous and the

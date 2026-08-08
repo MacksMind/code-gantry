@@ -843,12 +843,15 @@ class TestThePlannerOutputBudgetIsASetting:
             "reviewer": {"model": "gpt-5.6-sol"},
         })
 
-    def test_it_defaults_to_what_was_hardcoded(self):
-        # Unchanged behaviour for every project that does not set it.
-        assert self._cfg().planner.max_tokens == 32_000
+    def test_the_default_is_generous_because_it_is_a_ceiling(self):
+        # Was 32,000, which was the hardcoded value this setting replaced. A
+        # batched derivation died mid-JSON against it — five instructions plus
+        # reasoning at `xhigh` against a budget sized for one — so it is 64,000
+        # now, measured as half what the API accepts for this model.
+        assert self._cfg().planner.max_tokens == 64_000
 
-    def test_an_operator_can_raise_it(self):
-        assert self._cfg(max_tokens=64_000).planner.max_tokens == 64_000
+    def test_an_operator_can_change_it(self):
+        assert self._cfg(max_tokens=100_000).planner.max_tokens == 100_000
 
     def test_the_client_sends_the_configured_value(self):
         """Pinned at the call, not at the config.
