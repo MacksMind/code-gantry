@@ -352,13 +352,14 @@ class PlannerResponse(BaseModel):
             # as best declined. Under a cap of five, two derivations returned
             # one stage each. The guidance now lives in the prompt, where the
             # cap is known and can be stated as a number.
-            "In short: they run one at a time, each with its own branch, "
-            "review and merge, so what a batch saves is the survey rather "
-            "than the work. Every one must stand alone — no stage here may "
-            "edit a file another edits, reads, or quotes in `read_excerpts`, "
-            "because a stage drawn against a file an earlier one rewrites is "
-            "drawn against a tree that will not exist. Overlapping stages are "
-            "not rejected, they are dropped, and you are told which.\n\n"
+            "In short: they run one at a time and in order, each landing "
+            "before the next is cut, so what a batch saves is the survey "
+            "rather than the work — and a later stage may assume the earlier "
+            "ones ran. They may share files. The single constraint is that no "
+            "stage may quote `read_excerpts` from a file another stage in the "
+            "batch edits: a line range is chosen against the tree as it stands "
+            "now and read back after the earlier stages have moved it. Such a "
+            "stage is dropped rather than rejected, and you are told which.\n\n"
             "Not for `revise`: a stage being reworked owns a branch, and its "
             "replacement is a single stage."
         ),

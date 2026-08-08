@@ -29,10 +29,13 @@ def repo(tmp_path):
     return r
 
 
-def _spec(sid, edit, read=()):
+def _spec(sid, edit, read=(), excerpts=()):
     return {
         "id": sid, "instruction": "do it",
         "edit_files": list(edit), "read_files": list(read),
+        "read_excerpts": [
+            {"path": p, "start": 1, "end": 2} for p in excerpts
+        ],
     }
 
 
@@ -69,9 +72,14 @@ class TestTheQueueIsBuiltFromTheBatch:
         assert dropped == []
 
     def test_one_colliding_with_the_first_is_dropped(self, repo):
+        # Only an excerpt collides now: `two` quotes a line range out of the
+        # file `one` rewrites, and a line number does not survive that.
         queue, dropped = self._queued(
             repo, _spec("one", ["app/a.rb"]),
-            [_spec("two", ["app/a.rb"]), _spec("three", ["app/c.rb"])],
+            [
+                _spec("two", ["app/b.rb"], excerpts=["app/a.rb"]),
+                _spec("three", ["app/c.rb"]),
+            ],
         )
         assert [s["id"] for s in queue] == ["three"], "the rest still runs"
         assert len(dropped) == 1 and "two" in dropped[0]
@@ -92,13 +100,16 @@ class TestTheQueueIsBuiltFromTheBatch:
         )
         assert queue[0].get("command") in (None, "")
 
-    def test_a_batched_stage_reading_what_the_first_writes_is_dropped(self, repo):
+    def test_a_batched_stage_may_read_what_the_first_writes(self, repo):
+        # Reads are live, so the second stage sees the first stage's result
+        # rather than a tree that no longer exists. This asserted the opposite
+        # until the rule was narrowed to writes and excerpts.
         queue, dropped = self._queued(
             repo, _spec("one", ["app/a.rb"]),
             [_spec("two", ["app/b.rb"], read=["app/a.rb"])],
         )
-        assert queue == []
-        assert "app/a.rb" in dropped[0]
+        assert [s["id"] for s in queue] == ["two"]
+        assert dropped == []
 
 
 class TestARevisionRechecksTheQueue:
@@ -138,7 +149,10 @@ class TestARevisionRechecksTheQueue:
     def test_a_widened_revision_drops_only_what_it_now_touches(self, repo):
         kept, dropped = self._rechecked(
             repo, _spec("one", ["app/a.rb", "app/c.rb"]),
-            [_spec("two", ["app/b.rb"]), _spec("three", ["app/c.rb"])],
+            [
+                _spec("two", ["app/b.rb"]),
+                _spec("three", ["spec/a_spec.rb"], excerpts=["app/c.rb"]),
+            ],
         )
         assert [s["id"] for s in kept] == ["two"]
         assert len(dropped) == 1 and "three" in dropped[0]

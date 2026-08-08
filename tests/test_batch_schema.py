@@ -85,8 +85,10 @@ class TestTheFieldItself:
         assert not any(str(n) in d for n in range(2, 10))
         # The constraint that decides whether an offered stage survives travels
         # with the field as well as the prompt, because this is what the model
-        # is looking at while it writes them.
-        assert "stand alone" in d or "stands alone" in d
+        # is looking at while it writes them. It is no longer "stand alone" —
+        # stages run in order and may build on each other — but the one thing
+        # that cannot survive an earlier stage still has to be named here.
+        assert "read_excerpts" in d
 
     def test_the_prompt_keeps_the_guard_against_surveying_for_the_cap(self):
         # The concern the old assertion existed for. Stating a ceiling must not

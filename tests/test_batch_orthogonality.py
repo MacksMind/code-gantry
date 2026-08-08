@@ -8,12 +8,19 @@ now fails the stage back to the planner, and "an authored edit stops being
 satisfiable once part of it is already true on the branch" deadlocked a stage
 into two redraws.
 
-Stage 3 of 5 is drawn against a tree stages 1 and 2 have not touched yet. So
-the batch is *constrained* rather than trusted, in this codebase's habit of
-making the mistake unexpressible: **no stage's `edit_files` may intersect any
-other batched stage's `edit_files`, `read_files` or `read_excerpts` paths.**
-Under that rule nothing a batched stage does can invalidate a later one's spec,
-because no later stage names anything an earlier one can write.
+The rule started broad — no shared files at all — and is now narrow: **no
+stage's `edit_files` may intersect any other batched stage's `read_excerpts`
+paths**, and nothing else is checked.
+
+The broad version cost real stages for a risk that only one of the three cases
+carries. Stages run strictly in order, each landing before the next is cut, and
+each is judged by the reviewer against the diff it actually produced. So a read
+is live and self-correcting, an `instruction` is required to state an end state
+rather than a change and so survives an earlier stage editing the same file,
+and a later stage may be written assuming the earlier ones ran. A `read_excerpts`
+range is the exception: it is chosen against the tree at derivation and read
+back at the later stage's own starting commit, and a line number is not
+re-derivable from the file it points into.
 
 Intersection is decided by expanding globs against the repository's actual
 files, not by comparing glob strings. Two different-looking globs can select
@@ -84,19 +91,33 @@ class TestDisjointBatchesSurvive:
 
 
 class TestAConflictTruncates:
-    def test_two_stages_writing_the_same_file(self):
+    def test_two_stages_may_write_the_same_file(self):
+        # They run in order, each landing before the next is cut, and
+        # `instruction` is required to state an end state rather than a change
+        # — so the second stage's prose still describes what the file should
+        # contain once the first has had its turn.
         from orchestrator.config import orthogonal_stages
 
         kept, dropped = orthogonal_stages(
             [_stage("one", edit=["app/a.rb"]), _stage("two", edit=["app/a.rb"])],
             TRACKED,
         )
-        assert [s.id for s in kept] == ["one"]
-        assert "two" in dropped[0] and "app/a.rb" in dropped[0]
+        assert [s.id for s in kept] == ["one", "two"]
+        assert dropped == []
 
-    def test_a_later_stage_reading_what_an_earlier_one_writes(self):
-        # The stale-spec case: stage two was drawn against the file as it is
-        # now, and stage one is about to change it.
+    def test_a_later_stage_may_read_what_an_earlier_one_writes(self):
+        """Both of these used to be conflicts, and the reversal is the point.
+
+        A read is live — `RepoReader` carries no `at_sha` during a run — so the
+        later stage reads the file *after* the earlier one rewrote it, which is
+        the current and correct content. Nothing is drawn against a tree that
+        stops existing.
+
+        The cost of the old rule was not hypothetical: every batch in the live
+        run listed the same few reference files under `read_files`, so any
+        batch that also edited one of them collapsed to a single stage and the
+        planner paid to draw the rest for nothing.
+        """
         from orchestrator.config import orthogonal_stages
 
         kept, dropped = orthogonal_stages(
@@ -106,14 +127,11 @@ class TestAConflictTruncates:
             ],
             TRACKED,
         )
-        assert [s.id for s in kept] == ["one"]
-        assert "config/routes.rb" in dropped[0]
+        assert [s.id for s in kept] == ["one", "two"]
+        assert dropped == []
 
-    def test_an_earlier_stage_reading_what_a_later_one_writes(self):
-        # Symmetric, and the direction it is easy to forget: stage one is
-        # drawn against a file stage two will rewrite. Running one first is
-        # fine, but the batch is still unsafe if order ever changes, and the
-        # rule is cheaper to state symmetrically than to reason about.
+    def test_an_earlier_stage_may_read_what_a_later_one_writes(self):
+        # The mirror direction, safe for the same reason.
         from orchestrator.config import orthogonal_stages
 
         kept, dropped = orthogonal_stages(
@@ -123,7 +141,7 @@ class TestAConflictTruncates:
             ],
             TRACKED,
         )
-        assert [s.id for s in kept] == ["one"]
+        assert [s.id for s in kept] == ["one", "two"]
 
     def test_an_excerpt_quoting_what_another_stage_writes(self):
         """The case the constraint exists for.
@@ -160,7 +178,9 @@ class TestAConflictTruncates:
                 _stage("one", edit=["app/a.rb"]),
                 _stage("two", edit=["app/b.rb"]),
                 _stage("three", edit=["app/c.rb"]),
-                _stage("four", edit=["app/a.rb"]),      # collides with one
+                # Collides with `one`: it quotes a range out of the file
+                # `one` rewrites, and a line number does not survive that.
+                _stage("four", edit=["app/d.rb"], excerpts=["app/a.rb"]),
                 _stage("five", edit=["spec/a_spec.rb"]),
             ],
             TRACKED,
@@ -176,8 +196,8 @@ class TestAConflictTruncates:
         kept, _ = orthogonal_stages(
             [
                 _stage("one", edit=["app/a.rb"]),
-                _stage("three", edit=["app/a.rb", "app/b.rb"]),
-                _stage("four", edit=["app/b.rb"]),
+                _stage("three", edit=["app/b.rb"], excerpts=["app/a.rb"]),
+                _stage("four", edit=["app/c.rb"], excerpts=["app/b.rb"]),
             ],
             TRACKED,
         )
@@ -189,8 +209,8 @@ class TestAConflictTruncates:
         kept, dropped = orthogonal_stages(
             [
                 _stage("one", edit=["app/a.rb"]),
-                _stage("two", edit=["app/a.rb"]),
-                _stage("three", edit=["app/a.rb"]),
+                _stage("two", edit=["app/b.rb"], excerpts=["app/a.rb"]),
+                _stage("three", edit=["app/c.rb"], excerpts=["app/a.rb"]),
             ],
             TRACKED,
         )
@@ -205,7 +225,10 @@ class TestGlobsAreResolvedNotCompared:
         from orchestrator.config import orthogonal_stages
 
         kept, _ = orthogonal_stages(
-            [_stage("one", edit=["app/*.rb"]), _stage("two", edit=["app/a.rb"])],
+            [
+                _stage("one", edit=["app/*.rb"]),
+                _stage("two", edit=["spec/a_spec.rb"], excerpts=["app/a.rb"]),
+            ],
             TRACKED,
         )
         assert [s.id for s in kept] == ["one"]
@@ -232,9 +255,15 @@ class TestGlobsAreResolvedNotCompared:
         )
         assert len(kept) == 2
 
-    def test_two_stages_creating_the_same_new_file_still_conflict(self):
-        # Untracked, so glob expansion finds nothing — the literal paths have
-        # to be compared as well, or the one case globs cannot see is missed.
+    def test_two_stages_creating_the_same_new_file_are_allowed(self):
+        """Duplicated work, not a broken spec, so it is not forbidden.
+
+        Both stages name a path git has never seen. The second finds the file
+        already there and adds to it, which is exactly what a later stage
+        editing an earlier stage's file does anywhere else. It is worth
+        watching — two stages doing the same work is waste — but the place for
+        that is the record, not a rule that also forbids the useful case.
+        """
         from orchestrator.config import orthogonal_stages
 
         kept, dropped = orthogonal_stages(
@@ -244,18 +273,21 @@ class TestGlobsAreResolvedNotCompared:
             ],
             TRACKED,
         )
-        assert [s.id for s in kept] == ["one"]
-        assert "brand_new_spec" in dropped[0]
+        assert [s.id for s in kept] == ["one", "two"]
+        assert dropped == []
 
 
 class TestTheReasonIsUsable:
     def test_it_names_the_stage_and_the_path(self):
         from orchestrator.config import orthogonal_stages
 
+        # An excerpt rather than a read: reads no longer conflict, and this
+        # test is about the wording of the reason, so it has to use a pair
+        # that still collides.
         _kept, dropped = orthogonal_stages(
             [
                 _stage("first", edit=["config/routes.rb"]),
-                _stage("second", edit=["app/a.rb"], read=["config/routes.rb"]),
+                _stage("second", edit=["app/a.rb"], excerpts=["config/routes.rb"]),
             ],
             TRACKED,
         )
@@ -295,11 +327,14 @@ class TestARevisedStageIsRecheckedAgainstTheQueue:
 
     def test_a_widened_revision_drops_only_what_it_now_collides_with(self):
         # The scope-violation case: `one` is revised to also edit `app/c.rb`,
-        # which `three` was drawn against. `two` is untouched and survives.
+        # which `three` quotes a range out of. `two` is untouched and survives.
         from orchestrator.config import orthogonal_stages
 
         widened = _stage("one", edit=["app/a.rb", "app/c.rb"])
-        queue = [_stage("two", edit=["app/b.rb"]), _stage("three", edit=["app/c.rb"])]
+        queue = [
+            _stage("two", edit=["app/b.rb"]),
+            _stage("three", edit=["spec/a_spec.rb"], excerpts=["app/c.rb"]),
+        ]
         kept, dropped = orthogonal_stages([widened, *queue], TRACKED)
         assert [s.id for s in kept] == ["one", "two"]
         assert len(dropped) == 1 and "three" in dropped[0]
@@ -309,6 +344,9 @@ class TestARevisedStageIsRecheckedAgainstTheQueue:
         from orchestrator.config import orthogonal_stages
 
         widened = _stage("one", edit=["app/**"])
-        queue = [_stage("two", edit=["app/b.rb"]), _stage("three", edit=["app/c.rb"])]
+        queue = [
+            _stage("two", edit=["spec/a_spec.rb"], excerpts=["app/b.rb"]),
+            _stage("three", edit=["spec/b_spec.rb"], excerpts=["app/c.rb"]),
+        ]
         kept, _ = orthogonal_stages([widened, *queue], TRACKED)
         assert [s.id for s in kept] == ["one"]

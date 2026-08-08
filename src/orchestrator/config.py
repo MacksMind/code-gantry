@@ -891,13 +891,45 @@ def _paths_relied_on(stage, tracked: list[str]) -> set[str]:
     """Files a stage's spec is drawn against, and would be invalidated by.
 
     Its own writes are included: two stages writing the same file conflict for
-    the same reason one reading another's target does — the second was drawn
+    the same reason one quoting another's target does — the second was drawn
     against a state the first destroys.
+
+    Only `read_excerpts`, and the narrowing is the whole rule. It was
+    everything a stage named — its writes, its reads, its excerpts — on the
+    reasoning that a spec is a prediction and any shared file makes a later
+    stage's prediction stale. That is true of exactly one of the three.
+
+    An excerpt carries a **line range**, chosen while the planner was looking
+    at the tree as it stood at derivation, and `resolve_excerpts` reads it at
+    the stage's own `stage_start_sha` — which for stage three of a batch is
+    after stages one and two have landed. An earlier stage that rewrites the
+    file shifts those lines, and the range resolves to the wrong text or fails
+    the stage back to the planner. Nothing self-corrects, because a number is
+    not re-derivable from the file it points into.
+
+    A read does self-correct. `RepoReader` has no `at_sha` during a run, so a
+    stage that lists a file as reference gets whatever it contains when it
+    runs — if an earlier stage rewrote it, the later stage reads the rewritten
+    version, which is the current and correct one.
+
+    A write self-corrects too, and that is the less obvious half. `instruction`
+    is required to state the end state and never a change — the invariant is
+    "assert state, not change", and a stage phrased as "make this edit" is
+    already unsatisfiable the moment the edit is half-true, batch or no batch.
+    A correctly written instruction therefore still describes what the file
+    should end up containing after an earlier stage has had its turn.
+
+    So the fragile thing is a pinned range, not a filename, and constraining
+    filenames cost real stages: every batch in the live run named the same few
+    reference files, so almost any batch touching one collapsed to a single
+    stage and the planner paid to draw the rest for nothing.
+
+    One residual case is worth watching rather than forbidding: two stages that
+    each *create* the same new path. Nothing breaks — the second finds the file
+    already there — but the work is duplicated, and `batch_notes` is where that
+    would show up.
     """
-    relied = _paths_written(stage, tracked)
-    relied |= {p for p in tracked if matches_any(p, stage.read_files)}
-    relied |= {e.path for e in stage.read_excerpts}
-    return relied
+    return {e.path for e in stage.read_excerpts}
 
 
 def orthogonal_stages(stages: list, tracked: list[str]) -> tuple[list, list[str]]:
@@ -915,12 +947,13 @@ def orthogonal_stages(stages: list, tracked: list[str]) -> tuple[list, list[str]
     failing a stage back to the planner and once as an authored edit that
     stopped being satisfiable when half of it came true.
 
-    So the batch is constrained rather than trusted: **no stage's `edit_files`
-    may intersect any other batched stage's `edit_files`, `read_files` or
-    `read_excerpts` paths.** Under that rule nothing a batched stage does can
-    invalidate a later one's spec, because no later stage names anything an
-    earlier one can write. It makes the mistake unexpressible instead of
-    discouraged, which is the habit the rest of this file keeps.
+    So the batch is constrained rather than trusted — but narrowly: **no
+    stage's `edit_files` may intersect any other batched stage's
+    `read_excerpts` paths**, and nothing else is forbidden. Stages run in
+    order, each landing before the next is cut, and each is reviewed against
+    the diff it actually produced; so a later stage may share files with an
+    earlier one, may read what it wrote, and may be written assuming it ran.
+    A quoted line range is the one thing that cannot re-derive itself.
 
     Symmetric, deliberately. A conflict is reported whichever direction it
     points, because reasoning about which order makes a given pair safe is
