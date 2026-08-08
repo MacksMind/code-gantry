@@ -86,6 +86,18 @@ class Git:
     def rev_parse(self, ref: str) -> str:
         return self._out("rev-parse", "--verify", f"{ref}^{{commit}}")
 
+    def blob_at(self, ref: str, path: str) -> str:
+        """The object id of a file's contents at a ref, or "" if it is not there.
+
+        Contents rather than commit: the question it answers is whether these
+        bytes moved, and a commit id changes when anything in the tree moves.
+        Absence is a value rather than an error because a deleted file is a
+        legitimate answer to "is this the same as it was" — and it is `no`.
+        """
+        proc = self._run("rev-parse", "--verify", "--quiet", f"{ref}:{path}",
+                         check=False)
+        return proc.stdout.strip() if proc.returncode == 0 else ""
+
     def current_branch(self) -> str:
         return self._out("rev-parse", "--abbrev-ref", "HEAD")
 

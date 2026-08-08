@@ -71,9 +71,15 @@ class TestTheQueueIsBuiltFromTheBatch:
         assert [s["id"] for s in queue] == ["two", "three"]
         assert dropped == []
 
-    def test_one_colliding_with_the_first_is_dropped(self, repo):
-        # Only an excerpt collides now: `two` quotes a line range out of the
-        # file `one` rewrites, and a line number does not survive that.
+    def test_nothing_is_dropped_here_any_more(self, repo):
+        """`two` quotes a range out of the file `one` may rewrite, and is kept.
+
+        The judgement moved to where the fact is: `stale_excerpts` at `two`'s
+        own precheck, comparing the bytes. Deciding it here meant deciding it
+        from `edit_files`, which is a permission rather than a record — `one`
+        may well land without touching `app/a.rb` at all, and then `two` was
+        dropped for an edit that never happened.
+        """
         queue, dropped = self._queued(
             repo, _spec("one", ["app/a.rb"]),
             [
@@ -81,8 +87,25 @@ class TestTheQueueIsBuiltFromTheBatch:
                 _spec("three", ["app/c.rb"]),
             ],
         )
-        assert [s["id"] for s in queue] == ["three"], "the rest still runs"
-        assert len(dropped) == 1 and "two" in dropped[0]
+        assert [s["id"] for s in queue] == ["two", "three"]
+        assert dropped == []
+
+    def test_every_queued_stage_carries_the_sha_it_was_drawn_against(self, repo):
+        # Recorded by the machinery. The planner is never asked for it: a sha a
+        # model supplies is a claim, and this one is a fact the run already has.
+        from orchestrator.gitops import Git
+
+        queue, _ = self._queued(
+            repo, _spec("one", ["app/a.rb"]), [_spec("two", ["app/b.rb"])]
+        )
+        assert queue[0]["excerpt_base_sha"] == Git(repo).rev_parse("HEAD")
+
+    def test_the_planner_cannot_supply_the_sha_itself(self, repo):
+        queue, _ = self._queued(
+            repo, _spec("one", ["app/a.rb"]),
+            [dict(_spec("two", ["app/b.rb"]), excerpt_base_sha="deadbeef")],
+        )
+        assert queue[0]["excerpt_base_sha"] != "deadbeef"
 
     def test_the_started_stage_is_never_in_the_queue(self, repo):
         # It is the one being run now; the queue is what comes after it.
@@ -146,7 +169,10 @@ class TestARevisionRechecksTheQueue:
         assert [s["id"] for s in kept] == ["two", "three"]
         assert dropped == []
 
-    def test_a_widened_revision_drops_only_what_it_now_touches(self, repo):
+    def test_a_widened_revision_keeps_the_whole_queue(self, repo):
+        # This asserted a drop. Widening `edit_files` widens a permission, and
+        # a permission disturbs nothing — whether the revision actually moves
+        # the bytes `three` quotes is answered at `three`'s own precheck.
         kept, dropped = self._rechecked(
             repo, _spec("one", ["app/a.rb", "app/c.rb"]),
             [
@@ -154,8 +180,8 @@ class TestARevisionRechecksTheQueue:
                 _spec("three", ["spec/a_spec.rb"], excerpts=["app/c.rb"]),
             ],
         )
-        assert [s["id"] for s in kept] == ["two"]
-        assert len(dropped) == 1 and "three" in dropped[0]
+        assert [s["id"] for s in kept] == ["two", "three"]
+        assert dropped == []
 
     def test_an_empty_queue_stays_empty(self, repo):
         assert self._rechecked(repo, _spec("one", ["app/a.rb"]), []) == ([], [])

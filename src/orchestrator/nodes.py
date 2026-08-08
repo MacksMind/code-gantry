@@ -30,7 +30,7 @@ from orchestrator.addendum import (
     decode_escapes,
 )
 from orchestrator.commands import clip_for_model
-from orchestrator.config import Stage, orthogonal_stages, validate_stage
+from orchestrator.config import Stage, validate_stage
 from orchestrator.executor import (
     TRANSCRIPT_FILENAME,
     ExcerptError,
@@ -569,6 +569,37 @@ def precheck(state: RunState, rt: Runtime) -> dict:
                     "debris, then resume.",
                 ),
             }
+
+    # Before the branch is cut and before anything runs: a stage whose quoted
+    # ranges no longer describe the file cannot be executed, and the executor
+    # would be handed our excerpt block as the only code it gets.
+    moved = stale_excerpts(rt.git, stage)
+    if moved:
+        listed = ", ".join(repr(p) for p in moved)
+        return {
+            **update,
+            **_planner_failure(
+                state,
+                "excerpt",
+                f"stage {stage.id!r} quotes {listed}, which has changed since "
+                "you read it",
+                "You drew this stage as part of a batch, against the tree as "
+                f"it stood at {stage.excerpt_base_sha[:12]}. A stage in front "
+                "of it has landed since, and the file you quoted is not the "
+                "file that is there now — so the line numbers in "
+                "`read_excerpts` no longer point at what you meant.\n\n"
+                "**If an earlier stage of this same batch edited it, that is "
+                "the cause, and it was your own doing.** Batched stages run in "
+                "order and may build on each other freely; a quoted line range "
+                "is the one thing that does not survive an earlier stage "
+                "moving it, because a number cannot be re-derived from the "
+                "file it points into.\n\n"
+                "Redraw this stage against the file as it is now. Re-read the "
+                "range and quote it again, or drop the excerpt and describe "
+                "what you want instead — the executor can read the file "
+                "itself.",
+            ),
+        }
 
     for command in stage.preconditions:
         result = rt.runner.run(command)
@@ -1679,19 +1710,54 @@ def _wall_clock_overrun(state: RunState, limits) -> str | None:
     return reason
 
 
+def stale_excerpts(git, stage) -> list[str]:
+    """Excerpted paths whose bytes have moved since the planner read them.
+
+    The whole of what replaced the static orthogonality pass, and it is smaller
+    because it measures rather than predicts.
+
+    The old check asked whether an earlier stage in the same batch was
+    *permitted* to touch a file a later stage quotes. Three faults, and the
+    third ends the argument: it predicted, and a stage spec is already a
+    prediction; it could only see batch-mates, so a file moved by a human, by
+    `rubocop -A`, or by a resume onto an advanced branch was invisible; and
+    `edit_files` is a permission rather than a record — a stage very often
+    declares a file editable and never edits it, so the check fired over a
+    superset of what happened and dropped usable stages for edits that never
+    occurred.
+
+    This asks the only question that matters: are the bytes under this line
+    range the same bytes. Blob ids rather than commit ids, because a commit
+    changes whenever anything in the tree changes and almost none of that is
+    about this file.
+
+    Empty `excerpt_base_sha` means the stage was derived against the tree as it
+    stands and there is no window to check.
+    """
+    base = getattr(stage, "excerpt_base_sha", "")
+    if not base or not stage.read_excerpts:
+        return []
+    moved = []
+    for path in dict.fromkeys(e.path for e in stage.read_excerpts):
+        try:
+            if git.blob_at(base, path) != git.blob_at("HEAD", path):
+                moved.append(path)
+        except GitError:  # pragma: no cover - defensive
+            moved.append(path)
+    return moved
+
+
 def _queue_from_batch(cfg, git, first, extra_fields: list[dict]) -> tuple[list[dict], list[str]]:
-    """The stages to hold behind the one being started, and what was dropped.
+    """The stages to hold behind the one being started, and what was trimmed.
 
-    The orthogonality check runs here rather than in the planner because it
-    needs the repository: globs are resolved against the files that exist, not
-    compared as strings, and only this side of the boundary can list them.
+    No orthogonality pass any more — see `stale_excerpts`. What is left is the
+    cap, which is the operator's policy rather than a safety property, and the
+    conversion through `stage_from_planner` so an executable field cannot ride
+    in on a batched stage.
 
-    The first stage is never dropped. It is the one about to run, and the check
-    exists to protect what is queued behind it.
-
-    A failure to list the repository drops the batch rather than the run: a
-    stage the planner has already produced is worth more than the saving, and
-    the queue is an optimisation over asking again.
+    `first` is unused now and kept in the signature deliberately: the caller
+    passes the stage being started, and a checker that needs it again is one
+    change away.
     """
     if not extra_fields:
         return [], []
@@ -1711,38 +1777,34 @@ def _queue_from_batch(cfg, git, first, extra_fields: list[dict]) -> tuple[list[d
         extra_fields = extra_fields[:allowed]
     if not extra_fields:
         return [], notes
+    # The commit these stages' excerpt line numbers were chosen against.
+    # Recorded here, by the machinery, because the run knows it and a model
+    # asked for it would be making a claim instead.
     try:
-        tracked = git.tracked_paths_now()
+        base = git.rev_parse("HEAD")
     except GitError:  # pragma: no cover - defensive
-        return [], notes
-    candidates = [first] + [cfg.stage_from_planner(f) for f in extra_fields]
-    kept, dropped = orthogonal_stages(candidates, tracked)
-    return [s.model_dump() for s in kept[1:]], notes + dropped
+        base = ""
+    queued = []
+    for fields in extra_fields:
+        stage = cfg.stage_from_planner(fields)
+        queued.append({**stage.model_dump(), "excerpt_base_sha": base})
+    return queued, notes
 
 
 def _requeue_after_revision(cfg, git, revised, queue: list[dict]) -> tuple[list[dict], list[str]]:
-    """The queue that survives a revision of the stage in front of it.
+    """The queue behind a revised stage, which is all of it.
 
     Rework is never batched — a failed stage owns a branch and a branch belongs
-    to one stage — but the stages queued behind it are unaffected work and are
-    kept. What can change is the revised stage: widening `edit_files` to fix a
-    scope violation may make it name a file a queued stage was drawn against.
+    to one stage — and the stages queued behind it are unaffected work.
 
-    So the check is re-run rather than the queue discarded. Putting the revised
-    stage at the head asks exactly the right question: it is first so it is
-    never dropped, the queue was already pairwise orthogonal, and the only
-    drops that can appear are the ones the revision caused.
+    This used to re-run the orthogonality check, because a revision that
+    widened `edit_files` could newly overlap a queued stage. With the check
+    gone there is nothing to re-run: whether the revision actually disturbs a
+    queued stage's excerpts is answered at that stage's own precheck, against
+    the tree, by `stale_excerpts`. Widening a permission is not disturbing
+    anything, which was the flaw in asking here.
     """
-    if not queue:
-        return [], []
-    try:
-        tracked = git.tracked_paths_now()
-    except GitError:  # pragma: no cover - defensive
-        return [], []
-    stages = [revised] + [cfg.stage_from_planner(f) for f in queue]
-    kept, dropped = orthogonal_stages(stages, tracked)
-    return [s.model_dump() for s in kept[1:]], dropped
-
+    return list(queue), []
 
 def _no_change_reason(turns_exhausted: bool, turns: int) -> str:
     """Why an attempt produced nothing, said so the planner fixes the right thing.

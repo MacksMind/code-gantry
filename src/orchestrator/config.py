@@ -508,6 +508,21 @@ class Stage(_Strict):
     # reveals. Paths, never a command — see `scoped_test_command`.
     test_paths: list[str] = []
 
+    # --- machinery-recorded ---
+    # The commit the planner's excerpt line numbers were chosen against, set by
+    # `plan` on every stage it queues behind the one it starts.
+    #
+    # Deliberately not planner-writable, and the reason is the whole argument
+    # for this field: a sha a model declares is a *claim* made before the work,
+    # which is the class of thing that produced the prediction problem this
+    # replaces. The run already knows which commit it derived against. Asking
+    # for it back would be asking the planner to be right about something the
+    # machinery cannot be wrong about.
+    #
+    # Empty on the stage being started now — it was derived against the tree as
+    # it stands, so there is no window in which anything could have moved.
+    excerpt_base_sha: str = ""
+
     # --- operator-only (executable) ---
     command: str | None = None
     preconditions: list[str] = []
@@ -875,144 +890,6 @@ def denylist_violations(commands: list[tuple[str, str]]) -> list[str]:
 # The failure is right and only the wording is wrong; a config that *ignored*
 # them would be worse, leaving someone believing `map_tokens` still bounds
 # something.
-def _paths_written(stage, tracked: list[str]) -> set[str]:
-    """Files a stage may change: tracked files its globs select, plus literals.
-
-    The literals matter on their own. A stage that creates a file names a path
-    git has never seen, so glob expansion finds nothing and two stages creating
-    the same file would look orthogonal — the one collision expansion cannot see.
-    """
-    selected = {p for p in tracked if matches_any(p, stage.edit_files)}
-    literal = {g for g in stage.edit_files if not any(c in g for c in "*?[")}
-    return selected | literal
-
-
-def _paths_relied_on(stage, tracked: list[str]) -> set[str]:
-    """Files a stage's spec is drawn against, and would be invalidated by.
-
-    Its own writes are included: two stages writing the same file conflict for
-    the same reason one quoting another's target does — the second was drawn
-    against a state the first destroys.
-
-    Only `read_excerpts`, and the narrowing is the whole rule. It was
-    everything a stage named — its writes, its reads, its excerpts — on the
-    reasoning that a spec is a prediction and any shared file makes a later
-    stage's prediction stale. That is true of exactly one of the three.
-
-    An excerpt carries a **line range**, chosen while the planner was looking
-    at the tree as it stood at derivation, and `resolve_excerpts` reads it at
-    the stage's own `stage_start_sha` — which for stage three of a batch is
-    after stages one and two have landed. An earlier stage that rewrites the
-    file shifts those lines, and the range resolves to the wrong text or fails
-    the stage back to the planner. Nothing self-corrects, because a number is
-    not re-derivable from the file it points into.
-
-    A read does self-correct. `RepoReader` has no `at_sha` during a run, so a
-    stage that lists a file as reference gets whatever it contains when it
-    runs — if an earlier stage rewrote it, the later stage reads the rewritten
-    version, which is the current and correct one.
-
-    A write self-corrects too, and that is the less obvious half. `instruction`
-    is required to state the end state and never a change — the invariant is
-    "assert state, not change", and a stage phrased as "make this edit" is
-    already unsatisfiable the moment the edit is half-true, batch or no batch.
-    A correctly written instruction therefore still describes what the file
-    should end up containing after an earlier stage has had its turn.
-
-    So the fragile thing is a pinned range, not a filename, and constraining
-    filenames cost real stages: every batch in the live run named the same few
-    reference files, so almost any batch touching one collapsed to a single
-    stage and the planner paid to draw the rest for nothing.
-
-    One residual case is worth watching rather than forbidding: two stages that
-    each *create* the same new path. Nothing breaks — the second finds the file
-    already there — but the work is duplicated, and `batch_notes` is where that
-    would show up.
-    """
-    return {e.path for e in stage.read_excerpts}
-
-
-def orthogonal_stages(stages: list, tracked: list[str]) -> tuple[list, list[str]]:
-    """The stages of a batch that cannot invalidate each other, and what was dropped.
-
-    Orthogonal rather than merely non-overlapping: the property wanted is that
-    no stage's outcome changes what another was drawn against, and file sets
-    being unshared is how that is enforced rather than what it is for.
-
-    One derivation may answer with several stages, and the saving is real: the
-    planner is the expensive participant and a derivation is a third of a
-    stage's wall clock. But a stage spec is a prediction — stage 3 of 5 is
-    drawn against a tree stages 1 and 2 have not touched — and this project has
-    already paid for that twice, once as an unresolvable `read_excerpts` range
-    failing a stage back to the planner and once as an authored edit that
-    stopped being satisfiable when half of it came true.
-
-    So the batch is constrained rather than trusted — but narrowly: **no
-    stage's `edit_files` may intersect any other batched stage's
-    `read_excerpts` paths**, and nothing else is forbidden. Stages run in
-    order, each landing before the next is cut, and each is reviewed against
-    the diff it actually produced; so a later stage may share files with an
-    earlier one, may read what it wrote, and may be written assuming it ran.
-    A quoted line range is the one thing that cannot re-derive itself.
-
-    Symmetric, deliberately. A conflict is reported whichever direction it
-    points, because reasoning about which order makes a given pair safe is
-    exactly the thinking this rule exists to remove.
-
-    Globs are resolved against the repository rather than compared as strings:
-    `app/*.rb` and `app/a.rb` have nothing in common as text and everything as
-    files.
-
-    **Filters rather than truncates.** A conflicting stage is dropped and the
-    walk continues, so a bad pair at position four still leaves one, two, three
-    and five. Truncating there would throw away every later stage for a
-    collision it had nothing to do with — which is what an earlier version did,
-    and why nothing here is called a prefix any more.
-
-    Each candidate is judged against what has been *kept*, never against what
-    was dropped: a stage colliding only with one that is not going to run has
-    nothing to collide with. The earlier of a pair wins, because it is the one
-    already accepted.
-
-    That is sound because the rule itself removes ordering. A kept stage names
-    nothing any other kept stage writes, so its spec is as true after the
-    others run as before, and removing something from the middle cannot
-    invalidate what follows. What it *cannot* see is a stage whose instruction
-    refers to another in prose — "extend the helper the previous stage adds" —
-    because that dependency touches no file. Batched stages must therefore
-    stand alone, and the schema has to say so, since any one of them may be the
-    one dropped.
-
-    Returns the kept stages and one note per drop, each naming both stages and
-    the shared path: an operator reading it should not have to re-derive the
-    collision.
-    """
-    kept: list = []
-    dropped: list[str] = []
-    for stage in stages:
-        writes = _paths_written(stage, tracked)
-        relies = _paths_relied_on(stage, tracked)
-        conflict = None
-        for earlier in kept:
-            clash = (writes & _paths_relied_on(earlier, tracked)) or (
-                _paths_written(earlier, tracked) & relies
-            )
-            if clash:
-                conflict = (earlier.id, sorted(clash)[0])
-                break
-        if conflict is None:
-            kept.append(stage)
-            continue
-        earlier_id, path = conflict
-        dropped.append(
-            f"stage {stage.id!r} was dropped from the batch: it shares "
-            f"{path!r} with stage {earlier_id!r}, so one of them would be "
-            "drawn against a tree the other changes. The planner will derive "
-            "it again against what actually landed."
-        )
-    return kept, dropped
-
-
 RETIRED_KEYS: dict[str, dict[str, str]] = {
     "executor": {
     "provider": "there is one executor now; the in-process client is not optional",

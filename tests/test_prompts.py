@@ -2266,13 +2266,26 @@ class TestTheBatchBlockIsSizedByTheSetting:
         # batch against it.
         assert "5" in self._leading(5)
 
-    def test_the_orthogonality_rule_travels_with_the_invitation(self):
-        # Inviting a batch without it produces stages that share files and are
-        # dropped — a whole stage of planning spent for nothing, and the
-        # planner only learns why on the *next* call, from `batch_notes`.
-        text = self._leading(5)
-        for phrase in ("edit", "read", "dropped"):
-            assert phrase in text.lower(), phrase
+    def test_the_excerpt_contract_travels_with_the_invitation(self):
+        """Not an orthogonality rule — there is no longer one to state.
+
+        The planner used to be told which files a batched stage may not name,
+        which asked it to reason about permissions. What it is told now is what
+        actually happens: quoted ranges are compared against the copy it read,
+        and a stage whose file has moved comes back to be redrawn. That is a
+        fact about the machinery rather than a rule to obey, and it is the
+        shape the rest of these prompts are in.
+        """
+        text = self._leading(5).lower()
+        assert "read_excerpts" in text
+        assert "redrawn" in text
+        # And the causality, so a stale excerpt is not read as bad luck.
+        assert "your own doing" in text
+
+    def test_it_says_batched_stages_may_build_on_each_other(self):
+        text = self._leading(5).lower()
+        assert "may assume the earlier ones happened" in text
+        assert "share files freely" in text
 
     def test_the_invitation_is_absent_when_batching_is_off(self):
         assert "orthogonal" not in self._leading(1).lower()
