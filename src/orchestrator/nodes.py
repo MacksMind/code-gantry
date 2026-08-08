@@ -94,6 +94,34 @@ def _doc_sha(state: RunState) -> str:
     return state.get("plan_sha") or state.get("base_sha") or ""
 
 
+def _render_sent_prompt(messages: list[dict]) -> str:
+    """The planner prompt as sent, with a size for every block.
+
+    Plain text rather than JSON: its reader is a person asking why a prompt is
+    the size it is, and the first thing they need is the arithmetic.
+    """
+    lines = ["# Planner prompt as sent", ""]
+    total = 0
+    parts: list[str] = []
+    for i, message in enumerate(messages):
+        content = message.get("content")
+        blocks = (
+            [{"text": content}] if isinstance(content, str) else list(content or [])
+        )
+        for j, block in enumerate(blocks):
+            text = block.get("text", "") if isinstance(block, dict) else str(block)
+            total += len(text)
+            cache = "" if not isinstance(block, dict) else (
+                "  [cache breakpoint]" if block.get("cache_control") else ""
+            )
+            label = f"message {i} ({message.get('role')}) block {j}"
+            lines.append(f"- {label}: {len(text):,} chars{cache}")
+            parts.append(f"\n\n## {label} — {len(text):,} chars{cache}\n\n{text}")
+    lines.insert(1, "")
+    lines.insert(1, f"**Total: {total:,} characters across {len(parts)} block(s).**")
+    return "\n".join(lines) + "".join(parts) + "\n"
+
+
 def _planner_context(state: RunState, rt: Runtime) -> str:
     """Conventions plus operations — the planner is the only one that gets both.
 
@@ -224,6 +252,28 @@ def plan(state: RunState, rt: Runtime) -> dict:
     )
 
     rt.log(f"[plan] {'revising ' + stage.id if stage else 'deriving next stage'}")
+
+    # Before the call, because everything in it is known now and because the
+    # one time it is wanted is when the call does not come back. The executor
+    # has had `sent-prompt.md` for exactly this reason; the planner has had
+    # nothing, and a 400 rejecting a prompt as too long left no way to find out
+    # what was in it. An hour of reconstruction from `config.yaml` and the plan
+    # tree accounted for 575,633 characters of a prompt the provider measured
+    # at 1,077,433 tokens, and reconstruction cannot be made to converge —
+    # a prompt is assembled from a dozen optional inputs and the missing one is
+    # by definition the one you did not think to pass.
+    #
+    # Sizes beside the text, because the question asked of this file is almost
+    # always "which block is enormous" rather than "what does it say".
+    rt.write_artifact(
+        state.get("stage_index", 0),
+        stage.id if stage else "plan",
+        state.get("revision", 0),
+        _attempt(state),
+        "planner-prompt.md",
+        _render_sent_prompt(messages),
+    )
+
     started = time.time()
     outcome = rt.planner.plan(messages)
     planned_for = max(time.time() - started, 0.0)

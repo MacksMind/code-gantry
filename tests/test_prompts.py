@@ -2297,3 +2297,54 @@ class TestTheBatchBlockIsSizedByTheSetting:
             cfg=SimpleNamespace(cache_ttl=None), plan=a_plan(), completed=[]
         )
         assert messages[0]["content"][0]["text"]
+
+
+class TestThePlannerPromptIsRecordedBeforeItIsSent:
+    """The instrument that was missing when it was most wanted.
+
+    A planner call was rejected as `prompt is too long: 1077433 tokens >
+    1000000 maximum`, and nothing on disk said what had been in it. The
+    executor has had `sent-prompt.md` since the transcript work, written before
+    its first call because everything in it is known then. The planner had
+    `planner.json`, written after — and a call that never returns writes
+    nothing at all.
+
+    Reconstructing it from `config.yaml`, the plan tree and the runtime
+    accounted for 575,633 characters against a provider-measured ~1M tokens,
+    and that gap is not closable by more careful reconstruction: the prompt is
+    assembled from a dozen optional inputs and the one that matters is the one
+    you did not think to pass.
+    """
+
+    def test_every_block_is_listed_with_its_size(self):
+        from orchestrator.nodes import _render_sent_prompt
+
+        out = _render_sent_prompt([
+            {"role": "user", "content": [
+                {"text": "a" * 100, "cache_control": {"type": "ephemeral"}},
+                {"text": "b" * 5},
+            ]},
+            {"role": "assistant", "content": "c" * 7},
+        ])
+        assert "Total: 112 characters across 3 block(s)." in out
+        assert "message 0 (user) block 0: 100 chars" in out
+        assert "message 1 (assistant) block 0: 7 chars" in out
+
+    def test_a_cache_breakpoint_is_marked(self):
+        # Where the breakpoints fall is most of why a prompt costs what it
+        # does, and it is invisible in the text itself.
+        from orchestrator.nodes import _render_sent_prompt
+
+        out = _render_sent_prompt([
+            {"role": "user", "content": [
+                {"text": "x", "cache_control": {"type": "ephemeral"}},
+                {"text": "y"},
+            ]},
+        ])
+        assert out.count("[cache breakpoint]") == 2  # summary line and section
+
+    def test_the_text_itself_is_kept(self):
+        from orchestrator.nodes import _render_sent_prompt
+
+        out = _render_sent_prompt([{"role": "user", "content": "the actual bytes"}])
+        assert "the actual bytes" in out
