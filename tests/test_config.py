@@ -689,15 +689,22 @@ class TestAgentContextDocuments:
 class TestRetiredKeysExplainThemselves:
     """A key this tool used to have must say so, not fail as a typo.
 
-    Deleting Aider removed nine `executor` settings that existed only to build
-    its argv. Every project config that had them stops loading, and `extra=
-    "forbid"` renders that as "Extra inputs are not permitted" against a key
-    the operator deliberately set and that worked yesterday — indistinguishable
-    from a misspelling, and it names no way forward.
+    `extra="forbid"` renders a removed key as "Extra inputs are not permitted"
+    — the same message a typo gets, against a key the operator set deliberately
+    and that worked yesterday. The failure is correct and only the wording is
+    wrong; a config that silently *ignored* a retired key would be worse,
+    leaving someone believing it still bounds something.
 
-    The failure is correct and only the message is wrong, which is the whole
-    point: a config that silently ignored a retired key would leave an operator
-    believing `map_tokens` still bounds something.
+    **The table is empty and that is its normal state.** An entry belongs there
+    only while some config might still carry the key — between removing it and
+    updating the configs that set it — and comes out once none do. It was ten
+    entries deep for a tool with exactly one config, owned by the person who
+    had deleted the keys, which is a table of explanations nobody could ever
+    read.
+
+    So these drive the mechanism with a temporary entry rather than a live one.
+    A mechanism with no entries and no test is dead in the other direction: it
+    would keep passing while broken, and the next removal would find out.
     """
 
     def _base(self, **over):
@@ -714,106 +721,57 @@ class TestRetiredKeysExplainThemselves:
         data["executor"].update(over)
         return data
 
-    def test_it_names_the_key_and_why_it_went(self):
+    def test_it_names_the_key_and_where_the_intent_went(self, monkeypatch):
+        import orchestrator.config as config
+
+        monkeypatch.setitem(
+            config.RETIRED_KEYS, "executor", {"map_tokens": "the executor reads what it asks for"}
+        )
         with pytest.raises(ConfigError) as e:
             parse_config(self._base(map_tokens=1024))
         message = "\n".join(e.value.problems)
         assert "executor.map_tokens" in message
-        assert "aider" in message.lower()
+        assert "the executor reads what it asks for" in message
         assert "Extra inputs are not permitted" not in message
 
+    def test_it_reaches_a_section_other_than_the_executor(self, monkeypatch):
+        # Per section, because the key that most needed this last time lived on
+        # `Limits` and a guard looking only at `executor` could not see it.
+        import orchestrator.config as config
+
+        monkeypatch.setitem(
+            config.RETIRED_KEYS, "limits", {"gone_seconds": "bounded from inside the loop"}
+        )
+        data = self._base()
+        data["limits"] = {"gone_seconds": 900}
+        with pytest.raises(ConfigError) as e:
+            parse_config(data)
+        assert "limits.gone_seconds" in "\n".join(e.value.problems)
+
     def test_a_real_typo_still_fails_as_a_typo(self):
-        # The retired list must not swallow everything unknown.
+        # The mechanism must not swallow everything unknown.
         with pytest.raises(ConfigError) as e:
             parse_config(self._base(max_cyclez=2))
         assert "max_cyclez" in "\n".join(e.value.problems)
 
-    def test_every_retired_key_is_actually_gone_from_the_model(self):
-        # A key listed as retired that still exists would produce a config the
-        # loader rejects and the model accepts — the error would be a lie.
-        # Per section since `limits` needed the same guard; see
-        # `TestARetiredLimitIsNamedLikeARetiredExecutorKey`.
-        from orchestrator.config import RETIRED_KEYS, ExecutorConfig
-
-        live = set(ExecutorConfig.model_fields)
-        assert not (set(RETIRED_KEYS["executor"]) & live), "still a field"
-
-
-class TestARetiredLimitIsNamedLikeARetiredExecutorKey:
-    """`limits` needed the same mechanism, and could not reach it.
-
-    `aider_timeout_seconds` lived on `Limits`, not `ExecutorConfig`, so
-    `RETIRED_EXECUTOR_KEYS` could never have caught it — and it survived the
-    deletion of Aider entirely: read by nothing, still declared, and still
-    written into every config `orchestrator init` drafts. A field that is
-    declared rather than retired is invisible to the guard built for exactly
-    this, which is why the guard is now per-section rather than per-executor.
-
-    What replaced it is `executor.request_timeout_seconds`, which bounds an
-    attempt from inside the loop. The retirement message has to say so: an
-    operator who set a timeout deliberately needs to know where that intent
-    now lives, and `extra="forbid"` alone reports it identically to a typo.
-    """
-
-    def _base(self, **limits):
-        return {
-            "target_repo": ".", "base_ref": "main", "project_branch": "p",
-            "plan_root": "PLAN.md", "test_command": "true",
-            "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
-            "reviewer": {"model": "gpt-5.6-sol"}, "limits": limits,
-        }
-
-    def test_it_is_reported_as_retired_not_as_a_typo(self):
-        import pytest
-
-        from orchestrator.config import ConfigError, parse_config
-
-        with pytest.raises(ConfigError) as e:
-            parse_config(self._base(aider_timeout_seconds=900))
-        text = "\n".join(e.value.problems)
-        assert "aider_timeout_seconds" in text
-        assert "request_timeout_seconds" in text, "must name what replaced it"
-
-    def test_an_unknown_limit_is_still_a_typo(self):
-        # The retired list must not swallow everything unknown.
-        import pytest
-
-        from orchestrator.config import ConfigError, parse_config
-
-        with pytest.raises(ConfigError) as e:
-            parse_config(self._base(max_stagez=2))
-        assert "max_stagez" in "\n".join(e.value.problems)
-
-    def test_a_live_limit_still_loads(self):
-        from orchestrator.config import parse_config
-
-        cfg = parse_config(self._base(command_timeout_seconds=120))
-        assert cfg.limits.command_timeout_seconds == 120
-
-    def test_every_retired_key_is_gone_from_its_own_model(self):
+    def test_no_entry_names_a_key_that_still_exists(self):
+        # A key listed as retired that is still a field would produce a config
+        # the loader rejects and the model accepts — the error would be a lie.
+        # Vacuous while the table is empty, and the guard that catches the
+        # mistake the moment an entry is added.
         from orchestrator.config import RETIRED_KEYS, ExecutorConfig, Limits
 
         for section, model in (("executor", ExecutorConfig), ("limits", Limits)):
-            live = set(model.model_fields) & set(RETIRED_KEYS[section])
-            assert not live, f"{section}: listed as retired but still a field"
+            live = set(model.model_fields) & set(RETIRED_KEYS.get(section, {}))
+            assert not live, f"{section}: {live} is still a field"
 
-    def test_a_drafted_config_names_no_retired_key(self):
-        # `orchestrator init` was still minting one into every new project,
-        # which is how a deleted tool goes on shipping.
+    def test_the_table_is_empty_between_removals(self):
         from orchestrator.config import RETIRED_KEYS
-        from orchestrator.discover import draft_config
 
-        import re
-
-        draft, _notes = draft_config(Path("."), "PLAN.md")
-        for section, keys in RETIRED_KEYS.items():
-            for key in keys:
-                # A key, not a substring: "provider" occurs inside the prose
-                # "litellm provider prefix", and a naive check made the guard
-                # cry wolf on a comment while the real ones sat two lines down.
-                assert not re.search(rf"^\s*{re.escape(key)}\s*:", draft, re.M), (
-                    f"{section}.{key} drafted into a new config"
-                )
+        assert RETIRED_KEYS == {}, (
+            "entries are transient — once no config carries the key, take it "
+            "out rather than keeping an explanation nobody can read"
+        )
 
 
 class TestThePlannerOutputBudgetIsASetting:

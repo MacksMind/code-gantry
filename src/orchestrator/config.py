@@ -940,43 +940,26 @@ def denylist_violations(commands: list[tuple[str, str]]) -> list[str]:
     return problems
 
 
-# Settings that existed only to build Aider's argv, and went with it. Kept as
-# a list rather than deleted silently because `extra="forbid"` renders a
-# retired key as "Extra inputs are not permitted" — the same message a typo
-# gets, against a key the operator set deliberately and that worked yesterday.
-# The failure is right and only the wording is wrong; a config that *ignored*
-# them would be worse, leaving someone believing `map_tokens` still bounds
-# something.
-RETIRED_KEYS: dict[str, dict[str, str]] = {
-    "executor": {
-    "provider": "there is one executor now; the in-process client is not optional",
-    "lint_command": "declare it in `stage_defaults.checks`, which the loop runs",
-    "edit_format": "edits are structured tool calls, not a text format",
-    "model_metadata_file": "pricing comes from the public rate table",
-    "map_tokens": "there is no repo map; the executor reads what it asks for",
-    "cache_prompts": "prompt caching is always on",
-    "cache_keepalive_pings": "nothing to keep alive between calls",
-    "auto_test": "the loop always tests; see `max_cycles`",
-    "extra_args": "there is no subprocess to pass arguments to",
-    },
-    # Per section, because the first version was per executor and the key that
-    # most needed it lived here. `aider_timeout_seconds` was read by nothing,
-    # survived the deletion of Aider entirely, and was still being written into
-    # every config `orchestrator init` drafted — invisible to a guard that only
-    # looked at one block. A field that is declared rather than retired is not
-    # caught by `extra="forbid"` either, since it loads.
-    "limits": {
-        "aider_timeout_seconds": (
-            "there is no subprocess to time out; an attempt is bounded from "
-            "inside the loop by executor.request_timeout_seconds"
-        ),
-    },
-}
-"""Settings that once meant something, and what to use instead.
+# Keys this tool used to have, and where the intent moved.
+#
+# Empty, and that is the normal state. An entry belongs here only while a
+# config somewhere might still carry the key — between removing it and updating
+# every config that set it. Once none do, the entry goes too: a table of
+# explanations for keys nobody has left is a second thing to keep true, and it
+# was ten entries deep for a tool with exactly one config, owned by the person
+# who had deleted the keys.
+#
+# The mechanism stays because it is right for the case it was built for.
+# `extra="forbid"` renders a retired key as "Extra inputs are not permitted" —
+# the same message a typo gets, against a key the operator set deliberately and
+# that worked yesterday. The failure is correct and only the wording is wrong;
+# a config that *silently ignored* a retired key would be worse, leaving
+# someone believing it still bounds something.
+RETIRED_KEYS: dict[str, dict[str, str]] = {}
+"""Retired settings, per config section, and what to use instead.
 
-`extra="forbid"` reports a retired key exactly as it reports a typo, which is
-the wrong answer for an operator who set it deliberately: they need to know
-where the intent moved, not that they misspelled something.
+Per section rather than per executor, because the key that most needed it last
+time lived on `Limits` and a guard looking at one block could not see it.
 """
 
 
@@ -987,7 +970,7 @@ def _retired_key_problems(data: dict) -> list[str]:
         if not isinstance(block, dict):
             continue
         problems += [
-            f"{section}.{key}: retired when aider was removed — {why}"
+            f"{section}.{key}: retired — {why}"
             for key, why in keys.items()
             if key in block
         ]
