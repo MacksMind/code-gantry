@@ -695,12 +695,13 @@ class TestRetiredKeysExplainThemselves:
     wrong; a config that silently *ignored* a retired key would be worse,
     leaving someone believing it still bounds something.
 
-    **The table is empty and that is its normal state.** An entry belongs there
-    only while some config might still carry the key — between removing it and
-    updating the configs that set it — and comes out once none do. It was ten
-    entries deep for a tool with exactly one config, owned by the person who
-    had deleted the keys, which is a table of explanations nobody could ever
-    read.
+    **The table is empty, and that is temporary rather than normal.** There is
+    one config, in this repository, owned by whoever removes the key, so an
+    entry survives only as long as it takes to update that file — and ten of
+    them explaining settings nobody had left was a table no one could read.
+    Once the tool is public that reverses: an entry becomes permanent, because
+    nothing can tell you whether the last config carrying the key has been
+    updated.
 
     So these drive the mechanism with a temporary entry rather than a live one.
     A mechanism with no entries and no test is dead in the other direction: it
@@ -765,12 +766,25 @@ class TestRetiredKeysExplainThemselves:
             live = set(model.model_fields) & set(RETIRED_KEYS.get(section, {}))
             assert not live, f"{section}: {live} is still a field"
 
-    def test_the_table_is_empty_between_removals(self):
+    def test_the_table_is_still_empty(self):
+        """A tripwire with an expiry date, not an invariant.
+
+        While there is one config and we own it, an entry survives only as long
+        as it takes to update that file, so an empty table is the tidy state
+        and a non-empty one means a cleanup was forgotten.
+
+        **Delete this test the day the tool is public.** From then on entries
+        are permanent — there is no way to know whether the last config
+        carrying a key has been updated, and removing the explanation turns it
+        back into "Extra inputs are not permitted" for someone upgrading from a
+        version nobody is tracking. Failing here is the prompt to make that
+        decision rather than to reflexively empty the table again.
+        """
         from orchestrator.config import RETIRED_KEYS
 
         assert RETIRED_KEYS == {}, (
-            "entries are transient — once no config carries the key, take it "
-            "out rather than keeping an explanation nobody can read"
+            "either a cleanup was missed, or this tool now has users and this "
+            "test should be deleted rather than the entries"
         )
 
 

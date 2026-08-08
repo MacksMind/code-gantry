@@ -942,19 +942,24 @@ def denylist_violations(commands: list[tuple[str, str]]) -> list[str]:
 
 # Keys this tool used to have, and where the intent moved.
 #
-# Empty, and that is the normal state. An entry belongs here only while a
-# config somewhere might still carry the key — between removing it and updating
-# every config that set it. Once none do, the entry goes too: a table of
-# explanations for keys nobody has left is a second thing to keep true, and it
-# was ten entries deep for a tool with exactly one config, owned by the person
-# who had deleted the keys.
-#
-# The mechanism stays because it is right for the case it was built for.
 # `extra="forbid"` renders a retired key as "Extra inputs are not permitted" —
 # the same message a typo gets, against a key the operator set deliberately and
 # that worked yesterday. The failure is correct and only the wording is wrong;
-# a config that *silently ignored* a retired key would be worse, leaving
-# someone believing it still bounds something.
+# a config that *silently ignored* one would be worse, leaving someone
+# believing it still bounds something.
+#
+# **Empty right now, and that is temporary rather than normal.** There is one
+# config, in this repository, owned by whoever removes the key — so an entry
+# survives only as long as it takes to update that file, and ten of them
+# explaining settings nobody had left was a table no one could ever read.
+#
+# **That stops the moment this tool is public**, and the change is one-way.
+# Once configs exist that we do not own and cannot see, an entry is permanent:
+# there is no way to know whether the last config carrying the key has been
+# updated, and removing it turns a clear explanation back into "Extra inputs
+# are not permitted" for someone upgrading from a version we no longer track.
+# Cleaning out entries is a habit that has to be dropped deliberately, on that
+# day, rather than continued because it was right before.
 RETIRED_KEYS: dict[str, dict[str, str]] = {}
 """Retired settings, per config section, and what to use instead.
 
