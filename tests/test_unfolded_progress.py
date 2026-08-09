@@ -99,18 +99,30 @@ class TestTheAccounting:
         assert not check.ok
         assert not check.fatal, "a run must not refuse to start over this"
 
-    def test_it_counts_the_landings_separately_from_the_notes(self, repo):
-        """Two numbers because they answer different questions.
+    def test_it_names_each_count_for_whoever_wrote_it(self, repo):
+        """Two numbers, disjoint, each naming its author.
 
-        Entries are the size of the folding job. Landings are how many stages
-        have gone by since the last one, which is what the cost grows with —
-        the plan block is rewritten once per landing whatever is in it.
+        They answer different questions. A reviewer summary is what a stage
+        did, written after the diff by the only participant that saw it, and
+        there is one per landing — so that count is also how many stages have
+        gone by, which is what the cost grows with. A planner note is an
+        observation about the plan itself, recorded whether or not the stage
+        it was derived alongside ever landed.
+
+        The first version said "3 entries and 2 landings", which put a subset
+        beside its superset: the numbers could not be added, and neither said
+        who wrote what, which is what tells an operator what folding one of
+        them involves.
         """
         check = self._check(
             repo, [LANDED.format(1), OBSERVED.format(1), LANDED.format(2)]
         )
-        assert "3 entr" in check.detail
-        assert "2 landing" in check.detail
+        assert "1 planner note" in check.detail
+        assert "2 reviewer summaries" in check.detail
+
+    def test_the_singular_reads_correctly(self, repo):
+        check = self._check(repo, [LANDED.format(1), OBSERVED.format(1)])
+        assert "1 planner note and 1 reviewer summary" in check.detail
 
     def test_it_reports_the_size_the_planner_is_paying_for(self, repo):
         check = self._check(repo, [LANDED.format(n) for n in range(40)])

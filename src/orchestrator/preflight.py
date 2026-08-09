@@ -357,15 +357,21 @@ def _unfolded_progress_check(cfg: ProjectConfig) -> Check:
     if not entries:
         return Check("progress log", True, "nothing to fold")
 
-    landings = sum(1 for line in entries if line.startswith("## What "))
+    # Named for who wrote them, and disjoint. "68 entries and 24 landings" put
+    # a subset beside its superset, so the two numbers could not be added or
+    # compared — and neither said which participant produced it, which is the
+    # thing that tells an operator what folding one of them involves.
+    summaries = sum(1 for line in entries if line.startswith("## What "))
+    notes = len(entries) - summaries
     size = len(body.encode())
     shown = f"{size / 1024:.0f}KB" if size >= 1024 else f"{size} bytes"
     rel = target.relative_to(cfg.target_repo)
     return Check(
         "progress log",
         False,
-        f"{len(entries)} entr{'y' if len(entries) == 1 else 'ies'} and "
-        f"{landings} landing{'' if landings == 1 else 's'} unfolded in "
+        f"{notes} planner note{'' if notes == 1 else 's'} and "
+        f"{summaries} reviewer "
+        f"{'summary' if summaries == 1 else 'summaries'} unfolded in "
         f"{rel} ({shown})",
         fatal=False,
     )
