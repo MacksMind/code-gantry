@@ -162,7 +162,13 @@ def init(plan_doc: Path, config_path: Path | None) -> None:
     draft, notes = draft_config(repo, plan_rel)
     target.write_text(draft)
 
-    click.echo(f"wrote {target}\n")
+    # Relative where it helps. An operator runs these from the repo, and a
+    # 120-character absolute path is a command nobody types twice.
+    try:
+        shown = target.resolve().relative_to(Path.cwd())
+    except ValueError:
+        shown = target
+    click.echo(f"wrote {shown}\n")
     for note in notes:
         click.echo(f"  {note}")
     ignore_hint = ""
@@ -178,8 +184,8 @@ def init(plan_doc: Path, config_path: Path | None) -> None:
     click.echo(
         "\nEvery discovered field carries a provenance comment, so reviewing it "
         "is a check of reasoning rather than of values. Read it, fix what is "
-        f"wrong, commit it, then:\n\n  orchestrator validate {target}\n"
-        f"  orchestrator run {target}" + ignore_hint
+        f"wrong, commit it, then:\n\n  orchestrator validate {shown}\n"
+        f"  orchestrator run {shown}" + ignore_hint
     )
 
 

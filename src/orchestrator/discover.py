@@ -62,10 +62,21 @@ def draft_config(repo: Path, plan_rel: str) -> tuple[str, list[str]]:
     lines.append("# Documentation only: these commands assume this machine's Docker,")
     lines.append("# runtime, and paths. `validate` checks this host, not the config in")
     lines.append("# the abstract.")
-    lines.append(f'host: "{_hostname()}"')
+    # Commented, not set. This file is committed to the repository it
+    # describes and read by everyone who checks it out, so `init` writing one
+    # machine's name into it is a real identifier reaching a tracked file
+    # without anyone choosing to put it there. The field is documentation —
+    # uncomment it if a reader should know which host these commands assume.
+    lines.append(f'# host: "{_hostname()}"')
     lines.append("")
-    lines.append(f"target_repo: {repo}")
-    lines.append(f"# ^ derived by walking up from {plan_rel} to the git root")
+    # No `target_repo`. This file now lives in the repository it describes and
+    # is committed there, so an absolute path would be one machine's home
+    # directory written into a file other people check out — and it would be a
+    # second name for something already known, free to disagree with where the
+    # config actually is. Derived by walking up to the git root instead.
+    lines.append("# target_repo is not set: it is the git repository this file")
+    lines.append("# sits in, found by walking up. Set it only to point somewhere")
+    lines.append("# else, such as a worktree.")
     lines.append("base_ref: main")
     lines.append("project_branch: refactor/CHANGE-ME")
     lines.append("")
