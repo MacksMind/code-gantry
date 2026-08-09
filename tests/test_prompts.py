@@ -2349,3 +2349,72 @@ class TestThePlannerPromptIsRecordedBeforeItIsSent:
 
         out = _render_sent_prompt([{"role": "user", "content": "the actual bytes"}])
         assert "the actual bytes" in out
+
+
+class TestHowLargeOneStageShouldBe:
+    """Stage sizing was project config, and three paragraphs of it were not.
+
+    One project's `planner.guidance` carried the whole answer — cohesion,
+    independence, blast radius — so it reached that project's planner and no
+    other's. Read against the rule that keeps config and code apart, none of
+    the three named a framework, a file extension or a directory: they were
+    this machine describing its own behaviour. A stage lands completely or not
+    at all; `must_not_remain` reads file contents, so an incomplete sweep is
+    caught without a review; a stage is judged as one diff, so a judgement
+    split across two of them is judged by neither.
+
+    What stayed in config is what genuinely could not be derived: a suite that
+    flakes under parallel execution, with an issue number, and the sizes real
+    stages on that repository came in at.
+    """
+
+    def _text(self):
+        from orchestrator.prompts import _stage_size_block
+
+        return _stage_size_block()
+
+    def test_it_leads_with_what_a_large_stage_costs(self):
+        # The reason to care, before the rules. Blast radius is the thing an
+        # operator cannot see from the plan and the planner cannot infer.
+        text = self._text()
+        assert "lands completely or not at all" in text
+        assert "redraw" in text
+
+    def test_it_says_to_group_identical_edits_and_count_the_sites(self):
+        text = self._text()
+        assert "identical edit at every site" in text
+        assert "total number of sites" in text
+
+    def test_it_says_to_split_a_judgement_that_spans_files(self):
+        text = self._text()
+        assert "unreviewable on its own" in text
+
+    def test_it_distinguishes_independent_judgements_from_a_single_one(self):
+        # The distinction the guidance made and the prompt did not: needing
+        # thought everywhere is not a reason to split; needing the *same*
+        # thought everywhere is a reason to group.
+        text = self._text()
+        assert "several small decisions rather than one large one" in text
+
+    def test_it_does_not_restate_the_stage_cost_advice(self):
+        """Sizing by context rather than by file count has a home already.
+
+        `_stage_costs_block` says it beside the figures that make it
+        actionable. Saying it again here would be the history block's fault
+        repeated: text that reads as missing because you are looking at one
+        prompt and not at the one arriving beside it.
+        """
+        text = self._text().lower()
+        assert "file count" not in text
+        assert "peak" not in text
+
+    def test_it_carries_no_project_vocabulary(self):
+        # It ships to every project. The guidance it came from illustrated
+        # itself with one framework's rename and one repository's controller,
+        # which is exactly what must not travel.
+        text = self._text().lower()
+        for word in (
+            "rails", "ruby", "rspec", "gemfile", "controller", "helper",
+            ".rb", ".erb", "app/", "spec/", "bundle", "capybara",
+        ):
+            assert word not in text, f"{word!r} is project knowledge in a prompt"

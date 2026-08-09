@@ -667,6 +667,60 @@ def _batch_block(cfg) -> str:
     )
 
 
+def _stage_size_block() -> str:
+    """How much work belongs in one stage.
+
+    Not the same question as `_batch_block`, which is how many stages one call
+    may return. This is the size of each, and the prompt had nothing on it —
+    so one project's config carried the whole answer in `planner.guidance`,
+    where it reached that project's planner and no other's. Three of its
+    paragraphs named no framework, no file extension and no directory: they
+    were never project knowledge, they were this machine describing itself.
+
+    All three are facts about the orchestrator rather than about a repository.
+    A stage lands completely or not at all, so blast radius is a property of
+    the merge; `must_not_remain` reads file contents, so it catches a sweep
+    that stopped early; a stage is reviewed as one diff, so the cost of
+    splitting one judgement across stages is that neither half can be judged.
+    An operator should not have to know any of that to get it right.
+
+    Deliberately silent on sizing by context rather than by file count. The
+    stage-costs block already says it, beside the figures that make it
+    actionable, and the first instinct here was to restate it more fully —
+    which is the same fault the history block had: text that reads as missing
+    because you are looking at one prompt and not at the one arriving beside
+    it.
+    """
+    return (
+        "## How large one stage should be\n\n"
+        "A stage lands completely or not at all. A failure at one site "
+        "reverts every site with it, and the whole stage is re-attempted "
+        "against an instruction written before any of it was done — so the "
+        "question is not how much work fits, it is how much you are willing "
+        "to lose and redraw.\n\n"
+        "**Group sites that need the same judgement.** When a change is the "
+        "identical edit at every site and nothing at any site needs its own "
+        "thought, one stage is right however many files it touches. Declare "
+        "every one of them in `edit_files`, and state the total number of "
+        "sites in the instruction so the executor knows when it has "
+        "finished — a sweep that stops early is caught by the gates in "
+        "seconds, without spending a review.\n\n"
+        "**Keep apart sites where the judgement at one depends on the "
+        "judgement at another** — a declaration and the things that inherit "
+        "from it, two files that have to agree on a name. That is a single "
+        "judgement spread across files, and splitting it is what leaves each "
+        "piece unreviewable on its own. A file that is unusually large is a "
+        "stage by itself.\n\n"
+        "**Independent judgements are neither.** Sites that each need their "
+        "own decision, where none of them refers to any other, are several "
+        "small decisions rather than one large one, and reading them together "
+        "costs the reviewer no more than reading them in sequence. Group "
+        "those while each is small: needing thought at every site is not on "
+        "its own a reason to split, but needing the *same* thought at every "
+        "site is a reason to group.\n\n"
+    )
+
+
 def _history_block(
     completed: list[StageResult],
     addendum_path: str | None = None,
@@ -1041,6 +1095,7 @@ def build_planner_messages(
             + agent_context
             + "\n\n"
         )
+    leading += _stage_size_block()
     leading += _batch_block(cfg)
     leading += _checks_block(cfg)
     if layout:
