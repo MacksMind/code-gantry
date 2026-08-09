@@ -200,6 +200,51 @@ def _digest(rt, state):
     return diff_digest(rt.git, state["stage_start_sha"])
 
 
+class TestWhatADerivationProduced:
+    """Named on every derivation, including the ones that produced one stage.
+
+    `additional_stages` exists to amortise a planner call — seven minutes and
+    several dollars — over more than one stage, so the question that decides
+    whether it earns its place is the *distribution* of batch sizes. Two lines
+    reported this before: the stage about to run, and a count of the rest only
+    when there were any. A batch of one was therefore indistinguishable from a
+    batch that was never offered, and the run where the question was asked had
+    to have its distribution recovered by a script — 17 derivations, 26 stages,
+    8 singletons and 9 pairs against a cap of five.
+
+    The absence was the finding. A log that speaks up only when the answer is
+    greater than one cannot be read for how often the answer is one.
+    """
+
+    def _derive(self, repo, tmp_path, extras):
+        planner = StubPlanner([
+            PlannerOutcome(
+                "next_stage", "first", "e",
+                stage_fields=planned_stage(),
+                additional_stage_fields=extras,
+            )
+        ])
+        # `make`'s `planner` argument is the stub, and the config key of the
+        # same name is the endpoint — so the cap is raised after the fact.
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        rt.cfg.planner.max_batch_stages = 5
+        seen: list[str] = []
+        rt.log = seen.append
+        nodes.plan(state, rt)
+        return [line for line in seen if line.startswith("[plan] derived:")]
+
+    def test_a_single_stage_derivation_still_names_what_it_produced(
+        self, repo, tmp_path
+    ):
+        assert self._derive(repo, tmp_path, []) == ["[plan] derived: extract"]
+
+    def test_a_batch_names_every_stage_in_order(self, repo, tmp_path):
+        extra = {**planned_stage(), "id": "second", "edit_files": ["other.py"]}
+        assert self._derive(repo, tmp_path, [extra]) == [
+            "[plan] derived: extract, second"
+        ]
+
+
 class TestPlanDerivation:
     def test_a_new_stage_goes_to_precheck(self, repo, tmp_path):
         planner = StubPlanner(

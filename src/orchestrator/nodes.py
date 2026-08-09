@@ -510,7 +510,6 @@ def plan(state: RunState, rt: Runtime) -> dict:
         return update
 
     # next_stage
-    rt.log(f"[plan] next stage: {new_stage.id}")
     index = state.get("stage_index", 0)
     if stage is not None:
         # A predecessor inserted in front of a failing stage takes its slot; the
@@ -525,11 +524,15 @@ def plan(state: RunState, rt: Runtime) -> dict:
     queue, dropped_from_batch = _queue_from_batch(
         rt.cfg, rt.git, new_stage, outcome.additional_stage_fields
     )
-    if queue:
-        rt.log(
-            f"[plan] {len(queue)} further stage(s) queued from this derivation: "
-            + ", ".join(s["id"] for s in queue)
-        )
+    # Everything this derivation produced, named, on one line and on every
+    # derivation. Two lines said this before — the stage about to run, and a
+    # count of the rest *if there were any* — so a derivation that returned one
+    # stage said nothing about being a batch of one. That is the reading the
+    # question is actually about: `additional_stages` was added to amortise a
+    # seven-minute planner call over several stages, and whether it is doing
+    # so is answered by the distribution, which cannot be recovered from a log
+    # that only speaks up when the answer is greater than one.
+    rt.log(f"[plan] derived: " + ", ".join([new_stage.id, *(s["id"] for s in queue)]))
     for note in dropped_from_batch:
         # Logged rather than swallowed. A batch quietly shrinking is how a
         # feature that is not working looks exactly like one that is.
