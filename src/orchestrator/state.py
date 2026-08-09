@@ -335,6 +335,10 @@ def zero_usage() -> dict[str, int]:
         "cache_write_tokens": 0,
         "completion_tokens": 0,
         "planner_prompt_tokens": 0,
+        # Not a total; see `accumulate_usage`. The largest single call of a
+        # derivation's tool loop, which is what the read budgets bound and
+        # what the summed figure cannot show.
+        "planner_peak_prompt_tokens": 0,
         "planner_cached_tokens": 0,
         "planner_cache_write_tokens": 0,
         "planner_completion_tokens": 0,
@@ -591,9 +595,24 @@ def outstanding_deferrals(entries: list[dict] | None) -> list[dict]:
 
 
 def accumulate_usage(current: dict[str, int] | None, **deltas: int) -> dict[str, int]:
+    """Add every figure except the ones that are not totals.
+
+    A key naming a peak takes the maximum. Two calls do not make a larger
+    call than either of them, and summing high-water marks produces a number
+    that is not a reading of anything — it looks like a context figure, grows
+    monotonically, and would be compared against a window it never approached.
+
+    Decided here rather than at each call site because there are four of
+    those, in two modules, and the fifth is one feature away. A field whose
+    arithmetic depends on the caller remembering is the shape of thing this
+    codebase has already lost twice.
+    """
     out = dict(current or zero_usage())
     for key, value in deltas.items():
-        out[key] = out.get(key, 0) + value
+        if "peak" in key:
+            out[key] = max(out.get(key, 0), value)
+        else:
+            out[key] = out.get(key, 0) + value
     return out
 
 

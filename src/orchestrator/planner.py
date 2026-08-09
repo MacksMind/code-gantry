@@ -428,6 +428,15 @@ class PlannerUsage:
     # own: a prefix written every call and never read back costs more than no
     # caching at all.
     cache_write_tokens: int = 0
+    # The largest single call of the loop, which is a different question from
+    # every other field here and the only one that is not a sum. A tool loop
+    # bills per turn, so the totals say what a derivation *cost*; this says how
+    # close it came to the window it has to fit inside. The executor has
+    # tracked it since it went in-process and the planner never did — and the
+    # planner is the role that has actually overrun a context limit, rejected
+    # at 1,103,000 tokens against a 1,000,000 ceiling, with nothing recorded
+    # that would have seen it coming.
+    peak_prompt_tokens: int = 0
 
 
 @dataclass
@@ -491,6 +500,9 @@ def _add_usage(a: PlannerUsage, b: PlannerUsage) -> PlannerUsage:
         cached_tokens=a.cached_tokens + b.cached_tokens,
         cache_write_tokens=a.cache_write_tokens + b.cache_write_tokens,
         completion_tokens=a.completion_tokens + b.completion_tokens,
+        # Not summed. Two attempts do not make a larger call than either of
+        # them; the high-water mark is the high-water mark.
+        peak_prompt_tokens=max(a.peak_prompt_tokens, b.peak_prompt_tokens),
     )
 
 
@@ -909,6 +921,8 @@ def _merge_usage(a: PlannerUsage, b: PlannerUsage) -> PlannerUsage:
         completion_tokens=a.completion_tokens + b.completion_tokens,
         cached_tokens=a.cached_tokens + b.cached_tokens,
         cache_write_tokens=a.cache_write_tokens + b.cache_write_tokens,
+        # See `_add_usage`: the one field here that is not a total.
+        peak_prompt_tokens=max(a.peak_prompt_tokens, b.peak_prompt_tokens),
     )
 
 
@@ -996,11 +1010,16 @@ def _extract_usage(usage) -> PlannerUsage:
     uncached = getattr(usage, "input_tokens", 0) or 0
     read = getattr(usage, "cache_read_input_tokens", 0) or 0
     written = getattr(usage, "cache_creation_input_tokens", 0) or 0
+    total_in = uncached + read + written
     return PlannerUsage(
-        prompt_tokens=uncached + read + written,
+        prompt_tokens=total_in,
         cached_tokens=read,
         cache_write_tokens=written,
         completion_tokens=getattr(usage, "output_tokens", 0) or 0,
+        # One call's input is this call's peak. The merges take the max, so
+        # the loop's peak is the largest turn rather than the last one — a
+        # conversation does not only grow, a redraw can start from less.
+        peak_prompt_tokens=total_in,
     )
 
 
@@ -1401,7 +1420,7 @@ STAGE_COST_PREFIX = "- cost "
 # the executor cutover: keep the quantity, and the history stays comparable.
 _STAGE_COST = re.compile(
     r"^- cost `(?P<merge_sha>[0-9a-f]+)` `(?P<stage_id>[^`]*)` — "
-    r"(?P<files>\d+) file\(s\), (?P<peak>[\d,]+) (?:executor tokens|peak)"
+    r"(?P<files>\d+) file\(s\), (?P<peak>[\d,]+) (?:executor tokens|peak|context)"
     r"(?:, (?P<changed>\d+) changed \+(?P<plus>\d+) -(?P<minus>\d+))?",
     re.MULTILINE,
 )
@@ -1456,7 +1475,7 @@ def append_stage_cost(
     path = project_dir / STAGE_COSTS_FILENAME
     line = (
         f"{STAGE_COST_PREFIX}`{merge_sha}` `{stage_id}` — "
-        f"{files} file(s), {context_tokens:,} peak"
+        f"{files} file(s), {context_tokens:,} context"
     )
     # What the stage actually changed, beside what it was allowed to. The
     # declared count is a permission and stages routinely touch less than they
@@ -1469,6 +1488,11 @@ def append_stage_cost(
             f"; {row['role']} {row['prompt']:,} in"
             + (f" ({row['cached']:,} cached)" if row.get("cached") else "")
             + f" / {row['completion']:,} out"
+            # The largest single call, where the role records one. Without it
+            # the input figure reads as a context size and is nothing of the
+            # sort: a tool loop bills the whole conversation once per turn, so
+            # the total exceeds the biggest call by the number of turns.
+            + (f", peak {row['peak']:,}" if row.get("peak") else "")
         )
         # Only when there is one. Zero for "not priced" and zero for "free" are
         # indistinguishable, so an unpriced role says nothing rather than $0.00.

@@ -157,6 +157,8 @@ class TestUsageAccumulation:
             # computable per attempt and nowhere for the run.
             "executor_prompt_tokens", "executor_cached_tokens",
             "executor_cache_write_tokens", "executor_completion_tokens",
+            # The one key here that is not a total; see `accumulate_usage`.
+            "planner_peak_prompt_tokens",
         }
 
 
@@ -448,3 +450,45 @@ class TestAResumeStartsFromTheCheckpoint:
         assert got["status"] == "running"
         assert got["escalation_reason"] is None
         assert got["resuming"] is True
+
+
+class TestAPeakIsNotATotal:
+    """`accumulate_usage` sums, and a high-water mark must not be summed.
+
+    Two calls do not make a larger call than either of them. Summed, a peak
+    grows monotonically, looks exactly like a context figure, and would be
+    compared against a window it never approached — which is the reading the
+    summed figure already invites and the peak exists to correct.
+
+    Decided in the helper rather than at each call site because there are four
+    of those in two modules, and a field whose arithmetic depends on the
+    caller remembering is the shape of thing this codebase has lost twice.
+    """
+
+    def test_totals_still_add(self):
+        from orchestrator.state import accumulate_usage
+
+        out = accumulate_usage(None, planner_prompt_tokens=100)
+        out = accumulate_usage(out, planner_prompt_tokens=250)
+        assert out["planner_prompt_tokens"] == 350
+
+    def test_a_peak_takes_the_maximum(self):
+        from orchestrator.state import accumulate_usage
+
+        out = accumulate_usage(None, planner_peak_prompt_tokens=480_000)
+        out = accumulate_usage(out, planner_peak_prompt_tokens=190_000)
+        assert out["planner_peak_prompt_tokens"] == 480_000
+
+    def test_a_later_larger_call_raises_it(self):
+        from orchestrator.state import accumulate_usage
+
+        out = accumulate_usage(None, planner_peak_prompt_tokens=190_000)
+        out = accumulate_usage(out, planner_peak_prompt_tokens=480_000)
+        assert out["planner_peak_prompt_tokens"] == 480_000
+
+    def test_the_key_is_declared_so_the_schema_does_not_drop_it(self):
+        # Four defects here have been values computed correctly and lost
+        # crossing a schema that had no key for them.
+        from orchestrator.state import zero_usage
+
+        assert "planner_peak_prompt_tokens" in zero_usage()

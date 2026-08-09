@@ -560,6 +560,14 @@ def _write_loop_record(history_dir: Path, out: ExecutionResult) -> None:
             json.dumps(
                 {
                     "cycles": out.cycles,
+                    # This attempt's high-water mark. Recorded here as well as
+                    # in the stage's total because the stage's is a sum across
+                    # attempts, and a sum cannot be taken apart afterwards —
+                    # the analysis that found the total was being assigned
+                    # rather than accumulated had to infer per-attempt figures
+                    # from cache writes, because this file did not carry the
+                    # one number it is about.
+                    "peak_prompt_tokens": out.context_tokens,
                     "model_turns": out.model_turns,
                     "edits_applied": out.edits_applied,
                     "edit_refusals": out.edit_refusals,

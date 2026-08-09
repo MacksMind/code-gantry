@@ -595,7 +595,7 @@ def _costs_block(costs: list[dict] | None) -> str:
         return ""
     lines = "\n".join(
         f"- `{c['merge_sha'][:12]}` {c['stage_id']} — "
-        f"{c['context_tokens']:,} peak tokens, "
+        f"{c['context_tokens']:,} context tokens, "
         + (
             f"{c['changed']} file(s) changed "
             f"+{c['insertions']} -{c['deletions']}"
@@ -606,9 +606,10 @@ def _costs_block(costs: list[dict] | None) -> str:
     )
     return (
         "\n\n## What stages have cost the executor\n\n"
-        "Measured, across every run of this project. The figure is the "
-        "executor's peak context on that stage: a high-water mark, not a "
-        "total.\n\n"
+        "Measured, across every run of this project. The figure is how much "
+        "context the executor carried on that stage: each attempt's high-water "
+        "mark, added across the attempts it took. A stage that needed three "
+        "passes really did load context three times.\n\n"
         "**Read them against each other, not against a limit.** The useful "
         "fact is that one stage cost three times another, not what fraction "
         "of a window it used — the window is not what bounds a stage. What "

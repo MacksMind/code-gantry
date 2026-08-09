@@ -337,6 +337,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
         planner_cached_tokens=outcome.usage.cached_tokens,
         planner_cache_write_tokens=outcome.usage.cache_write_tokens,
         planner_completion_tokens=outcome.usage.completion_tokens,
+        planner_peak_prompt_tokens=outcome.usage.peak_prompt_tokens,
     )
 
     append_status(
@@ -368,6 +369,13 @@ def plan(state: RunState, rt: Runtime) -> dict:
                     # run totals average that away — per call is where it shows.
                     "cache_write_tokens": outcome.usage.cache_write_tokens,
                     "completion_tokens": outcome.usage.completion_tokens,
+                    # The one figure here that is not a total: the largest
+                    # single call of the loop. The others say what the
+                    # derivation cost; this says how close it came to the
+                    # window it has to fit inside, which is the question the
+                    # read budgets exist to answer and the one nothing was
+                    # recording when a call was rejected at 1,103,000 tokens.
+                    "peak_prompt_tokens": outcome.usage.peak_prompt_tokens,
                 },
                 # Both recorded even when empty, and that is the point. An
                 # absent key cannot be told apart from a feature that never
@@ -402,6 +410,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
             planner_cached_tokens=outcome.usage.cached_tokens,
             planner_cache_write_tokens=outcome.usage.cache_write_tokens,
             planner_completion_tokens=outcome.usage.completion_tokens,
+            planner_peak_prompt_tokens=outcome.usage.peak_prompt_tokens,
         ),
         "planner_notes": notes,
         "deferred": deferred,
@@ -910,7 +919,31 @@ def execute(state: RunState, rt: Runtime) -> dict:
     # Carried even on the failing paths below: an attempt that timed out with
     # 60k of context loaded is exactly the datum that should shrink the next
     # stage, and it is the one most likely to be discarded.
-    measured = {"executor_context_tokens": result.context_tokens} if result.context_tokens else {}
+    # Summed across attempts, like the cost eleven lines below and for the same
+    # reason: a stage that took three passes really did load context three
+    # times, and the figure worth keeping is the stage's rather than the last
+    # attempt's. It was assigned rather than accumulated, so a stage whose
+    # final attempt was a one-line fix recorded that attempt's high-water mark
+    # as the whole stage's. Measured on one run: two stages of two and three
+    # attempts, together 4.4M and 1.5M prompt tokens, recorded 12,933 and
+    # 16,079 — below the opening prompt of a single turn, in the number the
+    # planner sizes batches from.
+    #
+    # Summed peaks rather than summed cache writes, which was the alternative.
+    # Writes count only newly-cached material, so a stage reusing an earlier
+    # stage's prefix looks small precisely because it was efficient: one stage
+    # on that run wrote 21,547 while carrying 82,015. Peaks are per
+    # conversation, so they neither double-count within an attempt nor depend
+    # on how well the cache held.
+    measured = (
+        {
+            "executor_context_tokens": (
+                state.get("executor_context_tokens", 0) + result.context_tokens
+            )
+        }
+        if result.context_tokens
+        else {}
+    )
     # What the loop proved green, carried to the gate so it does not ask
     # the same question of the same tree. Always written, including empty,
     # so a later attempt cannot inherit an earlier one's answers.
@@ -2402,6 +2435,15 @@ def _stage_spend(cfg, usage: dict, executor_cost: float | None = None) -> list[d
             "cached": cached,
             "completion": completion,
         }
+        # Where one is recorded. The summed figure is what the role was billed
+        # for; the peak is how large its largest single call got, and only the
+        # second is comparable to a context window. A tool loop makes them
+        # differ by more than an order of magnitude — 6.6M billed against a
+        # call that never approached it — and the summed one invites exactly
+        # the wrong reading.
+        peak = usage.get(f"{prefix}peak_prompt_tokens", 0)
+        if peak:
+            row["peak"] = peak
         # The loop already priced its own attempt, through this same
         # `price_usage` and the same table, and it is the only participant
         # that does. Preferring its figure keeps one arithmetic rather than

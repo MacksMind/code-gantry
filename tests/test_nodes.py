@@ -3402,7 +3402,7 @@ class TestTheNativeExecutorsMeasurementsSurviveTheTrip:
 
         written = (rt.project.project_dir / "stage-costs.md").read_text()
         assert "planner 500,000 in (480,000 cached) / 9,000 out" in written
-        assert "21,000 peak" in written
+        assert "21,000 context" in written
         # And the head of the line still parses, so the planner's batch sizing
         # does not silently stop counting.
         assert recent_stage_costs(rt.project.project_dir)[0]["context_tokens"] == 21_000
@@ -3503,3 +3503,130 @@ class TestTheExecuteLineReportsWhatItPaid:
 
         line = next(m for m in lines if "tool call(s)" in m)
         assert "cached" not in line and "peak" not in line
+
+
+class TestThePlannersPeakReachesTheCostLine:
+    """The figure that answers "how close did that call come to the window".
+
+    Everything recorded about the planner was a total, and a tool loop bills
+    the whole conversation once per turn — so one derivation showed 6,604,374
+    input tokens against a prompt of 187k and 32 calls. Read as a context
+    figure it is nonsense by a factor of thirty; read as a bill it is correct
+    and answers a different question than the one the read budgets are about.
+
+    The executor has tracked its peak since it went in-process. The planner
+    never did, and the planner is the role that has actually overrun a context
+    limit — rejected at 1,103,000 tokens against a 1,000,000 ceiling, with
+    nothing recorded that would have seen it coming.
+    """
+
+    def test_the_peak_survives_plan_execute_and_advance(self, repo, tmp_path):
+        from orchestrator.planner import recent_stage_costs
+
+        planner = StubPlanner([
+            PlannerOutcome(
+                "next_stage", "first", "e", stage_fields=planned_stage(),
+                usage=PlannerUsage(
+                    prompt_tokens=6_604_374, cached_tokens=6_309_958,
+                    completion_tokens=20_882, cache_write_tokens=294_370,
+                    peak_prompt_tokens=480_120,
+                ),
+            )
+        ])
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+
+        state.update(nodes.plan(state, rt))
+        assert state["stage_usage"]["planner_peak_prompt_tokens"] == 480_120
+        state = with_stage(state, rt)
+        state.update(nodes.execute(state, rt))
+        nodes.advance(state, rt)
+
+        written = (rt.project.project_dir / "stage-costs.md").read_text()
+        assert "peak 480,120" in written
+        # Beside the total rather than instead of it: one is the bill, the
+        # other is the size of the largest call, and each answers a question
+        # the other cannot.
+        assert "6,604,374 in" in written
+        assert recent_stage_costs(rt.project.project_dir), "the line stopped parsing"
+
+    def test_a_role_with_no_peak_recorded_says_nothing(self, repo, tmp_path):
+        # The reviewer has no peak of its own yet. An absent figure is left
+        # out rather than rendered as zero, which would read as a call that
+        # carried nothing.
+        cfg, rt, state = make(repo, tmp_path)
+        spend = nodes._stage_spend(cfg, {"prompt_tokens": 500, "completion_tokens": 9})
+        assert spend and "peak" not in spend[0]
+
+
+class TestContextIsSummedAcrossAttempts:
+    """A stage that took three passes loaded context three times.
+
+    `executor_context_tokens` was assigned rather than accumulated, eleven
+    lines above `executor_cost_usd`, which accumulates and says in its comment
+    why: "a stage that took four attempts paid for four and the figure worth
+    recording is the stage's, not the last attempt's." The same sentence is
+    true of context and was not applied to it.
+
+    The consequence is not a slightly-low number. A stage whose final attempt
+    is a one-line fix records that attempt's high-water mark as the whole
+    stage's. Measured on one run: two stages of two and three attempts,
+    together 4.4M and 1.5M prompt tokens, recorded 12,933 and 16,079 — below
+    the opening prompt of a single turn, in the figure the planner sizes
+    batches from.
+
+    Summed peaks rather than summed cache writes, which was the alternative
+    considered. Writes count only newly-cached material, so a stage that
+    reuses an earlier one's prefix looks small precisely because it was
+    efficient — one stage on that run wrote 21,547 while carrying 82,015.
+    Peaks are per conversation: they neither double-count inside an attempt
+    nor vary with how well the cache held.
+    """
+
+    def _measured(self, repo, peak):
+        class Measured(StubExecutor):
+            def run_agent_stage(
+                self, stage, prompt, history_dir=None, since_sha="",
+                agent_context=None, feedback=None, failure_layer=None,
+            ):
+                self._apply()
+                return ExecutionResult(ok=True, log="", context_tokens=peak)
+
+        return Measured(repo=repo, edits=[("app.py", "stage work\n")])
+
+    def test_a_second_attempt_adds_rather_than_replaces(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path, executor=self._measured(repo, 60_000))
+        state = with_stage(state, rt)
+        state.update(nodes.execute(state, rt))
+        assert state["executor_context_tokens"] == 60_000
+
+        rt.executor = self._measured(repo, 9_000)
+        state.update(nodes.execute(state, rt))
+        assert state["executor_context_tokens"] == 69_000, (
+            "a small final attempt replaced the stage's figure"
+        )
+
+    def test_it_resets_between_stages(self, repo, tmp_path):
+        # Accumulating across attempts is only safe because the per-stage
+        # reset clears it; without that a long run would report one
+        # monotonically rising number keyed by unrelated merge shas.
+        from orchestrator.state import fresh_stage_fields
+
+        assert fresh_stage_fields()["executor_context_tokens"] == 0
+
+    def test_the_attempt_artifact_records_its_own_peak(self, repo, tmp_path):
+        """A sum cannot be taken apart afterwards.
+
+        Finding the assignment bug meant inferring per-attempt figures from
+        cache writes, because `executor-loop.json` — the per-attempt record —
+        did not carry the one number it is about.
+        """
+        import json
+
+        from orchestrator.executor import _write_loop_record
+        from orchestrator.executor import ExecutionResult as ER
+
+        out = ER(ok=True, log="")
+        out.context_tokens = 47_000
+        _write_loop_record(tmp_path, out)
+        written = json.loads((tmp_path / "executor-loop.json").read_text())
+        assert written["peak_prompt_tokens"] == 47_000
