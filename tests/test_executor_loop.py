@@ -796,3 +796,80 @@ class TestTheContextHighWaterMarkAndCostReachTheResult:
         )
         assert out.commits, "the fixture must reach the gate, not break before it"
         assert out.cost_usd == pytest.approx(0.0092)
+
+
+class TestSetupRunsInsideTheLoop:
+    """The environment, re-prepared where a stage's own edits can break it.
+
+    `setup_command` already ran twice — precheck before the attempt, verify
+    after it — and never in between. So a stage that edits a migration or a
+    Gemfile ran its in-session tests against an environment its own work had
+    made stale, could not see why, and would start repairing code that was
+    not broken. Same shape as the linter deadlock: the model cannot see or
+    affect the thing that is actually wrong.
+
+    The failure goes back to the model rather than to a human, and that needs
+    no heuristic. Precheck ran this same command on the pre-edit tree and it
+    passed — a precondition of the attempt existing — so a failure here is the
+    stage's doing by construction.
+    """
+
+    def test_a_failing_setup_becomes_feedback_not_an_abort(self, repo):
+        cfg, stage = build(repo, {"setup_command": "exit 3"})
+        model = ScriptedModel([
+            [edit_file("app/a.rb", "class A", "class B")],
+            [edit_file("app/a.rb", "class B", "class C")],
+        ])
+        out = drive(repo, cfg, stage, model)
+
+        assert out.in_loop_failures, "the failure was not recorded"
+        assert "environment" in out.in_loop_failures[0]
+        # And the model got another turn with it, rather than the attempt
+        # ending on a problem it could fix.
+        assert model.calls > 1
+
+    def test_the_feedback_says_the_stage_caused_it(self, repo):
+        # Without this the model reads an environment failure as something to
+        # wait out or report, which is what the gate's wording means and is
+        # the wrong reading from inside the loop.
+        from orchestrator.gates import run_setup
+
+        cfg, stage = build(repo, {"setup_command": "echo 'Could not find gem' && exit 1"})
+        found = run_setup(stage, cfg, CommandRunner(cwd=repo, timeout=60))
+        assert not found.ok
+        assert "before you started" in found.feedback
+        assert "Could not find gem" in found.feedback
+
+    def test_no_setup_command_is_not_a_gate(self, repo):
+        from orchestrator.commands import CommandRunner
+        from orchestrator.gates import run_setup
+
+        cfg, stage = build(repo)
+        assert run_setup(stage, cfg, CommandRunner(cwd=repo, timeout=60)).ok
+
+
+class TestTheGatesAreEvaluatedLazily:
+    """Cheapest-first ordering that never took the saving.
+
+    The gates were the elements of a tuple literal, and a tuple literal
+    evaluates every element before the loop body sees the first — so the suite
+    ran even when `patterns` had already failed, on every cycle, for as long as
+    the ordering has been documented as cheapest-first.
+
+    Harmless while every entry was a pure question. Not harmless once one of
+    them prepares an environment: building a tuple would restart containers.
+    """
+
+    def test_the_suite_does_not_run_when_a_cheap_gate_fails(self, repo):
+        # `must_not_remain` fails on the tree the model leaves, and the test
+        # command writes a file if it runs. It must not exist afterwards.
+        marker = repo / "ran-the-suite"
+        cfg, stage = build(
+            repo,
+            {"must_not_remain": ["class B"]},
+            test_command=f"touch {marker} && true",
+        )
+        drive(repo, cfg, stage, ScriptedModel([
+            [edit_file("app/a.rb", "class A", "class B")],
+        ]))
+        assert not marker.exists(), "the suite ran behind a failed regex gate"

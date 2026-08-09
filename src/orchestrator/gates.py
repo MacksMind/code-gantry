@@ -482,6 +482,52 @@ def path_hints(output: str) -> list[str]:
     return out[:20]
 
 
+def run_setup(stage: Stage, cfg: ProjectConfig, runner: CommandRunner) -> GateResult:
+    """The environment, re-prepared inside the executor's loop.
+
+    The command already exists and already runs twice — precheck, before the
+    attempt, and `verify`, after it. What was missing is the middle, and the
+    middle is where a stage's own edits can invalidate it: a migration the
+    schema has not loaded, a Gemfile the bundle has not installed. The model
+    then runs its in-session tests against an environment its own work made
+    stale, cannot see why, and starts repairing code that is not broken.
+
+    A failure here goes back to the model rather than to a human, and that
+    routing needs no heuristic. Precheck ran this same command on the pre-edit
+    tree minutes ago and it passed — that is a precondition of the attempt
+    existing — so a failure now is the stage's doing by construction. There is
+    no glob predicting which files are environment-affecting and no judgement
+    about whose fault it is.
+
+    `verify`'s own setup layer keeps its `Route.HUMAN`, and the two are not in
+    conflict: there the same failure means the environment could not be
+    prepared *at all*, which is a different claim and one a model cannot act
+    on. Same command, two questions.
+    """
+    command = stage.effective_setup_command(cfg)
+    if not command:
+        return GateResult(ok=True)
+
+    result = runner.run(command)
+    if result.ok:
+        return GateResult(ok=True, results=[result])
+
+    return GateResult(
+        ok=False,
+        summary="the environment could not be prepared",
+        feedback=(
+            "Preparing the environment failed, and it succeeded on this same "
+            "tree before you started — so something this stage changed is "
+            "what broke it. A dependency that will not resolve and a schema "
+            "that will not load are both fixable from here.\n"
+            f"{result.summary()}\n{clip(result.output)}"
+        ),
+        results=[result],
+        failing_paths=path_hints(result.output),
+        command=result.command,
+    )
+
+
 def run_checks(stage: Stage, runner: CommandRunner) -> GateResult:
     """The operator's declared checks, in order, stopping at the first failure.
 

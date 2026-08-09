@@ -280,13 +280,16 @@ def _gate_cycle(stage, cfg, git, runner, out: ExecutionResult, since_sha, log=No
     # were committed, which is the tree the gate will see.
     out.gate_records["checks"] = {"command": "", "head_sha": git.head_sha()}
 
-    for name, found in (
-        ("patterns", gates.check_patterns(stage, cfg, git, since_sha)),
-        ("residue", gates.check_residue(stage, cfg, git)),
-        ("new_tests", gates.check_new_tests(stage, cfg, git, since_sha)),
+    for name, call in (
+        ("patterns", lambda: gates.check_patterns(stage, cfg, git, since_sha)),
+        ("residue", lambda: gates.check_residue(stage, cfg, git)),
+        ("new_tests", lambda: gates.check_new_tests(stage, cfg, git, since_sha)),
+        # Immediately before the tests, because they are the only entry that
+        # needs it and the cheap gates decide most failures without it.
+        ("setup", lambda: gates.run_setup(stage, cfg, runner)),
         (
             "tests",
-            gates.run_tests(
+            lambda: gates.run_tests(
                 stage, cfg, git, runner, since_sha,
                 # The editor refuses an out-of-scope write, so the reason the
                 # subprocess path was denied the full suite does not apply.
@@ -294,6 +297,13 @@ def _gate_cycle(stage, cfg, git, runner, out: ExecutionResult, since_sha, log=No
             ),
         ),
     ):
+        # Called here rather than built into the tuple. A tuple literal
+        # evaluates every element before the loop body sees the first, so this
+        # ran the whole suite even when `patterns` had already failed — the
+        # ordering was cheapest-first and the saving was never taken. Harmless
+        # while every entry was a pure question; not harmless once one of them
+        # restarts containers.
+        found = call()
         if not found.ok:
             # Recorded, not discarded. A failure is as much an answer as a
             # pass: the gate would run the same command on the same tree and
