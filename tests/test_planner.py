@@ -1534,3 +1534,66 @@ class TestTheToolLogSaysWhatWasDenied:
             [ToolCall("read_file", "app/ghost.rb", 0, refusal="does not exist")]
         )
         assert p._reads_answered() == 0
+
+
+class TestTheStatOnTheCostLine:
+    """Measured off the landing commit, and old lines still parse.
+
+    `stage-costs.md` is append-only and spans every run of a project, so the
+    entries that inform a derivation are mostly ones written before any given
+    field existed. A parser that required the new group would drop the whole
+    history the first time it ran — which is the shape of defect this file has
+    already had once, when the models suffix was added.
+    """
+
+    def test_the_stat_is_written_when_it_was_measured(self, tmp_path):
+        from orchestrator.planner import append_stage_cost
+
+        append_stage_cost(
+            tmp_path, "s", "0285803b159a", 4, 13_000, changed=(2, 131, 0),
+        )
+        assert "2 changed +131 -0" in (tmp_path / "stage-costs.md").read_text()
+
+    def test_no_measurement_writes_no_stat(self, tmp_path):
+        # `shortstat` returns None when git cannot answer. A stage that
+        # changed nothing and a stage nobody could measure are different, and
+        # "0 changed" would claim the first.
+        from orchestrator.planner import append_stage_cost
+
+        append_stage_cost(tmp_path, "s", "0285803b159a", 4, 13_000)
+        assert "changed" not in (tmp_path / "stage-costs.md").read_text()
+
+    def test_it_parses_back(self, tmp_path):
+        from orchestrator.planner import append_stage_cost, recent_stage_costs
+
+        append_stage_cost(
+            tmp_path, "s", "0285803b159a", 4, 13_000, changed=(2, 131, 7),
+        )
+        got = recent_stage_costs(tmp_path)[0]
+        assert (got["changed"], got["insertions"], got["deletions"]) == (2, 131, 7)
+        assert got["files"] == 4, "the declared scope survives beside it"
+
+    def test_a_line_written_before_the_stat_existed_still_parses(self, tmp_path):
+        from orchestrator.planner import recent_stage_costs
+
+        (tmp_path / "stage-costs.md").write_text(
+            "- cost `aaaaaaaaaaaa` `old` — 2 file(s), 9,000 executor tokens\n"
+            "- cost `bbbbbbbbbbbb` `mid` — 1 file(s), 8,000 peak\n"
+        )
+        got = recent_stage_costs(tmp_path)
+        assert [c["stage_id"] for c in got] == ["old", "mid"]
+        assert "changed" not in got[0] and "changed" not in got[1]
+
+    def test_the_stat_survives_a_spend_suffix(self, tmp_path):
+        # Order on the line matters: the stat sits before the per-role spend,
+        # and the regex must not stop at the first semicolon.
+        from orchestrator.planner import append_stage_cost, recent_stage_costs
+
+        append_stage_cost(
+            tmp_path, "s", "0285803b159a", 4, 13_000, changed=(2, 131, 0),
+            spend=[{"role": "planner", "prompt": 500, "cached": 0,
+                    "completion": 10, "cost_usd": 1.5}],
+            roles=(("plan", "claude-opus-5", "xhigh"),),
+        )
+        got = recent_stage_costs(tmp_path)[0]
+        assert got["changed"] == 2

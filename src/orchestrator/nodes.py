@@ -1693,6 +1693,10 @@ def advance(state: RunState, rt: Runtime) -> dict:
             context_tokens=result.get("executor_context_tokens", 0),
             spend=spend,
             roles=_roles_for_record(rt.cfg),
+            # Measured off the landing commit rather than taken from the
+            # stage's declared scope. `edit_files` is a permission and stages
+            # routinely touch less than it allows.
+            changed=rt.git.shortstat(result["merge_sha"]),
         )
     rt.log(f"[advance] {stage.id} landed as {result['merge_sha'][:12]}")
 

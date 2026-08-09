@@ -1400,8 +1400,9 @@ STAGE_COST_PREFIX = "- cost "
 # rename is worse than an imprecise label. The same reasoning kept `max` across
 # the executor cutover: keep the quantity, and the history stays comparable.
 _STAGE_COST = re.compile(
-    r"^- cost `([0-9a-f]+)` `([^`]*)` — (\d+) file\(s\), "
-    r"([\d,]+) (?:executor tokens|peak)",
+    r"^- cost `(?P<merge_sha>[0-9a-f]+)` `(?P<stage_id>[^`]*)` — "
+    r"(?P<files>\d+) file\(s\), (?P<peak>[\d,]+) (?:executor tokens|peak)"
+    r"(?:, (?P<changed>\d+) changed \+(?P<plus>\d+) -(?P<minus>\d+))?",
     re.MULTILINE,
 )
 
@@ -1414,6 +1415,7 @@ def append_stage_cost(
     context_tokens: int,
     spend: list[dict] | None = None,
     roles: tuple[tuple[str, str, str], ...] = (),
+    changed: tuple[int, int, int] | None = None,
 ) -> Path:
     """Record what a landed stage cost, durably, in one shape for all three roles.
 
@@ -1456,6 +1458,12 @@ def append_stage_cost(
         f"{STAGE_COST_PREFIX}`{merge_sha}` `{stage_id}` — "
         f"{files} file(s), {context_tokens:,} peak"
     )
+    # What the stage actually changed, beside what it was allowed to. The
+    # declared count is a permission and stages routinely touch less than they
+    # may; this is measured off the landing commit. Both are kept because they
+    # answer different questions and each is a handful of characters.
+    if changed:
+        line += f", {changed[0]} changed +{changed[1]} -{changed[2]}"
     for row in spend or ():
         line += (
             f"; {row['role']} {row['prompt']:,} in"
@@ -1489,13 +1497,21 @@ def recent_stage_costs(
     path = Path(project_dir) / STAGE_COSTS_FILENAME
     if not path.is_file():
         return []
-    found = [
-        {
-            "merge_sha": sha,
-            "stage_id": stage_id,
-            "files": int(files),
-            "context_tokens": int(tokens.replace(",", "")),
+    found = []
+    for m in _STAGE_COST.finditer(path.read_text()):
+        entry = {
+            "merge_sha": m["merge_sha"],
+            "stage_id": m["stage_id"],
+            "files": int(m["files"]),
+            "context_tokens": int(m["peak"].replace(",", "")),
         }
-        for sha, stage_id, files, tokens in _STAGE_COST.findall(path.read_text())
-    ]
+        # Absent on every line written before the stat was recorded, which is
+        # most of the file. Left out of the dict rather than zeroed: a stage
+        # that changed nothing and a stage measured before this existed are
+        # different, and the renderer needs to tell them apart.
+        if m["changed"] is not None:
+            entry["changed"] = int(m["changed"])
+            entry["insertions"] = int(m["plus"])
+            entry["deletions"] = int(m["minus"])
+        found.append(entry)
     return found[-limit:] if limit else found

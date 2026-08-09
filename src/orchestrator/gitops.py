@@ -144,6 +144,33 @@ class Git:
     def commit_subject(self, ref: str = "HEAD") -> str:
         return self._out("log", "-1", "--pretty=%s", ref)
 
+    def shortstat(self, sha: str) -> tuple[int, int, int] | None:
+        """Files changed, inserted and deleted by one commit.
+
+        `None` when git cannot answer — an unreachable sha, or a repository
+        that has moved underneath us — rather than a tuple of zeroes, because
+        a stage that changed nothing and a stage nobody could measure are
+        different facts and a cost line should not conflate them.
+
+        Worth having beside the declared file count rather than instead of it
+        while both are cheap: `edit_files` is what a stage was *permitted* to
+        touch and stages routinely touch less, which is a distinction this
+        project has already paid to learn once, when a batch check read a
+        permission as a record of what happened.
+        """
+        proc = self._run("show", "--shortstat", "--format=", sha, check=False)
+        if proc.returncode != 0:
+            return None
+        found = re.search(
+            r"(\d+) files? changed"
+            r"(?:, (\d+) insertions?\(\+\))?"
+            r"(?:, (\d+) deletions?\(-\))?",
+            proc.stdout,
+        )
+        if not found:
+            return None
+        return tuple(int(g or 0) for g in found.groups())  # type: ignore[return-value]
+
     def show_file(self, sha: str, path: str | None = None) -> str:
         """Read a file as it stood at `sha`, or the commit itself with no path.
 

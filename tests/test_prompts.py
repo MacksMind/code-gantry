@@ -2475,3 +2475,82 @@ class TestTheCostsBlockTellsThePlannerHowToUseIt:
         from orchestrator.prompts import _costs_block
 
         assert _costs_block([]) == ""
+
+
+class TestTheCostLineCarriesWhatChanged:
+    """A declared file count is a permission, not a record.
+
+    `files` on a cost line is `len(stage.edit_files)` — what the stage was
+    *allowed* to touch. Stages routinely touch less, and this project has
+    already paid once for reading a permission as a record of what happened,
+    when a batch check discarded usable work over edits that never occurred.
+
+    The landing commit knows what actually changed, so `advance` measures it
+    there. Both are kept: they answer different questions and each is a
+    handful of characters.
+    """
+
+    def _block(self, entry):
+        from orchestrator.prompts import _costs_block
+
+        return _costs_block([{
+            "merge_sha": "b52851a90c6398", "stage_id": "some-stage",
+            "files": 4, "context_tokens": 88_762, **entry,
+        }])
+
+    def test_a_measured_stat_is_rendered(self):
+        text = self._block({"changed": 2, "insertions": 131, "deletions": 0})
+        assert "2 file(s) changed +131 -0" in text
+        # Not the declared four: the measurement supersedes the permission.
+        assert "4 file(s)" not in text
+
+    def test_a_line_without_one_falls_back_to_the_declared_scope(self):
+        """Most of the file predates the stat and must still render.
+
+        `stage-costs.md` is append-only and spans every run of a project, so
+        the entries that inform the first derivation after this ships are all
+        old ones. A renderer that needed the new field would drop the history
+        exactly when it is the only history there is.
+        """
+        text = self._block({})
+        assert "4 file(s) in scope" in text
+        assert "changed" not in text.split("- `b52851a90c63`")[1]
+
+
+class TestTheCostsAreReadComparatively:
+    """The peak is not a fraction of anything the planner should reason about.
+
+    The block said the figure was the high-water mark "because what decides
+    whether the next stage fits is the largest it ever got". That was written
+    against a local executor with a 229,376-token context. The executor's
+    window is now 1,050,000 and the largest peak on this project's record is
+    88,762 — 8.5% — so fitting is not the question, and a planner told the
+    ratio could reasonably conclude it has room to batch ten times as much.
+
+    What actually bounds a stage is what a failure costs to redraw and what
+    can be judged as one diff, both of which the size block states. So this
+    one stops making a claim about capacity and says what the numbers are for.
+    """
+
+    def _text(self):
+        from orchestrator.prompts import _costs_block
+
+        return _costs_block([{
+            "merge_sha": "b52851a90c6398", "stage_id": "s",
+            "files": 1, "context_tokens": 88_762,
+        }])
+
+    def test_it_no_longer_claims_the_figure_decides_what_fits(self):
+        assert "fits" not in self._text()
+
+    def test_it_says_to_compare_entries_with_each_other(self):
+        text = self._text()
+        assert "against each other, not against a limit" in text
+        assert "nearest the work you are drawing" in text
+
+    def test_it_names_what_actually_bounds_a_stage(self):
+        # Redraw cost and reviewability — the two the size block is built on,
+        # so the planner is not left with a number and no rule.
+        text = self._text()
+        assert "costs to redraw" in text
+        assert "judged as one diff" in text

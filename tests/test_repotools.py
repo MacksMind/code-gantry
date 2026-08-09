@@ -807,3 +807,27 @@ class TestTheTotalIsBoundedInCharactersToo:
         with pytest.raises(ToolError):
             r.read_file("docs/nope.md")
         assert r._chars_used == before
+
+
+class TestShortstat:
+    """Measured off a commit, not taken from a stage's declared scope."""
+
+    def test_it_counts_files_and_lines(self, repo):
+        import subprocess
+
+        from orchestrator.gitops import Git
+
+        (repo / "docs" / "plan.md").write_text("# Plan\n\nStep one.\nStep two.\n")
+        (repo / "docs" / "extra.md").write_text("new\n")
+        subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-q", "-m", "two files"], check=True
+        )
+        assert Git(repo).shortstat("HEAD") == (2, 2, 0)
+
+    def test_an_unreachable_sha_is_none_rather_than_zeroes(self, repo):
+        # A stage that changed nothing and a stage nobody could measure are
+        # different facts, and a cost line must not claim the first.
+        from orchestrator.gitops import Git
+
+        assert Git(repo).shortstat("no-such-ref") is None
