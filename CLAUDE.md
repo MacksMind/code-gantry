@@ -987,6 +987,99 @@ read as a suite result. Both are the standing rule about checking what a
 command actually returns, and both were committed to before anyone asked what
 the number counted.
 
+**A value that fits is a value that fits *where it is*.** `prompt_cache_key` is
+capped at 64 characters and nothing had been near it: `orchestrator:example` is
+19. Moving the config into the repository it describes made `work_dir` the
+project's identity, the identity a path, and the key 98 — so the first reviewer
+call of the first run on the new layout came back 400. Nothing about the value
+changed except its length. That is the same door as a value being private only
+while its file was private, and the same discipline answers both: when a source
+moves, re-read every field it feeds as though seeing it for the first time. This
+one was measurable at any point in the six hours between the move and the
+failure by taking `len()` of a string.
+
+And the fix was already written once. `executor.py` had met the same limit and
+answered `[:64]` at its own call site; the reviewer's site never got it. Blind
+truncation is also wrong — two projects under a long shared prefix truncate to
+the same key and silently share a cache — so both sites hash through one helper
+now, with short identities passing through unchanged so no warm cache is thrown
+away by the fix.
+
+**A tuple literal evaluates before the loop body sees anything.** The executor's
+gates were the elements of one, ordered cheapest-first with a module docstring
+saying so, and the full suite ran even when `patterns` had already failed — for
+as long as the ordering has been documented. Harmless while every entry was a
+pure question; the moment one of them prepares an environment, building a tuple
+restarts containers. Laziness is not an optimisation here, it is what makes the
+ordering mean anything.
+
+**Look one line up from the field you are adding.** `executor_cost_usd`
+accumulates across attempts and its comment says why: "a stage that took four
+attempts paid for four and the figure worth recording is the stage's, not the
+last attempt's." Eleven lines above, `executor_context_tokens` was *assigned*.
+The consequence is not a slightly-low number — a stage whose final attempt is a
+one-line fix records that attempt's high-water mark as the whole stage's, and
+two stages on one run reported 12,933 and 16,079 against 4.4M and 1.5M prompt
+tokens, in the figure the planner sizes batches from. The sentence that fixes a
+field is often already written on the field beside it.
+
+**A summary artifact must carry the number it is about.** Finding that required
+inferring per-attempt context from cache writes, because `executor-loop.json` —
+the *per-attempt* record — did not record the attempt's peak. It was computed,
+carried to state, and rendered per stage. A sum cannot be decomposed afterwards,
+so the per-item artifact has to hold the per-item figure or the only analysis
+left is archaeology.
+
+**Cache writes measure what was newly cached, not how big the job was.** The
+appealing alternative for sizing a multi-pass job is summing cache writes, and
+the artifacts refute it: a stage that reuses an earlier stage's prefix looks
+*small precisely because it was efficient*. Measured — single-attempt stages sat
+a steady ~7.3k below their context figure, the shared prefix, and one wrote
+21,547 while carrying 82,015. Summed per-attempt peaks have neither problem and
+need no reconciliation between two providers that disagree about what a cache
+write is: Anthropic reports cache *creation*, OpenAI reports a field inside
+`prompt_tokens_details` from automatic caching. One column, two meanings.
+
+**A total from a tool loop is not a context figure.** One derivation billed
+6,604,374 input tokens against a 187k prompt, because a tool loop re-sends the
+whole conversation once per turn and it made 32 calls. Read as capacity it is
+nonsense by a factor of thirty; read as a bill it is exact, and the cost
+decomposes to the cent. The planner had only totals recorded, and the planner is
+the role that has actually overrun a window — rejected at 1,103,000 tokens
+against a 1,000,000 ceiling with nothing recorded that would have seen it
+coming. Peaks and totals answer different questions, and `accumulate_usage` maxes
+any key naming a peak rather than adding it, decided in the helper because four
+call sites in two modules is three too many to rely on remembering.
+
+**Nothing can be omitted after a tool call, so the lever is what you send
+first.** The API is stateless; caching changes the price of resent tokens, not
+whether they are sent. Measured on one derivation: block 0 is 190,907 tokens and
+strictly append-only across derivations — 99.2–99.7% shared with the previous
+one, so cross-derivation caching is already doing everything it can. What
+remains is that the prefix is re-read 31 times *inside* one derivation, $2.96 of
+a $5.52 bill, and roughly 620k of its 687k characters are plan documents. The
+only lever with that magnitude is a smaller plan, and the risk of moving it
+behind tools is that a planner asked to fetch it will fetch it. That is a
+question for an experiment, not for reasoning.
+
+**A retry that behaves correctly can still describe itself wrongly.** One loop
+serves both the transport budget and the spurious-400 budget, and it hardcoded
+"transport failure" — so a 400 the provider *answered* announced itself as a
+dropped connection, and the first minutes of diagnosing a live failure went to
+the retry logic, which was working exactly as designed. The category was drawn
+around the mechanism again. A log line is the interface a failure is diagnosed
+through, and naming it after the machinery rather than the event costs whoever
+reads it next.
+
+**Check the instrument before the world.** Three measurements in one afternoon
+were wrong in the tool rather than in the system: `grep -c` counting lines where
+occurrences were wanted; a "0.0% shared prefix" that was the artifact's own
+header changing, one function call away from reporting that caching had never
+worked; and a project memory describing a manual remedy, read as a statement
+about what the current code cannot do — when the operator's own script had been
+written to handle exactly that case, with a comment citing the incident. When a
+number surprises, suspect the measurement first.
+
 ## Where things live
 
 `nodes.py` holds the loop's decisions — which failures route to the executor,
@@ -1028,7 +1121,18 @@ its git blob sha, recorded at run start and checked on every resume, so an
 edited config refuses to continue a run rather than needing a command run
 against it. `ProjectPaths` is built from `cfg.work_dir` and there is no slug —
 the work dir is the project's identity, which is what the prompt cache key
-needs and the one thing a derived handle could disagree with.
+needs and the one thing a derived handle could disagree with. `cachekey.py`
+bounds that identity to the provider's 64 characters, because a path is longer
+than a slug.
+
+**A project's config lives in the repository it describes**, beside the plan,
+with `.code_gantry/` gitignored next to it for everything the run writes.
+`target_repo`, `work_dir` and `host` are all absent from it: the first two are
+derived from where the file was read, and the third was a note to self that
+became somebody's hostname the moment the file was tracked. `planner.guidance`
+is empty there and the comment in its place records why — every paragraph it
+held was either the machine describing itself, or already arriving through the
+stage-costs block, or a hand copy of a live feed that the feed had overtaken.
 
 `executor.py` is now only what shapes an attempt before it starts — the read
 budget, the excerpts, the conventions — plus `run_script_stage`. Aider is gone
