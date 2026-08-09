@@ -310,8 +310,8 @@ def new_state(
         review_verdict=None,
         review_summary=None,
         review_record=None,
-        stage_usage=_zero_usage(),
-        run_usage=_zero_usage(),
+        stage_usage=zero_usage(),
+        run_usage=zero_usage(),
         status="running",
         escalation_reason=None,
         stage_queue=[],
@@ -321,7 +321,7 @@ def new_state(
     )
 
 
-def _zero_usage() -> dict[str, int]:
+def zero_usage() -> dict[str, int]:
     return {
         "prompt_tokens": 0,
         "cached_tokens": 0,
@@ -413,7 +413,13 @@ def fresh_stage_fields() -> dict:
         # stage it would report a withholding that stage never suffered, and
         # the planner would trim a reference list that fits.
         "withheld_reads": [],
-        "stage_usage": _zero_usage(),
+        # `stage_usage` is deliberately absent, and cleared by `advance`
+        # instead — exactly where `plan_seconds` is, for the same reason. The
+        # planner's derivation is the first thing a stage costs, and `plan`
+        # spreads this dict *over* its own update, so a reset here would zero
+        # the figure the derivation had just recorded. That is the defect
+        # `plan_seconds` was moved out to fix; the second value through the
+        # same door does not need to rediscover it.
     }
 
 
@@ -585,7 +591,7 @@ def outstanding_deferrals(entries: list[dict] | None) -> list[dict]:
 
 
 def accumulate_usage(current: dict[str, int] | None, **deltas: int) -> dict[str, int]:
-    out = dict(current or _zero_usage())
+    out = dict(current or zero_usage())
     for key, value in deltas.items():
         out[key] = out.get(key, 0) + value
     return out

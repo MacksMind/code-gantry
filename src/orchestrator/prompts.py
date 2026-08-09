@@ -582,15 +582,18 @@ def _costs_block(costs: list[dict] | None) -> str:
         return ""
     lines = "\n".join(
         f"- `{c['merge_sha'][:12]}` {c['stage_id']} — {c['files']} file(s), "
-        f"{c['context_tokens']:,} tokens"
+        f"{c['context_tokens']:,} peak tokens"
         for c in costs
     )
     return (
         "\n\n## What stages have cost the executor\n\n"
-        "Measured, across every run of this project. Size a batch against "
-        "these rather than against a file count — the figure is dominated by "
-        "fixed overhead, so a stage's cost tracks the size of the files far "
-        "more than their number.\n\n" + lines
+        "Measured, across every run of this project. The figure is the "
+        "executor's peak context on that stage — the high-water mark, not a "
+        "total, because what decides whether the next stage fits is the "
+        "largest it ever got. Size a batch against these rather than against a "
+        "file count: the figure is dominated by fixed overhead, so a stage's "
+        "cost tracks the size of the files far more than their number.\n\n"
+        + lines
     )
 
 

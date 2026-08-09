@@ -872,8 +872,16 @@ class TestStageCostsSurviveTheRun:
     def test_a_priced_executor_adds_its_cost_to_the_line(self, tmp_path):
         from orchestrator.planner import append_stage_cost
 
-        append_stage_cost(tmp_path, "s", "0285803b159a", 3, 13_000, cost_usd=0.42)
-        assert "$0.42" in (tmp_path / "stage-costs.md").read_text()
+        append_stage_cost(
+            tmp_path, "s", "0285803b159a", 3, 13_000,
+            spend=[{"role": "executor", "prompt": 40_000, "cached": 30_000,
+                    "completion": 900, "cost_usd": 0.42}],
+        )
+        text = (tmp_path / "stage-costs.md").read_text()
+        assert "$0.42" in text
+        # Tokens beside it, because the peak and the billed total are
+        # different quantities and the line used to show only one of each.
+        assert "executor 40,000 in (30,000 cached) / 900 out" in text
 
     def test_a_free_executor_adds_nothing(self, tmp_path):
         # A local endpoint costs nothing, and "$0.00" on every line of a file
@@ -889,7 +897,11 @@ class TestStageCostsSurviveTheRun:
         # two-place format would record a run's whole executor spend as zero.
         from orchestrator.planner import append_stage_cost
 
-        append_stage_cost(tmp_path, "s", "0285803b159a", 1, 900, cost_usd=0.0004)
+        append_stage_cost(
+            tmp_path, "s", "0285803b159a", 1, 900,
+            spend=[{"role": "executor", "prompt": 900, "cached": 0,
+                    "completion": 10, "cost_usd": 0.0004}],
+        )
         assert "$0.0004" in (tmp_path / "stage-costs.md").read_text()
 
     def test_the_line_records_which_models_and_efforts_produced_it(self, tmp_path):
@@ -906,7 +918,8 @@ class TestStageCostsSurviveTheRun:
             "0285803b159a",
             3,
             13_000,
-            cost_usd=0.42,
+            spend=[{"role": "executor", "prompt": 40_000, "cached": 0,
+                    "completion": 900, "cost_usd": 0.42}],
             roles=(
                 ("exec", "gpt-5.6-luna", "max"),
                 ("plan", "claude-opus-5", "xhigh"),
@@ -925,7 +938,9 @@ class TestStageCostsSurviveTheRun:
         from orchestrator.planner import append_stage_cost, recent_stage_costs
 
         append_stage_cost(
-            tmp_path, "s", "0285803b159a", 3, 13_000, cost_usd=0.42,
+            tmp_path, "s", "0285803b159a", 3, 13_000,
+            spend=[{"role": "executor", "prompt": 40_000, "cached": 0,
+                    "completion": 900, "cost_usd": 0.42}],
             roles=(("exec", "gpt-5.6-luna", "max"),),
         )
         got = recent_stage_costs(tmp_path)

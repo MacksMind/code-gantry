@@ -1393,8 +1393,15 @@ def append_status(
 # else, so it stays small enough to read whole however long the project runs.
 STAGE_COSTS_FILENAME = "stage-costs.md"
 STAGE_COST_PREFIX = "- cost "
+# `executor tokens` is what the figure was called for the first several
+# hundred lines of this file, and it was always the executor's *peak* context
+# rather than what it billed. Both spellings parse, because the quantity did
+# not change — only its name — and a series that stops being readable at the
+# rename is worse than an imprecise label. The same reasoning kept `max` across
+# the executor cutover: keep the quantity, and the history stays comparable.
 _STAGE_COST = re.compile(
-    r"^- cost `([0-9a-f]+)` `([^`]*)` — (\d+) file\(s\), ([\d,]+) executor tokens",
+    r"^- cost `([0-9a-f]+)` `([^`]*)` — (\d+) file\(s\), "
+    r"([\d,]+) (?:executor tokens|peak)",
     re.MULTILINE,
 )
 
@@ -1405,15 +1412,27 @@ def append_stage_cost(
     merge_sha: str,
     files: int,
     context_tokens: int,
-    cost_usd: float = 0.0,
+    spend: list[dict] | None = None,
     roles: tuple[tuple[str, str, str], ...] = (),
 ) -> Path:
-    """Record what a landed stage cost the executor, durably.
+    """Record what a landed stage cost, durably, in one shape for all three roles.
 
     The figure itself lives on `StageResult`, which lives in the run's state
     database — so a fresh run starts with none of it and sizes its first batch,
     the decision that matters most, from nothing. This is the copy that
     outlives the run.
+
+    `context_tokens` is the executor's **peak**, and it leads because it is the
+    one number the planner reads: what bounds the next stage is the high-water
+    mark, not a total. It was written as "executor tokens" beside a dollar
+    figure derived from the executor's *summed* usage, which put two different
+    quantities on one line reading as one. `spend` is the summed side, one row
+    per role, and the peak is now labelled as a peak.
+
+    The planner was the role with no per-stage record at all — 91% of the bill,
+    logging no token counts anywhere — which is why a question about how much
+    an unfolded progress log was costing could not be answered from this
+    project's own artifacts.
 
     Keyed by the merge sha because that is the only identifier that survives:
     the stage branch is deleted and the executor's own commits are squashed
@@ -1435,13 +1454,18 @@ def append_stage_cost(
     path = project_dir / STAGE_COSTS_FILENAME
     line = (
         f"{STAGE_COST_PREFIX}`{merge_sha}` `{stage_id}` — "
-        f"{files} file(s), {context_tokens:,} executor tokens"
+        f"{files} file(s), {context_tokens:,} peak"
     )
-    # Only when there is one. A local endpoint costs nothing, and a trailing
-    # "$0.00" on every line of a file the planner reads on each call is noise
-    # that says the same thing as its absence.
-    if cost_usd:
-        line += f", ${cost_usd:,.4f}".rstrip("0").rstrip(".")
+    for row in spend or ():
+        line += (
+            f"; {row['role']} {row['prompt']:,} in"
+            + (f" ({row['cached']:,} cached)" if row.get("cached") else "")
+            + f" / {row['completion']:,} out"
+        )
+        # Only when there is one. Zero for "not priced" and zero for "free" are
+        # indistinguishable, so an unpriced role says nothing rather than $0.00.
+        if row.get("cost_usd"):
+            line += f" ${row['cost_usd']:,.4f}".rstrip("0").rstrip(".")
     # `@` rather than `/`: a routed model string is already full of slashes
     # (`openai/responses/gpt-5.6-luna`), so a slash before the effort reads as
     # another path segment and the field stops being greppable.

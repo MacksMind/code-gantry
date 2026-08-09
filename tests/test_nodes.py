@@ -3314,6 +3314,50 @@ class TestTheNativeExecutorsMeasurementsSurviveTheTrip:
         written = (rt.project.project_dir / "stage-costs.md").read_text()
         assert "$0.0092" in written
 
+    def test_all_three_roles_reach_the_cost_line(self, repo, tmp_path):
+        """The journey, through every node that spends money.
+
+        The planner is 91% of the bill and had no per-stage record anywhere —
+        it logged no token counts at all — so a question about what an
+        unfolded progress log was costing could not be answered from this
+        project's own artifacts. The reviewer's usage reached the log and
+        stopped there.
+
+        Driven through `plan`, `execute` and `advance` rather than asserted on
+        `_stage_spend`, because the defect was never the arithmetic: the keys
+        exist in `zero_usage` and nothing wrote them, and `fresh_stage_fields`
+        zeroed the one that was written. Both are invisible to a test that
+        calls the formatter with a dict it made up.
+        """
+        from orchestrator.planner import recent_stage_costs
+
+        planner = StubPlanner([
+            PlannerOutcome(
+                "next_stage", "first", "e", stage_fields=planned_stage(),
+                usage=PlannerUsage(
+                    prompt_tokens=500_000, cached_tokens=480_000,
+                    completion_tokens=9_000,
+                ),
+            )
+        ])
+        ex = self._measured(repo, context_tokens=21_000, cost_usd=0.0092)
+        cfg, rt, state = make(repo, tmp_path, planner=planner, executor=ex)
+
+        state.update(nodes.plan(state, rt))
+        assert state["stage_usage"]["planner_prompt_tokens"] == 500_000, (
+            "the derivation's cost was zeroed by the per-stage reset"
+        )
+        state = with_stage(state, rt)
+        state.update(nodes.execute(state, rt))
+        nodes.advance(state, rt)
+
+        written = (rt.project.project_dir / "stage-costs.md").read_text()
+        assert "planner 500,000 in (480,000 cached) / 9,000 out" in written
+        assert "21,000 peak" in written
+        # And the head of the line still parses, so the planner's batch sizing
+        # does not silently stop counting.
+        assert recent_stage_costs(rt.project.project_dir)[0]["context_tokens"] == 21_000
+
     def test_an_unpriced_model_still_records_its_context(self, repo, tmp_path):
         # `cost_usd` is None for a model with no rate — the distinction the
         # pricing module exists to keep. The line must still be written, on the

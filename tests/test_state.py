@@ -144,9 +144,9 @@ class TestUsageAccumulation:
     def test_a_fresh_usage_record_declares_every_key(self):
         # A key absent from the zero record is a key `accumulate_usage` will
         # create on first use and the report will read as missing until then.
-        from orchestrator.state import _zero_usage
+        from orchestrator.state import zero_usage
 
-        assert set(_zero_usage()) == {
+        assert set(zero_usage()) == {
             "prompt_tokens", "cached_tokens", "cache_write_tokens",
             "completion_tokens", "planner_prompt_tokens",
             "planner_cached_tokens", "planner_cache_write_tokens",

@@ -50,6 +50,7 @@ from orchestrator.runtime import Runtime
 from orchestrator.state import (
     clear_rework_after_approval,
     RunState,
+    zero_usage,
     accumulate_usage,
     evidence_surviving_a_revision,
     fresh_revision_fields,
@@ -385,6 +386,17 @@ def plan(state: RunState, rt: Runtime) -> dict:
     deferred = merge_deferrals(state.get("deferred") or [], outcome.deferred)
     base = {
         "run_usage": usage,
+        # And onto the stage, which is what makes a per-stage figure possible
+        # for the participant that spends most of the money. Accumulated for
+        # the same reason `plan_seconds` is: a revision is more planning for
+        # the same stage.
+        "stage_usage": accumulate_usage(
+            state.get("stage_usage"),
+            planner_prompt_tokens=outcome.usage.prompt_tokens,
+            planner_cached_tokens=outcome.usage.cached_tokens,
+            planner_cache_write_tokens=outcome.usage.cache_write_tokens,
+            planner_completion_tokens=outcome.usage.completion_tokens,
+        ),
         "planner_notes": notes,
         "deferred": deferred,
         # Accumulated rather than assigned: a revision is more planning for the
@@ -898,16 +910,21 @@ def execute(state: RunState, rt: Runtime) -> dict:
     # so a later attempt cannot inherit an earlier one's answers.
     measured["gate_records"] = dict(result.gate_records)
     if result.usage is not None:
-        measured["run_usage"] = accumulate_usage(
-            state.get("run_usage"),
-            executor_prompt_tokens=getattr(result.usage, "prompt_tokens", 0),
-            executor_cached_tokens=getattr(result.usage, "cached_tokens", 0),
-            executor_cache_write_tokens=getattr(
+        deltas = {
+            "executor_prompt_tokens": getattr(result.usage, "prompt_tokens", 0),
+            "executor_cached_tokens": getattr(result.usage, "cached_tokens", 0),
+            "executor_cache_write_tokens": getattr(
                 result.usage, "cache_write_tokens", 0
             ),
-            executor_completion_tokens=getattr(
+            "executor_completion_tokens": getattr(
                 result.usage, "completion_tokens", 0
             ),
+        }
+        measured["run_usage"] = accumulate_usage(state.get("run_usage"), **deltas)
+        # The same deltas onto the stage. Every attempt is its own session, so
+        # a stage reworked three times is billed for three.
+        measured["stage_usage"] = accumulate_usage(
+            state.get("stage_usage"), **deltas
         )
     # Accumulated, not replaced. Each attempt is its own executor session with
     # its own running total, so a stage that took four attempts paid for four
@@ -1656,14 +1673,15 @@ def advance(state: RunState, rt: Runtime) -> dict:
     # Recorded after the squash, keyed by the sha that survives it. The run's
     # own state carries this too, but only until the run ends; this is the copy
     # a later run can calibrate against.
-    if result.get("executor_context_tokens") or result.get("executor_cost_usd"):
+    spend = _stage_spend(rt.cfg, usage, result.get("executor_cost_usd") or None)
+    if result.get("executor_context_tokens") or spend:
         append_stage_cost(
             rt.project.project_dir,
             stage_id=stage.id,
             merge_sha=result["merge_sha"],
             files=len(stage.edit_files),
             context_tokens=result.get("executor_context_tokens", 0),
-            cost_usd=result.get("executor_cost_usd", 0.0),
+            spend=spend,
             roles=_roles_for_record(rt.cfg),
         )
     rt.log(f"[advance] {stage.id} landed as {result['merge_sha'][:12]}")
@@ -1674,6 +1692,11 @@ def advance(state: RunState, rt: Runtime) -> dict:
         # billed for this one's derivation. Not in `fresh_stage_fields`, which
         # `plan` also spreads — see its docstring.
         "plan_seconds": 0.0,
+        # Same door, same reason: `plan` writes the derivation's tokens into
+        # this and then spreads `fresh_stage_fields` over its own update, so
+        # the reset has to happen where the stage ends rather than where the
+        # next one begins.
+        "stage_usage": zero_usage(),
         "completed": completed,
         "current": None,
         # Cleared here, by the only node that writes them, rather than by the
@@ -2312,6 +2335,69 @@ def _first_line(stage: Stage) -> str:
 
 # git's own convention, and the width every tool that renders a log assumes.
 _BODY_WIDTH = 72
+
+
+def _stage_spend(cfg, usage: dict, executor_cost: float | None = None) -> list[dict]:
+    """What each of the three roles billed for one stage.
+
+    One shape for all of them, because they were not comparable before: the
+    executor's line carried a *peak* context figure beside a dollar amount
+    computed from its *summed* usage — two different quantities reading as
+    one — the reviewer's tokens went only to the log, and the planner's went
+    nowhere at all. The planner is 91% of the bill and was the role with no
+    per-stage record.
+
+    Tokens first and always; the dollars are optional and omitted for an
+    unpriced model. `None` from `price_usage` is not `0.0` — a rate table that
+    reports zero for "not priced" as readily as for "free" makes a local
+    endpoint and a missing rate identical — and the two are told apart here by
+    the field simply being absent.
+    """
+    import os
+
+    from orchestrator.pricing import entry_for, load_price_map, price_usage
+    from orchestrator.report import PRICE_MAP_FILENAME
+
+    prices = load_price_map(
+        os.environ.get("ORCHESTRATOR_PRICE_MAP") or PRICE_MAP_FILENAME
+    )
+    out: list[dict] = []
+    # The reviewer's keys are unprefixed: it was the first role to write here
+    # and the shape was not role-aware yet. Named explicitly rather than
+    # inferred, so adding a fourth role is a line here and not a rule to work
+    # out.
+    for label, prefix, model in (
+        ("planner", "planner_", cfg.planner.model),
+        ("executor", "executor_", cfg.executor.model),
+        ("reviewer", "", cfg.reviewer.model),
+    ):
+        prompt = usage.get(f"{prefix}prompt_tokens", 0)
+        completion = usage.get(f"{prefix}completion_tokens", 0)
+        known = executor_cost if label == "executor" else None
+        if not prompt and not completion and not known:
+            continue
+        cached = usage.get(f"{prefix}cached_tokens", 0)
+        writes = usage.get(f"{prefix}cache_write_tokens", 0)
+        row = {
+            "role": label,
+            "prompt": prompt,
+            "cached": cached,
+            "completion": completion,
+        }
+        # The loop already priced its own attempt, through this same
+        # `price_usage` and the same table, and it is the only participant
+        # that does. Preferring its figure keeps one arithmetic rather than
+        # two agreeing ones — the second is the one that drifts, and
+        # `_price`'s own docstring says so.
+        cost = known
+        if cost is None:
+            cost = price_usage(
+                entry_for(prices, model), prompt, cached, writes, completion
+            )
+        if cost:
+            row["cost_usd"] = cost
+        out.append(row)
+    return out
 
 
 def _roles_for_record(cfg) -> tuple[tuple[str, str, str], ...]:
