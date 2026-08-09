@@ -353,26 +353,40 @@ def _unfolded_progress_check(cfg: ProjectConfig) -> Check:
         # unreadable one is already reported by the plan checks.
         return Check("progress log", True, "no progress log yet")
 
-    entries = [line for line in body.splitlines() if line.startswith("## ")]
-    if not entries:
+    # Counted by the marker each writer stamps, not by the heading. Three
+    # functions in `addendum` produce entries and each writes exactly one of
+    # these lines, so the count is a fact about who wrote what. Headings are
+    # not: a planner note lifts its title from the plan, and a detail body can
+    # quote a `##` line out of a plan document.
+    kinds = (
+        ("planner note", "planner notes", "- **observed** while planning"),
+        (
+            "reviewer observation",
+            "reviewer observations",
+            "- **observed** by the reviewer while landing",
+        ),
+        ("reviewer summary", "reviewer summaries", "## What "),
+    )
+    counted = [
+        (one, many, sum(1 for line in body.splitlines() if line.startswith(marker)))
+        for one, many, marker in kinds
+    ]
+    if not any(n for _, _, n in counted):
         return Check("progress log", True, "nothing to fold")
 
-    # Named for who wrote them, and disjoint. "68 entries and 24 landings" put
-    # a subset beside its superset, so the two numbers could not be added or
-    # compared — and neither said which participant produced it, which is the
-    # thing that tells an operator what folding one of them involves.
-    summaries = sum(1 for line in entries if line.startswith("## What "))
-    notes = len(entries) - summaries
+    # Disjoint, and each named for its author. The first version said "68
+    # entries and 24 landings", which put a subset beside its superset — the
+    # numbers could not be added — and then "44 planner notes", which silently
+    # counted the reviewer's own findings among the planner's.
+    parts = [f"{n} {one if n == 1 else many}" for one, many, n in counted if n]
+    listed = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + f" and {parts[-1]}"
     size = len(body.encode())
     shown = f"{size / 1024:.0f}KB" if size >= 1024 else f"{size} bytes"
     rel = target.relative_to(cfg.target_repo)
     return Check(
         "progress log",
         False,
-        f"{notes} planner note{'' if notes == 1 else 's'} and "
-        f"{summaries} reviewer "
-        f"{'summary' if summaries == 1 else 'summaries'} unfolded in "
-        f"{rel} ({shown})",
+        f"{listed} unfolded in {rel} ({shown})",
         fatal=False,
     )
 

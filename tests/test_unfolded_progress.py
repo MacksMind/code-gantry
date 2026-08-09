@@ -53,8 +53,16 @@ def _log(repo, entries):
     (repo / "docs" / "progress_log.md").write_text(body)
 
 
+# The three writers in `addendum`, each with the marker it stamps. Written out
+# here rather than imported so the test fails when a format changes, which is
+# the event the counter cares about.
 LANDED = "## What `stage-{}` landed\n\nIt did a thing.\n\n"
 OBSERVED = "## A note\n\n- **observed** while planning `stage-{}`\n\n"
+REVIEWED = (
+    "## `app/models/thing.rb`\n\n"
+    "- **observed** by the reviewer while landing `stage-{}`\n"
+    "- **found** the count is wrong\n\n"
+)
 
 
 class TestWhenThereIsNothingToFold:
@@ -120,6 +128,28 @@ class TestTheAccounting:
         assert "1 planner note" in check.detail
         assert "2 reviewer summaries" in check.detail
 
+    def test_a_reviewer_observation_is_neither_of_the_other_two(self, repo):
+        """Three writers, not two.
+
+        A reviewer finding — the code has a problem this stage did not cause —
+        is filed under the file it is about and carries no plan citation, which
+        is exactly what distinguishes it from a planner note. Counting by
+        heading put it in with the planner's, so the one number an operator
+        would read as "what the planner claimed about the plan" silently
+        included the reviewer's corrections of those claims.
+        """
+        check = self._check(
+            repo, [OBSERVED.format(1), REVIEWED.format(1), LANDED.format(1)]
+        )
+        assert "1 planner note" in check.detail
+        assert "1 reviewer observation" in check.detail
+        assert "1 reviewer summary" in check.detail
+
+    def test_a_kind_with_nothing_in_it_is_not_listed(self, repo):
+        # Three zeroes would be three quarters of the line saying nothing.
+        check = self._check(repo, [LANDED.format(1), LANDED.format(2)])
+        assert check.detail.startswith("2 reviewer summaries unfolded")
+
     def test_the_singular_reads_correctly(self, repo):
         check = self._check(repo, [LANDED.format(1), OBSERVED.format(1)])
         assert "1 planner note and 1 reviewer summary" in check.detail
@@ -144,7 +174,7 @@ class TestTheAccounting:
         the numbers, which are the part that changes.
         """
         check = self._check(repo, [LANDED.format(1)])
-        assert len(check.detail) < 120, check.detail
+        assert len(check.detail) < 160, check.detail
         assert "cache" not in check.detail.lower()
 
 
