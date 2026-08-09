@@ -154,3 +154,50 @@ class TestTheExecutorCannotEditIt:
         cfg = parse_config(_data(), source=repo / ".orchestrator" / "config.yaml")
         ctx = _ctx(cfg)
         assert not _is_plan_document("app/models/order.rb", ctx)
+
+
+class TestTheCharBudgetTracksTheLineBudget:
+    """A second dimension whose default ignored the first is a tightening.
+
+    `max_chars_per_call` bounds one call and `max_total_chars` bounds the step,
+    for the reason `ReadBudget` records: a line is not a unit of size. But the
+    step ceiling shipped with a default computed from the *class* default line
+    budget, while every real config overrides the line budget three to seven
+    times higher.
+
+    Measured on this project's config before it was caught: the reviewer had
+    `max_read_lines_total: 20000` and an effective char budget of 240,000 —
+    a seventh of what the line budget implies. It would have bound long before
+    the ceiling it was added underneath, and silently, because a read budget
+    refusal reads the same whichever ceiling raised it.
+
+    So it is derived at parse time from the configured value. Eighty characters
+    a line is a generous average for source, which is the point: the ceiling
+    exists for the minified bundle and the one-row fixture, and should never be
+    what stops ordinary reading.
+    """
+
+    def test_it_follows_a_raised_line_budget(self):
+        from orchestrator.config import ReviewerConfig
+
+        cfg = ReviewerConfig(model="m", max_read_lines_total=30_000)
+        assert cfg.max_read_chars_total == 30_000 * 80
+
+    def test_an_explicit_value_still_wins(self):
+        from orchestrator.config import ReviewerConfig
+
+        cfg = ReviewerConfig(
+            model="m", max_read_lines_total=30_000, max_read_chars_total=1_000
+        )
+        assert cfg.max_read_chars_total == 1_000
+
+    def test_every_role_derives_it(self):
+        from orchestrator.config import (
+            ExecutorConfig,
+            PlannerConfig,
+            ReviewerConfig,
+        )
+
+        for kind in (ExecutorConfig, PlannerConfig, ReviewerConfig):
+            cfg = kind(model="m", max_read_lines_total=7_000)
+            assert cfg.max_read_chars_total == 7_000 * 80, kind.__name__

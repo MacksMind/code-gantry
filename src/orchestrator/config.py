@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, model_validator, ValidationError
 
 from orchestrator.globs import matches_any
 
@@ -135,6 +135,29 @@ class _EndpointConfig(_Strict):
     what the operator read.
     """
 
+    # Derived from `max_read_lines_total` unless set, at eighty characters a
+    # line. Shipped as a class-level constant first, which was wrong in the
+    # one way that matters: every real config raises the line budget three to
+    # seven times above its default, and the char ceiling stayed where the
+    # default put it. Measured before it reached a run — the reviewer had
+    # `max_read_lines_total: 20000` and an effective 240,000 characters, a
+    # seventh of what the lines imply, so the ceiling added *underneath*
+    # another would have bound first and silently, a read-budget refusal
+    # reading the same whichever ceiling raised it.
+    #
+    # Eighty a line is generous for source on purpose: this exists for the
+    # minified bundle and the one-row fixture, and must never be what stops
+    # ordinary reading.
+    max_read_chars_total: int | None = None
+
+    @model_validator(mode="after")
+    def _derive_char_budget(self):
+        if self.max_read_chars_total is None:
+            object.__setattr__(
+                self, "max_read_chars_total", self.max_read_lines_total * 80
+            )
+        return self
+
     api_base: str | None = None
     api_base_env: str | None = None
 
@@ -242,7 +265,6 @@ class ExecutorConfig(_EndpointConfig):
     # say so without silently moving the other two.
     max_read_lines_per_call: int = 400
     max_read_lines_total: int = 6000
-    max_read_chars_total: int = 480000
     max_read_calls: int = 60
     # Complete edit → lint → commit → test passes before the attempt gives up
     # and hands what it has to the gate. Deliberately low: an attempt is now a
@@ -361,7 +383,6 @@ class PlannerConfig(_EndpointConfig):
     repo_access: bool = False
     max_read_lines_per_call: int = 400
     max_read_lines_total: int = 3000
-    max_read_chars_total: int = 240000
     max_read_calls: int = 25
     # Semantic search over a Qdrant index, when the project maintains one.
     # Endpoints come from the environment because they carry a host name, which
@@ -435,7 +456,6 @@ class ReviewerConfig(_EndpointConfig):
     repo_access: bool = False
     max_read_lines_per_call: int = 400
     max_read_lines_total: int = 3000
-    max_read_chars_total: int = 240000
     max_read_calls: int = 25
     # See `PlannerConfig.semantic_search`. Same shape, same reason for keeping
     # the endpoints in the environment.
