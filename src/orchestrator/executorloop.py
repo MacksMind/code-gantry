@@ -210,15 +210,60 @@ def _price(usage, model: str | None) -> float | None:
     )
 
 
+LINT_REWRITE_CHARS = 4_000
+
+
+def _with_lint_rewrite(failure, diff: str):
+    """Tell the model what the checks changed after it stopped editing.
+
+    `checks` autocorrect — `rubocop -A`, `eslint --fix`, `gofmt -w` — and they
+    run once the model has stopped asking for things. The tree moves under a
+    conversation that is already finished, so the next cycle opens with the
+    model holding file contents that are no longer on disk. It cannot see that
+    its edit was rewritten; from where it sits it made the change and the gate
+    is complaining anyway.
+
+    Measured on one stage: the instruction required `Date.today` and forbade
+    `Time.zone.today`, and `Rails/Date` rewrites the first into the second. The
+    executor made the edit, the linter undid it, the patterns gate saw the
+    forbidden spelling still there, and the same diff came back twice. Three
+    planner revisions and about thirty-five minutes, and the planner only
+    escaped by inferring the cause from the repetition — nothing told it, and
+    nothing told the executor.
+
+    Attributed to the tool in as many words. Handed the diff without being told
+    whose it is, a model reads it as its own mistake and tries the same edit
+    again, which is the loop this exists to break.
+    """
+    if not diff.strip():
+        return failure
+    from orchestrator.commands import clip_for_model
+
+    failure.feedback = (
+        f"{failure.feedback}\n\n"
+        "After you stopped editing, the project's `checks` ran with "
+        "autocorrection and rewrote part of your work. This is their diff, not "
+        "yours — the tree now reads as the right-hand side:\n\n"
+        f"{clip_for_model(diff, LINT_REWRITE_CHARS)}\n\n"
+        "If an instruction requires a spelling the checks rewrite, no edit can "
+        "satisfy it. Say so rather than making the same change again."
+    )
+    return failure
+
+
 def _gate_cycle(stage, cfg, git, runner, out: ExecutionResult, since_sha, log=None):
     """Lint, commit, then the gates — in that order, for the reasons above."""
+    # Staged first, so whatever the checks rewrite is separable from what the
+    # model wrote. The index is already a snapshot; this is what it is for.
+    git.stage_all()
     lint = gates.run_checks(stage, runner)
+    rewritten = git.diff_unstaged()
     changed = _commit_if_dirty(git, stage, out, why=", after checks")
     if changed and log:
         log(f"[execute] checks rewrote files; committed as {changed[:12]}")
     if not lint.ok:
         out.gate_records.pop("checks", None)
-        return lint
+        return _with_lint_rewrite(lint, rewritten)
 
     # The checks passed on the tree as it stands *after* their own rewrites
     # were committed, which is the tree the gate will see.
@@ -257,7 +302,15 @@ def _gate_cycle(stage, cfg, git, runner, out: ExecutionResult, since_sha, log=No
                 }
             else:
                 out.gate_records.pop(name, None)
-            return found
+            # Recorded above without it, deliberately. `gate_records` is a
+            # cache keyed on the tree, and a rewrite that is true of this
+            # cycle would be stale the moment the tree moves again; the
+            # feedback is what the model reads, and only that needs it.
+            #
+            # This is the branch the incident actually took: `patterns` fired
+            # because the linter had put the forbidden spelling back, and the
+            # model was shown a gate failure with no way to know why.
+            return _with_lint_rewrite(found, rewritten)
         if found.command:
             out.gate_records[name] = {
                 "command": found.command,

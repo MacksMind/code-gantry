@@ -1,0 +1,128 @@
+"""What the linter changed, told to the model that did not change it.
+
+`checks` run with autocorrection — `rubocop -A`, `eslint --fix`, `gofmt -w` —
+and they run *after* the model has stopped asking for things. So the tree moves
+underneath a conversation that is already finished, and the next cycle opens
+with the model holding file contents that are no longer what is on disk. It
+cannot see that its edit was rewritten; from where it sits, it made the change
+and the gate is complaining anyway.
+
+Measured on `customer-service-automations-reminder-dates`, which took three
+planner revisions and about thirty-five minutes to escape. The stage required
+the template to read `Date.today` and forbade `Time.zone.today`. The repository
+loads `rubocop-rails`, whose `Rails/Date` cop rewrites `Date.today` into
+`Time.zone.today` — so every attempt made the edit, the linter undid it, the
+patterns gate saw the forbidden spelling still present, and the same diff came
+back twice. The planner eventually worked it out from the repetition alone and
+withdrew the instruction:
+
+    That could never be satisfied: the repository's linter runs over this
+    stage's output with autocorrection enabled and rewrites `Date.today` into
+    `Time.zone.today`, so the change was undone by tooling after the executor
+    made it, and the same diff came back twice.
+
+It reached that by inference from a repeated diff. Nothing told it, and nothing
+told the executor either.
+
+The mechanism is the cheap half: stage the model's work before the checks run,
+and whatever the checks then change is the unstaged remainder. That is the
+linter's diff exactly, with no commit restructuring and no snapshot files — and
+when it is empty there is nothing to say and nothing is said.
+"""
+
+import subprocess
+
+import pytest
+
+from orchestrator.config import Stage, parse_config
+from orchestrator.gitops import Git
+
+
+def git(path, *args):
+    subprocess.run(["git", "-C", str(path), *args], check=True, capture_output=True)
+
+
+@pytest.fixture
+def repo(tmp_path):
+    path = tmp_path / "target"
+    path.mkdir()
+    git(path, "init", "-q", "-b", "main")
+    for pair in (("user.email", "t@e.com"), ("user.name", "T"),
+                 ("commit.gpgsign", "false")):
+        git(path, "config", *pair)
+    (path / "app.rb").write_text("x = Date.today\n")
+    git(path, "add", "-A")
+    git(path, "commit", "-qm", "initial")
+    return path
+
+
+class TestTheLintersDiffIsIsolated:
+    def test_staging_first_separates_the_two(self, repo):
+        """The whole mechanism, in the shape the loop uses it.
+
+        The model's edit is staged; the linter's rewrite lands on top as the
+        unstaged remainder. No commit boundary is needed and no copy of the
+        tree is kept.
+        """
+        g = Git(repo)
+        (repo / "app.rb").write_text("x = Date.today\ny = 1\n")   # the model
+        g.stage_all()
+        (repo / "app.rb").write_text("x = Time.zone.today\ny = 1\n")  # the linter
+        diff = g.diff_unstaged()
+        assert "Time.zone.today" in diff
+        assert "-x = Date.today" in diff
+        # The model's own edit must not appear: it is staged, so it is the
+        # baseline the remainder is measured against.
+        assert "+y = 1" not in diff
+
+    def test_no_rewrite_is_an_empty_diff(self, repo):
+        g = Git(repo)
+        (repo / "app.rb").write_text("x = Date.today\ny = 1\n")
+        g.stage_all()
+        assert g.diff_unstaged() == ""
+
+    def test_an_untracked_file_the_model_added_is_staged_too(self, repo):
+        # Otherwise a new spec the model wrote reads as the linter's work.
+        g = Git(repo)
+        (repo / "new_spec.rb").write_text("describe X do\nend\n")
+        g.stage_all()
+        assert g.diff_unstaged() == ""
+
+
+class TestItReachesTheModel:
+    def _cfg(self, repo):
+        return parse_config({
+            "target_repo": str(repo), "base_ref": "main", "project_branch": "p",
+            "plan_root": "PLAN.md", "test_command": "true",
+            "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
+            "reviewer": {"model": "gpt-5.6-sol"},
+        })
+
+    def test_the_rewrite_is_appended_to_the_failure(self, repo):
+        from orchestrator.executorloop import _with_lint_rewrite
+
+        failure = type("F", (), {"feedback": "the patterns gate failed"})()
+        out = _with_lint_rewrite(
+            failure, "--- a/app.rb\n+++ b/app.rb\n-Date.today\n+Time.zone.today\n"
+        )
+        assert "the patterns gate failed" in out.feedback
+        assert "Time.zone.today" in out.feedback
+        # Named as the tool's doing, not the model's. Without that the model
+        # reads it as its own mistake and tries the same edit again.
+        assert "checks" in out.feedback.lower()
+
+    def test_nothing_is_appended_when_nothing_was_rewritten(self, repo):
+        from orchestrator.executorloop import _with_lint_rewrite
+
+        failure = type("F", (), {"feedback": "the tests failed"})()
+        assert _with_lint_rewrite(failure, "").feedback == "the tests failed"
+
+    def test_a_huge_rewrite_is_clipped(self, repo):
+        # A formatter that reflows a whole file must not evict the failure it
+        # is attached to. `clip_for_model` collapses before it truncates.
+        from orchestrator.executorloop import _with_lint_rewrite
+
+        failure = type("F", (), {"feedback": "the patterns gate failed"})()
+        out = _with_lint_rewrite(failure, "+line\n" * 20_000)
+        assert len(out.feedback) < 20_000
+        assert "the patterns gate failed" in out.feedback
