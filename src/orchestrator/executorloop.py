@@ -252,15 +252,26 @@ def _with_lint_rewrite(failure, diff: str):
 
 
 def _gate_cycle(stage, cfg, git, runner, out: ExecutionResult, since_sha, log=None):
-    """Lint, commit, then the gates — in that order, for the reasons above."""
-    # Staged first, so whatever the checks rewrite is separable from what the
-    # model wrote. The index is already a snapshot; this is what it is for.
-    git.stage_all()
+    """Commit, lint, commit the rewrite, then the gates — in that order.
+
+    The model's work is committed *before* the checks run, so whatever they
+    then change is the unstaged remainder and gets a commit of its own. Both
+    are squashed on landing, so the project branch is unaffected; what it buys
+    is on the stage branch, which is what you read when a stage misbehaves.
+
+    The first version staged instead of committing. That isolated the rewrite
+    just as well and held it in a local variable, so it survived only as far as
+    the feedback that used it — and on the success path there is no feedback,
+    which is every cycle that worked. `git` could not answer "what did the
+    linter change here" afterwards, because the two halves had been folded into
+    one commit and nothing else had written the split down.
+    """
+    _commit_if_dirty(git, stage, out)
     lint = gates.run_checks(stage, runner)
     rewritten = git.diff_unstaged()
-    changed = _commit_if_dirty(git, stage, out, why=", after checks")
-    if changed and log:
-        log(f"[execute] checks rewrote files; committed as {changed[:12]}")
+    rewrote = _commit_if_dirty(git, stage, out, why=", after checks")
+    if rewrote and log:
+        log(f"[execute] checks rewrote files; committed as {rewrote[:12]}")
     if not lint.ok:
         out.gate_records.pop("checks", None)
         return _with_lint_rewrite(lint, rewritten)

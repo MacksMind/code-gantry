@@ -24,10 +24,19 @@ withdrew the instruction:
 It reached that by inference from a repeated diff. Nothing told it, and nothing
 told the executor either.
 
-The mechanism is the cheap half: stage the model's work before the checks run,
+The mechanism is the cheap half: commit the model's work before the checks run,
 and whatever the checks then change is the unstaged remainder. That is the
-linter's diff exactly, with no commit restructuring and no snapshot files — and
-when it is empty there is nothing to say and nothing is said.
+linter's diff exactly, and committing it separately is what makes it survive —
+the first attempt staged instead of committed, which isolated the diff in
+memory and then folded both halves into one commit, so the rewrite existed only
+for as long as the variable holding it. On the success path it was computed,
+used for nothing, and dropped; `git` could not recover it afterwards because
+nothing had ever written it down.
+
+Its own commit answers three questions the fold could not: whether a rewrite
+happened at all, what it was, and — through `git blame` on the stage branch —
+whose it was. All of it is squashed on landing, so the project branch is
+unaffected either way.
 """
 
 import subprocess
@@ -57,35 +66,35 @@ def repo(tmp_path):
 
 
 class TestTheLintersDiffIsIsolated:
-    def test_staging_first_separates_the_two(self, repo):
+    def test_committing_first_separates_the_two(self, repo):
         """The whole mechanism, in the shape the loop uses it.
 
-        The model's edit is staged; the linter's rewrite lands on top as the
-        unstaged remainder. No commit boundary is needed and no copy of the
-        tree is kept.
+        The model's edit is committed; the linter's rewrite lands on top as the
+        unstaged remainder, measured against a tree that already contains the
+        model's work.
         """
         g = Git(repo)
         (repo / "app.rb").write_text("x = Date.today\ny = 1\n")   # the model
-        g.stage_all()
+        g.commit_all("the model's work")
         (repo / "app.rb").write_text("x = Time.zone.today\ny = 1\n")  # the linter
         diff = g.diff_unstaged()
         assert "Time.zone.today" in diff
         assert "-x = Date.today" in diff
-        # The model's own edit must not appear: it is staged, so it is the
+        # The model's own edit must not appear: it is committed, so it is the
         # baseline the remainder is measured against.
         assert "+y = 1" not in diff
 
     def test_no_rewrite_is_an_empty_diff(self, repo):
         g = Git(repo)
         (repo / "app.rb").write_text("x = Date.today\ny = 1\n")
-        g.stage_all()
+        g.commit_all("the model's work")
         assert g.diff_unstaged() == ""
 
-    def test_an_untracked_file_the_model_added_is_staged_too(self, repo):
+    def test_an_untracked_file_the_model_added_is_committed_too(self, repo):
         # Otherwise a new spec the model wrote reads as the linter's work.
         g = Git(repo)
         (repo / "new_spec.rb").write_text("describe X do\nend\n")
-        g.stage_all()
+        g.commit_all("the model's work")
         assert g.diff_unstaged() == ""
 
 

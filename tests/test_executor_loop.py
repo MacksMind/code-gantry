@@ -266,6 +266,14 @@ class TestTheRecordOfAnAttempt:
         assert "cycle 1" in log and "cycle 2" in log
 
     def test_a_checks_rewrite_says_so_in_its_own_commit(self, repo):
+        """Two commits, and the second is the rewrite alone.
+
+        This test passed for a year on one commit, because the single commit
+        the cycle made was unconditionally labelled `after checks` whether the
+        checks had touched anything or not. It asserted the message and the
+        message was a constant. What it names — that a rewrite is separable —
+        needs the *contents* of the second commit.
+        """
         cfg, stage = build(
             repo, {"checks": ["printf 'class C\\nend\\n' > app/a.rb"]}
         )
@@ -273,10 +281,36 @@ class TestTheRecordOfAnAttempt:
 
         import subprocess
 
-        log = subprocess.run(
+        def out(*args):
+            return subprocess.run(
+                args, cwd=repo, capture_output=True, text=True
+            ).stdout
+
+        subjects = out("git", "log", "--format=%s").splitlines()
+        assert "after checks" in subjects[0]
+        assert "after checks" not in subjects[1]
+
+        # The model's edit is in the parent; the rewrite of it is on its own.
+        rewrite = out("git", "show", "--format=", "HEAD")
+        assert "+class C" in rewrite and "-class B" in rewrite
+        assert "+class B" not in rewrite
+
+        authored = out("git", "show", "--format=", "HEAD~1")
+        assert "+class B" in authored and "class C" not in authored
+
+    def test_checks_that_rewrite_nothing_make_no_second_commit(self, repo):
+        # The log line and the commit both claimed a rewrite on every cycle
+        # that committed anything, which is every cycle the model edited in.
+        # Twenty such lines were read as twenty rewrites; none of them were.
+        cfg, stage = build(repo, {"checks": ["true"]})
+        drive(repo, cfg, stage, ScriptedModel([[edit_file("app/a.rb", "class A", "class B")]]))
+
+        import subprocess
+
+        subjects = subprocess.run(
             ["git", "log", "--format=%s"], cwd=repo, capture_output=True, text=True
         ).stdout
-        assert "after checks" in log
+        assert "after checks" not in subjects
 
     def test_the_transcript_records_every_item_in_order(self, tmp_path):
         from types import SimpleNamespace

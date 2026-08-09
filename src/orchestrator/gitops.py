@@ -497,19 +497,15 @@ class Git:
                 changed.append(rel)
         return changed
 
-    def stage_all(self) -> None:
-        """Stage everything, so a later rewrite is separable from it.
-
-        The executor's edits go into the index before `checks` run; whatever
-        the checks then change lands on top as the unstaged remainder, and
-        `diff_unstaged` is the linter's contribution exactly. No commit
-        boundary and no copy of the tree — the index is already a snapshot and
-        this is what it is for.
-        """
-        self._run("add", "-A", ".")
-
     def diff_unstaged(self) -> str:
-        """Working tree against the index: what changed since `stage_all`."""
+        """The working tree against the index, and nothing that is in it.
+
+        Called after the executor's own edits have been committed and the
+        `checks` have run over them, where it is the checks' contribution
+        exactly. An index-based version of the same split came first and was
+        the reason `stage_all` existed; committing instead is what lets the
+        rewrite outlive the variable holding it.
+        """
         return self._out("diff")
 
     def commit_all(self, message: str) -> str | None:
