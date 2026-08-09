@@ -2938,6 +2938,55 @@ class TestReviewerObservationsReachTheLog:
 
         return Once()
 
+    def test_the_run_log_says_what_was_found_not_only_where(self, repo, tmp_path):
+        """The line a human actually reads while watching a run.
+
+        It used to join the file names with semicolons and stop there, so the
+        rarest thing the reviewer produces announced itself as a count and a
+        path — and finding out what had been noticed meant opening an
+        artifact. The paths in a real project are long enough that two of them
+        filled the line on their own.
+
+        The finding only. Detail and evidence stay in `review.json` and the
+        progress log, which are the record; this is the pointer to it.
+        """
+        reviewer = self._reviewer([
+            {
+                "file": "docs/progress_log.md",
+                "finding": "the entry says 46 columns; the generator has 50",
+                "detail": "Field list at item_recipient.rb:1107-1156.",
+            }
+        ])
+        cfg, rt, state = make(repo, tmp_path, reviewer=reviewer)
+        seen: list[str] = []
+        rt.log = seen.append
+
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("stage work\n")
+        nodes.review(state, rt)
+
+        line = next(x for x in seen if "reviewer note" in x)
+        assert "docs/progress_log.md" in line
+        assert "the entry says 46 columns; the generator has 50" in line
+        assert "Field list at" not in line, "the detail belongs in the record"
+
+    def test_one_line_each_rather_than_one_joined_line(self, repo, tmp_path):
+        reviewer = self._reviewer([
+            {"file": "a.rb", "finding": "first thing", "detail": "d"},
+            {"file": "b.rb", "finding": "second thing", "detail": "d"},
+        ])
+        cfg, rt, state = make(repo, tmp_path, reviewer=reviewer)
+        seen: list[str] = []
+        rt.log = seen.append
+
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("stage work\n")
+        nodes.review(state, rt)
+
+        notes = [x for x in seen if "reviewer note" in x]
+        assert len(notes) == 2
+        assert "first thing" in notes[0] and "second thing" in notes[1]
+
     def test_an_observation_is_written_when_the_stage_lands(self, repo, tmp_path):
         reviewer = self._reviewer([
             {

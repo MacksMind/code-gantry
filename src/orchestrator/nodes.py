@@ -68,6 +68,11 @@ STATUS_TAIL_CHARS = 4_000
 # expensive enough without paying for a coverage report.
 FEEDBACK_OUTPUT_CHARS = 4_000
 
+# A reviewer note in the run log is for a human scanning it, not the record —
+# the whole finding, its detail and its evidence are in `review.json` and the
+# progress log. Enough to know whether to go and look.
+REVIEWER_NOTE_CHARS = 240
+
 
 def _clip(text: str) -> str:
     return clip_for_model(text, FEEDBACK_OUTPUT_CHARS)
@@ -1267,11 +1272,16 @@ def review(state: RunState, rt: Runtime) -> dict:
         f"({outcome.usage.prompt_tokens} prompt, {outcome.usage.cached_tokens} cached)"
     )
 
-    if outcome.observations:
+    for note in outcome.observations:
+        # One line each, and the finding on it. The first version joined the
+        # file names with semicolons and said nothing else, so a human reading
+        # the run log learned that something had been noticed somewhere and had
+        # to open an artifact to find out what — for the rarest thing the
+        # reviewer produces. The paths are long enough that two of them filled
+        # the line on their own.
         rt.log(
-            f"[review] {stage.id}: {len(outcome.observations)} observation(s) "
-            "outside this stage: "
-            + "; ".join(o.file for o in outcome.observations)
+            f"[review] {stage.id}: reviewer note on {note.file} — "
+            + clip_for_model(note.finding.strip(), REVIEWER_NOTE_CHARS)
         )
 
     base = {
