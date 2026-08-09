@@ -35,7 +35,8 @@ from orchestrator.flake import (
     seeds_by_file,
 )
 
-# The operator's, from projects/example/config.yaml. Group 1 is the file path;
+# A real operator's, copied from a project config — which now lives in the
+# repository it describes rather than here. Group 1 is the file path;
 # it stops before `[1:1]` or `:531`, so both of RSpec's locator forms reduce to
 # the same file. Nothing in the code knows this shape.
 RSPEC_PATTERN = r"^\s*rspec\s+'?\.?/?([^'\s\[:]+_spec\.rb)"
