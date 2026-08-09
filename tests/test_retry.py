@@ -390,3 +390,53 @@ class TestADeterministic400IsNotWaitedOut:
 
         for status in (401, 404, 422, 500, None):
             assert not is_spurious_request_status(status, "prompt is too long")
+
+
+class TestTheTwoBudgetsAreNamedApart:
+    """A 400 the provider answered is not a transport failure.
+
+    One loop serves both budgets and its log line was a constant, so a
+    malformed request announced itself in the words of a dropped connection.
+    Measured on a live failure: a `prompt_cache_key` rejected for length was
+    logged as "transport failure, retrying in 120s", and the first minutes of
+    diagnosis went to the retry logic rather than to the request — which was
+    working exactly as designed, replaying an unrecognised 400 on the narrow
+    budget kept for the spurious ones.
+    """
+
+    def _log_of(self, status, message):
+        from orchestrator.retry import Backoff, with_provider_retry
+
+        seen: list[str] = []
+        calls = {"n": 0}
+
+        class Boom(Exception):
+            status_code = status
+
+            def __str__(self):
+                return message
+
+        def call():
+            calls["n"] += 1
+            raise Boom()
+
+        try:
+            with_provider_retry(
+                call,
+                retry_on=(Boom,),
+                transient=Backoff(budget_seconds=1),
+                spurious=Backoff(budget_seconds=1),
+                sleep=lambda _s: None,
+                log=seen.append,
+            )
+        except Boom:
+            pass
+        return "\n".join(seen)
+
+    def test_a_500_is_a_transport_failure(self):
+        assert "transport failure" in self._log_of(500, "upstream is unwell")
+
+    def test_a_spurious_400_says_the_provider_rejected_it(self):
+        text = self._log_of(400, "invalid_request_error: something odd")
+        assert "provider rejected the request" in text
+        assert "transport failure" not in text.split("giving up")[0]

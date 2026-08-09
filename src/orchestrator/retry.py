@@ -181,6 +181,13 @@ def with_provider_retry(
         backoff=spurious,
         sleep=sleep,
         log=log,
+        # Named for what happened rather than for the machinery. This loop
+        # serves both budgets and said "transport failure" for both, so a 400
+        # the provider *answered* announced itself as a dropped connection —
+        # and a reader diagnosing a live failure spent the first minutes on
+        # the retry logic instead of on the request. The category was drawn
+        # around the mechanism again.
+        label="provider rejected the request",
     )
 
 
@@ -192,6 +199,7 @@ def with_transport_retry(
     sleep=time.sleep,
     log=None,
     retry_if=None,
+    label: str = "transport failure",
 ):
     """Run `call`, waiting out failures of the kinds in `retry_on`.
 
@@ -222,7 +230,7 @@ def with_transport_retry(
                 raise
             if log:
                 log(
-                    f"transport failure, retrying in {wait:.0f}s "
+                    f"{label}, retrying in {wait:.0f}s "
                     f"({attempt + 1} of {len(schedule)}): {failure}"
                 )
             sleep(wait)

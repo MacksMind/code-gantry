@@ -30,6 +30,7 @@ from orchestrator.addendum import (
     decode_escapes,
 )
 from orchestrator.commands import clip_for_model
+from orchestrator.cachekey import cache_key
 from orchestrator.config import ProjectConfig, Stage, validate_stage
 from orchestrator.executor import (
     TRANSCRIPT_FILENAME,
@@ -1235,7 +1236,10 @@ def review(state: RunState, rt: Runtime) -> dict:
     # Keyed by project rather than by run: successive runs and resumes share
     # the same plan snapshot prefix, so they should share the same cache.
     outcome = rt.reviewer.review(
-        messages, cache_key=f"orchestrator:{state.get('project_slug') or 'project'}"
+        messages,
+        cache_key=cache_key(
+            "orchestrator", state.get("project_slug") or "project"
+        ),
     )
 
     # What it looked at, before the verdict that used it. An approval reached

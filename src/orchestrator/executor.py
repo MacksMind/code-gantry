@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from orchestrator import gates
+from orchestrator.cachekey import cache_key
 from orchestrator.commands import (
     CommandResult,
     CommandRunner,
@@ -276,7 +277,7 @@ class Executor:
             # are identical across every stage of a run; keying per stage
             # would put each stage in its own cache and guarantee a miss on
             # the one region that was arranged to be shared.
-            cache_key=f"exec:{self.cfg.project_branch}"[:64],
+            cache_key=cache_key("exec", self.cfg.project_branch),
             log=self.log,
         )
         out.dropped_reads = [p for p in stage.read_files if p not in kept]

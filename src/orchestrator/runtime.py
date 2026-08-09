@@ -394,6 +394,7 @@ def pin_modules() -> None:
     """
     from orchestrator import (  # noqa: F401
         addendum,
+        cachekey,
         driver,
         edittools,
         executorclient,
