@@ -30,7 +30,7 @@ from orchestrator.addendum import (
     decode_escapes,
 )
 from orchestrator.commands import clip_for_model
-from orchestrator.config import Stage, validate_stage
+from orchestrator.config import ProjectConfig, Stage, validate_stage
 from orchestrator.executor import (
     TRANSCRIPT_FILENAME,
     ExcerptError,
@@ -207,12 +207,15 @@ def plan(state: RunState, rt: Runtime) -> dict:
             "**Resume alone will not clear this.** The counter only resets "
             "when a stage lands, and no stage can land while this check stops "
             "the run before the planner is called. Your options:\n"
-            "  - `orchestrator resume <run_id> --reset-progress-budget`, if "
-            "you have changed something that makes the earlier failures no "
+            f"  - `{rt.cfg.resume_command(flags='--reset-progress-budget')}`, "
+            "if you have changed something that makes the earlier failures no "
             "longer apply. That is you asserting it, not the run inferring "
             "it.\n"
-            "  - Raise `max_interventions_without_landing` and approve the "
-            "config, if the work legitimately needs more attempts.\n"
+            "  - Raise `max_interventions_without_landing`, if the work "
+            "legitimately needs more attempts. Editing the config ends this "
+            "run: it is pinned to the config's blob sha, so the next command "
+            "is `start` rather than `resume`, and what has landed is on the "
+            "project branch either way.\n"
             "  - Start a fresh run. The progress log, stage costs, flake "
             "record and project branch all outlive this run, so a new one "
             "picks up where the work is rather than where the run was.",
@@ -241,7 +244,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
     # Checked here, with the budgets, and for the same reason: this is the
     # point where the run is between stages with nothing in flight. Stopping
     # anywhere else means a half-finished executor and a dirty tree.
-    paused = _pause_escalation(rt.paths.pause_flag, state)
+    paused = _pause_escalation(rt.paths.pause_flag, state, rt.cfg)
     if paused is not None:
         return paused
 
@@ -557,7 +560,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
     # Nothing has run here, so the tree is as clean as it is between stages,
     # and the derived stage is held rather than discarded — re-deriving it
     # would cost another planner call for an answer already in hand.
-    paused = _pause_escalation(rt.paths.pause_flag, state, "precheck")
+    paused = _pause_escalation(rt.paths.pause_flag, state, rt.cfg, "precheck")
     return {**derived, **paused} if paused else derived
 
 
@@ -1696,7 +1699,7 @@ def advance(state: RunState, rt: Runtime) -> dict:
     # and on the branch whatever the run does next; replacing this update with
     # the escalation would leave `completed` short by one and `stage_index`
     # unmoved, and a resume would re-derive work that is already landed.
-    paused = _pause_escalation(rt.paths.pause_flag, state)
+    paused = _pause_escalation(rt.paths.pause_flag, state, rt.cfg)
     return {**landed, **paused} if paused else landed
 
 
@@ -2024,7 +2027,9 @@ def _next_from_queue(state: RunState, landed_index: int) -> dict:
     }
 
 
-def _pause_escalation(flag, state: RunState, ready_hop: str = "") -> dict | None:
+def _pause_escalation(
+    flag, state: RunState, cfg: ProjectConfig, ready_hop: str = ""
+) -> dict | None:
     """The pause stop, if the operator has asked for one.
 
     Consulted at both points where the run is genuinely between stages: before
@@ -2057,7 +2062,7 @@ def _pause_escalation(flag, state: RunState, ready_hop: str = "") -> dict | None
             "half-done: everything that landed is on the project branch and no "
             "stage was in flight.\n\n"
             + (f"Your note: {note}\n\n" if note else "")
-            + f"`orchestrator resume {state.get('run_id')}` picks up "
+            + f"`{cfg.resume_command()}` picks up "
             + ("that stage." if ready_hop else "from the next stage."),
         ),
         # The hop the run was about to take, recorded rather than inferred. A

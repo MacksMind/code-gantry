@@ -55,7 +55,7 @@ def build_report(state: RunState, cfg: ProjectConfig) -> str:
     lines.append("")
 
     if status == "escalated":
-        lines.extend(_escalation_section(state))
+        lines.extend(_escalation_section(state, cfg))
 
     lines.extend(_deferred_section(state))
 
@@ -139,7 +139,7 @@ def _deferred_section(state: RunState) -> list[str]:
     return lines
 
 
-def _escalation_section(state: RunState) -> list[str]:
+def _escalation_section(state: RunState, cfg: ProjectConfig) -> list[str]:
     lines = ["## Why it stopped", ""]
     failed = state.get("failed_stage_id")
     layer = state.get("failure_layer")
@@ -151,10 +151,9 @@ def _escalation_section(state: RunState) -> list[str]:
     lines.append("```")
     lines.append("")
     lines.append(
-        "Fix whatever this describes, then `orchestrator resume "
-        f"{state.get('run_id')}`. A repository-state failure re-enters at verify "
-        "so your fix is checked rather than discarded; a planning failure "
-        "re-enters at the planner."
+        f"Fix whatever this describes, then `{cfg.resume_command()}`. A "
+        "repository-state failure re-enters at verify so your fix is checked "
+        "rather than discarded; a planning failure re-enters at the planner."
     )
     lines.append("")
     return lines

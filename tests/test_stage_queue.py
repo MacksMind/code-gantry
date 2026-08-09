@@ -13,6 +13,18 @@ stages rather than mid-batch.
 import pytest
 
 
+def _cfg_for_pause():
+    """Only the resume hint reads this; the queue behaviour does not care."""
+    from orchestrator.config import parse_config
+
+    return parse_config({
+        "target_repo": "/tmp", "base_ref": "main", "project_branch": "p",
+        "plan_root": "PLAN.md", "test_command": "true",
+        "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
+        "reviewer": {"model": "gpt-5.6-sol"},
+    })
+
+
 def _spec(sid, edit, read=(), excerpts=()):
     return {
         "id": sid, "instruction": "do it", "edit_files": list(edit),
@@ -112,7 +124,7 @@ class TestThePauseStillWins:
             {"stage_queue": [_spec("two", ["app/b.rb"])], "stage_index": 1},
             landed_index=1,
         )
-        paused = _pause_escalation(flag, {"run_id": "r"})
+        paused = _pause_escalation(flag, {"run_id": "r"}, _cfg_for_pause())
         merged = {**queued, **paused}
         assert merged["next_hop"] == "escalate"
         assert merged["current"]["id"] == "two", "the popped stage is not lost"

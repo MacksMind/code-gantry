@@ -25,13 +25,33 @@ landed.
 import pytest
 
 
+def _cfg(source=None):
+    """A config, because the message has to name the file to resume from.
+
+    The hint used to be built from `run_id` alone, which is not what any
+    command takes any more. `source=None` gives the `<config>` placeholder,
+    which is what a config built in memory honestly is.
+    """
+    from orchestrator.config import parse_config
+
+    return parse_config(
+        {
+            "target_repo": "/tmp", "base_ref": "main", "project_branch": "p",
+            "plan_root": "PLAN.md", "test_command": "true",
+            "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
+            "reviewer": {"model": "gpt-5.6-sol"},
+        },
+        source=source,
+    )
+
+
 class TestItStopsAfterTheSquash:
     def test_a_pause_set_during_a_stage_stops_at_the_landing(self, tmp_path):
         from orchestrator.nodes import _pause_escalation
 
         flag = tmp_path / "paused"
         flag.write_text("")
-        paused = _pause_escalation(flag, {"run_id": "r"})
+        paused = _pause_escalation(flag, {"run_id": "r"}, _cfg())
         assert paused is not None
         assert paused["next_hop"] == "escalate"
         assert paused["failure_layer"] == "paused"
@@ -39,23 +59,34 @@ class TestItStopsAfterTheSquash:
     def test_no_flag_is_no_escalation(self, tmp_path):
         from orchestrator.nodes import _pause_escalation
 
-        assert _pause_escalation(tmp_path / "absent", {"run_id": "r"}) is None
+        assert _pause_escalation(tmp_path / "absent", {"run_id": "r"}, _cfg()) is None
 
     def test_the_note_is_carried_through(self, tmp_path):
         from orchestrator.nodes import _pause_escalation
 
         flag = tmp_path / "paused"
         flag.write_text("picking up the new prompts")
-        paused = _pause_escalation(flag, {"run_id": "r"})
+        paused = _pause_escalation(flag, {"run_id": "r"}, _cfg())
         assert "picking up the new prompts" in paused["escalation_reason"]
 
-    def test_it_names_the_run_to_resume(self, tmp_path):
+    def test_it_names_the_config_to_resume_from(self, tmp_path):
+        """It named the run id, and every command takes a config path.
+
+        The message was correct when `resume` took a run id and stayed
+        unchanged through the CLI's move to config paths, so an operator who
+        copied it got a usage error. Nothing failed: it is a console string,
+        and the test that covered it asserted the run id was present — which
+        is exactly the part that had to go.
+        """
         from orchestrator.nodes import _pause_escalation
 
+        source = tmp_path / "code_gantry.yaml"
+        source.write_text("x: 1\n")
         flag = tmp_path / "paused"
         flag.write_text("")
-        paused = _pause_escalation(flag, {"run_id": "20260808-x"})
-        assert "20260808-x" in paused["escalation_reason"]
+        paused = _pause_escalation(flag, {"run_id": "20260808-x"}, _cfg(source))
+        assert str(source) in paused["escalation_reason"]
+        assert "resume 20260808-x" not in paused["escalation_reason"]
 
 
 class TestTheLandingIsNotLost:
@@ -141,7 +172,7 @@ class TestAPauseCaughtAfterDeriving:
 
         flag = tmp_path / "paused"
         flag.write_text("")
-        assert _pause_escalation(flag, {"run_id": "r"}, "precheck")["paused_before"] == "precheck"
+        assert _pause_escalation(flag, {"run_id": "r"}, _cfg(), "precheck")["paused_before"] == "precheck"
 
     def test_the_other_checkpoints_record_nothing_to_resume_into(self, tmp_path):
         # Written every time rather than left absent, so a pause caught before
@@ -150,15 +181,15 @@ class TestAPauseCaughtAfterDeriving:
 
         flag = tmp_path / "paused"
         flag.write_text("")
-        assert _pause_escalation(flag, {"run_id": "r"})["paused_before"] == ""
+        assert _pause_escalation(flag, {"run_id": "r"}, _cfg())["paused_before"] == ""
 
     def test_the_message_says_a_stage_is_waiting(self, tmp_path):
         from orchestrator.nodes import _pause_escalation
 
         flag = tmp_path / "paused"
         flag.write_text("")
-        held = _pause_escalation(flag, {"run_id": "r"}, "precheck")["escalation_reason"]
-        between = _pause_escalation(flag, {"run_id": "r"})["escalation_reason"]
+        held = _pause_escalation(flag, {"run_id": "r"}, _cfg(), "precheck")["escalation_reason"]
+        between = _pause_escalation(flag, {"run_id": "r"}, _cfg())["escalation_reason"]
         assert "derived" in held and "derived" not in between
 
 

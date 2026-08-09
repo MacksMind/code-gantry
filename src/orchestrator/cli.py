@@ -479,7 +479,7 @@ def pause(config_path: Path | None, run_id: str | None, note: str) -> None:
     a partially applied executor edit and a stage branch nobody owns.
     """
     config_path = _config_argument(config_path)
-    _cfg, project = _project_for(config_path)
+    cfg, project = _project_for(config_path)
     run_id = _resolve_run_id(project, run_id)
     paths = RunPaths(project, run_id)
     if not paths.run_dir.is_dir():
@@ -491,7 +491,7 @@ def pause(config_path: Path | None, run_id: str | None, note: str) -> None:
         f"{run_id} will stop after the stage in flight finishes.\n"
         "A stage can take a while — watch the run log, or `orchestrator status "
         f"{run_id}` once it stops.\n"
-        f"Continue with: orchestrator resume {run_id}"
+        f"Continue with: {cfg.resume_command(run_id)}"
     )
 
 

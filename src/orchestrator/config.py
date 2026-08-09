@@ -636,6 +636,11 @@ class ProjectConfig(_Strict):
     # target repo. What `_is_plan_document` matches against; `None` when the
     # config lives elsewhere, which is the case every test builds.
     config_rel_path: str | None = None
+    # Absolute path of the file this was read from, for the messages that tell
+    # an operator what to run next. `config_rel_path` cannot serve: it is
+    # `None` whenever the config lives outside the repo, which is where every
+    # config lived until recently and where this one still lives.
+    config_path: Path | None = None
     base_ref: str = "main"
     project_branch: str
 
@@ -861,6 +866,26 @@ class ProjectConfig(_Strict):
     def plan_root_path(self) -> Path:
         return self.target_repo / self.plan_root
 
+    def resume_command(self, run_id: str = "", flags: str = "") -> str:
+        """How to continue, spelled the way the CLI actually takes it.
+
+        One place decides, because there are four sites that say this — the
+        pause escalation, the progress-budget escalation, the report, and the
+        `pause` command's own parting line — and every one of them still named
+        a run id alone months after every command started with a config path.
+        None of it was checkable: the strings are console output, so nothing
+        fails when they go stale, and an operator following the message gets a
+        usage error at whatever hour the run stopped.
+
+        The run id is optional in the CLI and it is optional here, for the same
+        reason: it defaults to the newest run in the config's work dir, which
+        is nearly always the one that just stopped.
+        """
+        where = str(self.config_path) if self.config_path else "<config>"
+        return " ".join(
+            part for part in ("orchestrator resume", where, run_id, flags) if part
+        )
+
     @property
     def effective_operations_context(self) -> list[str]:
         """Documents only the planner is given.
@@ -1061,6 +1086,7 @@ def parse_config(data: dict, source: Path | str | None = None) -> ProjectConfig:
     # root is commonly several directories down.
     if source is not None:
         source = Path(source).resolve()
+        data.setdefault("config_path", source)
         root = _git_root(source.parent)
         if root is not None:
             data.setdefault("target_repo", root)
