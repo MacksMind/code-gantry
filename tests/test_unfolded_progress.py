@@ -128,7 +128,7 @@ class TestTheAccounting:
         assert "1 planner note" in check.detail
         assert "2 reviewer summaries" in check.detail
 
-    def test_a_reviewer_observation_is_neither_of_the_other_two(self, repo):
+    def test_a_reviewer_note_is_neither_of_the_other_two(self, repo):
         """Three writers, not two.
 
         A reviewer finding — the code has a problem this stage did not cause —
@@ -142,7 +142,7 @@ class TestTheAccounting:
             repo, [OBSERVED.format(1), REVIEWED.format(1), LANDED.format(1)]
         )
         assert "1 planner note" in check.detail
-        assert "1 reviewer observation" in check.detail
+        assert "1 reviewer note" in check.detail
         assert "1 reviewer summary" in check.detail
 
     def test_a_kind_with_nothing_in_it_is_not_listed(self, repo):

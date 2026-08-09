@@ -361,8 +361,8 @@ def _unfolded_progress_check(cfg: ProjectConfig) -> Check:
     kinds = (
         ("planner note", "planner notes", "- **observed** while planning"),
         (
-            "reviewer observation",
-            "reviewer observations",
+            "reviewer note",
+            "reviewer notes",
             "- **observed** by the reviewer while landing",
         ),
         ("reviewer summary", "reviewer summaries", "## What "),
