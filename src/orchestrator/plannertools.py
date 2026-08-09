@@ -142,14 +142,20 @@ READ_TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "git_show",
-        "description": "Read a file as it stood at a git ref.",
+        "description": (
+            "With a path, the file as it stood at that ref. With no path, "
+            "that commit's message and a per-file line count. Every stage in "
+            "the cost list above is named by its merge sha, and the commit it "
+            "names carries the instruction that stage was given and how much "
+            "it changed — which is how a figure there becomes a comparison."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "ref": {"type": "string"},
                 "path": {"type": "string"},
             },
-            "required": ["ref", "path"],
+            "required": ["ref"],
         },
     },
     {
@@ -296,7 +302,7 @@ def dispatch(
             hits = reader.search(args.get("pattern", ""), args.get("path_glob"))
             return "\n".join(hits) if hits else "(no matches)"
         if name == "git_show":
-            return reader.git_show(args.get("ref", ""), args.get("path", ""))
+            return reader.git_show(args.get("ref", ""), args.get("path"))
         if name == "git_diff":
             return reader.git_diff(
                 args.get("ref", ""), args.get("other"), args.get("path")

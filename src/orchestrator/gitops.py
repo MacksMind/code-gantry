@@ -144,18 +144,37 @@ class Git:
     def commit_subject(self, ref: str = "HEAD") -> str:
         return self._out("log", "-1", "--pretty=%s", ref)
 
-    def show_file(self, sha: str, path: str) -> str:
-        """Read a file as it stood at `sha`.
+    def show_file(self, sha: str, path: str | None = None) -> str:
+        """Read a file as it stood at `sha`, or the commit itself with no path.
 
         Plan documents are read at the run's base sha, not at the branch tip,
         so a concurrent edit on `main` cannot change what a run thinks it was
         asked to do.
+
+        The pathless form exists because `stage-costs.md` is keyed by the
+        squash merge sha, and both the writer and the planner's prompt block
+        justified carrying that sha on the grounds that `git show` on it is the
+        way back to what a stage did. It was not: `path` was required, so every
+        call built the colon form and answered with a file. The commit message
+        — stage id, the instruction's first line, the reviewer's account of the
+        diff — was unreachable by the participant the key was put there for.
+
+        `--stat` rather than the whole commit, because the question that sends
+        a planner here is how large a stage was. The stat answers it in a few
+        lines — message, files, counts — where a squash commit's full diff is
+        an entire stage's work and would spend a read budget to say the same
+        thing. `git_diff` between the sha and its parent is still there for
+        anyone who wants the text.
         """
-        proc = self._run("show", f"{sha}:{path}", check=False)
+        proc = self._run(
+            *(("show", f"{sha}:{path}") if path is not None else ("show", "--stat", sha)),
+            check=False,
+        )
         if proc.returncode != 0:
+            where = f"{path!r} does not exist at {sha[:12]}" if path is not None \
+                else f"{sha[:12]} is not a commit this repository has"
             raise GitError(
-                f"{path!r} does not exist at {sha[:12]}: "
-                f"{proc.stderr.strip() or proc.stdout.strip()}"
+                f"{where}: {proc.stderr.strip() or proc.stdout.strip()}"
             )
         return proc.stdout
 

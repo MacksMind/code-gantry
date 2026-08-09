@@ -575,8 +575,21 @@ def _costs_block(costs: list[dict] | None) -> str:
     gets decided, would have nothing to calibrate against. These persist.
 
     Keyed by merge sha because that is what survives the squash: the stage
-    branch is deleted and the executor's commits are folded away, so `git show`
-    on this sha is the only way back to what those files actually were.
+    branch is deleted and the executor's commits are folded away, so the
+    landing commit is the only way back to what a stage did.
+
+    That was written as a justification for carrying the sha and was not true
+    of anything the planner could run. `git_show` required a path and built
+    `git show <ref>:<path>`, so the sha reached the prompt with nothing able to
+    dereference it — twelve of them on every call, consumed by no one. It takes
+    a pathless ref now and answers with the message and a per-file stat, and
+    the block says so, because a capability nothing mentions is one nothing
+    uses.
+
+    It matters more after a fold than before. The progress log is where the
+    reviewer's account of a landed stage lives, and folding empties it — so the
+    id in a cost line stops having a description anywhere except in the commit
+    it names.
     """
     if not costs:
         return ""
@@ -593,6 +606,13 @@ def _costs_block(costs: list[dict] | None) -> str:
         "largest it ever got. Size a batch against these rather than against a "
         "file count: the figure is dominated by fixed overhead, so a stage's "
         "cost tracks the size of the files far more than their number.\n\n"
+        "A number on its own is not a comparison. Each line is named by the "
+        "commit that landed it, and `git_show` on that sha **with no path** "
+        "answers with the instruction that stage was given and how many lines "
+        "it changed in each file. Use it on the closest one or two before "
+        "sizing something unfamiliar — a figure you cannot picture the work "
+        "behind is not calibration. Nothing else still holds that account: a "
+        "fold empties the progress log, and these commits remain.\n\n"
         + lines
     )
 

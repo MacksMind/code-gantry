@@ -334,6 +334,43 @@ class TestHistory:
         with pytest.raises(ToolError, match="outside the repository"):
             reader(repo).git_show("HEAD", "../escape")
 
+    def test_a_ref_with_no_path_shows_the_commit(self, repo):
+        """The capability two docstrings claimed and the tool did not have.
+
+        `stage-costs.md` is keyed by the squash merge sha, and both the writer
+        and the prompt block justify carrying it on the grounds that `git show`
+        on that sha is the way back to what a stage did. It never was: `path`
+        was required and every call built `git show <ref>:<path>`, which is a
+        file at a commit. The message — carrying the stage id, the
+        instruction's first line and the reviewer's account of the diff — was
+        unreachable, and after a fold empties the progress log it is the only
+        surviving description of a landed stage.
+
+        It answers with `--stat`, because the question that sends a planner to
+        a merge sha is how large that stage was. A squash commit's full diff is
+        an entire stage's work and would spend a read budget to say what a few
+        lines of stat say.
+        """
+        import subprocess
+
+        (repo / "docs" / "plan.md").write_text("# Plan\n\nStep one.\nStep two.\n")
+        subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-q",
+             "-m", "[some-stage] a subject line", "-m", "and a body"],
+            check=True,
+        )
+        out = reader(repo).git_show("HEAD")
+        assert "[some-stage] a subject line" in out
+        assert "and a body" in out
+        # The stat, not the diff: file and counts, no changed lines.
+        assert "docs/plan.md" in out and "1 file changed" in out
+        assert "+Step two." not in out
+
+    def test_the_commit_form_still_refuses_a_bad_ref(self, repo):
+        with pytest.raises(ToolError):
+            reader(repo).git_show("no-such-ref-anywhere")
+
 
 class TestBudget:
     def test_a_single_read_is_capped(self, repo):

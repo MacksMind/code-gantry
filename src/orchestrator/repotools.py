@@ -678,18 +678,31 @@ class RepoReader:
         self._spend("search", f"{pattern} in {path_glob or '.'}", "\n".join(hits))
         return hits
 
-    def git_show(self, ref: str, path: str) -> str:
-        """A file as it stood at a ref."""
+    def git_show(self, ref: str, path: str | None = None) -> str:
+        """A file as it stood at a ref, or a commit's message and stat.
+
+        The pathless form is how a merge sha becomes evidence rather than a
+        number: `stage-costs.md` keys every line by one, and nothing could
+        dereference it until now. It answers with `--stat`, which is what the
+        question behind it needs — how large was that stage, and what did it
+        touch. Confinement does not apply: there is no path to escape with.
+        """
         self._charge_call("git_show")
-        resolved = self._resolve(path)
-        rel = self._relative(resolved)
+        rel = None
+        if path is not None:
+            rel = self._relative(self._resolve(path))
         try:
             body = self.git.show_file(ref, rel)
         except GitError as e:
             raise ToolError(str(e)) from e
         lines, clipped = self._clip(body.splitlines())
         text = "\n".join(lines) + ("\n... truncated" if clipped else "")
-        return self._spend("git_show", f"{ref}:{rel}", text)
+        # The ledger reads back as the argv that produced it, so a pathless
+        # call must not render as `sha:None` — the log is what a limit is
+        # tuned from, and an entry nobody can reproduce is not evidence.
+        return self._spend(
+            "git_show", f"{ref}:{rel}" if rel is not None else ref, text
+        )
 
     def git_diff(
         self, ref: str, other: str | None = None, path: str | None = None

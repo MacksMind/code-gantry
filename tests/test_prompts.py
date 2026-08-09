@@ -2399,7 +2399,7 @@ class TestHowLargeOneStageShouldBe:
     def test_it_does_not_restate_the_stage_cost_advice(self):
         """Sizing by context rather than by file count has a home already.
 
-        `_stage_costs_block` says it beside the figures that make it
+        `_costs_block` says it beside the figures that make it
         actionable. Saying it again here would be the history block's fault
         repeated: text that reads as missing because you are looking at one
         prompt and not at the one arriving beside it.
@@ -2418,3 +2418,60 @@ class TestHowLargeOneStageShouldBe:
             ".rb", ".erb", "app/", "spec/", "bundle", "capybara",
         ):
             assert word not in text, f"{word!r} is project knowledge in a prompt"
+
+
+
+class TestTheCostsBlockTellsThePlannerHowToUseIt:
+    """A merge sha the planner could not dereference.
+
+    Every line of `stage-costs.md` is keyed by the commit that landed the
+    stage, and two docstrings justified carrying it on the grounds that
+    `git show` on that sha is the way back to what the stage did. Nothing the
+    planner could run did that: `git_show` required a path and built
+    `git show <ref>:<path>`, which answers with a file. So twelve shas reached
+    every call and no tool consumed them.
+
+    The tool takes a pathless ref now. This pins the other half — that the
+    block says so — because a capability nothing mentions is one nothing uses,
+    and this block is the only place the sha appears.
+    """
+
+    def _block(self):
+        from orchestrator.prompts import _costs_block
+
+        return _costs_block([
+            {"merge_sha": "b52851a90c6398", "stage_id": "some-stage",
+             "files": 1, "context_tokens": 88_762},
+        ])
+
+    def test_it_says_the_sha_can_be_shown_with_no_path(self):
+        text = self._block()
+        assert "`git_show`" in text
+        assert "with no path" in text
+
+    def test_it_says_what_that_answers_with(self):
+        # The instruction and the per-file counts — which is what turns a
+        # figure into a comparison with the stage about to be drawn.
+        text = self._block()
+        assert "instruction that stage was given" in text
+        assert "how many lines" in text
+
+    def test_it_says_why_the_commit_is_the_only_copy_left(self):
+        """The reason this matters more after a fold than before.
+
+        The reviewer's account of a landed stage lives in the progress log,
+        and folding empties it. After that the id in a cost line has a
+        description in exactly one place.
+        """
+        assert "fold empties the progress log" in self._block()
+
+    def test_the_sha_is_rendered_long_enough_to_resolve(self):
+        # Twelve characters. A shorter prefix is ambiguous on a large
+        # repository, and an unresolvable key is the defect this block spent
+        # months having in a different form.
+        assert "`b52851a90c63`" in self._block()
+
+    def test_no_costs_is_no_block(self):
+        from orchestrator.prompts import _costs_block
+
+        assert _costs_block([]) == ""
