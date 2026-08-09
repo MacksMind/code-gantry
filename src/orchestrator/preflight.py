@@ -95,6 +95,7 @@ def run_preflight(
 
     checks.extend(_plan_checks(cfg, git))
     checks.append(_read_budget_check(cfg, git))
+    checks.append(_unfolded_progress_check(cfg))
     checks.extend(_endpoint_checks(cfg))
     if check_endpoint:
         checks.extend(check_executor_endpoint(cfg))
@@ -308,6 +309,62 @@ def _read_budget_check(cfg: ProjectConfig, git: Git) -> Check:
         + f". Raising the ceiling past {oversized[0][1]} would recover the "
         "first of them; leaving it means they are withheld silently, on every "
         "attempt of every stage that asks for one.",
+        fatal=False,
+    )
+
+
+def _unfolded_progress_check(cfg: ProjectConfig) -> Check:
+    """How much the progress log has accumulated since anyone last folded it.
+
+    Folding is the largest single lever on a run's bill and the one step
+    nothing in the loop performs — deliberately, because rewriting a plan is a
+    judgement about what the work has become and should not happen unattended
+    in the middle of doing the work. The consequence is that it only happens if
+    someone remembers, and nothing was reminding them.
+
+    The cost is invisible in behaviour. The log is spliced into the plan block,
+    which carries a cache breakpoint, so every landing invalidates that block
+    and pays to rewrite it: the log does not merely cost its own size, it drags
+    the plan tree through the cache with it. Measured between two folds, 292
+    bytes to 263KB over 66 landings, with the extra per-stage cost growing with
+    the *gap* rather than with the log — so the total is quadratic in how long
+    nobody looked. Every stage still lands and every gate still passes.
+
+    Said at preflight because that is the moment acting on it is free: nothing
+    is in flight, and folding costs a commit. Never fatal — a run that refuses
+    to start until someone rewrites a plan is worse than an expensive one.
+    """
+    if not cfg.plan_addendum_path:
+        return Check("progress log", True, "no addendum configured")
+
+    from orchestrator.addendum import _target
+
+    try:
+        target = _target(cfg.target_repo, cfg.plan_addendum_path)
+        body = target.read_text()
+    except OSError:
+        # Not yet written is the normal state of a new project, and an
+        # unreadable one is already reported by the plan checks.
+        return Check("progress log", True, "no progress log yet")
+
+    entries = [line for line in body.splitlines() if line.startswith("## ")]
+    if not entries:
+        return Check("progress log", True, "nothing to fold")
+
+    landings = sum(1 for line in entries if line.startswith("## What "))
+    size = len(body.encode())
+    shown = f"{size / 1024:.0f}KB" if size >= 1024 else f"{size} bytes"
+    rel = target.relative_to(cfg.target_repo)
+    return Check(
+        "progress log",
+        False,
+        f"{len(entries)} entr{'y' if len(entries) == 1 else 'ies'} and "
+        f"{landings} landing{'' if landings == 1 else 's'} are unfolded in "
+        f"{rel} ({shown}). It is spliced into the plan block, which carries a "
+        "cache breakpoint, so each landing rewrites the block and the log "
+        "drags the plan tree through the cache with it — the cost grows with "
+        "how long it has been since the last fold, not with the size of the "
+        "log. Folding now is a commit; folding later is not cheaper.",
         fatal=False,
     )
 
