@@ -115,6 +115,26 @@ open steps that lives outside the repository is the same failure this project
 records about compaction prompts and agent memory: it carries one hop and then
 ages out, where a tracked file does not.
 
+## After the ten steps
+
+The config moved into the repository it describes, which is a change of
+audience rather than of content and pulled several things with it.
+
+| change | commit |
+| --- | --- |
+| every command takes a config path; the slug is deleted | `f063c01` |
+| config identified by its git sha; `approval.py` deleted | `c55213f` |
+| `work_dir` named in config, defaulting under the plan directory | `9399c28` |
+| the linter's diff fed back to the executor, attributed | `c6d3529` |
+| `base_ref` may move forward; asked at startup, not after the work | `bd9cf62` |
+| `init` drafts a config fit to commit into a shared repo | `e1f5cc9` |
+
+Not done: the example config itself still lives in the orchestrator repo, so
+`config_rel_path` is `None` and preflight warns rather than pinning a sha. The
+move needs two commits in the target repo — the config, and `.code_gantry/` in
+a `.gitignore` beside the plan — after which `problem_starting` becomes fatal
+and an uncommitted config edit refuses to start a run.
+
 ## Context
 
 The orchestrator drives an LLM executor over a target repo. The executor is

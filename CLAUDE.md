@@ -891,6 +891,102 @@ the API *without* a timeout returns "Streaming is required", which taken at
 face value says our ceiling is 21,333 — a wrong answer about our own
 configuration, produced by measuring a call we do not make.
 
+**A guard belongs where its question can first be answered, not where its
+answer is convenient.** `branch_identity_problems` asks four things at once,
+and one of them — has `base_ref` moved — is a fact about the world at startup
+that cannot become true part-way through a stage. Asked inside `verify`, it is
+answered *after* a planner call and an executor attempt have been paid for.
+Measured: a resume died 9 minutes and two model calls in, on a condition that
+was true before the first byte of work. The other three checks are right where
+they are, because HEAD wandering and a stage branch diverging can only happen
+mid-stage. Two questions with different lifetimes in one guard, and the cheap
+one was paying the expensive one's price.
+
+**And that guard asked equality where the question was ancestry.** Any change
+to `base_ref` stopped the run, on the stated grounds that "the baseline is no
+longer what the report will claim" — which is not what the report claims. It
+prints a sha, and the sha a run started from stays true however far the branch
+travels. Nothing else depended on the pointer either: the flake baseline checks
+out the recorded `base_sha`, stage diffs come from `stage_start_sha`, plan
+documents from `plan_sha`. So a 17-stage run died because `main` had been
+merged in — the correct thing to do on a migration lasting days, already proven
+green over 3,775 examples. What is worth stopping for is a *rewrite*, when the
+baseline is no longer reachable. This is the "category drawn around the
+mechanism" rule again: the check described a pointer when it meant a history.
+
+**A tool that edits after the model stops leaves its context stale.** `checks`
+autocorrect — `rubocop -A`, `eslint --fix`, `gofmt -w` — and they run once the
+model has stopped asking for things, so the tree moves under a conversation
+that is already finished. The next cycle opens with the model holding file
+contents that are no longer on disk; it cannot see that its edit was reverted,
+and from where it sits it made the change and the gate is complaining anyway.
+Measured: a stage required `Date.today` and forbade `Time.zone.today`, and
+`Rails/Date` rewrites the first into the second. Three planner revisions, five
+attempts, ~35 minutes, and the planner escaped only by inferring the cause from
+a diff that came back twice. Stage the model's work before the checks run and
+the rewrite is the unstaged remainder — the linter's diff exactly, no commit
+restructuring, no snapshot. Attribute it in as many words: handed a diff
+without being told whose it is, a model reads it as its own mistake and tries
+the same edit again.
+
+**A second dimension whose default ignores the first is a tightening.**
+`max_total_chars` was added underneath `max_total_lines` because a line is not
+a unit of size — and shipped with a default computed from the *class* default
+line budget, while every real config raises the line budget three to seven
+times higher. The reviewer would have got 240,000 characters against a line
+budget implying 1,600,000: a seventh of the ceiling it was added to sit under,
+binding first and silently, because a read-budget refusal reads the same
+whichever ceiling raised it. Derive a companion limit from the configured value
+of its partner, not from the constant beside it.
+
+**The success path is the one that skips the tail.** `run_loop` returned the
+moment the gates came back clean, two statements above where the cost was
+computed — so every attempt that worked first time was billed at zero, and only
+attempts that failed a gate or edited nothing were priced at all. 41 of 57
+recorded attempts, 17.9M prompt tokens unbilled. Three tests asserted the
+pricing and all were green, because their fixture makes no edits and leaves by
+a different exit. Prefer one exit; when there are several, ask which one the
+happy case takes.
+
+**A resume is not a fresh process with the old state.** Three defects in one
+mechanism, each invisible because the work survived elsewhere. `resume_fields`
+said it was "what a resume merges over the saved checkpoint" and nothing merged
+it, so every resumed run began with a four-key state — no `run_id`, so the
+checkpointer never fired, so the database froze 31 stages before the run
+stopped. `step` counts from zero inside one `drive` call and the key is
+`(run_id, step)`, so a resumed session overwrote the beginning of the previous
+one while its tail survived at higher numbers; `load_state` ordered by `step`
+and therefore returned whichever session ran *longest*, reliably the older.
+What hid all of it is that the continuity that matters lives on the project
+branch and in the progress log, so the run kept working and nothing asked.
+Check that a resume starts from what it loaded, and that "latest" means last
+written rather than largest.
+
+**A value that was private when its file was private is published when the
+file moves.** Relocating the config into the target repo turned `target_repo`
+from a convenience into one machine's home directory in a file other people
+check out, and turned `host` into `init` writing a real machine name into a
+tracked file that nobody chose to put it in. Neither value changed; their
+status did. When a file changes audience, re-read every field as though seeing
+it for the first time.
+
+**Watch the process, not only its log.** A filter over log lines cannot see a
+process that stopped emitting them, and a monitor stopped for volume looks
+exactly like a quiet one. Measured: a run died and sat dead for 78 minutes
+while being reported as healthy. The filter did match the escalation — it had
+been killed earlier for also matching `[plan]` and `flake`, which fire several
+times per stage. Two watches, never one: liveness on the pid, and a narrow
+filter for rare events. Never mix a per-cycle signal into the rare-event
+filter; the noisy entry costs the alarm.
+
+**`grep -c` counts lines and `grep -o | uniq -c` counts occurrences.** One
+summary line echoing many refusals turned 17 into 842, and I used the larger
+number to argue a ceiling was binding when it had been reached by 2 attempts of
+85. The same day, `timeout` — which macOS does not have — returned 127 and was
+read as a suite result. Both are the standing rule about checking what a
+command actually returns, and both were committed to before anyone asked what
+the number counted.
+
 ## Where things live
 
 `nodes.py` holds the loop's decisions — which failures route to the executor,
@@ -926,6 +1022,13 @@ cycle itself — edit until the model stops asking, lint, **commit, then test** 
 and `executortools.py` and `executorclient.py` are its schemas and its provider
 call. `repotools.number_lines` is the single renderer of numbered source; three
 copies of that format string is how it drifted while every test stayed green.
+
+`configversion.py` is what replaced `approval.py`: a config is identified by
+its git blob sha, recorded at run start and checked on every resume, so an
+edited config refuses to continue a run rather than needing a command run
+against it. `ProjectPaths` is built from `cfg.work_dir` and there is no slug —
+the work dir is the project's identity, which is what the prompt cache key
+needs and the one thing a derived handle could disagree with.
 
 `executor.py` is now only what shapes an attempt before it starts — the read
 budget, the excerpts, the conventions — plus `run_script_stage`. Aider is gone
