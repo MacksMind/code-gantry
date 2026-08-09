@@ -549,6 +549,22 @@ extra per-stage cost of roughly `landings-since-fold × $0.018`. That is
 quadratic in the gap, so ~$100 over 50 stages at 90 landings deep. Folding is
 not housekeeping; it is the largest single lever on the run's bill.
 
+**Content cannot move between a pinned document and a live one.** The plan is
+read once at `plan_sha` so the reviewer judges a diff against the text the
+planner drew it from; the progress log is spliced from the worktree on every
+call, because freezing it had the planner reading 6,680 bytes of a 114,554-byte
+record. Both are right, and together they have a seam: a fold moves content
+*out* of the log and *into* the plan documents and `AGENTS.md`. A resume
+inherits `plan_sha` in `**saved` and re-reads nothing, so it sees neither copy
+— the live log no longer carries it and the pinned documents never did. From
+the planner's side a fold is then indistinguishable from deleting the log. The
+two policies are only consistent while the live document is append-only, which
+is exactly what a fold ends. `_plan_unmoved` refuses the resume rather than
+re-reading, because `current` and everything queued behind it were derived
+against the old text and loading the new does not make them valid. Ask of any
+two inputs read at different revisions whether anything ever moves between
+them.
+
 **A delimiter drawn from the content's own alphabet is not a delimiter.**
 `read_file` numbered with a five-character field and *two spaces*, and
 indentation is also spaces. A line indented by two arrived as four with nothing
