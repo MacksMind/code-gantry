@@ -881,9 +881,21 @@ class ProjectConfig(_Strict):
         reason: it defaults to the newest run in the config's work dir, which
         is nearly always the one that just stopped.
         """
+        return self._command("resume", run_id, flags)
+
+    def start_command(self, flags: str = "") -> str:
+        """How to begin a new run — the answer whenever a resume is refused.
+
+        Beside `resume_command` rather than spelled out at the one site that
+        needs it, because that site is console output and console output is
+        what goes stale unnoticed.
+        """
+        return self._command("run", "", flags)
+
+    def _command(self, verb: str, run_id: str = "", flags: str = "") -> str:
         where = str(self.config_path) if self.config_path else "<config>"
         return " ".join(
-            part for part in ("orchestrator resume", where, run_id, flags) if part
+            part for part in (f"orchestrator {verb}", where, run_id, flags) if part
         )
 
     @property

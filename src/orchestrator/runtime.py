@@ -9,7 +9,7 @@ and reviewer and no network.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Callable
 
 from orchestrator.commands import CommandRunner
@@ -266,12 +266,12 @@ class Runtime:
         for path in paths:
             try:
                 # A symlink's blob is its target path, so reading it as content
-                # yields a document whose whole body is a filename. Follow it
-                # once — `CLAUDE.md -> AGENTS.md` is the usual shape — and give
-                # up rather than chase a chain.
-                if self.git.is_symlink(sha, path):
-                    target = self.git.show_file(sha, path).strip()
-                    path = str(PurePosixPath(path).parent / target).lstrip("./")
+                # yields a document whose whole body is a filename. `real_path`
+                # follows one hop — `CLAUDE.md -> AGENTS.md` is the usual shape
+                # — and the preflight check that asks whether these documents
+                # have moved calls the same thing, so it cannot resolve to a
+                # different file than the run reads.
+                path = self.git.real_path(sha, path)
                 text = self.git.show_file(sha, path)
             except GitError:
                 # Absent at this sha. The default names two files and most

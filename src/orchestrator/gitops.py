@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import re
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)")
 
@@ -215,6 +215,28 @@ class Git:
         """
         out = self._run("ls-tree", sha, "--", path, check=False).stdout
         return out.startswith("120000")
+
+    def real_path(self, sha: str, path: str) -> str:
+        """`path` at `sha`, following one symlink hop.
+
+        The decision above, made once for the two callers that need it: the
+        conventions block a run reads at its fixed sha, and the check that asks
+        whether those documents have moved since. Both have to arrive at the
+        same file or the check passes on an edit the run would have read —
+        a symlink's blob is its target path, and that blob does not change when
+        the target's contents do.
+
+        One hop, not a chain, and never off the end: an unresolvable link comes
+        back as itself, so the caller's own `GitError` handling still decides
+        what a missing document means.
+        """
+        try:
+            if not self.is_symlink(sha, path):
+                return path
+            target = self.show_file(sha, path).strip()
+        except GitError:
+            return path
+        return str(PurePosixPath(path).parent / target).lstrip("./")
 
     def tracked_paths(self, sha: str) -> list[str]:
         """Every tracked path at `sha`.
