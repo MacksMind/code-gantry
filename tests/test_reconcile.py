@@ -13,6 +13,8 @@ so the code path actually executes.
 
 import subprocess
 
+from pathlib import Path
+
 import pytest
 from click.testing import CliRunner
 
@@ -100,14 +102,14 @@ class TestItActuallyRuns:
         # The test that would have caught the deleted method: it calls through
         # to real git rather than stubbing the repository.
         stub_planner(monkeypatch, [A_NOTE])
-        result = CliRunner().invoke(cli.main, ["reconcile", "demo"])
+        result = CliRunner().invoke(cli.main, ["reconcile", "projects/demo/config.yaml"])
         assert result.exit_code == 0, result.output
         assert "1 commit(s)" in result.output
 
     def test_the_observation_is_written_to_the_addendum(self, project, monkeypatch):
         repo, _ = project
         stub_planner(monkeypatch, [A_NOTE])
-        CliRunner().invoke(cli.main, ["reconcile", "demo"])
+        CliRunner().invoke(cli.main, ["reconcile", "projects/demo/config.yaml"])
         written = (repo / "docs" / "addendum" / "plan-addendum.md").read_text()
         assert "search finds 0 remaining" in written
         assert "1. Convert 24 call sites" in written
@@ -115,14 +117,14 @@ class TestItActuallyRuns:
     def test_dry_run_writes_nothing(self, project, monkeypatch):
         repo, _ = project
         stub_planner(monkeypatch, [A_NOTE])
-        result = CliRunner().invoke(cli.main, ["reconcile", "demo", "--dry-run"])
+        result = CliRunner().invoke(cli.main, ["reconcile", "projects/demo/config.yaml", "--dry-run"])
         assert "search finds 0 remaining" in result.output
         assert not (repo / "docs" / "addendum" / "plan-addendum.md").exists()
 
     def test_nothing_to_add_says_so_and_writes_nothing(self, project, monkeypatch):
         repo, _ = project
         stub_planner(monkeypatch, [])
-        result = CliRunner().invoke(cli.main, ["reconcile", "demo"])
+        result = CliRunner().invoke(cli.main, ["reconcile", "projects/demo/config.yaml"])
         assert "nothing to add" in result.output
         assert not (repo / "docs" / "addendum" / "plan-addendum.md").exists()
 
@@ -133,7 +135,7 @@ class TestItRefusesWhenItCannotWork:
         # the read tools it would be the planner guessing, which is the failure
         # this whole mechanism exists to correct.
         stub_planner(monkeypatch, [A_NOTE], reader=None)
-        result = CliRunner().invoke(cli.main, ["reconcile", "demo"])
+        result = CliRunner().invoke(cli.main, ["reconcile", "projects/demo/config.yaml"])
         assert result.exit_code != 0
         assert "repo_access" in result.output
 
@@ -169,7 +171,7 @@ class TestTheDiffIsAgainstBaseRef:
         monkeypatch.chdir(tmp_path)
 
         stub = stub_planner(monkeypatch, [])
-        CliRunner().invoke(cli.main, ["reconcile", "demo"])
+        CliRunner().invoke(cli.main, ["reconcile", "projects/demo/config.yaml"])
         sent = stub.messages[0]["content"]
         assert "develop" in sent
         assert "main" not in sent
@@ -198,7 +200,7 @@ class TestAnUnverifiedVerdictIsRefused:
                 tool_calls=[],
             ),
         )
-        result = CliRunner().invoke(cli.main, ["reconcile", "demo"])
+        result = CliRunner().invoke(cli.main, ["reconcile", "projects/demo/config.yaml"])
         assert result.exit_code != 0
         assert "without reading anything" in result.output
 
@@ -228,7 +230,7 @@ class TestAnUnverifiedVerdictIsRefused:
                 reads_answered=0,
             ),
         )
-        result = CliRunner().invoke(cli.main, ["reconcile", "demo"])
+        result = CliRunner().invoke(cli.main, ["reconcile", "projects/demo/config.yaml"])
         assert result.exit_code != 0
         assert "without reading anything" in result.output
 
@@ -248,13 +250,13 @@ class TestAnUnverifiedVerdictIsRefused:
             ),
         )
         repo, _ = project
-        result = CliRunner().invoke(cli.main, ["reconcile", "demo"])
+        result = CliRunner().invoke(cli.main, ["reconcile", "projects/demo/config.yaml"])
         assert result.exit_code != 0
         assert not (repo / "docs" / "addendum" / "plan-addendum.md").exists()
 
     def test_a_verdict_backed_by_reads_is_accepted(self, project, monkeypatch):
         stub_planner(monkeypatch, [])
-        result = CliRunner().invoke(cli.main, ["reconcile", "demo"])
+        result = CliRunner().invoke(cli.main, ["reconcile", "projects/demo/config.yaml"])
         assert result.exit_code == 0
         assert "nothing to add" in result.output
         assert "1 read(s)" in result.output
@@ -283,7 +285,7 @@ class TestAFailedCallIsNotAVerdict:
                 failed=True,
             ),
         )
-        result = CliRunner().invoke(cli.main, ["reconcile", "demo"])
+        result = CliRunner().invoke(cli.main, ["reconcile", "projects/demo/config.yaml"])
         assert result.exit_code != 0
         assert "could not be reached" in result.output
         assert "401" in result.output
@@ -299,7 +301,7 @@ class TestAFailedCallIsNotAVerdict:
                 status_entry="e", plan_notes=[], tool_calls=[], failed=False,
             ),
         )
-        result = CliRunner().invoke(cli.main, ["reconcile", "demo"])
+        result = CliRunner().invoke(cli.main, ["reconcile", "projects/demo/config.yaml"])
         assert result.exit_code != 0
         assert "without reading anything" in result.output
 
@@ -321,9 +323,8 @@ class TestThePlanDirectoryIsNotWork:
 
     def _prompt_text(self):
         from orchestrator.cli import _load, _reconcile_prompt
-        from orchestrator.runtime import ProjectPaths
 
-        cfg = _load(ProjectPaths("demo").config)
+        cfg = _load(Path("projects/demo/config.yaml"))
         return _reconcile_prompt(cfg)[0]["content"]
 
     def test_it_names_the_plan_directory(self, project):

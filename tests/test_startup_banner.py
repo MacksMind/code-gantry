@@ -149,8 +149,8 @@ reviewer:
 
     def test_run_banners_before_preflight(self, demo, monkeypatch):
         self._preflight_explodes(monkeypatch)
-        result = CliRunner().invoke(cli.main, ["run", "demo"], catch_exceptions=True)
-        assert "=== orchestrator run demo" in result.output
+        result = CliRunner().invoke(cli.main, ["run", "projects/demo/config.yaml"], catch_exceptions=True)
+        assert "=== orchestrator run " in result.output
         assert isinstance(result.exception, RuntimeError)
 
     def test_resume_banners_before_preflight(self, demo, monkeypatch):
@@ -167,12 +167,14 @@ reviewer:
                 "reviewer": {"model": "gpt-5.5"},
             }
         )
-        monkeypatch.setattr(
-            cli, "_locate_run", lambda rid: (ProjectPaths("demo"), cfg)
-        )
+        # A run is reached through the config that owns its work dir now, so
+        # there is no lookup to stub — only the state read.
         monkeypatch.setattr(cli, "_load_state", lambda *a, **k: {"failure_layer": None})
+        monkeypatch.setattr(cli, "_resolve_run_id", lambda p, r: r or "20260807-x")
         result = CliRunner().invoke(
-            cli.main, ["resume", "20260807-x"], catch_exceptions=True
+            cli.main,
+            ["resume", "projects/demo/config.yaml", "20260807-x"],
+            catch_exceptions=True,
         )
         assert "=== orchestrator resume 20260807-x" in result.output
         assert isinstance(result.exception, RuntimeError)

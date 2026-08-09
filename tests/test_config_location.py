@@ -60,7 +60,7 @@ def _ctx(cfg):
 @pytest.fixture
 def repo(tmp_path):
     (tmp_path / ".git").mkdir()
-    (tmp_path / ".orchestrator").mkdir(parents=True)
+    (tmp_path / ".code_gantry").mkdir(parents=True)
     (tmp_path / "PLAN.md").write_text("# plan\n")
     return tmp_path
 
@@ -88,9 +88,9 @@ class TestTheWorkDir:
         # directory rather than at the repository root.
         cfg = parse_config(
             _data(target_repo=str(repo), plan_root="docs/migration/PLAN.md"),
-            source=repo / "docs" / "migration" / "orchestrator.yaml",
+            source=repo / "docs" / "migration" / "code_gantry.yaml",
         )
-        assert cfg.work_dir == repo / "docs" / "migration" / ".orchestrator"
+        assert cfg.work_dir == repo / "docs" / "migration" / ".code_gantry"
 
     def test_the_repo_is_found_by_walking_up(self, repo):
         # Not a fixed depth: the config sits beside the plan, and a plan root
@@ -98,10 +98,10 @@ class TestTheWorkDir:
         (repo / "docs" / "migration").mkdir(parents=True)
         cfg = parse_config(
             _data(plan_root="docs/migration/PLAN.md"),
-            source=repo / "docs" / "migration" / "orchestrator.yaml",
+            source=repo / "docs" / "migration" / "code_gantry.yaml",
         )
         assert cfg.target_repo == repo
-        assert cfg.config_rel_path == "docs/migration/orchestrator.yaml"
+        assert cfg.config_rel_path == "docs/migration/code_gantry.yaml"
 
     def test_an_unset_variable_is_a_config_error(self, repo):
         # Not a directory literally named `${NOPE}`. A run that writes its
@@ -115,7 +115,7 @@ class TestTheTargetRepoIsDerived:
     def test_the_config_names_the_repo_it_sits_in(self, repo):
         # One fewer absolute path in a tracked file, and it cannot disagree
         # with reality: the repo is wherever the config was read from.
-        cfg = parse_config(_data(), source=repo / ".orchestrator" / "config.yaml")
+        cfg = parse_config(_data(), source=repo / ".code_gantry" / "config.yaml")
         assert cfg.target_repo == repo
 
     def test_an_explicit_value_still_wins(self, repo, tmp_path):
@@ -124,7 +124,7 @@ class TestTheTargetRepoIsDerived:
         other = tmp_path / "other"
         other.mkdir()
         cfg = parse_config(
-            _data(target_repo=str(other)), source=repo / ".orchestrator" / "config.yaml"
+            _data(target_repo=str(other)), source=repo / ".code_gantry" / "config.yaml"
         )
         assert cfg.target_repo == other
 
@@ -144,14 +144,14 @@ class TestTheExecutorCannotEditIt:
         """
         from orchestrator.verify import _is_plan_document
 
-        cfg = parse_config(_data(), source=repo / ".orchestrator" / "config.yaml")
+        cfg = parse_config(_data(), source=repo / ".code_gantry" / "config.yaml")
         ctx = _ctx(cfg)
-        assert _is_plan_document(".orchestrator/config.yaml", ctx)
+        assert _is_plan_document(".code_gantry/config.yaml", ctx)
 
     def test_an_ordinary_file_still_is_not(self, repo):
         from orchestrator.verify import _is_plan_document
 
-        cfg = parse_config(_data(), source=repo / ".orchestrator" / "config.yaml")
+        cfg = parse_config(_data(), source=repo / ".code_gantry" / "config.yaml")
         ctx = _ctx(cfg)
         assert not _is_plan_document("app/models/order.rb", ctx)
 

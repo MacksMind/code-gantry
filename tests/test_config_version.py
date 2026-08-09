@@ -42,7 +42,7 @@ def repo(tmp_path):
     for pair in (("user.email", "t@e.com"), ("user.name", "T"),
                  ("commit.gpgsign", "false")):
         git(path, "config", *pair)
-    (path / "docs" / "orchestrator.yaml").write_text("test_command: true\n")
+    (path / "docs" / "code_gantry.yaml").write_text("test_command: true\n")
     git(path, "add", "-A")
     git(path, "commit", "-qm", "config")
     return path
@@ -52,7 +52,7 @@ class TestTheShaIsGits:
     def test_it_matches_what_git_would_say(self, repo):
         # Not a sha256 of our own: the point of using git's is that an operator
         # can look the value up. `git cat-file` must answer to it.
-        cfg = repo / "docs" / "orchestrator.yaml"
+        cfg = repo / "docs" / "code_gantry.yaml"
         got = blob_sha(cfg)
         out = subprocess.run(
             ["git", "-C", str(repo), "cat-file", "-p", got],
@@ -67,10 +67,10 @@ class TestTheShaIsGits:
 
 class TestStarting:
     def test_a_committed_config_is_fine(self, repo):
-        assert problem_starting(repo / "docs" / "orchestrator.yaml", repo, "main") == ""
+        assert problem_starting(repo / "docs" / "code_gantry.yaml", repo, "main") == ""
 
     def test_an_uncommitted_edit_refuses(self, repo):
-        cfg = repo / "docs" / "orchestrator.yaml"
+        cfg = repo / "docs" / "code_gantry.yaml"
         cfg.write_text("test_command: false\n")
         problem = problem_starting(cfg, repo, "main")
         assert "uncommitted" in problem
@@ -94,11 +94,11 @@ class TestStarting:
 
 class TestResuming:
     def test_an_unchanged_config_continues(self, repo):
-        cfg = repo / "docs" / "orchestrator.yaml"
+        cfg = repo / "docs" / "code_gantry.yaml"
         assert problem_resuming(cfg, blob_sha(cfg)) == ""
 
     def test_a_changed_config_refuses(self, repo):
-        cfg = repo / "docs" / "orchestrator.yaml"
+        cfg = repo / "docs" / "code_gantry.yaml"
         was = blob_sha(cfg)
         cfg.write_text("test_command: false\n")
         problem = problem_resuming(cfg, was)
@@ -111,7 +111,7 @@ class TestResuming:
     def test_a_committed_change_refuses_too(self, repo):
         # The point is not "uncommitted". Committing an edit mid-run is exactly
         # the case approval could not catch, because re-approving made it legal.
-        cfg = repo / "docs" / "orchestrator.yaml"
+        cfg = repo / "docs" / "code_gantry.yaml"
         was = blob_sha(cfg)
         cfg.write_text("test_command: false\n")
         git(repo, "add", "-A")
@@ -121,5 +121,5 @@ class TestResuming:
     def test_a_run_with_no_recorded_sha_is_not_blocked(self, repo):
         # Runs started before this existed have nothing to compare against, and
         # refusing them all would strand work that is perfectly resumable.
-        cfg = repo / "docs" / "orchestrator.yaml"
+        cfg = repo / "docs" / "code_gantry.yaml"
         assert problem_resuming(cfg, "") == ""

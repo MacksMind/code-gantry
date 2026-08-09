@@ -135,7 +135,7 @@ def make(repo, tmp_path, planner=None, reviewer=None, executor=None, **cfg_over)
     data.update(cfg_over)
     cfg = parse_config(data)
 
-    project = ProjectPaths("proj-slug", root=tmp_path / "projects")
+    project = ProjectPaths(tmp_path / "projects" / "proj-slug")
     project.ensure()
     paths = RunPaths(project, "r1")
     paths.ensure()

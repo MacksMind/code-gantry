@@ -65,6 +65,7 @@ def run_preflight(
     run_tests: bool = True,
     check_models: bool = True,
     check_approval: bool = True,
+    config_path=None,
     check_endpoint: bool = True,
     for_resume: bool = False,
 ) -> list[Check]:
@@ -104,8 +105,8 @@ def run_preflight(
 
     if check_models:
         checks.extend(_model_checks(cfg))
-    if check_approval and project_dir is not None:
-        checks.append(_approval_check(cfg, project_dir))
+    if check_approval and config_path is not None:
+        checks.append(_approval_check(cfg, config_path))
 
     return checks
 
@@ -151,10 +152,10 @@ def _work_dir_is_ignored(cfg: ProjectConfig, git: Git) -> Check:
         return Check(name, True, f"outside the target repo: {work}", fatal=False)
 
     rel = work.relative_to(cfg.target_repo)
-    # Queried with a trailing slash. `.orchestrator/` is a directory pattern,
+    # Queried with a trailing slash. `.code_gantry/` is a directory pattern,
     # and for a path that does not exist yet git cannot tell a directory from a
     # file — so the pattern misses without it. Measured: `check-ignore` on
-    # `.orchestrator` exits 1 and on `.orchestrator/` exits 0, against the same
+    # `.code_gantry` exits 1 and on `.code_gantry/` exits 0, against the same
     # `.gitignore`. The work dir never exists at the moment this runs for the
     # first time, which is the only moment the check matters.
     if git.is_ignored(f"{rel}/"):
@@ -761,7 +762,7 @@ def _project_root(project_dir):
     )
 
 
-def _approval_check(cfg: ProjectConfig, project_dir) -> Check:
+def _approval_check(cfg: ProjectConfig, config_path) -> Check:
     """The config must be committed, and the working copy must match it.
 
     What replaced `orchestrator approve`. A run is identified by the git sha of
@@ -770,11 +771,6 @@ def _approval_check(cfg: ProjectConfig, project_dir) -> Check:
     check is that the sha exists and is current, not that someone ran a
     command.
     """
-    from orchestrator.runtime import ProjectPaths
-
-    config_path = (
-        project_dir.config if isinstance(project_dir, ProjectPaths) else project_dir
-    )
     if config_path is None or not Path(config_path).exists():
         return Check("config is committed", True, "no config file to check",
                      fatal=False)

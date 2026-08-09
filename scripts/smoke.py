@@ -519,12 +519,12 @@ def build_repo(root: Path) -> Path:
     (repo / "docs" / "plan_detail.md").write_text(PLAN_DETAIL)
     # Without this the caches pytest writes fail the scope guard on every
     # stage — which is precisely what preflight's tidiness check warns about.
-    # `.orchestrator/` because the work dir defaults inside the repo, beside
+    # `.code_gantry/` because the work dir defaults inside the repo, beside
     # the plan, and preflight blocks a run whose data directory is tracked.
     # Every real project needs this line; the smoke test is the one place that
     # proves a project set up from scratch actually starts.
     (repo / ".gitignore").write_text(
-        "__pycache__/\n.pytest_cache/\n.orchestrator/\n"
+        "__pycache__/\n.pytest_cache/\n.code_gantry/\n"
     )
 
     git(repo, "init", "-b", "main")
@@ -686,14 +686,17 @@ def fail(message: str) -> None:
     sys.exit(1)
 
 
-def verify_outcome(work: Path, repo: Path, report: str, live: bool = False) -> None:
+def verify_outcome(work: Path, repo: Path, report: str, live: bool = False, main_at_start: str = "") -> None:
     """Assert the promises the design makes about the finished repository.
 
     Live mode asserts outcomes rather than counts. A real planner decides how
     many stages the plan needs and what to call them, so pinning either would
     be asserting the model's wording rather than the orchestrator's behaviour.
     """
-    project = work / "projects" / SLUG
+    # Where the config says, not where a slug used to put it. The work dir
+    # defaults beside the plan documents inside the target repo, which is the
+    # layout every new project gets.
+    project = repo / "docs" / ".code_gantry"
     run_dir = project / "runs" / RUN_ID
 
     print("\nthe report")
@@ -714,12 +717,19 @@ def verify_outcome(work: Path, repo: Path, report: str, live: bool = False) -> N
         "every child branch was deleted after merging",
         f"branches: {branches}",
     )
+    # Against the sha as it stood when the run began, not a commit count. The
+    # config lives in the repo now and an operator commits it to their default
+    # branch before starting, so "main has exactly one commit" stopped being
+    # true for a reason that has nothing to do with the tool.
     check(
-        git(repo, "rev-list", "--count", "main") == "1",
+        git(repo, "rev-parse", "main") == main_at_start,
         "main is untouched",
         "the tool never merges the project branch; that is the operator's job",
     )
-    commits = int(git(repo, "rev-list", "--count", BRANCH))
+    # Since the branch point, not from the root. The repo now carries the
+    # config as an ordinary tracked file, so the absolute count includes
+    # commits that have nothing to do with stages.
+    commits = int(git(repo, "rev-list", "--count", f"{main_at_start}..{BRANCH}"))
     if live:
         check(
             commits > 1,
@@ -728,7 +738,7 @@ def verify_outcome(work: Path, repo: Path, report: str, live: bool = False) -> N
         )
     else:
         check(
-            commits == 1 + len(STAGES),
+            commits == len(STAGES),
             f"{BRANCH} carries one squashed commit per stage",
             git(repo, "log", "--oneline", BRANCH),
         )
@@ -847,10 +857,20 @@ def main() -> int:
             )
 
         print("init")
-        cli(work, env, "init", str(repo / "docs" / "plan.md"), "--slug", SLUG)
-        config = work / "projects" / SLUG / "config.yaml"
+        # No `--slug`: the config names its own work dir, and where the
+        # config goes is the second argument rather than a project name.
+        config = repo / "docs" / "code_gantry.yaml"
+        cli(work, env, "init", str(repo / "docs" / "plan.md"), str(config))
         check(config.is_file(), "drafted a config")
         patch_config(config, live=args.live)
+
+        # Commit it. The config now lives in the target repo, so an uncommitted
+        # one leaves the tree dirty — and a run must begin from a known state
+        # or its diffs mean nothing. This is also what gives the run a config
+        # sha to record, which is what replaced `orchestrator approve`.
+        for argv in (["add", "-A"], ["commit", "-qm", "code_gantry config"]):
+            subprocess.run(["git", "-C", str(repo), *argv], check=True,
+                           capture_output=True)
 
         print("\nconfig outside the repo is warned about, not blocked")
         # The pre-relocation layout. It has no commit to cite, so there is
@@ -858,7 +878,7 @@ def main() -> int:
         # not moved its config in yet.
 
         print("\nvalidate")
-        checks = cli(work, env, "validate", SLUG)
+        checks = cli(work, env, "validate", str(config))
         check("[FAIL]" not in checks, "no blocking problems", checks)
         check(
             f"executor endpoint resolves from {EXECUTOR_API_BASE_VAR}" in checks
@@ -875,10 +895,12 @@ def main() -> int:
 
 
         print("\nrun")
-        report = cli(work, env, "run", SLUG, "--run-id", RUN_ID)
+        main_at_start = git(repo, "rev-parse", "main")
+        report = cli(work, env, "run", str(config), "--run-id", RUN_ID)
         check("complete" in report.lower(), "the run completed", report[-2000:])
 
-        verify_outcome(work, repo, report, live=args.live)
+        verify_outcome(work, repo, report, live=args.live,
+                       main_at_start=main_at_start)
 
         print(f"\n{CHECKS} checks passed")
         if server is not None:

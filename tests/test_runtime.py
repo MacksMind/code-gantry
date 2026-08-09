@@ -35,7 +35,7 @@ def a_config(repo):
 @pytest.fixture
 def assembled(repo, tmp_path):
     cfg = a_config(repo)
-    project = ProjectPaths("proj", root=tmp_path / "projects")
+    project = ProjectPaths(tmp_path / "projects" / "proj")
     planner = AnthropicPlanner(cfg.planner, client=object())
     reviewer = OpenAIReviewer(cfg.reviewer, client=object())
     lines: list[str] = []
@@ -137,7 +137,7 @@ class TestTheLiveProgressLog:
 
 
 def _runtime(cfg, tmp_path):
-    project = ProjectPaths("proj", root=tmp_path / "projects")
+    project = ProjectPaths(tmp_path / "projects" / "proj")
     return build_runtime(
         cfg,
         project,
@@ -170,7 +170,7 @@ class TestAgentContextDocuments:
 
     def _rt(self, repo, tmp_path, **over):
         cfg = a_config(repo).model_copy(update=over)
-        project = ProjectPaths("proj", root=tmp_path / "projects")
+        project = ProjectPaths(tmp_path / "projects" / "proj")
         return build_runtime(
             cfg, project, RunPaths(project, "run-1"),
             AnthropicPlanner(cfg.planner, client=object()),
@@ -299,7 +299,7 @@ class TestEveryRoleGetsBothLogs:
     """
 
     def _built(self, cfg, tmp_path):
-        project = ProjectPaths("proj", root=tmp_path / "projects")
+        project = ProjectPaths(tmp_path / "projects" / "proj")
         timeline, tools = [], []
         rt = build_runtime(
             cfg,

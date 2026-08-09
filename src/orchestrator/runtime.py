@@ -21,27 +21,51 @@ from orchestrator.plandoc import PlanDocument, PlanTree, load_snapshot
 from orchestrator.planner import PlannerClient
 from orchestrator.reviewer import ReviewerClient
 
-PROJECTS_ROOT = Path("projects")
-
-
 class ProjectPaths:
-    """Layout of `projects/<slug>/`.
+    """Layout of the work directory: everything the orchestrator writes.
 
-    Everything the orchestrator owns lives here. The target repo receives
-    product code and plan-document revisions, and nothing else.
+    Built from `cfg.work_dir` rather than a slug under a fixed root. The
+    orchestrator's own tree holds code and nothing else, and the work dir
+    defaults beside the plan documents in the target repo — the plan says what
+    the migration is and this says what happened to it, and a later reader
+    wants them together.
+
+    There is no `config` property any more, and its absence is the point. The
+    config used to live here and be found from the slug; now it is an input
+    that locates everything else, so a path that derived it would be deriving
+    the thing that was handed to us.
+
+    `slug` survives as the directory's name, because run ids and log lines
+    read better with a short handle than with an absolute path.
     """
 
-    def __init__(self, slug: str, root: Path | str = PROJECTS_ROOT):
-        self.slug = slug
-        self.root = Path(root)
+    def __init__(self, work_dir: Path | str):
+        self.work_dir = Path(work_dir)
+
+    @property
+    def slug(self) -> str:
+        """What identifies this project: the work directory, as given.
+
+        Not generated. A slug used to be a directory name under `projects/`
+        and had to be invented for each project; now the config names its work
+        dir outright, and a derived handle would only be a second name for it
+        — free to disagree, and one more thing to keep in step.
+
+        It has exactly one load-bearing use, which sets the requirement:
+        `nodes` builds the prompt cache key from it, so it must be stable
+        across a project's runs and distinct between projects. A path is both
+        by construction. Run ids do not use it — those slugify
+        `project_branch` — so nothing is lost by it being long.
+
+        The first cut of this returned `work_dir.name`, which is
+        `.code_gantry` under the default layout: a cache key shared by every
+        project on the machine, and a report line naming nothing.
+        """
+        return str(self.work_dir)
 
     @property
     def project_dir(self) -> Path:
-        return self.root / self.slug
-
-    @property
-    def config(self) -> Path:
-        return self.project_dir / "config.yaml"
+        return self.work_dir
 
     @property
     def plan_snapshot(self) -> Path:

@@ -29,11 +29,11 @@ def repo(tmp_path):
     git(path, "config", "user.name", "Test")
     git(path, "config", "commit.gpgsign", "false")
     (path / "app.py").write_text("def hello():\n    return 1\n")
-    # `.orchestrator/` because the work dir now defaults inside the repo,
+    # `.code_gantry/` because the work dir now defaults inside the repo,
     # beside the plan documents, and preflight blocks a run whose data
     # directory is tracked — every stage would find a dirty tree and none
     # could cut a branch. Every real project needs this line too.
-    (path / ".gitignore").write_text("ignored/\n*.local\n.orchestrator/\n")
+    (path / ".gitignore").write_text("ignored/\n*.local\n.code_gantry/\n")
     git(path, "add", "-A")
     git(path, "commit", "-qm", "initial")
     return path

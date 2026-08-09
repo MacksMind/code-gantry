@@ -1,12 +1,20 @@
 """Command line interface.
 
-    orchestrator init <plan-doc>      draft a project config from a plan document
-    orchestrator validate <project>   prove the config works on this host
-    orchestrator approve <project>    record that a human read it
-    orchestrator run <project>        start a run
-    orchestrator pause <run_id>       stop cleanly at the next stage boundary
-    orchestrator resume <run_id>      continue after an interruption or escalation
-    orchestrator status <run_id>      where a run stopped and why
+    orchestrator init <plan-doc> [config]   draft a config from a plan document
+    orchestrator validate <config>          prove the config works on this host
+    orchestrator run <config>               start a run
+    orchestrator pause <config> [run_id]    stop cleanly at the next boundary
+    orchestrator resume <config> [run_id]   continue after an interruption
+    orchestrator status <config> [run_id]   where a run stopped and why
+
+Every command takes the path to a project's config, because a config decides
+what runs unattended and guessing which one was meant is the class of mistake
+this design is arranged against. `ORCHESTRATOR_CONFIG` supplies it once per
+shell. `init` is the exception, and only because it produces a config rather
+than consuming one — its config path is optional and defaults beside the plan.
+
+A run id is optional wherever it appears: the newest run in the config's work
+directory is the one meant, almost always.
 
 Exit codes: 0 complete, 1 failed or escalated, 2 complete with deferred steps.
 
@@ -47,7 +55,7 @@ from orchestrator.preflight import format_checks, run_preflight
 from orchestrator.report import build_report
 from orchestrator.reviewer import make_reviewer
 from orchestrator.runlog import RunLog
-from orchestrator.runtime import PROJECTS_ROOT, ProjectPaths, RunPaths, build_runtime
+from orchestrator.runtime import ProjectPaths, RunPaths, build_runtime
 from orchestrator.state import new_state, resume_input
 
 EXIT_OK = 0
@@ -63,14 +71,72 @@ def main() -> None:
     """Drive a long refactor with a local executor, a planner, and a reviewer."""
 
 
+
+CONFIG_ENV = "ORCHESTRATOR_CONFIG"
+
+
+def _config_argument(value: Path | None) -> Path:
+    """The config path every command needs, or a refusal.
+
+    There is no default and no search. A config carries the commands that run
+    unattended for hours, and guessing which one an operator meant is the
+    class of mistake this whole design is arranged against — so an omitted
+    path is an error, not a lookup. `init` is the one exception, because it is
+    the command that produces a config rather than consuming one.
+
+    `ORCHESTRATOR_CONFIG` exists so the path is typed once per shell rather
+    than once per command. It is still explicit: something named it.
+    """
+    if value is not None:
+        return Path(value)
+    from_env = os.environ.get(CONFIG_ENV)
+    if from_env:
+        return Path(from_env)
+    raise click.UsageError(
+        "no config given. Pass the path to the project's config, or set "
+        f"{CONFIG_ENV}. There is no default: a config decides what runs "
+        "unattended, so it is named rather than found."
+    )
+
+
+def _project_for(config_path: Path) -> tuple[ProjectConfig, ProjectPaths]:
+    cfg = _load(config_path)
+    return cfg, ProjectPaths(cfg.work_dir)
+
+
+def _resolve_run_id(project: ProjectPaths, run_id: str | None) -> str:
+    """The run being asked about: the one named, or the newest in the work dir.
+
+    Newest by run id, which sorts chronologically because it is stamped. A
+    directory with no runs is an error rather than an empty answer — "resume"
+    with nothing to resume is a typo in the config path far more often than it
+    is a real request.
+    """
+    if run_id:
+        return run_id
+    if project.runs_dir.is_dir():
+        candidates = sorted(
+            d.name for d in project.runs_dir.iterdir()
+            if (d / "run.json").is_file()
+        )
+        if candidates:
+            return candidates[-1]
+    raise click.UsageError(f"no runs found under {project.runs_dir}")
+
+
 @main.command()
 @click.argument("plan_doc", type=click.Path(exists=True, path_type=Path))
-@click.option("--slug", default=None, help="Project directory name under projects/.")
-def init(plan_doc: Path, slug: str | None) -> None:
+@click.argument("config_path", required=False, type=click.Path(path_type=Path))
+def init(plan_doc: Path, config_path: Path | None) -> None:
     """Draft a project config from a plan document.
 
     Discovery splits along the same line as the planner's write permissions:
     executable fields come from deterministic repo inspection, never a model.
+
+    The one command whose config path is optional, because it is the one that
+    produces a config rather than consuming one. Defaulted from the plan: the
+    documents and the machinery that acts on them are the same project, and a
+    later reader wants them in one directory.
     """
     repo = derive_target_repo(plan_doc)
     if repo is None:
@@ -84,37 +150,46 @@ def init(plan_doc: Path, slug: str | None) -> None:
         sys.exit(EXIT_FAILED)
 
     plan_rel = plan_doc.resolve().relative_to(repo.resolve()).as_posix()
-    slug = slug or _slugify(plan_doc.stem)
-    project = ProjectPaths(slug)
+    target = Path(config_path) if config_path else plan_doc.resolve().parent / "code_gantry.yaml"
 
-    if project.config.exists() and not click.confirm(
-        f"{project.config} already exists. Overwrite?", default=False
+    if target.exists() and not click.confirm(
+        f"{target} already exists. Overwrite?", default=False
     ):
         click.echo("left alone")
         sys.exit(EXIT_OK)
 
-    project.ensure()
+    target.parent.mkdir(parents=True, exist_ok=True)
     draft, notes = draft_config(repo, plan_rel)
-    project.config.write_text(draft)
+    target.write_text(draft)
 
-    click.echo(f"wrote {project.config}\n")
+    click.echo(f"wrote {target}\n")
     for note in notes:
         click.echo(f"  {note}")
+    ignore_hint = ""
+    work = target.parent / ".code_gantry"
+    if work.is_relative_to(repo) and not Git(repo).is_ignored(
+        f"{work.relative_to(repo)}/"
+    ):
+        ignore_hint = (
+            f"\n\nAdd `.code_gantry/` to a .gitignore beside the plan. Every "
+            "run writes there, and a tracked work dir means no stage can ever "
+            "cut a branch."
+        )
     click.echo(
         "\nEvery discovered field carries a provenance comment, so reviewing it "
         "is a check of reasoning rather than of values. Read it, fix what is "
-        f"wrong, then:\n\n  orchestrator validate {slug}\n"
-        f"  orchestrator approve {slug}"
+        f"wrong, commit it, then:\n\n  orchestrator validate {target}\n"
+        f"  orchestrator run {target}" + ignore_hint
     )
 
 
 @main.command()
-@click.argument("slug")
+@click.argument("config_path", required=False, type=click.Path(path_type=Path))
 @click.option("--skip-tests", is_flag=True, help="Do not run the test suites.")
-def validate(slug: str, skip_tests: bool) -> None:
-    """Prove the config works against this host, before approval."""
-    project = ProjectPaths(slug)
-    cfg = _load(project.config)
+def validate(config_path: Path | None, skip_tests: bool) -> None:
+    """Prove the config works against this host, before a run."""
+    config_path = _config_argument(config_path)
+    cfg, project = _project_for(config_path)
     checks = run_preflight(
         cfg, project_dir=project, run_tests=not skip_tests, check_approval=False
     )
@@ -128,16 +203,16 @@ def validate(slug: str, skip_tests: bool) -> None:
         sys.exit(EXIT_FAILED)
     click.echo(
         f"config works on this host ({len(warnings)} warning(s)). "
-        f"Approve it with: orchestrator approve {slug}"
+        f"Commit it, then: orchestrator run {config_path}"
     )
 
 
 @main.command()
-@click.argument("slug")
+@click.argument("config_path", required=False, type=click.Path(path_type=Path))
 @click.option(
     "--dry-run", is_flag=True, help="Print the observations without writing them."
 )
-def reconcile(slug: str, dry_run: bool) -> None:
+def reconcile(config_path: Path | None, dry_run: bool) -> None:
     """Check the plan against what the branch actually did, and record the drift.
 
     Plan documents are written before the work and go stale during it. After
@@ -154,8 +229,8 @@ def reconcile(slug: str, dry_run: bool) -> None:
     premises. It changes no plan document either: it appends observations for a
     later pass to fold in.
     """
-    project = ProjectPaths(slug)
-    cfg = _load(project.config)
+    config_path = _config_argument(config_path)
+    cfg, project = _project_for(config_path)
     git = Git(cfg.target_repo)
 
     if not cfg.plan_addendum_path and not dry_run:
@@ -282,7 +357,7 @@ def _reconcile_prompt(cfg: ProjectConfig) -> list[dict]:
 
 
 @main.command()
-@click.argument("slug")
+@click.argument("config_path", required=False, type=click.Path(path_type=Path))
 @click.option("--run-id", default=None, help="Override the generated run id.")
 @click.option(
     "--skip-preflight-tests",
@@ -290,10 +365,12 @@ def _reconcile_prompt(cfg: ProjectConfig) -> list[dict]:
     help="Skip the suites during preflight. Faster, but an already-red repo "
     "will not be caught.",
 )
-def run(slug: str, run_id: str | None, skip_preflight_tests: bool) -> None:
+def run(config_path: Path | None, run_id: str | None, skip_preflight_tests: bool) -> None:
     """Start a run against a project."""
-    project = ProjectPaths(slug)
-    cfg = _load(project.config)
+    config_path = _config_argument(config_path)
+    cfg, project = _project_for(config_path)
+    project.ensure()
+    slug = project.slug
 
 
     # Before preflight, not after. Preflight is the slow thing — containers,
@@ -326,7 +403,8 @@ def run(slug: str, run_id: str | None, skip_preflight_tests: bool) -> None:
         "" if skip_preflight_tests else " (running the suites, which take minutes)"
     ))
 
-    checks = run_preflight(cfg, project_dir=project, run_tests=not skip_preflight_tests)
+    checks = run_preflight(cfg, project_dir=project, run_tests=not skip_preflight_tests,
+                            config_path=config_path)
     click.echo(format_checks(checks))
     blocking = [c for c in checks if c.blocking]
     start_log(
@@ -361,7 +439,7 @@ def run(slug: str, run_id: str | None, skip_preflight_tests: bool) -> None:
     state = new_state(
         run_id=run_id,
         project_slug=slug,
-        config_hash=blob_sha(project.config),
+        config_hash=blob_sha(config_path),
         target_repo=str(cfg.target_repo),
         base_ref=cfg.base_ref,
         base_sha=base_sha,
@@ -383,9 +461,10 @@ def run(slug: str, run_id: str | None, skip_preflight_tests: bool) -> None:
 
 
 @main.command()
-@click.argument("run_id")
+@click.argument("config_path", required=False, type=click.Path(path_type=Path))
+@click.argument("run_id", required=False)
 @click.option("--note", default="", help="Why, recorded for when you come back.")
-def pause(run_id: str, note: str) -> None:
+def pause(config_path: Path | None, run_id: str | None, note: str) -> None:
     """Ask a running run to stop at the next stage boundary.
 
     Not a kill. The flag is read before each planner call, so the run finishes
@@ -393,7 +472,9 @@ def pause(run_id: str, note: str) -> None:
     nothing half-done and a clean tree. Interrupting the process instead leaves
     a partially applied executor edit and a stage branch nobody owns.
     """
-    project, _cfg = _locate_run(run_id)
+    config_path = _config_argument(config_path)
+    _cfg, project = _project_for(config_path)
+    run_id = _resolve_run_id(project, run_id)
     paths = RunPaths(project, run_id)
     if not paths.run_dir.is_dir():
         click.echo(f"no such run: {run_id}", err=True)
@@ -409,14 +490,15 @@ def pause(run_id: str, note: str) -> None:
 
 
 @main.command()
-@click.argument("run_id")
+@click.argument("config_path", required=False, type=click.Path(path_type=Path))
+@click.argument("run_id", required=False)
 @click.option(
     "--reset-progress-budget",
     is_flag=True,
     help="Clear the without-landing intervention counter. Use when you have "
     "changed something that makes the earlier failures no longer apply.",
 )
-def resume(run_id: str, reset_progress_budget: bool) -> None:
+def resume(config_path: Path | None, run_id: str | None, reset_progress_budget: bool) -> None:
     """Continue after an interruption or an escalation a human has fixed.
 
     `--reset-progress-budget` exists because `max_interventions_without_landing`
@@ -435,7 +517,9 @@ def resume(run_id: str, reset_progress_budget: bool) -> None:
     carrying four spaces of Markdown indentation. Both causes were fixed. The
     run had no way to be told.
     """
-    project, cfg = _locate_run(run_id)
+    config_path = _config_argument(config_path)
+    cfg, project = _project_for(config_path)
+    run_id = _resolve_run_id(project, run_id)
     paths = RunPaths(project, run_id)
 
     try:
@@ -451,14 +535,15 @@ def resume(run_id: str, reset_progress_budget: bool) -> None:
     # this is not the run that config describes — the stages already landed
     # were produced by different commands, and nothing in the record would say
     # where the change fell.
-    problem = problem_resuming(project.config, saved.get("config_hash", ""))
+    problem = problem_resuming(config_path, saved.get("config_hash", ""))
     if problem:
         click.echo(f"refusing to resume: {problem}", err=True)
         sys.exit(EXIT_FAILED)
 
     click.echo(_startup_banner("resume", run_id, cfg, run_tests=False))
 
-    checks = run_preflight(cfg, project_dir=project, run_tests=False, for_resume=True)
+    checks = run_preflight(cfg, project_dir=project, run_tests=False, for_resume=True,
+                            config_path=config_path)
     click.echo(format_checks(checks))
     if any(c.blocking for c in checks):
         click.echo("\npreflight failed; nothing was resumed", err=True)
@@ -489,10 +574,13 @@ def resume(run_id: str, reset_progress_budget: bool) -> None:
 
 
 @main.command()
-@click.argument("run_id")
-def status(run_id: str) -> None:
+@click.argument("config_path", required=False, type=click.Path(path_type=Path))
+@click.argument("run_id", required=False)
+def status(config_path: Path | None, run_id: str | None) -> None:
     """Show where a run stopped and why."""
-    project, cfg = _locate_run(run_id)
+    config_path = _config_argument(config_path)
+    cfg, project = _project_for(config_path)
+    run_id = _resolve_run_id(project, run_id)
     paths = RunPaths(project, run_id)
     try:
         saved = _load_state(paths, run_id)
@@ -646,17 +734,6 @@ def _load_state(paths, run_id) -> dict | None:
     `load_state` opens and closes its own connection.
     """
     return load_state(paths.state_db, run_id)
-
-
-def _locate_run(run_id: str) -> tuple[ProjectPaths, ProjectConfig]:
-    """Find which project owns a run id."""
-    if PROJECTS_ROOT.is_dir():
-        for candidate in sorted(PROJECTS_ROOT.iterdir()):
-            if (candidate / "runs" / run_id / "run.json").is_file():
-                project = ProjectPaths(candidate.name)
-                return project, _load(project.config)
-    click.echo(f"no such run: {run_id}", err=True)
-    sys.exit(EXIT_FAILED)
 
 
 def _startup_banner(

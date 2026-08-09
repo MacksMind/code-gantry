@@ -1092,7 +1092,7 @@ def parse_config(data: dict, source: Path | str | None = None) -> ProjectConfig:
         cfg = cfg.model_copy(
             update={
                 "work_dir": cfg.target_repo / Path(cfg.plan_root).parent
-                / ".orchestrator"
+                / ".code_gantry"
             }
         )
 
