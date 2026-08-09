@@ -66,6 +66,7 @@ def run_preflight(
     check_models: bool = True,
     check_approval: bool = True,
     config_path=None,
+    recorded_base_sha: str = "",
     check_endpoint: bool = True,
     for_resume: bool = False,
 ) -> list[Check]:
@@ -107,6 +108,8 @@ def run_preflight(
         checks.extend(_model_checks(cfg))
     if check_approval and config_path is not None:
         checks.append(_approval_check(cfg, config_path))
+    if recorded_base_sha:
+        checks.append(_baseline_still_reachable(cfg, recorded_base_sha))
 
     return checks
 
@@ -759,6 +762,41 @@ def _project_root(project_dir):
         project_dir.project_dir
         if isinstance(project_dir, ProjectPaths)
         else project_dir
+    )
+
+
+def _baseline_still_reachable(cfg: ProjectConfig, recorded: str) -> Check:
+    """Is the commit this run measured itself against still in `base_ref`?
+
+    Asked here rather than only at the merge gate, because it is a property of
+    the world at startup and cannot become true part-way through a stage. The
+    same question inside `verify` is answered after a planner call and an
+    executor attempt have already been paid for — nine minutes and two model
+    calls, on one measured resume, to learn something knowable before any work
+    began.
+
+    The other branch-identity checks stay where they are: HEAD wandering and a
+    stage branch diverging can only happen mid-stage, so mid-stage is where
+    they belong. Two questions with different lifetimes, asked in one place,
+    and the cheap one was paying the expensive one's price.
+    """
+    from orchestrator.gitops import Git
+
+    name = "the run's baseline is still in " + cfg.base_ref
+    git = Git(cfg.target_repo)
+    try:
+        current = git.rev_parse(cfg.base_ref)
+    except Exception:
+        return Check(name, False, f"{cfg.base_ref} does not resolve")
+    if current == recorded or git.is_ancestor(recorded, current):
+        moved = "" if current == recorded else f"moved on to {current[:12]}"
+        return Check(name, True, f"{recorded[:12]} {moved}".strip())
+    return Check(
+        name,
+        False,
+        f"{cfg.base_ref} was rewritten: {recorded[:12]} is no longer an "
+        f"ancestor of {current[:12]}. Start a new run — this one measured "
+        "itself against a commit the branch no longer contains.",
     )
 
 

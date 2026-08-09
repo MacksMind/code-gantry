@@ -7,6 +7,9 @@ reviewer approves an empty diff. And stages land by squash merge, which is what
 lets the executor commit before testing while the project branch stays green.
 """
 
+import os
+import subprocess
+
 import pytest
 
 from orchestrator.gitops import Git, GitError
@@ -171,14 +174,29 @@ class TestBranchIdentity:
         problems = g.branch_identity_problems("proj-stage/001-x", "proj", "main", base_sha)
         assert problems and "HEAD is on" in problems[0]
 
-    def test_detects_a_moved_base_ref(self, repo, run_git):
+    def test_a_moved_base_ref_is_allowed(self, repo, run_git):
+        """This asserted the opposite, and the reversal is measured.
+
+        Concurrent work on `main` was treated as a reason to stop, on the
+        stated grounds that "the run's baseline is no longer what the report
+        will claim". The report claims a sha, and the sha a run started from
+        stays true however far the branch travels afterwards — so the reason
+        was not true, and nothing else depended on the pointer either.
+
+        Measured: a run 17 stages deep died at 12:37 because `main` had been
+        merged into the migration branch, which is the right thing to do on a
+        migration lasting days and had just been proven green over 3,775
+        examples. It sat dead for 78 minutes.
+
+        Rewrites still stop it — see below. Ancestry is the question.
+        """
         g, base_sha = self.setup_project(repo)
         run_git(repo, "checkout", "-q", "main")
         (repo / "app.py").write_text("someone else's commit\n")
         run_git(repo, "commit", "-aqm", "concurrent work on main")
         run_git(repo, "checkout", "-q", "proj-stage/001-x")
         problems = g.branch_identity_problems("proj-stage/001-x", "proj", "main", base_sha)
-        assert any("moved during the run" in p for p in problems)
+        assert problems == []
 
     def test_detects_a_rewritten_project_branch(self, repo, run_git):
         g, base_sha = self.setup_project(repo)
@@ -714,3 +732,68 @@ class TestALandingLeavesNoHalfMergedBranch:
         run_git(repo, "checkout", "-q", "-b", "empty")
         run_git(repo, "checkout", "-q", "proj")
         assert Git(repo).squash_merge("empty", "proj", "m") is None
+
+
+class TestBaseRefIsAllowedToMoveForward:
+    """`main` moving is normal life on a migration, not a rewrite.
+
+    The check treated any change to `base_ref` as a reason to stop the run:
+    "the run's baseline is no longer what the report will claim". That is not
+    what the report claims — it prints a sha, and the sha a run started from
+    stays true however far the branch travels afterwards.
+
+    Nothing depends on `base_ref`'s current position either. `flake.
+    predates_stage` checks out the recorded `base_sha`, which is pinned and
+    still resolvable; stage diffs are measured from `stage_start_sha` and plan
+    documents from `plan_sha`. The pointer moving reaches none of them.
+
+    Measured: a run 17 stages deep died at 12:37 because the operator merged
+    `main` into the migration branch — which is the right thing to do on a
+    migration that runs for days, and had just been proven green over 3,775
+    examples. The run sat dead for 78 minutes.
+
+    What the check should catch is history being *rewritten* underneath the
+    run, because then `base_sha` may no longer be reachable and the baseline
+    really is gone. Ancestry is the question, not equality.
+    """
+
+    def _moved(self, repo, **over):
+        g = Git(repo)
+        args = {
+            "expected_branch": g.current_branch(),
+            "project_branch": "main",
+            "base_ref": "main",
+            "base_sha": g.rev_parse("main"),
+        }
+        args.update(over)
+        return g.branch_identity_problems(**args)
+
+    def test_a_fast_forward_is_not_a_problem(self, repo):
+        g = Git(repo)
+        was = g.rev_parse("main")
+        (repo / "later.txt").write_text("someone else shipped\n")
+        subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-C", str(repo), "-c", "commit.gpgsign=false",
+                        "commit", "-qm", "main moves on"], check=True,
+                       capture_output=True)
+        assert self._moved(repo, base_sha=was) == []
+
+    def test_an_unchanged_base_is_still_fine(self, repo):
+        assert self._moved(repo) == []
+
+    def test_a_rewritten_history_still_stops_the_run(self, repo):
+        # The recorded baseline is no longer reachable from the branch, so the
+        # tree the flake check would re-run at is not the one the run started
+        # from. This is the case the guard exists for.
+        g = Git(repo)
+        orphan = subprocess.run(
+            ["git", "-C", str(repo), "commit-tree", g.rev_parse("main") + "^{tree}",
+             "-m", "rewritten"],
+            capture_output=True, text=True, check=True,
+            env={"GIT_AUTHOR_NAME": "T", "GIT_AUTHOR_EMAIL": "t@e.com",
+                 "GIT_COMMITTER_NAME": "T", "GIT_COMMITTER_EMAIL": "t@e.com",
+                 "PATH": os.environ["PATH"]},
+        ).stdout.strip()
+        problems = self._moved(repo, base_sha=orphan)
+        assert problems and "rewritten" in problems[0].lower()

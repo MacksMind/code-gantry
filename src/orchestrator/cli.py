@@ -549,7 +549,8 @@ def resume(config_path: Path | None, run_id: str | None, reset_progress_budget: 
     click.echo(_startup_banner("resume", run_id, cfg, run_tests=False))
 
     checks = run_preflight(cfg, project_dir=project, run_tests=False, for_resume=True,
-                            config_path=config_path)
+                            config_path=config_path,
+                            recorded_base_sha=saved.get("base_sha", ""))
     click.echo(format_checks(checks))
     if any(c.blocking for c in checks):
         click.echo("\npreflight failed; nothing was resumed", err=True)

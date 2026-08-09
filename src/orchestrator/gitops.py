@@ -307,11 +307,31 @@ class Git:
             problems.append(f"base_ref {base_ref!r} no longer resolves")
             return problems
 
-        if current_base != base_sha:
+        # Ancestry, not equality. `base_ref` moving is normal life on a
+        # migration that runs for days — the rest of the team ships, and
+        # merging that into the project branch is the right thing to do rather
+        # than something to be stopped for.
+        #
+        # Nothing depends on where the pointer is now. `flake.predates_stage`
+        # checks out the recorded `base_sha`, which is pinned; stage diffs are
+        # measured from `stage_start_sha` and plan documents from `plan_sha`.
+        # The report prints the sha the run started from, which stays true
+        # however far the branch travels — so "the baseline is no longer what
+        # the report will claim", which this used to say, was not the case.
+        #
+        # Measured: a run 17 stages deep died because `main` had been merged
+        # in, after that merge had been proven green over 3,775 examples. It
+        # sat dead for 78 minutes.
+        #
+        # What is worth stopping for is history being *rewritten*, because
+        # then the recorded baseline may be unreachable and the tree the flake
+        # check re-runs at is not the one the run started from.
+        if current_base != base_sha and not self.is_ancestor(base_sha, current_base):
             problems.append(
-                f"{base_ref!r} moved during the run: was {base_sha[:12]}, now "
-                f"{current_base[:12]}. The run's baseline is no longer what the "
-                "report will claim"
+                f"{base_ref!r} was rewritten during the run: the baseline "
+                f"{base_sha[:12]} is no longer an ancestor of {current_base[:12]}, "
+                "so the commit this run measured itself against is not in the "
+                "branch any more"
             )
 
         return problems
