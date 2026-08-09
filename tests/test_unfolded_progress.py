@@ -122,11 +122,18 @@ class TestTheAccounting:
         check = self._check(repo, [LANDED.format(1)])
         assert "docs/progress_log.md" in check.detail
 
-    def test_it_says_why_this_is_not_merely_untidy(self, repo):
-        # Without the reason it reads as housekeeping, which is how it went
-        # unfolded for 66 landings.
+    def test_it_is_the_accounting_and_nothing_else(self, repo):
+        """No explanation on the line.
+
+        The first version spent four sentences saying why folding matters, on
+        every start — read once and scrolled past thereafter, inside a block an
+        operator is scanning for whatever is wrong. The reasoning is in the
+        docstring, where the code beneath it keeps it honest; the line carries
+        the numbers, which are the part that changes.
+        """
         check = self._check(repo, [LANDED.format(1)])
-        assert "cache" in check.detail.lower() or "prefix" in check.detail.lower()
+        assert len(check.detail) < 120, check.detail
+        assert "cache" not in check.detail.lower()
 
 
 class TestItRunsWhereItCanBeActedOn:

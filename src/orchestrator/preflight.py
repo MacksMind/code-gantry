@@ -333,6 +333,12 @@ def _unfolded_progress_check(cfg: ProjectConfig) -> Check:
     Said at preflight because that is the moment acting on it is free: nothing
     is in flight, and folding costs a commit. Never fatal — a run that refuses
     to start until someone rewrites a plan is worse than an expensive one.
+
+    The line itself is the accounting and nothing else. The first version
+    explained all of the above on every start, which is four sentences an
+    operator reads once and scrolls past forever after, in a preflight block
+    they are scanning for the thing that is wrong. The reasoning belongs here,
+    where the code beneath it keeps it honest.
     """
     if not cfg.plan_addendum_path:
         return Check("progress log", True, "no addendum configured")
@@ -359,12 +365,8 @@ def _unfolded_progress_check(cfg: ProjectConfig) -> Check:
         "progress log",
         False,
         f"{len(entries)} entr{'y' if len(entries) == 1 else 'ies'} and "
-        f"{landings} landing{'' if landings == 1 else 's'} are unfolded in "
-        f"{rel} ({shown}). It is spliced into the plan block, which carries a "
-        "cache breakpoint, so each landing rewrites the block and the log "
-        "drags the plan tree through the cache with it — the cost grows with "
-        "how long it has been since the last fold, not with the size of the "
-        "log. Folding now is a commit; folding later is not cheaper.",
+        f"{landings} landing{'' if landings == 1 else 's'} unfolded in "
+        f"{rel} ({shown})",
         fatal=False,
     )
 
