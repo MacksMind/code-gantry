@@ -83,37 +83,68 @@ class TestVerify:
         out = nodes.verify(state, rt)  # must not raise
         assert out is not None
 
-    def test_it_routes_to_the_executor(self, repo, tmp_path):
+    def test_it_escalates_to_a_human(self, repo, tmp_path):
+        """Not the executor, and the reason is what is being committed.
+
+        This commit carries what the *checks* rewrote, not the model's work.
+        Handing that back to the executor asks it to fight the linter — which
+        rewrites the same bytes on the next cycle — and when the retry budget
+        runs out the planner inherits a hook it can do nothing about either.
+        A commit hook is repository policy, in the same family as the setup
+        command failing, and the only participant who can satisfy it is a
+        person.
+        """
         cfg, rt, state = self._dirty_stage(repo, tmp_path)
         refuse_commits(repo)
-        assert nodes.verify(state, rt)["next_hop"] == "execute"
+        assert nodes.verify(state, rt)["next_hop"] == "escalate"
 
-    def test_the_hook_output_reaches_the_executor(self, repo, tmp_path):
-        # The hook names the file and line. Feedback that omits it leaves the
-        # model guessing at a gate it cannot see.
+    def test_the_hook_output_reaches_the_operator(self, repo, tmp_path):
+        # The hook names the file and line, and that is the whole diagnosis.
         cfg, rt, state = self._dirty_stage(repo, tmp_path)
         refuse_commits(repo, "app.py:3: trailing whitespace.")
         out = nodes.verify(state, rt)
-        assert any(
-            "app.py:3" in note for note in (out.get("review_feedback") or [])
-        )
+        assert "app.py:3" in out["escalation_reason"]
 
-    def test_the_feedback_says_it_is_not_one_of_the_stage_gates(
-        self, repo, tmp_path
-    ):
-        # Handed an unattributed complaint, a model reads it as its own gate
-        # failing and re-runs the work rather than fixing the file.
+    def test_the_reason_claims_no_authorship_it_cannot_check(self, repo, tmp_path):
+        """It said "not the model's edits" and that was false.
+
+        The executor commits its own work before verify — unless the same hook
+        refused *that* commit, silently, which is what happened: the attempt's
+        `executor-loop.json` recorded `commits: []` against 15 edits. The
+        uncommitted set is then the stage's work and the checks' together, so
+        an escalation asserting either is guessing at the one fact an operator
+        will act on.
+        """
+        cfg, rt, state = self._dirty_stage(repo, tmp_path)
+        refuse_commits(repo)
+        reason = nodes.verify(state, rt)["escalation_reason"].lower()
+        assert "hook" in reason
+        assert "not the model's edits" not in reason
+        assert "uncommitted" in reason
+
+    def test_no_executor_retry_is_consumed(self, repo, tmp_path):
+        # An escalation that also spends a retry would let a second, unrelated
+        # failure arrive at the planner one attempt short.
         cfg, rt, state = self._dirty_stage(repo, tmp_path)
         refuse_commits(repo)
         out = nodes.verify(state, rt)
-        assert any(
-            "hook" in note.lower() for note in (out.get("review_feedback") or [])
+        assert "verify_attempt" not in out or out["verify_attempt"] == state.get(
+            "verify_attempt", 0
         )
 
     def test_the_layer_is_recorded_as_checks(self, repo, tmp_path):
         cfg, rt, state = self._dirty_stage(repo, tmp_path)
         refuse_commits(repo)
         assert nodes.verify(state, rt)["failure_layer"] == "checks"
+
+    def test_it_says_what_to_do_about_it(self, repo, tmp_path):
+        # An escalation stops an unattended run. What it costs an operator is
+        # decided by whether the message names the next move or only the
+        # symptom — the work is in the tree and resuming re-commits it.
+        cfg, rt, state = self._dirty_stage(repo, tmp_path)
+        refuse_commits(repo)
+        reason = nodes.verify(state, rt)["escalation_reason"].lower()
+        assert "resume" in reason
 
     def test_the_work_is_left_in_the_tree(self, repo, tmp_path):
         # Nothing may be discarded to make the commit succeed. The next

@@ -1123,6 +1123,24 @@ def verify(state: RunState, rt: Runtime) -> dict:
     if outcome.flaky_files:
         _record_flakes(rt, stage.id, outcome.flaky_files, outcome.flaky_seeds)
 
+
+    accumulated = {
+        # Consumed here. `resuming` means "this is the first step after a
+        # resume", and every reader treats it that way — but nothing cleared
+        # it, so it meant "this run has been resumed at some point" and stayed
+        # true forever. The progress layer treats it as a hard bypass, so a
+        # single resume disabled "the attempt reproduced the previous diff
+        # exactly" for the remainder of the run. Observed: a stage produced
+        # byte-identical diffs on two attempts, both rejected for the same
+        # reason, and the guard that exists to redraw such a stage never fired.
+        "resuming": False,
+        "flake_reruns": state.get("flake_reruns", 0) + outcome.flake_reruns,
+        "flaky_files": _merge_flaky(state, outcome.flaky_files),
+        "test_seconds": state.get("test_seconds", 0.0) + outcome.test_seconds,
+        "last_diff_digest": outcome.diff_digest,
+        "full_suite_digest": outcome.full_suite_digest,
+    }
+
     # A check may write. `checks` is arbitrary operator-declared shell, and an
     # autocorrecting linter is the obvious case — it is run precisely so the
     # executor does not spend an attempt on a line break. The executor commits
@@ -1150,54 +1168,53 @@ def verify(state: RunState, rt: Runtime) -> dict:
         except GitError as e:
             # A repository may refuse a commit. Hooks are the ordinary reason —
             # a whitespace or lint gate on staged content — and the refusal is
-            # both foreseeable and recoverable, so it must not leave here as a
-            # traceback. It did: a run three stages deep died at this line
-            # because the editor's line-ending normalisation rewrote a CRLF
-            # file whole, turning every pre-existing trailing space into an
-            # *added* line for the hook to find.
+            # foreseeable, so it must not leave here as a traceback. It did: a
+            # run three stages deep died at this line because the editor's
+            # line-ending normalisation rewrote a CRLF file whole, turning
+            # every pre-existing trailing space into an *added* line for the
+            # hook to find.
             #
-            # Routed to the executor because the hook says what to fix and
-            # names the file and line. The check-rewrites stay in the tree; the
-            # next attempt's own commit sweeps them up once the model has
-            # cleared whatever was objected to.
+            # Escalated rather than routed to the executor, and what decides
+            # that is *whose changes these are*. This commit carries what the
+            # checks rewrote, not the model's work. Handing it back would ask
+            # the executor to fight the linter, which rewrites the same bytes
+            # on the next cycle; the retry budget then delivers a hook to the
+            # planner, which can do nothing about one either. It is repository
+            # policy, the same family as the setup command failing, and the
+            # only participant who can satisfy it is a person.
+            #
+            # Nothing is discarded to get past it: the rewrites stay in the
+            # tree, and a resume re-runs this commit once the objection is
+            # cleared.
             rt.log(f"[verify] {stage.id}: the repository refused the commit")
-            return _retry_or_plan(
-                state,
-                rt,
-                layer="checks",
-                summary="the repository refused to commit what the checks changed",
-                feedback=(
-                    "The checks rewrote "
-                    f"{len(touched)} file(s) and the repository refused to "
-                    "commit them:\n"
+            return {
+                **accumulated,
+                **_escalate(
+                    "checks",
+                    f"{len(touched)} file(s) were left uncommitted after the "
+                    "checks ran, and the repository refused to commit them. "
+                    "This is a commit hook, not one of this stage's gates:\n\n"
                     f"{_clip(str(e))}\n\n"
-                    "This is a commit hook in the target repository, not one of "
-                    "this stage's gates. Fix what it names — the files are in "
-                    "the working tree — and the commit is retried for you."
+                    "Whose changes these are is not knowable from here and the "
+                    "message does not guess. Usually they are what an "
+                    "autocorrecting check rewrote — but the executor's own "
+                    "commit runs earlier and the same hook refuses that too, "
+                    "in which case this is the stage's work as well. The run "
+                    "log says which.\n\n"
+                    "Nothing has been discarded: the changes are still in the "
+                    "working tree. Clear what the hook objects to and resume, "
+                    "and the commit is retried from here.",
                 ),
-                detail=_clip(str(e)),
-            )
+            }
+        # "left in the tree after the checks", not "changed by the checks".
+        # Usually they are the same thing and the old wording said so — but the
+        # executor's own commit can be refused by a hook and silently leave its
+        # work here, and this line then credited fifteen model edits to the
+        # linter. Observed once, in the run that produced the escalation above.
         rt.log(
-            f"[verify] {stage.id}: checks changed {len(touched)} file(s); "
-            "committed to the stage branch"
+            f"[verify] {stage.id}: committed {len(touched)} file(s) left in "
+            "the tree after the checks"
         )
-
-    accumulated = {
-        # Consumed here. `resuming` means "this is the first step after a
-        # resume", and every reader treats it that way — but nothing cleared
-        # it, so it meant "this run has been resumed at some point" and stayed
-        # true forever. The progress layer treats it as a hard bypass, so a
-        # single resume disabled "the attempt reproduced the previous diff
-        # exactly" for the remainder of the run. Observed: a stage produced
-        # byte-identical diffs on two attempts, both rejected for the same
-        # reason, and the guard that exists to redraw such a stage never fired.
-        "resuming": False,
-        "flake_reruns": state.get("flake_reruns", 0) + outcome.flake_reruns,
-        "flaky_files": _merge_flaky(state, outcome.flaky_files),
-        "test_seconds": state.get("test_seconds", 0.0) + outcome.test_seconds,
-        "last_diff_digest": outcome.diff_digest,
-        "full_suite_digest": outcome.full_suite_digest,
-    }
 
     if outcome.unscoped_tests:
         rt.log(
