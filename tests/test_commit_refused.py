@@ -161,6 +161,92 @@ class TestVerify:
         assert nodes.verify(state, rt)["next_hop"] == "review"
 
 
+class TestTheAttemptDoesNotReportSuccess:
+    """A loop that could not record its work has not succeeded.
+
+    Measured on the run that produced all of this: `executor-loop.json` held
+    `commits: []` against `edits_applied: 15` and `in_loop_failures: []`. The
+    attempt reported clean. `executorloop.py`'s own docstring calls "the
+    executor committed before verify" a *guarantee* — the in-process loop
+    cannot be killed mid-write, so `git.is_clean()` need not be consulted — and
+    a commit hook falsifies it without a word to anyone.
+
+    Escalated rather than retried, on the same grounds as the setup command:
+    the hook will refuse the next attempt identically, and a broken environment
+    is not a planning defect.
+    """
+
+    def test_the_result_carries_the_refusal(self, repo, tmp_path):
+        from orchestrator.executor import ExecutionResult
+        from orchestrator.executorloop import _commit_if_dirty
+        from orchestrator.gitops import Git
+        from orchestrator.config import Stage
+
+        (repo / "app.py").write_text("work\n")
+        refuse_commits(repo, "app.py:1: trailing whitespace.")
+        out = ExecutionResult(ok=True)
+        _commit_if_dirty(
+            Git(repo),
+            Stage(id="s", instruction="do", edit_files=["app.py"]),
+            out,
+        )
+        assert out.commit_refused
+        assert "app.py:1" in out.commit_refused
+
+    def test_a_successful_commit_leaves_it_unset(self, repo, tmp_path):
+        # The control: without it, a bug setting this always would pass above.
+        from orchestrator.executor import ExecutionResult
+        from orchestrator.executorloop import _commit_if_dirty
+        from orchestrator.gitops import Git
+        from orchestrator.config import Stage
+
+        (repo / "app.py").write_text("work\n")
+        out = ExecutionResult(ok=True)
+        _commit_if_dirty(
+            Git(repo),
+            Stage(id="s", instruction="do", edit_files=["app.py"]),
+            out,
+        )
+        assert not out.commit_refused
+        assert out.commits
+
+    def test_execute_escalates(self, repo, tmp_path):
+        from test_nodes import StubExecutor
+
+        ex = StubExecutor(repo=repo, edits=[("app.py", "x\n")])
+        cfg, rt, state = make(repo, tmp_path, executor=ex)
+        state = with_stage(state, rt)
+
+        original = ex.run_agent_stage
+
+        def refusing(*a, **kw):
+            out = original(*a, **kw)
+            out.commit_refused = "app.py:1: trailing whitespace."
+            return out
+
+        ex.run_agent_stage = refusing
+        out = nodes.execute(state, rt)
+        assert out["next_hop"] == "escalate"
+        assert "app.py:1" in out["escalation_reason"]
+
+    def test_it_does_not_consume_an_executor_retry(self, repo, tmp_path):
+        from test_nodes import StubExecutor
+
+        ex = StubExecutor(repo=repo, edits=[("app.py", "x\n")])
+        cfg, rt, state = make(repo, tmp_path, executor=ex)
+        state = with_stage(state, rt)
+        original = ex.run_agent_stage
+
+        def refusing(*a, **kw):
+            out = original(*a, **kw)
+            out.commit_refused = "refused"
+            return out
+
+        ex.run_agent_stage = refusing
+        out = nodes.execute(state, rt)
+        assert out.get("verify_attempt", 0) == state.get("verify_attempt", 0)
+
+
 class TestExecutorLoop:
     def test_a_refused_commit_is_logged_rather_than_swallowed(self, repo, tmp_path):
         """The comment claimed the log carried this and there was no log."""

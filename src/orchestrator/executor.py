@@ -88,6 +88,16 @@ class ExecutionResult:
     # actionable enough.
     edit_refusals: list[str] = field(default_factory=list)
     commits: list[str] = field(default_factory=list)
+    # Why the repository refused to record the work, when it did — a commit
+    # hook, in every case seen. Empty otherwise.
+    #
+    # It needs a field because "the executor committed before verify" is stated
+    # as a guarantee in this loop's module docstring, on the reasoning that an
+    # in-process loop cannot be killed mid-write. A hook falsifies it for a
+    # reason the loop is entitled to know about and, until this existed, could
+    # not report: the refusal was caught and dropped, so an attempt with
+    # `commits: []` against 15 edits reported itself clean.
+    commit_refused: str = ""
     # Which gate failed on which cycle, so a stage that used its whole budget
     # says what it kept failing rather than only that it ran out.
     in_loop_failures: list[str] = field(default_factory=list)

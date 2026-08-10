@@ -969,6 +969,28 @@ def execute(state: RunState, rt: Runtime) -> dict:
     if result.dropped_reads:
         measured["withheld_reads"] = list(result.dropped_reads)
 
+    if result.commit_refused:
+        # The loop could not record its work. Escalated on the same grounds as
+        # the setup command above — the hook will refuse the next attempt
+        # identically, so a retry buys nothing and the planner cannot rewrite a
+        # hook any more than it can rewrite a precondition.
+        #
+        # Ahead of every branch below because those all read a tree they assume
+        # was committed: `git.is_clean()` is not consulted here precisely
+        # because the in-process loop was said to guarantee it.
+        return {
+            **measured,
+            **_escalate(
+                "commit",
+                f"The executor finished stage {stage.id!r} and the repository "
+                "refused to record its work. A commit hook, not a gate, and "
+                "not a planning defect:\n"
+                f"{_clip(result.commit_refused)}\n\n"
+                "The edits are still in the working tree. Clear what the hook "
+                "objects to and resume.",
+            ),
+        }
+
     if result.ok:
         # A rework that edited nothing has usually just said why, and until now
         # nobody read it. `result.log` is the model's closing text; on the

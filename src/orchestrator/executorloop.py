@@ -22,6 +22,14 @@ there is no external killer and no mid-write kill — which turns "the executor
 committed before verify" from an inference drawn from `git.is_clean()` into a
 guarantee.
 
+Against everything except the repository itself, which can refuse. A commit
+hook broke that guarantee once and said nothing: `commits: []` against 15
+edits, `in_loop_failures: []`, and an attempt that reported itself clean, after
+which `verify` swept the model's work up under a message crediting it to the
+linter. `commit_refused` carries it out now and `execute` escalates on it —
+because the caller cannot ask `git.is_clean()` here, on the strength of this
+very paragraph.
+
 `ok=False` means *the executor itself broke* — transport, auth, an unhandled
 exception. Every substantive verdict still comes from verify. The gates run
 here to save round trips, not to reach judgements.
@@ -360,16 +368,18 @@ def _commit_if_dirty(
             return None
         sha = git.commit_all(f"[{stage.id}] executor cycle {out.cycles}{why}")
     except GitError as e:
-        # A failure to commit is not a failure of the work, and the gates judge
-        # the tree either way — a hook refusing staged content is the ordinary
-        # cause. Not a verdict, so it is reported rather than raised.
+        # A hook refusing staged content is the ordinary cause. Not raised —
+        # whatever the model did is still in the tree and the caller decides
+        # what that means — but recorded twice over, because this was silent
+        # and the silence is what made it expensive.
         #
-        # It said that before and did not do it: the comment claimed the log
-        # carried this and the function had no `log` to write to, so a refused
-        # commit was silent and the work simply stayed uncommitted. A caller
-        # reading the loop's own record could not tell that from a clean tree.
+        # The comment here used to say the log carried it, and the function had
+        # no `log` to write to. So an attempt that committed nothing against 15
+        # edits reported itself clean, and `verify` later swept the model's
+        # work up under a message crediting it to the linter.
         if log:
             log(f"[execute] {stage.id}: the repository refused the commit: {e}")
+        out.commit_refused = str(e)
         return None
     if sha:
         out.commits.append(sha)
