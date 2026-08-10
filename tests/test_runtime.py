@@ -338,7 +338,7 @@ class TestEveryRoleGetsBothLogs:
         seen = {}
 
         class Spy:
-            def __init__(self, cfg, client=None, log=None, tool_log=None):
+            def __init__(self, cfg, client=None, log=None, tool_log=None, **kwargs):
                 seen["log"], seen["tool_log"] = log, tool_log
 
             def run(self, *a, **kw):  # pragma: no cover - never reached

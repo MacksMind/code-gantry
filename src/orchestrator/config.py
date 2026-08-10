@@ -609,6 +609,139 @@ class StageDefaults(_Strict):
     review: bool = True
 
 
+# Tool names are identifiers on the wire and keys in a JSON schema.
+_SAFE_TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
+
+# Refused as argv[0]. A declared command exists so that nothing interprets the
+# arguments; putting a shell at the front hands that property straight back.
+_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "fish", "csh", "tcsh"})
+
+# `{name}` occupying an entire argv element. Anything embedded in a longer
+# string is refused, so there is never a question of how a repeated value joins.
+_PLACEHOLDER = re.compile(r"^\{([a-z][a-z0-9_]*)\}$")
+
+
+class ToolArgument(_Strict):
+    """One value the model supplies when calling a declared tool.
+
+    `repeated` is the difference between `bundle update rails` and
+    `bundle update rails nokogiri`: a repeated argument expands in place into
+    as many argv elements as it has values, which is the only expansion that
+    needs no quoting rule.
+    """
+
+    name: str
+    description: str
+    repeated: bool = False
+
+
+class ProjectTool(_Strict):
+    """A command the operator declares and the executor may call.
+
+    The orchestrator ships eight tools and knows nothing about any project's
+    toolchain. A migration needs more — resolve the manifest, precompile
+    assets, run a generator — and every one of those is project knowledge,
+    which belongs in config rather than in a Python feature named after
+    whatever ecosystem prompted it. So this is a menu: the operator writes the
+    command and the description, and the model reaches for it exactly as it
+    reaches for `read_file`.
+
+    **Nothing here gates which stage may call which tool, deliberately.** The
+    scope gate already measures the outcome — a tool that writes a file the
+    stage never declared fails it, from the tree rather than from a
+    declaration. A per-stage permission in front of that would be a claim used
+    to predict what the existing gate observes.
+
+    `command` is argv and is spawned with `shell=False`. That is what makes it
+    safe for the model to supply arguments at all: a value containing `;` or
+    `&&` is one inert element that makes the underlying tool error, because
+    nothing is there to interpret it.
+    """
+
+    name: str
+    description: str
+    command: list[str]
+    arguments: list[ToolArgument] = []
+    # None means the runner's own default, which is what every other declared
+    # command already gets.
+    timeout_seconds: int | None = None
+
+    @model_validator(mode="after")
+    def _check(self):
+        problems = _tool_problems(self)
+        if problems:
+            raise ValueError("; ".join(problems))
+        return self
+
+
+def _tool_problems(tool: ProjectTool) -> list[str]:
+    """Everything wrong with one declared tool, all at once."""
+    problems: list[str] = []
+    if not _SAFE_TOOL_NAME.match(tool.name or ""):
+        problems.append(
+            f"project_tools: {tool.name!r} is not a usable tool name — it must "
+            "match [a-z][a-z0-9_]*, because it is sent to the provider as an "
+            "identifier and used as a key in a JSON schema"
+        )
+    if not tool.command:
+        problems.append(f"project_tools.{tool.name}: command must not be empty")
+        return problems
+
+    head = Path(tool.command[0]).name
+    if head in _SHELLS:
+        problems.append(
+            f"project_tools.{tool.name}: command starts with {tool.command[0]!r}. "
+            "A declared command is argv and is run without a shell, which is "
+            "what makes it safe for the model to supply an argument — nothing "
+            "interprets the value. Running it through a shell gives that back. "
+            "Put the real program first, or wrap the shell script in a file and "
+            "name the file."
+        )
+
+    declared = [a.name for a in tool.arguments]
+    for name in declared:
+        if not _SAFE_TOOL_NAME.match(name or ""):
+            problems.append(
+                f"project_tools.{tool.name}: argument {name!r} must match "
+                "[a-z][a-z0-9_]*"
+            )
+    if len(set(declared)) != len(declared):
+        problems.append(f"project_tools.{tool.name}: two arguments share a name")
+
+    used = []
+    for element in tool.command:
+        match = _PLACEHOLDER.match(element)
+        if match:
+            used.append(match.group(1))
+            continue
+        # An embedded placeholder is the trap: `--gems={names}` reads as
+        # obviously intended and has no answer for how a repeated value joins,
+        # so every answer is a quoting rule and quoting is what argv exists to
+        # avoid.
+        if "{" in element and "}" in element:
+            problems.append(
+                f"project_tools.{tool.name}: {element!r} embeds a placeholder in "
+                "a larger argument. A placeholder must be an entire argv "
+                "element, so that a repeated value expands into elements "
+                "rather than needing a rule for how to join it."
+            )
+
+    for name in used:
+        if name not in declared:
+            problems.append(
+                f"project_tools.{tool.name}: command uses {{{name}}} but no "
+                f"argument named {name!r} is declared"
+            )
+    for name in declared:
+        if name not in used:
+            problems.append(
+                f"project_tools.{tool.name}: argument {name!r} is declared but "
+                "the command never uses it, so the model would be asked for a "
+                "value that reaches nothing"
+            )
+    return problems
+
+
 class ProjectConfig(_Strict):
     # Documentation, not behaviour: these commands assume a particular
     # machine's Docker, Ruby, and paths. Recording it stops a future reader
@@ -810,6 +943,11 @@ class ProjectConfig(_Strict):
     # solve on the operator's behalf.
     checks_commit_changes: bool = True
 
+    # Extra tools the executor may call, declared by the operator. Empty by
+    # default: a project that needs none gets the eight built-ins and no new
+    # surface at all.
+    project_tools: list[ProjectTool] = []
+
     # Let the gate accept the executor loop's verdict when the command and the
     # tree are identical, instead of running the same thing again.
     #
@@ -972,6 +1110,12 @@ class ProjectConfig(_Strict):
             out.append((f"stage_defaults.context_commands[{i}]", command))
         for i, command in enumerate(self.stage_defaults.checks):
             out.append((f"stage_defaults.checks[{i}]", command))
+        for tool in self.project_tools:
+            # Joined for scanning only. The denylist reads shell-shaped strings
+            # — `git push`, `rm -rf` — and an argv list would hide `["git",
+            # "push"]` from every pattern in it. What actually runs is still
+            # the list; this is the string the operator would have written.
+            out.append((f"project_tools.{tool.name}", " ".join(tool.command)))
         return out
 
     def stage_from_planner(self, fields: dict) -> Stage:
@@ -1364,5 +1508,30 @@ def _structural_problems(cfg: ProjectConfig) -> list[str]:
                 "endpoint gets called is not a detail to guess at"
             )
 
+    problems.extend(_tool_name_problems(cfg.project_tools))
     problems.extend(denylist_violations(cfg.all_commands()))
+    return problems
+
+
+def _tool_name_problems(tools: list[ProjectTool]) -> list[str]:
+    """Declared tool names must be unique and must not shadow a built-in.
+
+    Two tools with one name is not a merge — it is whichever the provider
+    happens to pick, and the model cannot tell it got the wrong one. Checked
+    here rather than on `ProjectTool` because it is a property of the set.
+    """
+    from orchestrator.projecttools import BUILTIN_TOOL_NAMES
+
+    problems: list[str] = []
+    seen: set[str] = set()
+    for tool in tools:
+        if tool.name in BUILTIN_TOOL_NAMES:
+            problems.append(
+                f"project_tools: {tool.name!r} is the name of a built-in tool. "
+                "Two tools with one name is not a merge — the model cannot tell "
+                "which one it reached."
+            )
+        if tool.name in seen:
+            problems.append(f"project_tools: {tool.name!r} is declared twice")
+        seen.add(tool.name)
     return problems

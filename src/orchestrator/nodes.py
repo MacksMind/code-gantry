@@ -1145,7 +1145,38 @@ def verify(state: RunState, rt: Runtime) -> dict:
         and rt.git.uncommitted()
     ):
         touched = rt.git.uncommitted()
-        rt.git.commit_all(f"[{stage.id}] verification checks")
+        try:
+            rt.git.commit_all(f"[{stage.id}] verification checks")
+        except GitError as e:
+            # A repository may refuse a commit. Hooks are the ordinary reason —
+            # a whitespace or lint gate on staged content — and the refusal is
+            # both foreseeable and recoverable, so it must not leave here as a
+            # traceback. It did: a run three stages deep died at this line
+            # because the editor's line-ending normalisation rewrote a CRLF
+            # file whole, turning every pre-existing trailing space into an
+            # *added* line for the hook to find.
+            #
+            # Routed to the executor because the hook says what to fix and
+            # names the file and line. The check-rewrites stay in the tree; the
+            # next attempt's own commit sweeps them up once the model has
+            # cleared whatever was objected to.
+            rt.log(f"[verify] {stage.id}: the repository refused the commit")
+            return _retry_or_plan(
+                state,
+                rt,
+                layer="checks",
+                summary="the repository refused to commit what the checks changed",
+                feedback=(
+                    "The checks rewrote "
+                    f"{len(touched)} file(s) and the repository refused to "
+                    "commit them:\n"
+                    f"{_clip(str(e))}\n\n"
+                    "This is a commit hook in the target repository, not one of "
+                    "this stage's gates. Fix what it names — the files are in "
+                    "the working tree — and the commit is retried for you."
+                ),
+                detail=_clip(str(e)),
+            )
         rt.log(
             f"[verify] {stage.id}: checks changed {len(touched)} file(s); "
             "committed to the stage branch"

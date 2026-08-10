@@ -139,7 +139,9 @@ SEMANTIC_TOOL_FOR_EDITING: dict[str, Any] = {
 }
 
 
-def tool_schemas(semantic: SemanticSearch | None) -> list[dict[str, Any]]:
+def tool_schemas(
+    semantic: SemanticSearch | None, project_tools=None
+) -> list[dict[str, Any]]:
     """Everything the executor may call. Semantic search only when configured.
 
     Its description is the executor's own rather than the planner's, and the
@@ -148,12 +150,22 @@ def tool_schemas(semantic: SemanticSearch | None) -> list[dict[str, Any]]:
     the planner before a stage starts, the reviewer after it has committed. The
     executor is the first caller whose own uncommitted work is missing from
     what it is being shown.
+
+    Operator-declared tools go last and are otherwise undecorated. Nothing
+    marks them as project-supplied, because a tool the model reads as
+    second-class is one it reaches for last — and the whole point is that
+    `bundle install` should be as ordinary to it as `read_file`.
     """
+    from orchestrator.projecttools import tool_schema
+
     read = [*READ_TOOLS, SEMANTIC_TOOL_FOR_EDITING] if semantic else list(READ_TOOLS)
-    return [*read, *EDIT_TOOLS]
+    declared = [tool_schema(t) for t in (project_tools or [])]
+    return [*read, *EDIT_TOOLS, *declared]
 
 
-def openai_tool_schemas(semantic: SemanticSearch | None) -> list[dict[str, Any]]:
+def openai_tool_schemas(
+    semantic: SemanticSearch | None, project_tools=None
+) -> list[dict[str, Any]]:
     """The same tools in the Responses API's shape.
 
     Strict mode is not a preference: the SDK refuses to auto-parse otherwise,
@@ -168,7 +180,7 @@ def openai_tool_schemas(semantic: SemanticSearch | None) -> list[dict[str, Any]]
     objects with an optional `replace_all`.
     """
     out = []
-    for tool in tool_schemas(semantic):
+    for tool in tool_schemas(semantic, project_tools):
         schema = _strictify(tool["input_schema"])
         out.append(
             {
@@ -215,6 +227,8 @@ def dispatch(
     reader: RepoReader,
     editor: FileEditor,
     semantic: SemanticSearch | None,
+    project_tools=None,
+    runner=None,
 ) -> str:
     """Run one tool call and render its result as text.
 
@@ -223,8 +237,32 @@ def dispatch(
     because it was finished and one that stopped because every edit was refused
     produce the same artifact otherwise, and only one of them is a working
     executor.
+
+    Declared tools are checked before the built-ins fall through to the
+    planner's dispatch, and a name collision is impossible by then: config
+    refuses a declared tool named after a built-in, because two tools with one
+    name is whichever the provider picks and the model cannot tell.
     """
     from orchestrator import plannertools
+
+    declared = {t.name: t for t in (project_tools or [])}
+    if name in declared:
+        from orchestrator.projecttools import invoke
+
+        if runner is None:  # pragma: no cover - defensive
+            return (
+                f"cannot do that: {name} is declared but this executor was "
+                "built without a command runner"
+            )
+        try:
+            return invoke(declared[name], args, runner)
+        except ToolError as e:
+            # Recorded on the editor's ledger for the same reason its own
+            # refusals are: an attempt that achieved nothing because every call
+            # was refused must not read like one that finished.
+            if editor is not None:
+                editor.record_refusal(name, call_detail(args), str(e), "declared")
+            return f"cannot do that: {e}"
 
     if name in {"edit", "create_file", "delete_file"}:
         try:

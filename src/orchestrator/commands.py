@@ -188,6 +188,23 @@ class CommandRunner:
         (`a && b`, `! grep -q x`), so a shell is required."""
         return self._spawn(command, shell=True, label=command, timeout=timeout)
 
+    def run_argv(self, argv: Sequence[str], timeout: int | None = None) -> CommandResult:
+        """Run an argv list with no shell.
+
+        The counterpart to `run`, and the difference is the whole safety story
+        for `project_tools`: those commands carry values the model supplied, and
+        with no shell in the path there is no metacharacter to escape — a value
+        of `rails; rm -rf /` is one argument that makes the program error.
+
+        `label` is the joined form because that is what an operator reads in the
+        log and what the denylist scanned; the list is what actually runs, and
+        the two can only disagree by whitespace in an element.
+        """
+        argv = list(argv)
+        return self._spawn(
+            argv, shell=False, label=" ".join(argv), timeout=timeout
+        )
+
     def _spawn(
         self,
         target,

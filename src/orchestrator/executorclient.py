@@ -79,9 +79,24 @@ def _reasoning_param(cfg: ExecutorConfig) -> dict:
 class OpenAIExecutorModel:
     """Drives one edit cycle: the model calls tools until it stops."""
 
-    def __init__(self, cfg: ExecutorConfig, client=None, log=None, tool_log=None):
+    def __init__(
+        self,
+        cfg: ExecutorConfig,
+        client=None,
+        log=None,
+        tool_log=None,
+        project_tools=None,
+        runner=None,
+    ):
         self.cfg = cfg
         self.log = log
+        # Operator-declared tools and the runner that executes them. Both come
+        # from the `ProjectConfig`, which this class does not otherwise see —
+        # it is built from `cfg.executor` alone. Passed rather than reached
+        # for, because a client that could find the project config could find
+        # anything in it.
+        self.project_tools = list(project_tools or [])
+        self.runner = runner
         # Its own file, like the other two roles. This one has never been in
         # the run log at all and could not be: sixty calls a cycle would drown
         # a timeline, which is why `nodes.execute` reports counts. The full
@@ -120,6 +135,15 @@ class OpenAIExecutorModel:
         """
         return max(getattr(self.cfg, "max_model_turns", 20), 1)
 
+    def _tools(self, semantic) -> list:
+        """The menu actually sent to the provider.
+
+        Its own method so a test can assert what is sent rather than what is
+        held — this seam has broken twice, both times with the constructor
+        taking the argument and nothing carrying it further.
+        """
+        return openai_tool_schemas(semantic, self.project_tools)
+
     def run(
         self,
         conversation: list,
@@ -136,7 +160,7 @@ class OpenAIExecutorModel:
         attempt.
         """
         out = ExecutorTurn()
-        tools = openai_tool_schemas(semantic)
+        tools = self._tools(semantic)
         # Both ledgers, cumulative across the turns of one attempt.
         logged = len(reader.calls) + len(editor.calls)
 
@@ -223,7 +247,13 @@ class OpenAIExecutorModel:
                             {
                                 "type": "input_text",
                                 "text": dispatch(
-                                    name, args, reader, editor, semantic
+                                    name,
+                                    args,
+                                    reader,
+                                    editor,
+                                    semantic,
+                                    project_tools=self.project_tools,
+                                    runner=self.runner,
                                 ),
                                 # Marks accumulate rather than move, so every
                                 # turn extends the cached prefix instead of

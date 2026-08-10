@@ -227,7 +227,15 @@ class Executor:
             stage, self.cfg, self.cfg.target_repo
         )
         model = OpenAIExecutorModel(
-            self.cfg.executor, log=self.log, tool_log=self.tool_log
+            self.cfg.executor,
+            log=self.log,
+            tool_log=self.tool_log,
+            # Project-declared tools and the runner that executes them. Bound
+            # here with the rest of the per-stage assembly rather than in
+            # `runtime`, so there is one place that knows what an attempt is
+            # made of.
+            project_tools=self.cfg.project_tools,
+            runner=self.runner,
         )
         kept = set(_within_read_budget(stage.read_files, self.cfg))
 

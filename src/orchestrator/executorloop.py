@@ -155,7 +155,7 @@ def run_loop(
             }
         )
 
-    _commit_if_dirty(git, stage, out)
+    _commit_if_dirty(git, stage, out, log=log)
     out.cost_usd = _price(out.usage, cfg.executor.model)
     return out
 
@@ -266,10 +266,10 @@ def _gate_cycle(stage, cfg, git, runner, out: ExecutionResult, since_sha, log=No
     linter change here" afterwards, because the two halves had been folded into
     one commit and nothing else had written the split down.
     """
-    _commit_if_dirty(git, stage, out)
+    _commit_if_dirty(git, stage, out, log=log)
     lint = gates.run_checks(stage, runner)
     rewritten = git.diff_unstaged()
-    rewrote = _commit_if_dirty(git, stage, out, why=", after checks")
+    rewrote = _commit_if_dirty(git, stage, out, why=", after checks", log=log)
     if rewrote and log:
         log(f"[execute] checks rewrote files; committed as {rewrote[:12]}")
     if not lint.ok:
@@ -341,7 +341,7 @@ def _gate_cycle(stage, cfg, git, runner, out: ExecutionResult, since_sha, log=No
 
 
 def _commit_if_dirty(
-    git: Git, stage: Stage, out: ExecutionResult, why: str = ""
+    git: Git, stage: Stage, out: ExecutionResult, why: str = "", log=None
 ) -> str | None:
     """Commit whatever is in the tree, and remember the sha.
 
@@ -359,10 +359,17 @@ def _commit_if_dirty(
         if git.is_clean():
             return None
         sha = git.commit_all(f"[{stage.id}] executor cycle {out.cycles}{why}")
-    except GitError:
-        # A failure to commit is not a failure of the work, and the gates
-        # judge the tree either way. Reported through the log rather than
-        # turned into a verdict here.
+    except GitError as e:
+        # A failure to commit is not a failure of the work, and the gates judge
+        # the tree either way — a hook refusing staged content is the ordinary
+        # cause. Not a verdict, so it is reported rather than raised.
+        #
+        # It said that before and did not do it: the comment claimed the log
+        # carried this and the function had no `log` to write to, so a refused
+        # commit was silent and the work simply stayed uncommitted. A caller
+        # reading the loop's own record could not tell that from a clean tree.
+        if log:
+            log(f"[execute] {stage.id}: the repository refused the commit: {e}")
         return None
     if sha:
         out.commits.append(sha)
