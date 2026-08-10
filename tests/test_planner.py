@@ -13,7 +13,6 @@ import pytest
 from orchestrator.config import PLANNER_WRITABLE_FIELDS, parse_config
 from orchestrator.planner import (
     AnthropicPlanner,
-    Deferral,
     PlannedStage,
     PlannerResponse,
     append_status,
@@ -552,46 +551,6 @@ class TestStatusLog:
     def test_creates_the_project_directory(self, tmp_path):
         append_status(tmp_path / "new", 0, "s", 0, "next_stage", "e", "r", now="t")
         assert (tmp_path / "new" / "status.md").is_file()
-
-
-class TestDeferrals:
-    """Skipped plan steps, as data rather than prose.
-
-    The planner may take the plan out of order when the order is incidental.
-    The risk is that a deferral is mentioned once and then forgotten across
-    fifty more calls, and the run reports success having quietly dropped work.
-    Structuring it moves that memory from the model to the orchestrator.
-    """
-
-    def test_a_deferral_survives_the_round_trip(self):
-        parsed = PlannerResponse(
-            verdict="next_stage", reasoning="r", status_entry="e", stage=a_stage(),
-            deferred=[
-                Deferral(
-                    plan_step="Audit CloudWatch logs",
-                    reason="needs AWS credentials this run does not have",
-                    blocked_on="AWS access",
-                    safe_because="nothing later reads the audit output",
-                )
-            ],
-        )
-        outcome, _ = plan_with(response(parsed=parsed))
-        assert outcome.deferred[0]["plan_step"] == "Audit CloudWatch logs"
-
-    def test_no_deferrals_is_an_empty_list_not_none(self):
-        parsed = PlannerResponse(
-            verdict="next_stage", reasoning="r", status_entry="e", stage=a_stage()
-        )
-        outcome, _ = plan_with(response(parsed=parsed))
-        assert outcome.deferred == []
-
-    def test_deferred_is_not_a_stage_field(self):
-        # It describes the plan, not a unit of work, and it must not leak into
-        # the allowlist that guards what the planner may author on a stage.
-        from orchestrator.config import PLANNER_WRITABLE_FIELDS
-
-        assert "deferred" not in PlannedStage.model_fields
-        assert "deferred" not in PLANNER_WRITABLE_FIELDS
 
 
 class TestUsageNormalisation:

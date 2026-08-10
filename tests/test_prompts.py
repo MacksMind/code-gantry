@@ -127,12 +127,13 @@ class TestPlannerCacheBreakpoint:
             plan=a_plan(),
             completed=[],
             layout="LAYOUT_MARKER",
-            status_tail="TAIL_MARKER",
+            stage_costs=[{"merge_sha": "abc123def456", "stage_id": "COST_MARKER",
+                          "context_tokens": 1, "files": 2}],
             interventions_used=3,
             interventions_max=12,
         )
-        assert "TAIL_MARKER" not in leading_text(messages)
-        assert "TAIL_MARKER" in messages[0]["content"][-1]["text"]
+        assert "COST_MARKER" not in leading_text(messages)
+        assert "COST_MARKER" in messages[0]["content"][-1]["text"]
 
     def test_the_budget_countdown_is_not_cached(self):
         # It decrements on interventions, so caching it would defeat the point.
@@ -152,10 +153,9 @@ class TestPlannerCacheBreakpoint:
         the end, so the provider extends the cached prefix instead of
         rebuilding it.
 
-        The cost table and the deferral list stay outside both. The table is a
-        sliding window of the last twelve and the list mutates in place, so a
-        breakpoint after them would miss on every stage and cost more than not
-        caching at all.
+        The cost table stays outside both: it is a sliding window of the last
+        twelve, so a breakpoint after it would miss on every stage and cost
+        more than not caching at all.
         """
         messages = build_planner_messages(
             cfg=None, plan=a_plan(), completed=[], layout="x"
@@ -172,10 +172,14 @@ class TestPlannerCacheBreakpoint:
         # Caching depends on a byte-identical prefix. Anything varying here —
         # a timestamp, a counter — silently costs full price every call.
         first = build_planner_messages(
-            cfg=None, plan=a_plan(), completed=[], layout="L", status_tail="a"
+            cfg=None, plan=a_plan(), completed=[], layout="L",
+            stage_costs=[{"merge_sha": "a" * 12, "stage_id": "a",
+                          "context_tokens": 1, "files": 1}],
         )
         second = build_planner_messages(
-            cfg=None, plan=a_plan(), completed=[], layout="L", status_tail="b"
+            cfg=None, plan=a_plan(), completed=[], layout="L",
+            stage_costs=[{"merge_sha": "b" * 12, "stage_id": "b",
+                          "context_tokens": 2, "files": 1}],
         )
         # The cached blocks, not the whole message: the volatile tail is
         # expected to differ, which is why it is outside the breakpoints.
@@ -310,14 +314,16 @@ class TestDeployableIncrements:
         lowered = PLANNER_SYSTEM_PROMPT.lower()
         assert "deploy" in lowered
 
-    def test_the_prompt_permits_reordering_the_plan(self):
-        # A step needing access the run does not have should be deferred, not
-        # escalated — but only if the planner knows it is allowed to.
+    def test_the_prompt_says_the_plan_states_dependencies_not_a_queue(self):
+        # A step needing access this run does not have must not stop the run,
+        # and a plan's line order is not an instruction. Both have to be said,
+        # or the planner escalates on the first thing it cannot reach.
         from orchestrator.planner import PLANNER_SYSTEM_PROMPT
 
         lowered = PLANNER_SYSTEM_PROMPT.lower()
-        assert "reorder" in lowered or "out of order" in lowered
-        assert "defer" in lowered
+        assert "depends on what" in lowered
+        assert "not a queue" in lowered
+        assert "cannot do at all" in lowered
 
 
 class TestScopedTestGuidance:
@@ -578,16 +584,6 @@ class TestThePlannerPrefixAlsoSurvivesALanding:
         assert two[0]["content"][1]["text"].startswith(
             one[0]["content"][1]["text"]
         ), "the history must grow at the end, never be rewritten"
-
-    def test_a_deferral_does_not_evict_the_plan_either(self):
-        from orchestrator.prompts import build_planner_messages
-
-        before = build_planner_messages(cfg=None, plan=a_plan(), completed=[], layout="L")
-        after = build_planner_messages(
-            cfg=None, plan=a_plan(), completed=[], layout="L",
-            deferred=[{"plan_step": "aws", "reason": "no access"}],
-        )
-        assert before[0]["content"][:2] == after[0]["content"][:2]
 
     def test_the_history_still_reaches_the_planner(self):
         from orchestrator.prompts import build_planner_messages

@@ -33,6 +33,7 @@ launder its own history.
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -361,6 +362,91 @@ def _ensure_header(target: Path) -> None:
     )
 
 
+# Which kinds of note belong in the progress log. The log is spliced live into
+# every planner prompt, so what goes in it is what the run is allowed to read
+# back — and an out-of-scope finding read back is the scope-creep mechanism
+# itself. Filtering here rather than at the call site because the caller that
+# forgets is the shape of thing that has already gone quietly missing between
+# two correct changes in this codebase.
+LOGGED_KINDS = ("progress", "correction")
+
+FINDINGS_FILENAME = "findings.md"
+
+
+def in_scope(notes: list[dict] | None) -> list[dict]:
+    """The notes that belong in the progress log."""
+    return [n for n in (notes or []) if (n.get("kind") or "progress") in LOGGED_KINDS]
+
+
+def out_of_scope(notes: list[dict] | None) -> list[dict]:
+    """The notes that must never reach a planner prompt."""
+    return [n for n in (notes or []) if (n.get("kind") or "progress") not in LOGGED_KINDS]
+
+
+def _finding(note: dict, stage_id: str) -> str:
+    """One out-of-scope finding, for a human's backlog.
+
+    No plan citation and no anchor. The whole point of this kind is that the
+    finding is about code the plan is not about, so a quotation from the plan
+    would be a citation of the wrong document — and the planner's citations have
+    gone wrong in exactly that direction before, naming a real file and a real
+    span pointing at the wrong passage.
+
+    A timestamp, unlike the progress log, because this file is not committed:
+    it lives in the work directory, so there is no `git blame` to answer when
+    an entry was written.
+    """
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+    finding = decode_escapes((note.get("finding") or "").strip())
+    detail = decode_escapes((note.get("observation") or "").strip())
+    where = decode_escapes((note.get("plan_path") or "").strip())
+
+    lines = [f"## {finding or '(no summary)'}", ""]
+    lines.append(f"- **found** while planning `{stage_id}` at {stamp}")
+    if where:
+        lines.append(f"- **noticed against** `{where}`")
+    lines += ["", detail, ""]
+    return "\n".join(lines)
+
+
+def append_findings(
+    project_dir: Path | str,
+    notes: list[dict],
+    *,
+    stage_id: str,
+) -> Path | None:
+    """Append out-of-scope findings to the work directory's `findings.md`.
+
+    Deliberately not the progress log and deliberately not committed. These are
+    real defects the planner noticed while reading code for something else —
+    measured at 46 of 926 notes on one project, the planner labelling them
+    "pre-existing" in its own prose because it had nowhere to put them. In the
+    log they are read back on every derivation until the next fold, which is
+    how a plan grows work nobody asked for.
+
+    So they go where nothing reads them back, and a human decides whether they
+    become work. Returns the file written, if any.
+    """
+    findings = out_of_scope(notes)
+    if not findings:
+        return None
+
+    project_dir = Path(project_dir)
+    project_dir.mkdir(parents=True, exist_ok=True)
+    target = project_dir / FINDINGS_FILENAME
+    if not target.exists():
+        target.write_text(
+            "# Findings outside this plan\n\n"
+            "Defects and debt the planner noticed while reading code for "
+            "something else. Nothing here is work the run will do, and nothing "
+            "here is read back into a prompt.\n"
+        )
+    with target.open("a") as fh:
+        for note in findings:
+            fh.write("\n" + _finding(note, stage_id))
+    return target
+
+
 def append_notes(
     repo: Path,
     addendum_path: str | None,
@@ -376,7 +462,11 @@ def append_notes(
     mapped to nothing in the plan worth recording. A stage that advances a plan
     step should carry an entry — that is what keeps the next run from deriving
     it again — but not every stage does, and an empty note is worse than none.
+
+    Out-of-scope findings are filtered out here rather than by the caller, and
+    `append_findings` is where they go.
     """
+    notes = in_scope(notes)
     if not addendum_path or not notes:
         return None
 

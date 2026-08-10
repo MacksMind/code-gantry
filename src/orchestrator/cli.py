@@ -16,7 +16,7 @@ than consuming one — its config path is optional and defaults beside the plan.
 A run id is optional wherever it appears: the newest run in the config's work
 directory is the one meant, almost always.
 
-Exit codes: 0 complete, 1 failed or escalated, 2 complete with deferred steps.
+Exit codes: 0 complete, 1 failed or escalated.
 
 `init` may prompt — it is a human at a terminal doing one-time setup. `run` and
 `resume` execute unattended and must never block on input.
@@ -60,10 +60,6 @@ from orchestrator.state import new_state, resume_input
 
 EXIT_OK = 0
 EXIT_FAILED = 1
-# Complete, but the planner skipped part of the plan. Distinct from both, so a
-# script can tell "finished" from "finished, with work outstanding" without
-# treating a deferral as a failure or waving it through as a success.
-EXIT_DEFERRED = 2
 
 
 @click.group()
@@ -706,11 +702,7 @@ def _drive(
 
 
 def _exit_code(state: dict) -> int:
-    from orchestrator.state import outstanding_deferrals
-
-    if state.get("status") != "complete":
-        return EXIT_FAILED
-    return EXIT_DEFERRED if outstanding_deferrals(state.get("deferred")) else EXIT_OK
+    return EXIT_FAILED if state.get("status") != "complete" else EXIT_OK
 
 
 def _load(config_path: Path) -> ProjectConfig:

@@ -24,10 +24,13 @@ import time
 from datetime import datetime
 
 from orchestrator.addendum import (
+    append_findings,
     append_notes,
     append_observations,
     append_outcome,
     decode_escapes,
+    in_scope,
+    out_of_scope,
 )
 from orchestrator.commands import clip_for_model
 from orchestrator.cachekey import cache_key
@@ -56,12 +59,9 @@ from orchestrator.state import (
     evidence_surviving_a_revision,
     fresh_revision_fields,
     fresh_stage_fields,
-    merge_deferrals,
-    outstanding_deferrals,
 )
 from orchestrator.verify import Layer, Route, diff_digest, run_verify
 
-STATUS_TAIL_CHARS = 4_000
 
 # Command output bound where it reaches a model or a log, rather than where it
 # is captured. The runner keeps everything so the parsers can see it; a prompt
@@ -266,10 +266,8 @@ def plan(state: RunState, rt: Runtime) -> dict:
         revision=state.get("revision", 0),
         interventions_used=state.get("planner_interventions", 0),
         interventions_max=limits.max_planner_interventions,
-        status_tail=_status_tail(rt),
         layout=rt.layout(state.get("plan_sha") or state.get("base_sha") or ""),
         agent_context=_planner_context(state, rt),
-        deferred=state.get("deferred") or [],
         stage_costs=recent_stage_costs(rt.project.project_dir),
         # Only when a stage is under revision: deriving a new one has no branch
         # and nothing to reconcile. Read from the same sha the reviewer's diff
@@ -359,6 +357,14 @@ def plan(state: RunState, rt: Runtime) -> dict:
             {
                 "verdict": outcome.verdict,
                 "reasoning": outcome.reasoning,
+                # Every field of the structured response, and the completeness
+                # is the point: this artifact is what anyone reaches for to ask
+                # what the planner returned on a call. It used to omit three —
+                # `status_entry`, `additional_stages` and the deferral list —
+                # and the omission was silent, so a question answered from here
+                # got a confident wrong answer instead of a missing one.
+                "status_entry": outcome.status_entry,
+                "additional_stages": outcome.additional_stage_fields,
                 "revision_mode": outcome.revision_mode,
                 "stage": outcome.stage_fields,
                 "usage": {
@@ -397,7 +403,6 @@ def plan(state: RunState, rt: Runtime) -> dict:
 
     notes = list(state.get("planner_notes") or [])
     notes.append(f"{outcome.verdict}: {outcome.reasoning}")
-    deferred = merge_deferrals(state.get("deferred") or [], outcome.deferred)
     base = {
         "run_usage": usage,
         # And onto the stage, which is what makes a per-stage figure possible
@@ -413,7 +418,6 @@ def plan(state: RunState, rt: Runtime) -> dict:
             planner_peak_prompt_tokens=outcome.usage.peak_prompt_tokens,
         ),
         "planner_notes": notes,
-        "deferred": deferred,
         # Accumulated rather than assigned: a revision is more planning for the
         # same stage, and every path out of this node carries the total.
         "plan_seconds": state.get("plan_seconds", 0.0) + planned_for,
@@ -425,14 +429,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
     }
 
     if outcome.verdict == "project_complete":
-        still_open = outstanding_deferrals(deferred)
-        if still_open:
-            rt.log(
-                f"[plan] project complete, with {len(still_open)} deferred step(s) "
-                "outstanding"
-            )
-        else:
-            rt.log("[plan] project complete")
+        rt.log("[plan] project complete")
         return {**base, "next_hop": "finalize"}
 
     if outcome.verdict == "blocked":
@@ -614,14 +611,6 @@ def _revert_unadopted(state: RunState, rt: Runtime, revised: Stage) -> None:
 
     rt.log(f"[plan] reverting {len(unadopted)} unadopted path(s)")
     rt.git.revert_paths(state["stage_start_sha"], unadopted)
-
-
-def _status_tail(rt: Runtime) -> str | None:
-    path = rt.project.status
-    if not path.is_file():
-        return None
-    text = path.read_text()
-    return text[-STATUS_TAIL_CHARS:] if len(text) > STATUS_TAIL_CHARS else text
 
 
 # --- precheck ------------------------------------------------------------
@@ -2352,6 +2341,22 @@ def _publish_plan_notes(state: RunState, rt: Runtime, stage: Stage) -> dict:
             return None
 
     notes = state.get("pending_plan_notes") or []
+
+    # First, and outside everything below, because these go somewhere else
+    # entirely: the work directory, uncommitted, read by nobody. A note the
+    # planner classed `out_of_scope` is a real defect in code this plan is not
+    # about, and the progress log is spliced live into every later prompt — so
+    # logging it is how a plan grows work nobody asked for. Written before the
+    # early return, or a stage whose notes were *all* out of scope would file
+    # none of them.
+    findings = append_findings(rt.project.project_dir, notes, stage_id=stage.id)
+    if findings is not None:
+        rt.log(
+            f"[precheck] {len(out_of_scope(notes))} finding(s) outside this plan "
+            f"recorded in {findings}"
+        )
+
+    logged = in_scope(notes)
     written = append_notes(
         rt.cfg.target_repo,
         rt.cfg.plan_addendum_path,
@@ -2373,7 +2378,7 @@ def _publish_plan_notes(state: RunState, rt: Runtime, stage: Stage) -> dict:
         rt.git.checkout(rt.cfg.project_branch)
     rt.git.commit_all(f"[{stage.id}] plan observations from deriving this stage")
     rt.log(
-        f"[precheck] recorded {len(notes)} plan observation(s) in "
+        f"[precheck] recorded {len(logged)} plan observation(s) in "
         f"{written.relative_to(rt.cfg.target_repo)}"
     )
     return {"pending_plan_notes": []}

@@ -142,10 +142,12 @@ class TestReachesThePlanner:
             plan=plan,
             completed=[],
             layout="LAYOUT_MARKER",
-            status_tail="TAIL_MARKER",
         )
         assert "LAYOUT_MARKER" in _leading(messages)
-        assert "TAIL_MARKER" not in _leading(messages)
+        # And in the cached half specifically: it is fixed for a run, so it
+        # belongs ahead of the breakpoint with the plan rather than beside the
+        # per-call material.
+        assert "LAYOUT_MARKER" not in messages[0]["content"][-1]["text"]
 
     def test_a_repo_with_no_layout_still_builds_a_prompt(self):
         from orchestrator.plandoc import PlanDocument, PlanTree

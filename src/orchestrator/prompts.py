@@ -526,47 +526,6 @@ def _plan_block(plan: PlanTree, addendum_path: str | None = None) -> str:
     return intro + "\n\n" + plan.as_prompt_payload(last=addendum_path)
 
 
-def _deferred_block(deferred: list[dict] | None) -> str:
-    """Plan steps taken out of order, carried for the planner.
-
-    In the cached prefix with the history, and for the same reason: it changes
-    only when a deferral is added or resolved, not on every call. Rendering it
-    at all is the point — the planner does not have to remember, and cannot
-    quietly stop mentioning one.
-    """
-    outstanding = [d for d in (deferred or []) if not d.get("resolved")]
-    resolved = [d for d in (deferred or []) if d.get("resolved")]
-
-    if not outstanding and not resolved:
-        return (
-            "## Deferred plan steps\n\nNone. You have taken the plan in order "
-            "so far."
-        )
-
-    lines = ["## Deferred plan steps", ""]
-    if outstanding:
-        lines.append(
-            "Still outstanding. You must not return `project_complete` without "
-            "listing these in `reasoning`; take one on as a stage whenever it "
-            "becomes possible, and mark it resolved when it lands."
-        )
-        lines.append("")
-        for entry in outstanding:
-            lines.append(f"- **{entry.get('plan_step')}**")
-            if entry.get("reason"):
-                lines.append(f"  - deferred because: {entry['reason']}")
-            if entry.get("blocked_on"):
-                lines.append(f"  - blocked on: {entry['blocked_on']}")
-            if entry.get("safe_because"):
-                lines.append(f"  - judged safe because: {entry['safe_because']}")
-    if resolved:
-        lines.append("")
-        lines.append("Already resolved: " + ", ".join(
-            str(e.get("plan_step")) for e in resolved
-        ))
-    return "\n".join(lines)
-
-
 def _costs_block(costs: list[dict] | None) -> str:
     """What stages have cost the executor, across every run of this project.
 
@@ -1059,9 +1018,7 @@ def build_planner_messages(
     revision: int = 0,
     interventions_used: int = 0,
     interventions_max: int = 0,
-    status_tail: str | None = None,
     layout: str | None = None,
-    deferred: list[dict] | None = None,
     stage_costs: list[dict] | None = None,
     agent_context: str | None = None,
     stage_diff: str | None = None,
@@ -1101,12 +1058,11 @@ def build_planner_messages(
             "about what is possible, it is describing the machine and the "
             # `reasoning` was the wrong channel and this is the incident that
             # argues it: a capability recorded here, denied by the plan, gated
-            # five items until a human found it. Reasoning reaches `status.md`
-            # and the planner is fed a 4,000-character tail of that file — under
-            # ten decisions of history — so a finding parked there ages out and
-            # the contradiction is rediscovered, or is not. A plan note is
-            # appended to the progress log, which rides in the cached prefix and
-            # is read on every later call.
+            # five items until a human found it. Reasoning reaches `status.md`,
+            # which a human reads and no later call does — so a finding parked
+            # there is gone the moment the call returns. A plan note is appended
+            # to the progress log, which rides in the cached prefix and is read
+            # on every later call.
             "plan is describing intent; record that as a plan note, which "
             "survives to the next call, rather than in `reasoning`, which "
             "does not.\n\n"
@@ -1134,9 +1090,9 @@ def build_planner_messages(
         leading += "## What the repository contains\n\n" + layout + "\n\n"
     leading += _plan_block(plan, _addendum(cfg))
 
-    # The completed history and the deferred list used to live in here too, and
-    # both change as the run proceeds — so every landed stage and every deferral
-    # re-billed the plan and the layout along with them. Measured: two planner
+    # The completed history used to live in here too, and it changes as the run
+    # proceeds — so every landed stage re-billed the plan and the layout along
+    # with it. Measured: two planner
     # calls a minute apart, each writing ~91,000 tokens and reading back 4,051,
     # which was the system block, the only part that had not changed. They now
     # follow the breakpoint, costing full price for their own few hundred
@@ -1145,11 +1101,10 @@ def build_planner_messages(
     # that churns. The completed history only ever grows at the end, so a
     # breakpoint after it lets Anthropic extend the cached prefix between
     # stages rather than rebuild it. The cost table is a sliding window of the
-    # last twelve and the deferral list mutates in place, so both sit outside
-    # it — a breakpoint after *those* would miss on every stage and cost more
-    # than not caching at all.
+    # last twelve, so it sits outside — a breakpoint after *it* would miss on
+    # every stage and cost more than not caching at all.
     history = _history_block(completed, _addendum(cfg))
-    volatile = _costs_block(stage_costs) + "\n\n" + _deferred_block(deferred)
+    volatile = _costs_block(stage_costs)
 
     # The breakpoint, and the reason the ordering above exists. Anthropic
     # caching is explicit: without this marker the plan snapshot and the
@@ -1188,8 +1143,8 @@ def build_planner_messages(
         },
     ]
 
-    # History and deferrals lead the situational half: they are the run's state
-    # rather than its instructions, and the planner reads them before deciding.
+    # The cost table leads the situational half: it is the run's state rather
+    # than its instructions, and the planner reads it before deciding.
     current: list[str] = [volatile]
 
     # What became of a batch, when there was one. A single cycle can produce
@@ -1221,13 +1176,6 @@ def build_planner_messages(
             "ran. Nothing here needs apologising for; it is here so the next "
             "batch can avoid the same overlap, and so a stage that was dropped "
             "is drawn again when its turn comes."
-        )
-
-    if status_tail:
-        current.append(
-            "## Recent entries from status.md\n\n"
-            "Your own record of what was expected versus what happened.\n\n"
-            + status_tail.strip()
         )
 
     if current_stage is None:

@@ -43,6 +43,11 @@ from orchestrator.retry import Backoff, with_provider_retry
 
 Verdict = Literal["next_stage", "revise", "project_complete", "blocked"]
 RevisionMode = Literal["extend", "restart"]
+# Where a note goes, decided by the participant that has the evidence. The two
+# in-scope kinds reach the progress log and therefore every later prompt;
+# `out_of_scope` reaches a file in the work directory and nothing else. See
+# `addendum.LOGGED_KINDS`.
+NoteKind = Literal["progress", "correction", "out_of_scope"]
 
 
 class PlannedExcerpt(BaseModel):
@@ -217,37 +222,6 @@ class PlannedStage(BaseModel):
     )
 
 
-class Deferral(BaseModel):
-    """A plan step taken out of order, recorded so it cannot be forgotten.
-
-    The planner may defer a step whose position in the plan is incidental.
-    The hazard is that it says so once and then, fifty calls later, reports
-    the project complete having quietly dropped the work. Structuring it
-    means the orchestrator carries the memory instead of the model.
-    """
-
-    plan_step: str = Field(
-        description="What in the plan is being skipped, quoted closely enough "
-        "that a human can find it."
-    )
-    reason: str = Field(description="Why it cannot be done now.")
-    blocked_on: str = Field(
-        default="",
-        description="What would unblock it — credentials, an environment, a "
-        "human decision.",
-    )
-    safe_because: str = Field(
-        default="",
-        description="Why nothing already done or still to come depends on it. "
-        "If you cannot say this, the order is required and you must keep it.",
-    )
-    resolved: bool = Field(
-        default=False,
-        description="Set true once the step has actually been done. Omitting a "
-        "deferral does not clear it; only this does.",
-    )
-
-
 class PlanNote(BaseModel):
     """How the plan learns what is done.
 
@@ -267,6 +241,28 @@ class PlanNote(BaseModel):
     about what the work has become and does not belong mid-run.
     """
 
+    kind: NoteKind = Field(
+        description=(
+            "What sort of thing you found. This decides where it is written, "
+            "so it is not a label — it is a routing decision, and only you "
+            "have the evidence to make it.\n\n"
+            "`progress`: a plan step is further along than the plan says. A "
+            "sweep is complete, a count has moved, an item can be closed.\n\n"
+            "`correction`: the plan is wrong. It was wrong when written, or a "
+            "file it names is gone, or it asserts something the code "
+            "contradicts — including a step this pipeline cannot execute at "
+            "all, where the note should say who can.\n\n"
+            "`out_of_scope`: a real defect or piece of debt in code this plan "
+            "is not about, which you noticed while reading for something "
+            "else. Worth recording and not worth doing here. These are filed "
+            "for a human and are **not** read back to you, so write them for "
+            "someone who has not seen this stage.\n\n"
+            "The first two are about the plan and go into the progress log. "
+            "Judge by what the note is *about*, not by whether it is "
+            "interesting: a defect you would have to widen the plan to fix is "
+            "`out_of_scope` however real it is."
+        )
+    )
     plan_path: str = Field(
         description="Which plan document this is about, as a repo-relative "
         "path. One of the documents shown to you above."
@@ -327,7 +323,13 @@ class PlannerResponse(BaseModel):
             "blocked: a human is required."
         )
     )
-    reasoning: str = Field(description="Why. Recorded in status.md.")
+    reasoning: str = Field(
+        description=(
+            "Why. Recorded in `status.md` for a human reading this run, and "
+            "read by no later call — so anything you want the next "
+            "derivation to know belongs in `plan_notes` instead."
+        )
+    )
     status_entry: str = Field(
         description=(
             "One entry for the append-only log: goal, expected, actual, "
@@ -372,21 +374,14 @@ class PlannerResponse(BaseModel):
             "was wrong — discard the branch and re-cut."
         ),
     )
-    deferred: list[Deferral] = Field(
-        default_factory=list,
-        description=(
-            "Plan steps you are skipping for now, and any you are marking "
-            "resolved. These are carried for you between calls — you do not "
-            "need to repeat one to keep it alive, and omitting one does not "
-            "clear it."
-        ),
-    )
     plan_notes: list[PlanNote] = Field(
         default_factory=list,
         description=(
-            "How the plan learns what has been done. Appended to the progress "
-            "log; nothing you write here changes a plan document, and a later "
-            "pass folds these in and closes the items they report.\n\n"
+            "How the plan learns what has been done, and where a finding that "
+            "is *not* about this plan is filed. Nothing you write here changes "
+            "a plan document; `kind` decides where each note goes, and a later "
+            "pass folds the in-scope ones in and closes the items they "
+            "report.\n\n"
             "**Anything you conclude about the state of a plan step goes here, "
             "not in your reasoning.** Reasoning is read by a human reviewing "
             "this one call; only these notes are written down and survive to "
@@ -451,7 +446,6 @@ class PlannerOutcome:
     additional_stage_fields: list[dict] = field(default_factory=list)
     revision_mode: RevisionMode | None = None
     usage: PlannerUsage = field(default_factory=PlannerUsage)
-    deferred: list[dict] = field(default_factory=list)
     # What the planner looked at to reach this. Once it chooses its own inputs,
     # this is the only way to explain a stage afterwards — half the debugging on
     # the first long run was reconstructing what it had been told, and that was
@@ -686,7 +680,6 @@ class AnthropicPlanner:
                         st.model_dump() for st in parsed.additional_stages
                     ],
                     revision_mode=parsed.revision_mode,
-                    deferred=[d.model_dump() for d in parsed.deferred],
                     plan_notes=[n.model_dump() for n in parsed.plan_notes],
                     usage=billed,
                     tool_calls=self._tool_log(),
@@ -1165,23 +1158,24 @@ stage, an environment problem.
 
 ## The order of the plan
 
-The plan document is the authority on *what* must happen. It is not
-necessarily the authority on *when*. You may take steps out of order, or defer
-one and come back to it, when the plan's order is incidental rather than
-required — a step needing credentials or access this run does not have is the
-usual case, and deferring it is far better than stopping a run that could have
-completed forty other stages.
+The plan is the authority on *what* must happen and on *what depends on what*.
+It is not a queue. Where the plan states a dependency — a migration before the
+code that reads the new column, a version bump before the API it enables — that
+ordering is binding. Everything else you may take in whatever order makes the
+better stage, and you do not have to justify the choice: nobody is checking the
+sequence against the document's line order.
 
-Two obligations come with that latitude:
+Some steps this pipeline cannot do at all. They need a person with a shell, a
+signed-in browser session, credentials, or a decision. Do not stop the run over
+one — a run that completes forty other stages is worth far more than one that
+halts at the first thing it cannot reach. Record it as a `correction` plan note
+saying plainly that the step is not executable here and naming what would
+unblock it. That note is folded into the plan, so the next run learns it from
+the plan itself instead of rediscovering it.
 
-- **Only when it is safe.** If a later step depends on an earlier one — a
-  migration before the code that reads the new column, a version bump before
-  the API it enables — the order is required and you must keep it. When in
-  doubt, keep the plan's order.
-- **Never silently.** Say in `status_entry` that you deferred it and why, and
-  repeat it in each subsequent entry until it is done or the run ends. When you
-  return `project_complete`, list anything still deferred in `reasoning`.
-  "Complete" must never quietly mean "complete except the parts I skipped".
+"Complete" must never quietly mean "complete except the parts I skipped". When
+you return `project_complete`, name in `reasoning` anything the plan still asks
+for that no run can do.
 
 ## Mechanical work
 

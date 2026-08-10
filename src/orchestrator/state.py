@@ -209,9 +209,6 @@ class RunState(TypedDict, total=False):
     planner_interventions: int
     # Reset every time a stage lands; see Limits.max_interventions_without_landing.
     interventions_since_landing: int
-    # Plan steps the planner took out of order. Union-merged and never dropped
-    # by omission: silent loss is the failure this exists to prevent.
-    deferred: list[dict]
     planner_notes: list[str]
     review_feedback: list[str]
     # What the executor said on an attempt that left the branch unchanged,
@@ -303,7 +300,6 @@ def new_state(
         test_seconds=0.0,
         planner_interventions=0,
         interventions_since_landing=0,
-        deferred=[],
         planner_notes=[],
         review_feedback=[],
         executor_note=None,
@@ -560,38 +556,6 @@ def evidence_surviving_a_revision(previous: dict | None, keep_branch: bool) -> d
         return {}
     paths = [p for p in (previous.get("suite_failing_paths") or []) if p]
     return {"suite_failing_paths": sorted(set(paths))} if paths else {}
-
-
-def merge_deferrals(existing: list[dict], reported: list[dict]) -> list[dict]:
-    """Union by plan_step, keeping insertion order.
-
-    Never a replacement. The planner sends what it currently believes is
-    outstanding, and a call that omits one must not delete it — a model
-    forgetting is exactly the failure this structure exists to prevent.
-    Resolution is explicit instead, via the `resolved` flag.
-
-    Order is preserved because this is rendered into a cached prompt prefix,
-    and reshuffling it would invalidate the cache for no reason.
-    """
-    merged = [dict(entry) for entry in existing]
-    by_step = {entry.get("plan_step"): entry for entry in merged}
-
-    for entry in reported:
-        step = entry.get("plan_step")
-        if not step:
-            continue
-        if step in by_step:
-            by_step[step].update(entry)
-        else:
-            new = dict(entry)
-            merged.append(new)
-            by_step[step] = new
-    return merged
-
-
-def outstanding_deferrals(entries: list[dict] | None) -> list[dict]:
-    """Those not yet marked resolved."""
-    return [e for e in (entries or []) if not e.get("resolved")]
 
 
 def accumulate_usage(current: dict[str, int] | None, **deltas: int) -> dict[str, int]:
