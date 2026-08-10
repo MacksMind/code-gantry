@@ -1017,6 +1017,29 @@ branch and in the progress log, so the run kept working and nothing asked.
 Check that a resume starts from what it loaded, and that "latest" means last
 written rather than largest.
 
+**And it re-enters at the node it died in, not at the top.** The corollary, and
+it reads as obvious only afterwards. A run killed mid-stage was resumed
+expecting `precheck` to re-cut its stage branch — but `cut_stage_branch` is
+only on the path through `precheck`, and a resume interrupted inside `verify`
+comes back inside `verify`. What it found was HEAD on the project branch where
+it expected the stage branch, which is the branch-identity escalation, nine
+minutes and a planner call after the fix that was supposed to make it possible.
+"Delete the stage branch and resume" buys a fresh cut on a fresh *run*; on a
+resume it buys a stop. Before predicting what a resume will do, find the node
+it stopped at and read what runs there — the graph entry point is a property of
+the checkpoint, not of the command.
+
+**And "nothing landed" is a claim about the project branch that says nothing
+about the stage.** The same mistake one file over. The quarantine means a
+stage's work sits on its own branch until it squashes, so a project branch with
+no landing is exactly what a stage in progress looks like — and the stage
+branch was deleted on the reasoning that nothing had landed, which discarded a
+conversion of 115 tool calls over nine minutes. `stage_start_sha` outlives the
+branch too: re-cutting from a newer tip leaves the recorded start where it was,
+so the stage's diff silently acquires whatever landed in between. Before
+deleting a stage branch, run `git log <project_branch>..<stage_branch>` and
+read what is on it; an empty answer is the only evidence that nothing is there.
+
 **A value that was private when its file was private is published when the
 file moves.** Relocating the config into the target repo turned `target_repo`
 from a convenience into one machine's home directory in a file other people
