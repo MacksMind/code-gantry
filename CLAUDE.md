@@ -788,6 +788,45 @@ question that matters and answers it from the tree. Whenever a check reads a
 declaration to predict an outcome, ask what it would cost to measure the
 outcome instead — usually less, and it is right about causes nobody enumerated.
 
+**A channel that keeps restating the same fact is a fact with no durable
+home.** `deferred` carried a plan step taken out of order between planner
+calls, so a skipped step could not be quietly forgotten. Across every prompt on
+disk it collected 11 entries — five distinct items, re-asserted between 9 and
+23 times — and **not one was an ordering decision**. Every reason was a
+capability boundary: a scanner needing a signed-in browser session, a document
+our own scope gate reverts, a base image that has to change. Its `safe_because`
+field asked "why nothing already done or still to come depends on it", which
+presumes the document's line order is a queue and departures need justifying;
+the plan states dependencies, so there was never a departure to justify. The
+content belonged in the plan, a note says it, and the fold makes the plan say
+it. Two tells that a channel is standing in for a document: the same entry
+arrives call after call, and the field descriptions describe a different thing
+from what the entries contain.
+
+**Classify where the damage is, not where the tidying is.** Out-of-scope
+findings — a real defect in code the plan is not about — were landing in the
+progress log because the planner had nowhere else to put them; measured at 46
+of 926 notes saying so in their own prose. The obvious fix is to sort them
+during the fold, and it cannot work: the log is spliced live into every planner
+prompt, so a finding does its damage in the hours *before* the fold, arriving
+in the prompt that decides what work to do next. `kind` is declared by the
+planner and `advance` routes on it, because the only place a classification can
+prevent an effect is upstream of the effect. Ask of any sorting step whether
+the thing being sorted is inert while it waits.
+
+**A markdown link means two things, and following every one reads both as
+inclusion.** Recursive plan resolution looks obviously right — deeper documents
+are plan documents too — and the guard against escaping the plan directory,
+which is the part that sounds hard, already generalises for free. The problem
+is elsewhere: measured over this project's history, every depth-2 link was
+either a *sibling cross-reference* or a document already supplied by another
+channel, and there has never been a third tier. A recursive resolver would have
+silently restored 120,249 characters that had just been removed by unlinking
+two documents from the root, because a sibling still says "see also". Inclusion
+is the rare case and cross-reference is the common one, so transitivity
+optimises for the wrong one — and it costs the property that made the removal
+possible, that reading the root tells you the whole payload.
+
 **The rule you already wrote gets rebuilt in the next feature.** `CLAUDE.md`
 records that an optional field with a conditional trigger is answered with
 nothing: `observations` came back empty 278 times out of 278. Step 10 then
@@ -995,6 +1034,17 @@ times per stage. Two watches, never one: liveness on the pid, and a narrow
 filter for rare events. Never mix a per-cycle signal into the rare-event
 filter; the noisy entry costs the alarm.
 
+**And a sampled window over a growing log is a lottery, not a watch.** Two
+waiters written as `until grep -q "<phrase>" <(tail -c 5000 <log>); do sleep
+20; done` never fired, though the phrase was written every stage — the run
+emits multi-kilobyte tool-read lines, so by each sample the phrase had scrolled
+out of the window. One spun for an hour and forty-four minutes against a run
+that had already ended. Wait on a state that persists — a pid, a file that
+appears, a line count taken at the start — never on text that must still be
+inside a window at the instant you look. And keep the set enumerable: `ps`
+answers "what am I actually running" in one command, and the duplicates were
+found by someone else asking.
+
 **`grep -c` counts lines and `grep -o | uniq -c` counts occurrences.** One
 summary line echoing many refusals turned 17 into 842, and I used the larger
 number to argue a ceiling was binding when it had been reached by 2 attempts of
@@ -1045,6 +1095,15 @@ the *per-attempt* record — did not record the attempt's peak. It was computed,
 carried to state, and rendered per stage. A sum cannot be decomposed afterwards,
 so the per-item artifact has to hold the per-item figure or the only analysis
 left is archaeology.
+
+**And it must carry the whole response, because a silent omission answers.**
+`planner.json` recorded a subset of the planner's structured output and nothing
+said which — `status_entry`, `additional_stages` and the deferral list were all
+missing. Asked whether the planner had ever deferred, I read that file, found
+no key, and reported zero across 542 calls; the real answer, from the prompts
+actually sent, was 50 of 70. An absent field and a zero are indistinguishable
+to a reader, so an artifact that drops fields does not merely fail to answer —
+it answers wrongly, with the confidence of a record.
 
 **Cache writes measure what was newly cached, not how big the job was.** The
 appealing alternative for sizing a multi-pass job is summing cache writes, and
@@ -1131,6 +1190,23 @@ cycle itself — edit until the model stops asking, lint, **commit, then test** 
 and `executortools.py` and `executorclient.py` are its schemas and its provider
 call. `repotools.number_lines` is the single renderer of numbered source; three
 copies of that format string is how it drifted while every test stayed green.
+
+`addendum.py` is where a planner note is *routed*, not merely formatted:
+`LOGGED_KINDS` decides what reaches the progress log and therefore every later
+prompt, and `append_findings` writes the rest to `findings.md` at the top of
+the work directory, uncommitted and read by nobody. The filter lives in
+`append_notes` rather than at the call site, for the reason the transcript is a
+`list` subclass — a routing decision the caller has to remember is one a later
+caller will not.
+
+What the planner is sent, measured on a real derivation: 540,622 characters in
+three blocks, of which the plan is **89.5%**, the repository's own agent and
+operations documents 8%, the layout 2.5%, and everything about *this run* —
+the cost table and the completed-stage list — **0.5%**. Two channels were
+removed to get there and both were the planner reading its own prior output:
+the deferral list, and a 4,000-character tail of `status.md`, which carries
+`status_entry` and `reasoning` verbatim. `status.md` is still written; nothing
+reads it back.
 
 `configversion.py` is what replaced `approval.py`: a config is identified by
 its git blob sha, recorded at run start and checked on every resume, so an
