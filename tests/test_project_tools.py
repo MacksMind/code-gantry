@@ -230,6 +230,54 @@ class TestSchemas:
         assert tool["parameters"]["required"] == ["names"]
 
 
+class TestTheFrameworkNamesNothing:
+    """Tool *names* are the project's; the strings around them are not.
+
+    `bundle_install` belongs in a config, and calling it `sync_dependencies`
+    would only make it harder for a model to know what it does. But everything
+    the orchestrator itself authors on this path ships to every project, and
+    the two places it authors anything are the refusal messages and the result
+    header. Pinned by the names, because the leak that has happened here twice
+    is prose illustrated with whatever repository was in front of the author.
+    """
+
+    def _authored_strings(self):
+        from orchestrator.projecttools import build_argv, render
+        from orchestrator.repotools import ToolError
+
+        tool = cfg_with(
+            a_tool(
+                command=["prog", "{names}", "{one}"],
+                arguments=[
+                    {"name": "names", "description": "d", "repeated": True},
+                    {"name": "one", "description": "d"},
+                ],
+            )
+        ).project_tools[0]
+
+        said = []
+        for args in ({}, {"names": []}, {"names": ["x"]}, {"names": ["x"], "one": 3}):
+            try:
+                build_argv(tool, args)
+            except ToolError as e:
+                said.append(str(e))
+
+        said.append(render(Recorder(exit_code=1, stdout="", stderr="").run_argv(["p"])))
+        return " ".join(said).lower()
+
+    def test_no_ecosystem_appears_in_what_we_author(self):
+        text = self._authored_strings()
+        for word in (
+            "rails", "ruby", "gemfile", "rspec", "bundler", "bundle",
+            "gem", "npm", "yarn", "cargo", "pip", "poetry", "go.mod",
+        ):
+            assert word not in text, f"{word!r} is project knowledge in a shipped string"
+
+    def test_the_refusals_still_name_the_argument(self):
+        # The guard above must not be satisfiable by saying nothing useful.
+        assert "names" in self._authored_strings()
+
+
 class Recorder:
     """Stands in for `CommandRunner`, capturing argv rather than running it."""
 
