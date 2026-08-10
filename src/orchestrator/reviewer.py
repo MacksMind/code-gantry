@@ -116,6 +116,12 @@ class ReviewOutcome:
     # is: a verdict reached without reading is worth less than one reached
     # after it, and the two are indistinguishable from the verdict alone.
     tool_calls: list[str] = field(default_factory=list)
+    # The same ledger counted by tool. `tool_calls` is the record and goes
+    # to the artifact; this is what the run log prints, because a large
+    # review's rendered calls are thousands of characters on one line of a
+    # timeline meant to be skimmed -- and they are already in `tools.log`,
+    # one per line, and in `review.json` in order.
+    tool_counts: dict[str, int] = field(default_factory=dict)
     # Real problems found nearby that this stage did not cause. Carried
     # separately from `issues`, which are defects in this diff and route it
     # back to the executor; these route nowhere and are written to the
@@ -187,6 +193,20 @@ class OpenAIReviewer:
         from orchestrator.planner import _render_call
 
         return [_render_call(c) for c in getattr(self.reader, "calls", []) or []]
+
+    def _tool_counts(self) -> dict[str, int]:
+        """The same ledger, counted by tool, for the run log's one-line summary.
+
+        From `call.tool` rather than from the rendered strings. Taking the name
+        off the front of `_render_call`'s output would work today and is the
+        move this codebase has been burned by twice — a value derived from
+        rendered text stops being derivable the moment the rendering changes,
+        and nothing fails when it does.
+        """
+        counts: dict[str, int] = {}
+        for call in getattr(self.reader, "calls", []) or []:
+            counts[call.tool] = counts.get(call.tool, 0) + 1
+        return counts
 
     def _log_new_calls(self, seen: int) -> int:
         """Emit the reads made since `seen`; return the new watermark.
@@ -274,6 +294,7 @@ class OpenAIReviewer:
                 outcome = _blocked(f"The reviewer call failed: {e}")
                 outcome.usage = usage
                 outcome.tool_calls = self._looked_at()
+                outcome.tool_counts = self._tool_counts()
                 return outcome
 
             usage = _merge_usage(usage, _extract_usage(getattr(response, "usage", None)))
@@ -333,6 +354,7 @@ class OpenAIReviewer:
             outcome = _blocked(f"The reviewer refused to answer: {refusal}")
             outcome.usage = usage
             outcome.tool_calls = self._looked_at()
+            outcome.tool_counts = self._tool_counts()
             return outcome
 
         if getattr(response, "status", None) == "incomplete":
@@ -347,6 +369,7 @@ class OpenAIReviewer:
             )
             outcome.usage = usage
             outcome.tool_calls = self._looked_at()
+            outcome.tool_counts = self._tool_counts()
             return outcome
 
         parsed = getattr(response, "output_parsed", None)
@@ -357,6 +380,7 @@ class OpenAIReviewer:
             outcome = _blocked("The reviewer returned no parsable verdict.")
             outcome.usage = usage
             outcome.tool_calls = self._looked_at()
+            outcome.tool_counts = self._tool_counts()
             return outcome
 
         return ReviewOutcome(
@@ -368,6 +392,7 @@ class OpenAIReviewer:
             usage=usage,
             failed=False,
             tool_calls=self._looked_at(),
+            tool_counts=self._tool_counts(),
         )
 
 

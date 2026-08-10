@@ -136,3 +136,54 @@ class TestTheReviewerReportsAsItReads:
         r = _reviewer(log=None)
         r.reader.calls.append(ToolCall(tool="search", detail="X", lines=1))
         assert OpenAIReviewer._log_new_calls(r, 0) == 1
+
+
+class TestTheCountsComeFromTheLedger:
+    """Counted from `call.tool`, never from the rendered line.
+
+    The run log prints counts because a large review's rendered calls are
+    thousands of characters on one line. Deriving those counts by taking the
+    name off the front of `_render_call`'s output would pass today and is the
+    move this codebase has been burned by twice: a value read out of rendered
+    text stops being derivable the moment the rendering changes, and nothing
+    fails when it does. `tool_calls` remains the record and still goes to
+    `review.json` in full.
+    """
+
+    def test_calls_are_counted_by_tool(self):
+        from orchestrator.reviewer import OpenAIReviewer
+
+        r = _reviewer()
+        for i in range(3):
+            r.reader.calls.append(
+                ToolCall(tool="read_file", detail=f"a{i}.rb:1-40", lines=40)
+            )
+        r.reader.calls.append(ToolCall(tool="search", detail="x in app", lines=2))
+        assert OpenAIReviewer._tool_counts(r) == {"read_file": 3, "search": 1}
+
+    def test_a_reviewer_that_read_nothing_counts_nothing(self):
+        from orchestrator.reviewer import OpenAIReviewer
+
+        assert OpenAIReviewer._tool_counts(_reviewer()) == {}
+
+    def test_a_refused_call_still_counts_as_a_call(self):
+        # It is a thing the reviewer asked for, and a review that spent its
+        # budget being refused must not look like one that read nothing.
+        from orchestrator.reviewer import OpenAIReviewer
+
+        r = _reviewer()
+        r.reader.calls.append(
+            ToolCall(tool="read_file", detail="gone.rb", lines=0, refusal="no such path")
+        )
+        assert OpenAIReviewer._tool_counts(r) == {"read_file": 1}
+
+    def test_the_counts_and_the_record_agree_on_the_total(self):
+        # Two derivations of one ledger is how they drift, which is the reason
+        # `_render_call` is shared rather than restated.
+        from orchestrator.reviewer import OpenAIReviewer
+
+        r = _reviewer()
+        for i in range(5):
+            r.reader.calls.append(ToolCall(tool="search", detail=f"p{i}", lines=1))
+        counts = OpenAIReviewer._tool_counts(r)
+        assert sum(counts.values()) == len(OpenAIReviewer._looked_at(r))

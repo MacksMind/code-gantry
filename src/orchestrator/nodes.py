@@ -1339,9 +1339,27 @@ def review(state: RunState, rt: Runtime) -> dict:
     # alone read identically in the log otherwise, and those are exactly the
     # two cases worth telling apart while watching a run.
     if outcome.tool_calls:
+        # Counts, not the calls. Joining them put several thousand characters
+        # on one line of a timeline meant to be skimmed — nineteen rendered
+        # reads including two semantic queries and a two-hundred-character
+        # regex, on a single review.
+        #
+        # Nothing is lost, which is the part that had to be checked rather than
+        # assumed: `_log_new_calls` already streams every call to `tools.log`
+        # one per line as it happens, and `review.json` keeps the ordered list.
+        # This was the third copy and the only one whose reader cannot afford
+        # it. The executor's line reached the same shape for the same reason.
+        #
+        # The property the line exists for survives: a verdict reached after
+        # reading and one reached from the diff alone still read differently,
+        # which is the whole question this answers while a run is watched.
+        counts = outcome.tool_counts or {}
+        detail = ", ".join(
+            f"{n} {name}" for name, n in sorted(counts.items(), key=lambda kv: -kv[1])
+        )
         rt.log(
-            f"[review] {stage.id}: read {len(outcome.tool_calls)} thing(s): "
-            + "; ".join(outcome.tool_calls)
+            f"[review] {stage.id}: read {len(outcome.tool_calls)} thing(s)"
+            + (f": {detail}" if detail else "")
         )
 
     rt.write_artifact(

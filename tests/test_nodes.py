@@ -3630,3 +3630,83 @@ class TestContextIsSummedAcrossAttempts:
         _write_loop_record(tmp_path, out)
         written = json.loads((tmp_path / "executor-loop.json").read_text())
         assert written["peak_prompt_tokens"] == 47_000
+
+
+class TestTheReviewLogLineIsASummary:
+    """`run.log` gets counts; the calls themselves are already in two places.
+
+    The reviewer's reads were joined into one `run.log` line with `"; "`, and
+    on a large review that is a wall of text — one observed line carried
+    nineteen rendered calls including two `semantic_search` queries and a
+    two-hundred-character regex, several thousand characters on a single line
+    of a timeline meant to be skimmed.
+
+    Nothing is lost by summarising, and that is the point worth checking rather
+    than asserting: `reviewer._log_new_calls` already streams every call to
+    `tools.log` one per line as it happens, and `review.json` keeps the ordered
+    list. So the run log was the third copy, and the only one whose reader
+    cannot afford it. The executor's line settled this the same way for the
+    same reason, and its comment says so.
+
+    What must survive is the property the line exists for — that a verdict
+    reached after reading is distinguishable from one reached from the diff
+    alone. A count answers that; the wall of text answered it no better.
+    """
+
+    def _review(self, repo, tmp_path, calls, counts=None):
+        reviewer = StubReviewer(
+            [
+                ReviewOutcome(
+                    verdict="approved",
+                    summary="fine",
+                    tool_calls=calls,
+                    tool_counts=counts or {},
+                )
+            ]
+        )
+        cfg, rt, state = make(repo, tmp_path, reviewer=reviewer)
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("changed\n")
+        lines = []
+        rt.log = lines.append
+        nodes.review(state, rt)
+        return [ln for ln in lines if "read" in ln and "[review]" in ln]
+
+    def test_it_reports_counts_not_the_calls(self, repo, tmp_path):
+        calls = [f"read_file(app/f{i}.rb:1-80) -> 80 line(s)" for i in range(18)]
+        calls += ["search(a_very_long_pattern in app/**/*) -> 3 line(s)"]
+        found = self._review(
+            repo, tmp_path, calls, {"read_file": 18, "search": 1}
+        )
+        assert found, "the reviewer's reads must still be reported"
+        line = found[0]
+        assert "18 read_file" in line
+        assert "1 search" in line
+        assert "a_very_long_pattern" not in line
+
+    def test_the_line_stays_skimmable(self, repo, tmp_path):
+        calls = [f"read_file(app/f{i}.rb:1-80) -> 80 line(s)" for i in range(60)]
+        line = self._review(repo, tmp_path, calls, {"read_file": 60})[0]
+        assert len(line) < 200, f"{len(line)} chars is not a timeline entry"
+
+    def test_a_review_that_read_nothing_says_so_distinguishably(self, repo, tmp_path):
+        # The whole reason the line exists: an approval reached from the diff
+        # alone and one reached after reading the file it turns on must not
+        # read identically.
+        assert self._review(repo, tmp_path, []) == []
+
+    def test_the_artifact_still_carries_every_call(self, repo, tmp_path):
+        import json
+
+        calls = [f"read_file(app/f{i}.rb:1-80) -> 80 line(s)" for i in range(18)]
+        reviewer = StubReviewer(
+            [ReviewOutcome(verdict="approved", summary="fine", tool_calls=calls)]
+        )
+        cfg, rt, state = make(repo, tmp_path, reviewer=reviewer)
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("changed\n")
+        nodes.review(state, rt)
+        written = json.loads(
+            next(rt.paths.run_dir.glob("stages/*/review.json")).read_text()
+        )
+        assert written["tool_calls"] == calls
