@@ -2550,3 +2550,60 @@ class TestTheCostsAreReadComparatively:
         text = self._text()
         assert "costs to redraw" in text
         assert "judged as one diff" in text
+
+
+class TestARedrawIsAskedWhatItLearned:
+    """A stage that had to be drawn twice is evidence, and it evaporates.
+
+    `completed` records stages that *landed*, not the drafts they took, and
+    `stage-costs.md` keeps the revision count without the reason. So the next
+    derivation sees that a stage took two revisions and nothing about why —
+    which is exactly the case where the same badly-shaped stage gets drawn
+    again.
+
+    The channel for it already exists and is already used: measured over one
+    project's artifacts, 121 revision calls produced 190 `plan_notes`, and 85%
+    of those calls wrote at least one. Some are genuinely redraw lessons —
+    "`-A` also rewrites spellings that are not layout", "a fourth cause" added
+    to a plan anchor cataloguing why attempts produce no diff. The revision
+    block simply never asked for them, so this is a prompt sentence rather than
+    a new field. `observations` is the standing argument against adding one:
+    empty 278 times out of 278.
+
+    It asks a question with an answer every time — was the previous draft wrong
+    about something specific to this stage, or about the plan — rather than
+    "did you notice anything", which can always be declined in good conscience.
+    """
+
+    def _revision_prompt(self, **over):
+        from orchestrator.config import Stage
+
+        kwargs = dict(
+            cfg=_cfg(),
+            plan=a_plan(),
+            completed=[],
+            current_stage=Stage(id="s", instruction="do it", edit_files=["a.py"]),
+            revision=1,
+            failure={"layer": "review", "summary": "blocked"},
+        )
+        kwargs.update(over)
+        return all_text(build_planner_messages(**kwargs))
+
+    def test_the_redraw_is_asked_what_it_learned(self):
+        text = self._revision_prompt().lower()
+        assert "plan_notes" in text
+        assert "draw" in text
+
+    def test_it_names_why_nothing_else_carries_it(self):
+        # Without the reason a model has no way to weigh the ask against the
+        # cost of writing to a log that every later call pays for.
+        text = self._revision_prompt().lower()
+        assert "landed" in text or "completed" in text
+
+    def test_a_plain_derivation_is_not_asked(self):
+        # It has no redraw to learn from, and a question with no answer is how
+        # a required field starts collecting filler.
+        text = all_text(
+            build_planner_messages(cfg=_cfg(), plan=a_plan(), completed=[])
+        ).lower()
+        assert "the previous draft" not in text

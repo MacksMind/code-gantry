@@ -1290,6 +1290,40 @@ def build_planner_messages(
             "was wrong)."
         )
 
+        # A redraw is evidence and it evaporates. `completed` records stages
+        # that landed, not the drafts they took, and the cost table keeps the
+        # revision count without the reason — so a later derivation sees "took
+        # two revisions" and nothing about why, which is the case where the
+        # same badly-shaped stage gets drawn a second time.
+        #
+        # Asked as a question with an answer every time, not "did you notice
+        # anything": the standing evidence against the optional form is
+        # `observations`, empty 278 times out of 278. The judgement demanded
+        # here — specific to this stage, or true of the plan — is one the
+        # planner has to make anyway to write the revision, so making it
+        # explicit costs nothing and the routing falls out of it honestly.
+        #
+        # No new field, because the channel already exists and is used: 121
+        # revision calls produced 190 `plan_notes` on one project, 85% of them
+        # writing at least one, and some are already lessons of exactly this
+        # kind. What was missing is that nothing asked.
+        current.append(
+            "## What the redraw taught\n\n"
+            "The previous draft of this stage was wrong about something, or it "
+            "would have landed. Decide which of two things that is.\n\n"
+            "If it was **specific to this stage** — this scope was too narrow, "
+            "this instruction was ambiguous — then it is spent by revising and "
+            "there is nothing to record.\n\n"
+            "If it was **true of the plan, or of how a stage has to be drawn "
+            "against this repository**, write it as a `plan_notes` entry, "
+            "anchored where a later derivation will be reading. Nothing else "
+            "carries it: the completed-stage history records what landed, not "
+            "the drafts it took, and the cost table keeps the number of "
+            "revisions without the reason for any of them. A lesson you leave "
+            "in your reasoning is one the next derivation re-learns by "
+            "spending another revision on it."
+        )
+
     if interventions_max:
         remaining = max(interventions_max - interventions_used, 0)
         current.append(
