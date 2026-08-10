@@ -42,6 +42,7 @@ from orchestrator.executor import (
 )
 from orchestrator.flake import adjudicate, append_flakes, predates_stage
 from orchestrator.gitops import GitError
+from orchestrator.repotools import render_counts
 from orchestrator.globs import matches_any
 from orchestrator.planner import append_stage_cost, append_status, recent_stage_costs
 from orchestrator.prompts import (
@@ -323,10 +324,12 @@ def plan(state: RunState, rt: Runtime) -> dict:
         # what made a 19-minute derivation opaque. The full list stays in
         # `planner.json`, which is what the measurements read.
         refused = len(outcome.tool_calls) - outcome.reads_answered
+        detail = render_counts(outcome.tool_counts or {})
         rt.log(
             f"[plan] read {outcome.reads_answered} thing(s)"
             + (f", {refused} refused" if refused else "")
             + f" over {planned_for:.0f}s"
+            + (f": {detail}" if detail else "")
         )
 
     usage = accumulate_usage(
@@ -845,16 +848,8 @@ def execute(state: RunState, rt: Runtime) -> dict:
         # than the rendered calls the planner and reviewer log, because this
         # one makes sixty a cycle and the calls themselves are in the
         # conversation artifact beside this line's own log.
-        asked = ", ".join(
-            f"{n} {name}" for name, n in sorted(
-                result.tool_counts.items(), key=lambda kv: -kv[1]
-            )
-        )
-        refused = ", ".join(
-            f"{n} {kind}" for kind, n in sorted(
-                result.refusal_counts.items(), key=lambda kv: -kv[1]
-            )
-        )
+        asked = render_counts(result.tool_counts)
+        refused = render_counts(result.refusal_counts)
         # Not the reviewer's `(N prompt, M cached)`. That line reports one
         # call, where the pair is the whole story; this loop resends its
         # conversation every turn, so a summed prompt re-counts the same prefix
@@ -1353,10 +1348,7 @@ def review(state: RunState, rt: Runtime) -> dict:
         # The property the line exists for survives: a verdict reached after
         # reading and one reached from the diff alone still read differently,
         # which is the whole question this answers while a run is watched.
-        counts = outcome.tool_counts or {}
-        detail = ", ".join(
-            f"{n} {name}" for name, n in sorted(counts.items(), key=lambda kv: -kv[1])
-        )
+        detail = render_counts(outcome.tool_counts or {})
         rt.log(
             f"[review] {stage.id}: read {len(outcome.tool_calls)} thing(s)"
             + (f": {detail}" if detail else "")

@@ -721,3 +721,60 @@ class RepoReader:
         lines, clipped = self._clip(proc.stdout.splitlines())
         text = "\n".join(lines) + ("\n... truncated" if clipped else "")
         return self._spend("git_diff", " ".join(args[1:]), text)
+
+
+def count_calls(*ledgers) -> dict[str, int]:
+    """One ledger's calls, counted by tool. Several ledgers, merged.
+
+    Every agentic role reports what it looked at, and every one of them was
+    counting its own way: the executor merged a reader and an editor and also
+    bucketed refusals, the reviewer counted a single reader, and the planner
+    reported a bare total with no breakdown at all. Three shapes of the same
+    arithmetic, which is how `number_lines` drifted into three copies of one
+    format string while every test stayed green.
+
+    Variadic because the executor genuinely has two ledgers — reads and edits
+    are recorded by different objects — and an operator reading a log wants one
+    answer rather than two lines to add up.
+
+    A refused call still counts. It is a thing the role asked for, and a role
+    that spent its budget being refused must not read like one that asked for
+    nothing.
+    """
+    counts: dict[str, int] = {}
+    for ledger in ledgers:
+        for call in getattr(ledger, "calls", ledger) or []:
+            counts[call.tool] = counts.get(call.tool, 0) + 1
+    return counts
+
+
+def count_refusals(*ledgers) -> dict[str, int]:
+    """The same calls, bucketed by why they were denied.
+
+    `refusal_kind` where the raiser set one, and only then the message. An edit
+    can be refused by three separate routes to one sentence, and no reading of
+    that sentence recovers which fired — a classifier over rendered text cannot
+    separate classes the text renders identically.
+    """
+    from orchestrator.executor import _refusal_kind
+
+    counts: dict[str, int] = {}
+    for ledger in ledgers:
+        for call in getattr(ledger, "calls", ledger) or []:
+            if not getattr(call, "refusal", ""):
+                continue
+            kind = getattr(call, "refusal_kind", "") or _refusal_kind(call.refusal)
+            counts[kind] = counts.get(kind, 0) + 1
+    return counts
+
+
+def render_counts(counts: dict[str, int]) -> str:
+    """`12 read_file, 6 search, 1 semantic_search` — busiest first.
+
+    The one renderer, for the same reason `_render_call` is shared across the
+    three roles rather than restated: two renderings of one ledger is how they
+    drift, and these had.
+    """
+    return ", ".join(
+        f"{n} {name}" for name, n in sorted(counts.items(), key=lambda kv: -kv[1])
+    )

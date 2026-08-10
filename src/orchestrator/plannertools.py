@@ -245,37 +245,60 @@ def openai_tool_schemas(semantic: SemanticSearch | None) -> list[dict[str, Any]]
     with `.get`, so a null arrives as a missing argument and nothing
     downstream can tell the difference.
     """
-    out = []
-    for tool in tool_schemas(semantic):
-        schema = tool["input_schema"]
-        properties = {}
-        for name, spec in (schema.get("properties") or {}).items():
-            if name in (schema.get("required") or []):
-                properties[name] = spec
-                continue
+    return [as_strict_tool(tool) for tool in tool_schemas(semantic)]
+
+
+def as_strict_tool(tool: dict[str, Any]) -> dict[str, Any]:
+    """One tool, in the Responses API's strict shape.
+
+    Shared with `executortools`, which had its own copy — and the two had
+    already forked: that one recursed into nested objects and arrays, this one
+    did not. Harmless while no read tool's schema nests and exactly the drift
+    that shipping two renderings of one thing produces. The recursive version
+    is the survivor, because a schema that does not nest is unaffected by it.
+    """
+    return {
+        "type": "function",
+        # Flat, not nested under a `function` object. That nesting is the
+        # chat/completions shape; the Responses API takes the name, description
+        # and parameters at the top level of the tool.
+        "name": tool["name"],
+        "description": tool["description"],
+        "strict": True,
+        "parameters": strictify(tool["input_schema"]),
+    }
+
+
+def strictify(schema: dict) -> dict:
+    """An object schema made valid for strict mode, recursively.
+
+    Strict requires every property in `required` and `additionalProperties:
+    false`, which these schemas do not satisfy — `read_file` takes an optional
+    line range, `search` an optional path filter. So the optional ones are made
+    nullable and required, the shape strict mode provides for "may be omitted".
+    `dispatch` reads them with `.get`, so a null arrives as a missing argument
+    and nothing downstream can tell the difference.
+    """
+    properties = {}
+    required = schema.get("required") or []
+    for name, spec in (schema.get("properties") or {}).items():
+        spec = dict(spec)
+        if spec.get("type") == "object":
+            spec = strictify(spec)
+        elif spec.get("type") == "array" and isinstance(spec.get("items"), dict):
+            items = spec["items"]
+            if items.get("type") == "object":
+                spec["items"] = strictify(items)
+        if name not in required:
             kind = spec.get("type", "string")
-            properties[name] = {
-                **spec,
-                "type": [kind, "null"] if isinstance(kind, str) else kind,
-            }
-        out.append(
-            {
-                "type": "function",
-                # Flat, not nested under a `function` object. That nesting is
-                # the chat/completions shape; the Responses API takes the name,
-                # description and parameters at the top level of the tool.
-                "name": tool["name"],
-                "description": tool["description"],
-                "strict": True,
-                "parameters": {
-                    **schema,
-                    "properties": properties,
-                    "required": list(properties),
-                    "additionalProperties": False,
-                },
-            }
-        )
-    return out
+            spec["type"] = [kind, "null"] if isinstance(kind, str) else kind
+        properties[name] = spec
+    return {
+        **schema,
+        "properties": properties,
+        "required": list(properties),
+        "additionalProperties": False,
+    }
 
 
 def dispatch(

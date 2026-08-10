@@ -203,10 +203,9 @@ class OpenAIReviewer:
         rendered text stops being derivable the moment the rendering changes,
         and nothing fails when it does.
         """
-        counts: dict[str, int] = {}
-        for call in getattr(self.reader, "calls", []) or []:
-            counts[call.tool] = counts.get(call.tool, 0) + 1
-        return counts
+        from orchestrator.repotools import count_calls
+
+        return count_calls(self.reader)
 
     def _log_new_calls(self, seen: int) -> int:
         """Emit the reads made since `seen`; return the new watermark.

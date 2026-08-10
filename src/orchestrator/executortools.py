@@ -179,46 +179,9 @@ def openai_tool_schemas(
     never had to do because none of its schemas nest. `edit` carries a list of
     objects with an optional `replace_all`.
     """
-    out = []
-    for tool in tool_schemas(semantic, project_tools):
-        schema = _strictify(tool["input_schema"])
-        out.append(
-            {
-                # Flat, not nested under a `function` object. That nesting is
-                # the chat/completions shape; the Responses API takes the name,
-                # description and parameters at the top level.
-                "type": "function",
-                "name": tool["name"],
-                "description": tool["description"],
-                "strict": True,
-                "parameters": schema,
-            }
-        )
-    return out
+    from orchestrator.plannertools import as_strict_tool
 
-
-def _strictify(schema: dict) -> dict:
-    """One object schema, made valid for strict mode, recursively."""
-    properties = {}
-    required = schema.get("required") or []
-    for name, spec in (schema.get("properties") or {}).items():
-        spec = dict(spec)
-        if spec.get("type") == "object":
-            spec = _strictify(spec)
-        elif spec.get("type") == "array" and isinstance(spec.get("items"), dict):
-            items = spec["items"]
-            if items.get("type") == "object":
-                spec["items"] = _strictify(items)
-        if name not in required:
-            kind = spec.get("type", "string")
-            spec["type"] = [kind, "null"] if isinstance(kind, str) else kind
-        properties[name] = spec
-    return {
-        **schema,
-        "properties": properties,
-        "required": list(properties),
-        "additionalProperties": False,
-    }
+    return [as_strict_tool(tool) for tool in tool_schemas(semantic, project_tools)]
 
 
 def dispatch(

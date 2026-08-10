@@ -451,6 +451,11 @@ class PlannerOutcome:
     # the first long run was reconstructing what it had been told, and that was
     # when the inputs were fixed.
     tool_calls: list[str] = field(default_factory=list)
+    # The same ledger counted by tool, for the run log. `tool_calls` is
+    # the record and goes to `planner.json`; this is the summary, and it
+    # exists so all three roles report what they looked at in one shape
+    # rather than three.
+    tool_counts: dict[str, int] = field(default_factory=dict)
     # How many of those were answered. `tool_calls` stopped being a usable
     # proxy for "it looked at something" once refusals joined the ledger: two
     # requests for paths that are not there produce a log of length two and
@@ -587,6 +592,12 @@ class AnthropicPlanner:
         """
         return [_render_call(c) for c in getattr(self.reader, "calls", []) or []]
 
+    def _tool_counts(self) -> dict[str, int]:
+        """The same ledger by tool, for the run log's one-line summary."""
+        from orchestrator.repotools import count_calls
+
+        return count_calls(self.reader)
+
     def _log_new_calls(self, seen: int) -> int:
         """Emit the calls made since `seen`; return the new watermark.
 
@@ -666,6 +677,7 @@ class AnthropicPlanner:
             if terminal is not None:
                 terminal.usage = billed
                 terminal.tool_calls = self._tool_log()
+                terminal.tool_counts = self._tool_counts()
                 terminal.reads_answered = self._reads_answered()
                 return terminal
 
@@ -683,6 +695,7 @@ class AnthropicPlanner:
                     plan_notes=[n.model_dump() for n in parsed.plan_notes],
                     usage=billed,
                     tool_calls=self._tool_log(),
+                    tool_counts=self._tool_counts(),
                     reads_answered=self._reads_answered(),
                     failed=False,
                 )
@@ -691,6 +704,7 @@ class AnthropicPlanner:
                 outcome = _blocked(problem)
                 outcome.usage = billed
                 outcome.tool_calls = self._tool_log()
+                outcome.tool_counts = self._tool_counts()
                 outcome.reads_answered = self._reads_answered()
                 outcome.raw = parsed.model_dump()
                 return outcome

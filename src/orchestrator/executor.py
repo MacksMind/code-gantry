@@ -683,18 +683,7 @@ def _count_tool_use(out: ExecutionResult, reader, editor) -> None:
     reading the log wants one answer, so they are merged here rather than at
     the log site. Same reason `_tool_log` merges the planner's two.
     """
-    tools: dict[str, int] = {}
-    refusals: dict[str, int] = {}
-    for source in (reader, editor):
-        for call in getattr(source, "calls", []) or []:
-            tools[call.tool] = tools.get(call.tool, 0) + 1
-            if getattr(call, "refusal", ""):
-                # The raiser's own bucket wins where it set one. Deriving it
-                # from the message is a fallback for refusals whose text and
-                # cause are the same thing, and an edit refused by three
-                # different routes to one sentence is the case where they are
-                # not — no reading of that message could recover which fired.
-                kind = getattr(call, "refusal_kind", "") or _refusal_kind(call.refusal)
-                refusals[kind] = refusals.get(kind, 0) + 1
-    out.tool_counts = tools
-    out.refusal_counts = refusals
+    from orchestrator.repotools import count_calls, count_refusals
+
+    out.tool_counts = count_calls(reader, editor)
+    out.refusal_counts = count_refusals(reader, editor)
