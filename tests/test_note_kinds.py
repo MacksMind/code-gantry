@@ -164,3 +164,49 @@ class TestFindingsFile:
         )
         assert Path(cfg.work_dir).is_relative_to(cfg.target_repo)
         assert "findings.md" not in str(cfg.plan_addendum_path)
+
+
+class TestCorrectionNamesADependencyError:
+    """The most useful correction is one the description never asked for.
+
+    `deferred` was deleted because it asked the wrong question — "why did you
+    not go down the list in order", which presumes the plan is a queue. What is
+    worth hearing is the opposite: that the plan's *stated* prerequisites are
+    wrong. Measured on this project's notes, the planner already reports that
+    class under `correction` without being asked, and the good ones name the
+    mechanism: "Step 1 is ordered after the funnel-helper conversion, not
+    independent of it — the driver registers the CSRF hook those helpers
+    depend on."
+
+    So this is naming a thing that already happens rather than inviting a new
+    one. It earns its line because the question is answerable on every
+    derivation — the planner reads the plan against the code each time — and
+    the standing evidence here is that an always-answerable prompt gets an
+    answer while a conditional one is declined in good conscience.
+    """
+
+    def _correction_text(self) -> str:
+        from orchestrator.planner import PlanNote
+
+        return PlanNote.model_fields["kind"].description.lower()
+
+    def test_it_names_a_wrong_dependency(self):
+        text = self._correction_text()
+        assert "depend" in text or "prerequisite" in text
+
+    def test_it_covers_both_directions(self):
+        # A missing edge and a claimed-but-absent one are different findings,
+        # and only one of them makes work look blocked that is not.
+        text = self._correction_text()
+        assert "independent" in text or "does not" in text or "no such" in text
+
+    def test_the_other_two_kinds_are_untouched(self):
+        text = self._correction_text()
+        assert "progress" in text and "out_of_scope" in text
+
+    def test_it_names_no_project_vocabulary(self):
+        # This ships to every project's planner. The example that prompted it
+        # is a Rails one and must not travel with it.
+        text = self._correction_text()
+        for word in ("rails", "ruby", "gem", "prototype", "rspec", "ujs", ".rb"):
+            assert word not in text, f"{word!r} is project knowledge in a schema"
