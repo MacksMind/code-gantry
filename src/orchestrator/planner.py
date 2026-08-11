@@ -467,6 +467,10 @@ class PlannerOutcome:
     # exists so all three roles report what they looked at in one shape
     # rather than three.
     tool_counts: dict[str, int] = field(default_factory=dict)
+    # The questions put to the semantic index and what came back. See
+    # `ToolCall.result`: these are the only reads whose answer cannot be
+    # fetched from the repository again, so they are the only ones kept.
+    semantic_results: list[dict] = field(default_factory=list)
     # How many of those were answered. `tool_calls` stopped being a usable
     # proxy for "it looked at something" once refusals joined the ledger: two
     # requests for paths that are not there produce a log of length two and
@@ -630,6 +634,12 @@ class AnthropicPlanner:
         """
         return [_render_call(c) for c in getattr(self.reader, "calls", []) or []]
 
+    def _semantic_results(self) -> list[dict]:
+        """What the index was asked, and what it answered."""
+        from orchestrator.repotools import semantic_results
+
+        return semantic_results(self.reader)
+
     def _tool_counts(self) -> dict[str, int]:
         """The same ledger by tool, for the run log's one-line summary."""
         from orchestrator.repotools import count_calls
@@ -712,6 +722,7 @@ class AnthropicPlanner:
                 terminal.usage = billed
                 terminal.tool_calls = self._tool_log()
                 terminal.tool_counts = self._tool_counts()
+                terminal.semantic_results = self._semantic_results()
                 terminal.reads_answered = self._reads_answered()
                 return terminal
 
@@ -730,6 +741,7 @@ class AnthropicPlanner:
                     usage=billed,
                     tool_calls=self._tool_log(),
                     tool_counts=self._tool_counts(),
+                    semantic_results=self._semantic_results(),
                     reads_answered=self._reads_answered(),
                     failed=False,
                 )
@@ -739,6 +751,7 @@ class AnthropicPlanner:
                 outcome.usage = billed
                 outcome.tool_calls = self._tool_log()
                 outcome.tool_counts = self._tool_counts()
+                outcome.semantic_results = self._semantic_results()
                 outcome.reads_answered = self._reads_answered()
                 outcome.raw = parsed.model_dump()
                 return outcome

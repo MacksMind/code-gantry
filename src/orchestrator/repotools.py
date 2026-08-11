@@ -215,6 +215,20 @@ class ToolCall:
     # before an edit could be refused by three different routes to the same
     # sentence.
     refusal_kind: str = ""
+    # What the call returned, kept for semantic search alone.
+    #
+    # Every other read here is reproducible: the ledger records the path
+    # and range, the sha is known, and the same bytes can be fetched back.
+    # Copying them would be storing a second copy of the repository.
+    #
+    # A semantic hit cannot be reconstructed. It depends on an index built
+    # from whatever commits had been ingested, on a similarity cutoff and
+    # on an embedding model, so the same question later returns different
+    # chunks. For the one tool whose output is unrecoverable the record
+    # kept the least: a question and a line count. A verdict resting on
+    # eighteen lines nobody can retrieve is what tool access was granted
+    # to prevent.
+    result: str = ""
 
 
 @dataclass
@@ -824,6 +838,26 @@ def count_refusals(*ledgers) -> dict[str, int]:
             kind = getattr(call, "refusal_kind", "") or _refusal_kind(call.refusal)
             counts[kind] = counts.get(kind, 0) + 1
     return counts
+
+
+# The tools whose answers cannot be fetched back from the repository.
+SEMANTIC_TOOLS = frozenset({"semantic_search", "locate"})
+
+
+def semantic_results(*ledgers) -> list[dict]:
+    """The questions asked of the index, and what came back.
+
+    Filtered by tool rather than by "has a result". The policy is that only
+    the semantic tools fill `result` — see `ToolCall.result` — and this is what
+    makes that a property instead of a convention: a later caller that sets it
+    on a `read_file` does not thereby copy a repository file into an artifact.
+    """
+    out = []
+    for ledger in ledgers:
+        for call in getattr(ledger, "calls", ledger) or []:
+            if call.tool in SEMANTIC_TOOLS and call.result:
+                out.append({"question": call.detail, "returned": call.result})
+    return out
 
 
 def render_counts(counts: dict[str, int]) -> str:

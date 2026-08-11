@@ -214,7 +214,12 @@ class SemanticSearch:
             ][: self.cfg.snippet_lines]
             lines.extend(f"       | {ln}" for ln in snippet)
 
-        self.calls.append(ToolCall("semantic_search", question, len(lines)))
+        # The lines themselves, not just how many. This is the one tool
+        # whose answer cannot be fetched again from the repository.
+        self.calls.append(
+            ToolCall("semantic_search", question, len(lines),
+                     result="\n".join(lines))
+        )
         return lines
 
 

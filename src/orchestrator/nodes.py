@@ -393,6 +393,13 @@ def plan(state: RunState, rt: Runtime) -> dict:
                 # different fact from "the planner did not look" — one is the
                 # plan being accurate, the other is a bug.
                 "tool_calls": list(outcome.tool_calls),
+                # And what the semantic index actually said, which the line
+                # above cannot carry. Every other read here is reproducible
+                # from its path and the sha; a semantic hit depends on an
+                # index, a cutoff and an embedding model, so the same question
+                # later returns something else and the record was the only
+                # copy there was ever going to be.
+                "semantic_results": list(outcome.semantic_results),
                 "reads_answered": outcome.reads_answered,
                 "plan_notes": list(outcome.plan_notes),
                 "client_failure": outcome.failed,

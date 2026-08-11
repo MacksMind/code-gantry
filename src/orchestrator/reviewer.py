@@ -122,6 +122,10 @@ class ReviewOutcome:
     # timeline meant to be skimmed -- and they are already in `tools.log`,
     # one per line, and in `review.json` in order.
     tool_counts: dict[str, int] = field(default_factory=dict)
+    # The questions put to the semantic index and what came back. Kept for
+    # these alone because they are the only reads whose answer cannot be
+    # fetched from the repository again — see `ToolCall.result`.
+    semantic_results: list[dict] = field(default_factory=list)
     # Real problems found nearby that this stage did not cause. Carried
     # separately from `issues`, which are defects in this diff and route it
     # back to the executor; these route nowhere and are written to the
@@ -136,6 +140,10 @@ class ReviewOutcome:
             "issues": [i.model_dump() for i in self.issues],
             "observations": [o.model_dump() for o in self.observations],
             "tool_calls": list(self.tool_calls),
+            # Always present, empty included. An absent key and an empty
+            # one read the same to anyone measuring later, and this
+            # project has already answered a question wrongly that way.
+            "semantic_results": list(self.semantic_results),
             "usage": {
                 "prompt_tokens": self.usage.prompt_tokens,
                 "cached_tokens": self.usage.cached_tokens,
@@ -200,6 +208,12 @@ class OpenAIReviewer:
         from orchestrator.planner import _render_call
 
         return [_render_call(c) for c in getattr(self.reader, "calls", []) or []]
+
+    def _semantic_results(self) -> list[dict]:
+        """What the index was asked, and what it answered."""
+        from orchestrator.repotools import semantic_results
+
+        return semantic_results(self.reader)
 
     def _tool_counts(self) -> dict[str, int]:
         """The same ledger, counted by tool, for the run log's one-line summary.
@@ -310,6 +324,7 @@ class OpenAIReviewer:
                 outcome.usage = usage
                 outcome.tool_calls = self._looked_at()
                 outcome.tool_counts = self._tool_counts()
+                outcome.semantic_results = self._semantic_results()
                 return outcome
 
             usage = _merge_usage(usage, _extract_usage(getattr(response, "usage", None)))
@@ -370,6 +385,7 @@ class OpenAIReviewer:
             outcome.usage = usage
             outcome.tool_calls = self._looked_at()
             outcome.tool_counts = self._tool_counts()
+            outcome.semantic_results = self._semantic_results()
             return outcome
 
         if getattr(response, "status", None) == "incomplete":
@@ -385,6 +401,7 @@ class OpenAIReviewer:
             outcome.usage = usage
             outcome.tool_calls = self._looked_at()
             outcome.tool_counts = self._tool_counts()
+            outcome.semantic_results = self._semantic_results()
             return outcome
 
         parsed = getattr(response, "output_parsed", None)
@@ -396,6 +413,7 @@ class OpenAIReviewer:
             outcome.usage = usage
             outcome.tool_calls = self._looked_at()
             outcome.tool_counts = self._tool_counts()
+            outcome.semantic_results = self._semantic_results()
             return outcome
 
         return ReviewOutcome(
@@ -408,6 +426,7 @@ class OpenAIReviewer:
             failed=False,
             tool_calls=self._looked_at(),
             tool_counts=self._tool_counts(),
+            semantic_results=self._semantic_results(),
         )
 
 
