@@ -598,6 +598,58 @@ class RepoReader:
             globs.append(part)
         return globs
 
+    def _drop_ignored(self, lines: list[str]) -> list[str]:
+        """The same lines, minus any whose file the repository ignores.
+
+        ripgrep's `-g` is a filter over the walk rather than within it, so a
+        glob **overrides** the ignore rules: `rg --hidden -g '**/*'` on the
+        target repository returned 41 hits out of the executor's own
+        conversation transcript, 18 out of `tools.log`, and the planner's
+        `planner.json` for the stage being executed — none of which the same
+        search without a glob could see. So the tracked-only boundary this
+        tool documents held for exactly the calls that did not ask for a path.
+
+        Asked of the matched paths rather than of the walk, which is one
+        subprocess on an answer that is already small instead of a second pass
+        over the tree. `git check-ignore` is asked without `--no-index`, so a
+        *tracked* file matching an ignore rule is not reported and survives.
+        That is git's boundary rather than ripgrep's, and it is the better of
+        the two here: ripgrep knows nothing of the index, so it hides a tracked
+        file the stage is allowed to edit, and a glob then makes it visible
+        again. The rule this settles on is the one the caller can act on —
+        what the repository ignores is out, what it tracks is in.
+
+        Failing open here would restore the leak silently, so a
+        `check-ignore` that cannot answer is an error the caller sees.
+        """
+        paths = []
+        for line in lines:
+            body = line[2:] if line.startswith("./") else line
+            paths.append(body.split(":", 1)[0])
+        wanted = sorted({p for p in paths if p})
+        if not wanted:
+            return list(lines)
+        proc = subprocess.run(
+            ["git", "check-ignore", "-z", "--stdin"],
+            cwd=str(self._root()),
+            input="\0".join(wanted),
+            capture_output=True,
+            text=True,
+            errors="replace",
+        )
+        # 0 is "some are ignored", 1 is "none are" — both are answers, and 1 is
+        # the common one. Anything else is git declining to say, and a filter
+        # that guards a boundary must not treat silence as permission.
+        if proc.returncode not in (0, 1):
+            raise ToolError(
+                "search could not check the repository's ignore rules: "
+                f"{proc.stderr.strip() or 'git check-ignore failed'}"
+            )
+        ignored = {p for p in proc.stdout.split("\0") if p}
+        if not ignored:
+            return list(lines)
+        return [line for line, path in zip(lines, paths) if path not in ignored]
+
     def search(self, pattern: str, path_glob: str | None = None) -> list[str]:
         """Matching lines, as `path:line:text`.
 
@@ -723,20 +775,6 @@ class RepoReader:
         # unreachable the moment the stdin bug was fixed. Asking which files the
         # globs select is one extra call at 0.02s on a 4,423-file repository, and
         # it is true regardless of how ripgrep classifies the run.
-        if proc.returncode == 1 and globs:
-            listing = subprocess.run(
-                ["rg", "--files", "--hidden", *sum((["-g", g] for g in globs), []),
-                 "-g", "!.git", "."],
-                cwd=str(self._root()), capture_output=True, text=True,
-                errors="replace", stdin=subprocess.DEVNULL,
-            )
-            if not listing.stdout.strip():
-                raise ToolError(
-                    f"no files matched the path {path_glob!r}; the pattern was "
-                    "never tried. Check the path with list_files, or drop it to "
-                    "search the whole repository."
-                )
-
         # Searching `.` prefixes every hit with `./`. Stripped here so the
         # `path:line:text` contract every caller parses is unchanged.
         hits = [
@@ -744,6 +782,31 @@ class RepoReader:
             for line in proc.stdout.splitlines()
             if line.strip()
         ]
+        hits = self._drop_ignored(hits)
+
+        # After the filter, not before it. A glob selecting only ignored files
+        # produces hits from ripgrep and none from this tool, which is exactly
+        # the case the message below is for — and the shape most likely to be
+        # believed, since an empty answer reads as a fact about the repository.
+        if not hits and globs:
+            listing = subprocess.run(
+                ["rg", "--files", "--hidden", *sum((["-g", g] for g in globs), []),
+                 "-g", "!.git", "."],
+                cwd=str(self._root()), capture_output=True, text=True,
+                errors="replace", stdin=subprocess.DEVNULL,
+            )
+            # The listing is subject to the same override, so it is filtered
+            # too. Untouched, a glob aimed straight at an ignored directory
+            # would list its files, decline to raise, and return nothing.
+            if not self._drop_ignored(
+                [line for line in listing.stdout.splitlines() if line.strip()]
+            ):
+                raise ToolError(
+                    f"no files matched the path {path_glob!r}; the pattern was "
+                    "never tried. Check the path with list_files, or drop it to "
+                    "search the whole repository."
+                )
+
         hits, clipped = self._clip(hits)
         if clipped:
             hits = hits + ["... truncated; narrow the pattern or the path"]

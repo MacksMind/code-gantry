@@ -51,8 +51,12 @@ class TestStdinCannotSubstituteForTheRepository:
         real = rt.subprocess.run
 
         def spy(argv, **kw):
-            seen["argv"] = argv
-            seen["stdin"] = kw.get("stdin")
+            # `search` also shells out to `git check-ignore`, which is fed on
+            # stdin by design. Recording the last call would assert this
+            # property of the wrong command.
+            if argv and argv[0] == "rg":
+                seen["argv"] = argv
+                seen["stdin"] = kw.get("stdin")
             return real(argv, **kw)
 
         monkeypatch.setattr(rt.subprocess, "run", spy)
