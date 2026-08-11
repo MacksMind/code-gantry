@@ -595,12 +595,10 @@ class AnthropicPlanner:
         run, drawing stages with no ability to check a premise against the
         code.
         """
+        from orchestrator.repotools import Spend
+
         if self.reader is not None:
-            self.reader.reset()
-        if self.semantic is not None:
-            # Usually the same list the reader just cleared; separate only if a
-            # project ever gives semantic search its own ledger.
-            self.semantic.calls.clear()
+            self.reader.spend = Spend()
 
     def _tool_log(self) -> list[str]:
         """What was looked at, for the run log.
@@ -991,7 +989,7 @@ def make_planner(cfg: PlannerConfig, target_repo=None) -> PlannerClient:
             # the order is most of how a conclusion was reached — a read that
             # confirmed a semantic hit is a different act from one that
             # preceded it.
-            semantic = SemanticSearch(search_cfg, calls=reader.calls)
+            semantic = SemanticSearch(search_cfg, reader=reader)
 
     return AnthropicPlanner(cfg, reader=reader, semantic=semantic)
 

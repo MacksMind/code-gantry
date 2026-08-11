@@ -634,7 +634,7 @@ class TestTheLocatorIsWiredButIsNotATool:
                 api_base="http://x", qdrant_url="http://y",
                 embedding_model="e", collection="c",
             ),
-            calls=calls,
+            ledger=calls,
         )
         s._search = lambda q: [{"payload": {"path": "a.rb", "content": "TEXT"}}]
         s.chunks_for("something", "a.rb")

@@ -330,6 +330,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
             + (f", {refused} refused" if refused else "")
             + f" over {planned_for:.0f}s"
             + (f": {detail}" if detail else "")
+            + _spent(rt.planner)
         )
 
     usage = accumulate_usage(
@@ -1105,6 +1106,27 @@ def execute(state: RunState, rt: Runtime) -> dict:
     )
 
 
+def _spent(role) -> str:
+    """How much of this step's read budget went, as ` (120k/800k chars)`.
+
+    Permanent rather than temporary, because the failure it makes visible was
+    invisible for a whole run: the character counter was never reset between
+    steps, so it climbed past the ceiling and every later planner call was
+    refused on its first read — 14 of 31 calls, each drawing a stage blind, and
+    the only outward sign was the planner saying it could not read. A budget
+    whose consumption is not printed cannot be seen to leak.
+
+    It also answers the tuning question the read budget has never been able to
+    answer from outside: whether a ceiling is anywhere near binding in normal
+    operation, or is a backstop that never fires.
+    """
+    reader = getattr(role, "reader", None)
+    limit = getattr(getattr(reader, "budget", None), "max_total_chars", 0)
+    if reader is None or not limit:
+        return ""
+    return f" ({reader.spend.chars // 1000}k/{limit // 1000}k chars)"
+
+
 # --- verify --------------------------------------------------------------
 
 
@@ -1352,6 +1374,7 @@ def review(state: RunState, rt: Runtime) -> dict:
         rt.log(
             f"[review] {stage.id}: read {len(outcome.tool_calls)} thing(s)"
             + (f": {detail}" if detail else "")
+            + _spent(rt.reviewer)
         )
 
     rt.write_artifact(

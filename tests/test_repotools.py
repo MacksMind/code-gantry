@@ -791,22 +791,22 @@ class TestTheTotalIsBoundedInCharactersToo:
         with pytest.raises(ToolError) as exc:
             r.read_file("app/bundle.js")
         assert "characters" in str(exc.value)
-        assert r._lines_used < 10_000, "the line budget never came close"
+        assert r.spend.lines < 10_000, "the line budget never came close"
 
     def test_an_ordinary_step_is_unaffected(self, repo):
         r = reader(repo)
         for _ in range(5):
             r.read_file("docs/plan.md")
-        assert r._chars_used < r.budget.max_total_chars
+        assert r.spend.chars < r.budget.max_total_chars
 
     def test_a_refusal_is_not_charged(self, repo):
         # Same rule the call ceiling follows: recording a denial must not make
         # the next one more likely.
         r = reader(repo, max_total_chars=200)
-        before = r._chars_used
+        before = r.spend.chars
         with pytest.raises(ToolError):
             r.read_file("docs/nope.md")
-        assert r._chars_used == before
+        assert r.spend.chars == before
 
 
 class TestShortstat:

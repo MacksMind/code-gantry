@@ -218,6 +218,29 @@ class ToolCall:
 
 
 @dataclass
+class Spend:
+    """What one step has already used up.
+
+    Everything mutable about a read budget, in one object, so that clearing it
+    is replacing it. The counters used to be three fields on `RepoReader` and
+    the clearing was three statements at a call site — which went stale the
+    moment `max_total_chars` was added underneath `max_total_lines`, because
+    nothing taught the clearing about the new one. `_chars_used` then
+    accumulated for the life of the process and every planner call past the
+    ceiling was refused on its first read: 14 of 31 calls on one measured run,
+    each drawing a stage with no way to check a premise against the code.
+
+    A tidier `reset()` would have fixed that instance and kept the shape. This
+    changes the shape: whatever fields `Spend` grows, a fresh one starts empty,
+    and there is no list for anyone to maintain.
+    """
+
+    calls: list[ToolCall] = field(default_factory=list)
+    lines: int = 0
+    chars: int = 0
+
+
+@dataclass
 class RepoReader:
     """Answers questions about a repository, within bounds.
 
@@ -228,7 +251,7 @@ class RepoReader:
     git: Git
     repo: Path
     budget: ReadBudget = field(default_factory=ReadBudget)
-    calls: list[ToolCall] = field(default_factory=list)
+    spend: Spend = field(default_factory=Spend)
     # Pin every read to one commit instead of the working tree.
     #
     # Empty is right for a live run: the reviewer is called with the stage's
@@ -248,8 +271,6 @@ class RepoReader:
     # exclusion is about what a sweep pulls in by accident; conflating them
     # would make a file the operator can see unreadable to the pipeline.
     search_exclude_globs: list[str] = field(default_factory=list)
-    _lines_used: int = 0
-    _chars_used: int = 0
 
     # --- boundaries -----------------------------------------------------
 
@@ -350,13 +371,26 @@ class RepoReader:
 
     # --- budget ---------------------------------------------------------
 
+    @property
+    def calls(self) -> list[ToolCall]:
+        """The ledger, through the container.
+
+        A property rather than a rename, because `calls` is read by the
+        planner, the reviewer, the executor's counters and every test that
+        asserts what a role looked at. What matters is that it resolves to
+        whichever `Spend` is current — a caller holding the list itself would
+        keep appending to the previous step's after a replacement, and nothing
+        would say so.
+        """
+        return self.spend.calls
+
     def _spend(self, tool: str, detail: str, text: str) -> str:
         used = text.count("\n") + (0 if text.endswith("\n") or not text else 1)
-        self._lines_used += used
+        self.spend.lines += used
         # Charged where the lines are, and only on an answered call — a refusal
         # costs nothing here for the same reason it costs no call: recording a
         # denial must not make the next one more likely.
-        self._chars_used += len(text)
+        self.spend.chars += len(text)
         self.calls.append(ToolCall(tool=tool, detail=detail, lines=used))
         return text
 
@@ -398,9 +432,7 @@ class RepoReader:
         chronological; rebinding the attribute would hand them separate lists
         and nothing would say so.
         """
-        self.calls.clear()
-        self._lines_used = 0
-        self._chars_used = 0
+        self.spend = Spend()
 
     def _answered(self) -> int:
         """Calls the budget is actually spent on.
@@ -418,12 +450,12 @@ class RepoReader:
                 f"too many tool calls in one step "
                 f"(limit {self.budget.max_calls}). Work with what you have."
             )
-        if self._lines_used >= self.budget.max_total_lines:
+        if self.spend.lines >= self.budget.max_total_lines:
             raise ToolError(
                 f"read budget spent for this step "
                 f"({self.budget.max_total_lines} lines). Work with what you have."
             )
-        if self._chars_used >= getattr(self.budget, "max_total_chars", 0) > 0:
+        if self.spend.chars >= getattr(self.budget, "max_total_chars", 0) > 0:
             raise ToolError(
                 f"read budget spent for this step "
                 f"({self.budget.max_total_chars} characters). Work with what "
@@ -432,7 +464,7 @@ class RepoReader:
 
     def _clip(self, lines: list[str]) -> tuple[list[str], bool]:
         cap = self.budget.max_lines_per_call
-        remaining = max(self.budget.max_total_lines - self._lines_used, 0)
+        remaining = max(self.budget.max_total_lines - self.spend.lines, 0)
         allowed = min(cap, remaining)
         clipped = False
         if len(lines) > allowed:

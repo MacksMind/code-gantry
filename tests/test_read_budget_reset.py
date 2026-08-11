@@ -28,7 +28,7 @@ written without one.
 
 import pytest
 
-from orchestrator.repotools import ReadBudget, RepoReader, ToolError
+from orchestrator.repotools import ReadBudget, RepoReader, Spend, ToolError
 
 
 def _reader(tmp_path, **budget):
@@ -49,43 +49,53 @@ class TestResetClearsEveryCounter:
         # The one that was missed, and the only one whose absence is invisible
         # until a long run crosses the ceiling.
         r = _reader(tmp_path)
-        r._chars_used = 10_000
-        r.reset()
-        assert r._chars_used == 0
+        r.spend.chars = 10_000
+        r.spend = Spend()
+        assert r.spend.chars == 0
 
     def test_it_clears_the_line_counter(self, tmp_path):
         r = _reader(tmp_path)
-        r._lines_used = 999
-        r.reset()
-        assert r._lines_used == 0
+        r.spend.lines = 999
+        r.spend = Spend()
+        assert r.spend.lines == 0
 
     def test_it_clears_the_ledger(self, tmp_path):
         from orchestrator.repotools import ToolCall
 
         r = _reader(tmp_path)
         r.calls.append(ToolCall(tool="read_file", detail="a", lines=1))
-        r.reset()
+        r.spend = Spend()
         assert r.calls == []
 
-    def test_the_ledger_is_cleared_in_place(self, tmp_path):
-        # `SemanticSearch` is constructed with `calls=reader.calls` so the two
-        # share one list and the log stays chronological. Rebinding the
-        # attribute would silently give them separate lists.
+    def test_the_ledger_is_replaced_not_emptied(self, tmp_path):
+        """This assertion is the reverse of what it used to be, deliberately.
+
+        The first fix cleared the list in place, because `SemanticSearch` was
+        handed `reader.calls` and rebinding would have left it appending to an
+        orphan. That constraint is what forced the field-by-field clearing this
+        whole file exists to remove — so it was cut the other way: the reader
+        replaces its `Spend` wholesale, and `SemanticSearch` reaches through the
+        reader for the current ledger instead of holding a list.
+
+        Pinned because in-place clearing would still pass every other test here
+        while quietly reintroducing the shape.
+        """
         from orchestrator.repotools import ToolCall
 
         r = _reader(tmp_path)
-        shared = r.calls
+        before = r.calls
         r.calls.append(ToolCall(tool="search", detail="x", lines=1))
-        r.reset()
-        assert r.calls is shared
+        r.spend = Spend()
+        assert r.calls is not before
+        assert r.calls == []
 
     def test_a_reader_that_reset_can_read_again(self, tmp_path):
         (tmp_path / "f.txt").write_text("x" * 500)
         r = _reader(tmp_path, max_total_chars=200)
-        r._chars_used = 10_000
+        r.spend.chars = 10_000
         with pytest.raises(ToolError):
             r._charge_call("read_file")
-        r.reset()
+        r.spend = Spend()
         r._charge_call("read_file")  # must not raise
 
 
@@ -98,12 +108,12 @@ class TestBothRolesReset:
         planner = AnthropicPlanner.__new__(AnthropicPlanner)
         planner.reader = _reader(tmp_path)
         planner.semantic = None
-        planner.reader._chars_used = 10_000
-        planner.reader._lines_used = 500
+        planner.reader.spend.chars = 10_000
+        planner.reader.spend.lines = 500
 
         AnthropicPlanner._reset_reads(planner)
-        assert planner.reader._chars_used == 0
-        assert planner.reader._lines_used == 0
+        assert planner.reader.spend.chars == 0
+        assert planner.reader.spend.lines == 0
 
     def test_the_reviewer_resets_before_each_review(self, tmp_path):
         from orchestrator.reviewer import OpenAIReviewer
@@ -111,10 +121,10 @@ class TestBothRolesReset:
         reviewer = OpenAIReviewer.__new__(OpenAIReviewer)
         reviewer.reader = _reader(tmp_path)
         reviewer.semantic = None
-        reviewer.reader._chars_used = 10_000
+        reviewer.reader.spend.chars = 10_000
 
         OpenAIReviewer._reset_reads(reviewer)
-        assert reviewer.reader._chars_used == 0
+        assert reviewer.reader.spend.chars == 0
 
     def test_a_role_without_repo_access_does_not_raise(self, tmp_path):
         # `repo_access` off leaves `reader` as None on both roles.

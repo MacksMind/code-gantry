@@ -785,7 +785,7 @@ class TestTheReadLogIsChronological:
                 embedding_model="m", collection="c",
             ),
             http=lambda url, payload, timeout: (_ for _ in ()).throw(OSError("down")),
-            calls=reader.calls,
+            reader=reader,
         )
         planner = AnthropicPlanner(cfg(), client=StubClient(None), reader=reader, semantic=semantic)
 

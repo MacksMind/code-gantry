@@ -108,7 +108,35 @@ class SemanticSearch:
 
     cfg: SemanticSearchConfig
     http: Callable[[str, dict, float], dict] = _post
-    calls: list[ToolCall] = field(default_factory=list)
+    # The reader whose ledger this shares, when there is one. Held rather than
+    # its list, because the reader replaces its `Spend` wholesale between steps
+    # and anything holding the list itself would go on appending to the
+    # previous step's — every semantic call missing from the log, in
+    # order-dependent ways, with nothing raising.
+    reader: object | None = None
+    # An explicit ledger to append to, for a caller that shares one belonging
+    # to something other than a reader. The executor shares the *editor's*, so
+    # reads and edits interleave in one chronological log.
+    #
+    # Safe as a bare list here in a way it was not for the reader: the editor
+    # is built fresh per attempt and never replaces its list, whereas the
+    # reader replaces its whole `Spend` between steps.
+    ledger: list[ToolCall] | None = None
+    _own_calls: list[ToolCall] = field(default_factory=list)
+
+    @property
+    def calls(self) -> list[ToolCall]:
+        """One ledger with the reader, so the log stays chronological.
+
+        Two lists concatenated say what was looked at but not in what order,
+        and the order is most of how a conclusion was reached — a read that
+        confirmed a semantic hit is a different act from one that preceded it.
+        Falls back to its own list when there is no reader, which is how every
+        test and any caller without repo access builds it.
+        """
+        if self.reader is not None:
+            return self.reader.spend.calls
+        return self._own_calls if self.ledger is None else self.ledger
 
     def _search(self, question: str) -> list[dict]:
         """Embed the question and ask the collection. Raises; callers classify.

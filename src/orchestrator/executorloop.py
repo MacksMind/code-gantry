@@ -434,7 +434,7 @@ def build_loop_parts(stage: Stage, cfg: ProjectConfig, repo: Path):
         # locator consulted when an edit misses. Sharing `editor.calls` means
         # both land in the attempt's ledger, distinguished by name — the
         # model's own lookups as `semantic_search`, the locator's as `locate`.
-        semantic = SemanticSearch(search_cfg, calls=editor.calls)
+        semantic = SemanticSearch(search_cfg, ledger=editor.calls)
         editor.locator = lambda path, want: semantic_locator(semantic, path, want)
 
     return reader, editor, semantic

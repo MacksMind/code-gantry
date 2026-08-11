@@ -172,10 +172,10 @@ class OpenAIReviewer:
 
     def _reset_reads(self) -> None:
         """Forget the previous review's reads. See `RepoReader.reset`."""
+        from orchestrator.repotools import Spend
+
         if self.reader is not None:
-            self.reader.reset()
-        if self.semantic is not None:
-            self.semantic.calls.clear()
+            self.reader.spend = Spend()
 
     def _looked_at(self) -> list[str]:
         """What the reviewer read, from the ledger rather than the request.
@@ -445,7 +445,7 @@ def make_reviewer(
             # One list, shared with the reader, so the log is chronological.
             # Two lists concatenated say what was looked at but not in what
             # order, and the order is most of how a conclusion was reached.
-            semantic = SemanticSearch(search_cfg, calls=reader.calls)
+            semantic = SemanticSearch(search_cfg, reader=reader)
 
     return OpenAIReviewer(cfg, log=log, reader=reader, semantic=semantic)
 
