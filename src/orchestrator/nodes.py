@@ -42,6 +42,11 @@ from orchestrator.executor import (
 )
 from orchestrator.flake import adjudicate, append_flakes, predates_stage
 from orchestrator.gitops import GitError
+# The gate's clip, under the name thirteen call sites here already use.
+# Imported rather than redefined: the budget and the helper are one
+# decision, and `gates` is where the other half of it lives. Safe at
+# module level — `gates` imports nothing that reaches back here.
+from orchestrator.gates import clip as _clip
 from orchestrator.repotools import render_counts
 from orchestrator.globs import matches_any
 from orchestrator.planner import append_stage_cost, append_status, recent_stage_costs
@@ -68,7 +73,13 @@ from orchestrator.verify import Layer, Route, diff_digest, run_verify
 # is captured. The runner keeps everything so the parsers can see it; a prompt
 # cannot carry a third of a megabyte of rspec, and a planner intervention is
 # expensive enough without paying for a coverage report.
-FEEDBACK_OUTPUT_CHARS = 4_000
+#
+# The budget lives in `gates`, with the other half of this decision. It was
+# declared here too, identically, and nothing would have failed when the two
+# drifted — one role would simply have started giving a model less of a failure
+# to read than the other. That is the same duplication `clip_for_model` was
+# extracted to end, regrown one level up: the function was centralised and the
+# number it is called with was not.
 
 # A reviewer note in the run log is for a human scanning it, not the record —
 # the whole finding, its detail and its evidence are in `review.json` and the
@@ -76,8 +87,6 @@ FEEDBACK_OUTPUT_CHARS = 4_000
 REVIEWER_NOTE_CHARS = 240
 
 
-def _clip(text: str) -> str:
-    return clip_for_model(text, FEEDBACK_OUTPUT_CHARS)
 
 
 def current_stage(state: RunState, rt: Runtime) -> Stage | None:
