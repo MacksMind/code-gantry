@@ -400,6 +400,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
                 # later returns something else and the record was the only
                 # copy there was ever going to be.
                 "semantic_results": list(outcome.semantic_results),
+                "tool_counts": dict(outcome.tool_counts),
                 "reads_answered": outcome.reads_answered,
                 "plan_notes": list(outcome.plan_notes),
                 "client_failure": outcome.failed,

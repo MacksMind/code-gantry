@@ -570,51 +570,51 @@ def _write_loop_record(history_dir: Path, out: ExecutionResult) -> None:
 
     Totals, so unlike the transcript this is written once and at the end. Best
     effort for the same reason.
+
+    Built from the dataclass rather than from a list of keys. The list version
+    carried ten of twenty fields, and the four it left out — `ok`, `timed_out`,
+    `turns_exhausted`, `log` — were between them the whole answer to "why did
+    this attempt end". Asked exactly that about an attempt that made three
+    reads and no edits, this file said nothing and the answer was in
+    `executor.log` next door: the model had stopped because the fix lay outside
+    `edit_files`. An absent key cannot be told apart from a false one, so the
+    artifact did not fail to answer, it answered wrongly.
+
+    Enumerating is also what makes the next field go missing. `commit_refused`
+    was added the same morning this was found and was already absent. The
+    dataclass is the list now, so a field has to be *excluded* on purpose.
     """
     import json
 
+    from dataclasses import fields
+
+    # Two names the artifact says better than the attribute does, and one
+    # object that is flattened rather than dumped.
+    renamed = {"context_tokens": "peak_prompt_tokens"}
+    nested = {"first_prompt_tokens", "first_cached_tokens", "usage"}
+
+    record = {
+        renamed.get(f.name, f.name): getattr(out, f.name)
+        for f in fields(ExecutionResult)
+        if f.name not in nested
+    }
+    record["usage"] = {
+        "prompt_tokens": getattr(out.usage, "prompt_tokens", 0),
+        "cached_tokens": getattr(out.usage, "cached_tokens", 0),
+        "cache_write_tokens": getattr(out.usage, "cache_write_tokens", 0),
+        "completion_tokens": getattr(out.usage, "completion_tokens", 0),
+    }
+    # The opening turn is the only figure that answers whether the prefix
+    # arranged to be shared across stages actually is — everything after it in
+    # an attempt reads what it wrote.
+    record["opening_turn"] = {
+        "prompt_tokens": out.first_prompt_tokens,
+        "cached_tokens": out.first_cached_tokens,
+    }
+
     try:
         (history_dir / "executor-loop.json").write_text(
-            json.dumps(
-                {
-                    "cycles": out.cycles,
-                    # This attempt's high-water mark. Recorded here as well as
-                    # in the stage's total because the stage's is a sum across
-                    # attempts, and a sum cannot be taken apart afterwards —
-                    # the analysis that found the total was being assigned
-                    # rather than accumulated had to infer per-attempt figures
-                    # from cache writes, because this file did not carry the
-                    # one number it is about.
-                    "peak_prompt_tokens": out.context_tokens,
-                    "model_turns": out.model_turns,
-                    "edits_applied": out.edits_applied,
-                    "edit_refusals": out.edit_refusals,
-                    "commits": out.commits,
-                    "in_loop_failures": out.in_loop_failures,
-                    # Recorded here and not only rolled into the run total,
-                    # because a cache whose hit rate cannot be seen per
-                    # attempt cannot be tuned — the same argument that put
-                    # refusals in the planner's ledger. The static prefix is
-                    # arranged to be shared across every stage of a run, and
-                    # this is the only place that claim can be checked.
-                    "usage": {
-                        "prompt_tokens": getattr(out.usage, "prompt_tokens", 0),
-                        "cached_tokens": getattr(out.usage, "cached_tokens", 0),
-                        "cache_write_tokens": getattr(
-                            out.usage, "cache_write_tokens", 0
-                        ),
-                        "completion_tokens": getattr(
-                            out.usage, "completion_tokens", 0
-                        ),
-                    },
-                    "opening_turn": {
-                        "prompt_tokens": out.first_prompt_tokens,
-                        "cached_tokens": out.first_cached_tokens,
-                    },
-                    "cost_usd": out.cost_usd,
-                },
-                indent=2,
-            )
+            json.dumps(record, indent=2, default=str)
         )
     except OSError:
         return

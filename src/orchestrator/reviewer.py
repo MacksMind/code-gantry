@@ -140,6 +140,11 @@ class ReviewOutcome:
             "issues": [i.model_dump() for i in self.issues],
             "observations": [o.model_dump() for o in self.observations],
             "tool_calls": list(self.tool_calls),
+            # The same ledger by tool. It reaches `run.log` as a summary
+            # line and reached no structured artifact, so every count
+            # measured from this project so far came from parsing that
+            # line back out of a log.
+            "tool_counts": dict(self.tool_counts),
             # Always present, empty included. An absent key and an empty
             # one read the same to anyone measuring later, and this
             # project has already answered a question wrongly that way.
