@@ -572,7 +572,13 @@ def _transport_errors() -> tuple[type[BaseException], ...]:
 
 class AnthropicPlanner:
     def __init__(
-        self, cfg: PlannerConfig, client=None, reader=None, semantic=None, log=None
+        self,
+        cfg: PlannerConfig,
+        client=None,
+        reader=None,
+        semantic=None,
+        log=None,
+        project_tools=None,
     ):
         self.cfg = cfg
         # Set by `build_runtime`, which is where the run log becomes
@@ -592,6 +598,11 @@ class AnthropicPlanner:
         # always been.
         self.reader = reader
         self.semantic = semantic
+        # What this project lets the executor run. The system prompt
+        # describes the executor's capabilities, and describing them from a
+        # fixed string is how the planner came to withhold a stream of work
+        # the operator had already enabled.
+        self.project_tools = list(project_tools or [])
         # Bound by `build_runtime`. Reads go here rather than to the run log.
         self.tool_log = None
 
@@ -813,7 +824,11 @@ class AnthropicPlanner:
                         # derivation discarded.
                         max_tokens=self.cfg.max_tokens,
                         output_config=_output_config(self.cfg),
-                        system=_system_blocks(self.cfg.cache_ttl, self.cfg.guidance),
+                        system=_system_blocks(
+                            self.cfg.cache_ttl,
+                            self.cfg.guidance,
+                            self.project_tools,
+                        ),
                         messages=_with_loop_breakpoint(conversation),
                         output_format=PlannerResponse,
                         **({"tools": tools} if tools else {}),
@@ -968,7 +983,9 @@ def _semantic_problem(parsed: PlannerResponse) -> str | None:
     return None
 
 
-def make_planner(cfg: PlannerConfig, target_repo=None) -> PlannerClient:
+def make_planner(
+    cfg: PlannerConfig, target_repo=None, project_tools=None
+) -> PlannerClient:
     """Build the planner, with repository access when the project enables it.
 
     `target_repo` is optional so preflight can build a client just to prove the
@@ -1002,7 +1019,9 @@ def make_planner(cfg: PlannerConfig, target_repo=None) -> PlannerClient:
             # preceded it.
             semantic = SemanticSearch(search_cfg, reader=reader)
 
-    return AnthropicPlanner(cfg, reader=reader, semantic=semantic)
+    return AnthropicPlanner(
+        cfg, reader=reader, semantic=semantic, project_tools=project_tools
+    )
 
 
 def _build_anthropic_client(cfg: PlannerConfig):
@@ -1099,18 +1118,7 @@ stage, an environment problem.
 - **Self-contained instruction.** The executor cannot see the plan document,
   the other stages, or this conversation. Everything it needs goes in
   `instruction`.
-- **The executor cannot run commands, but it can look.** It has the same read
-  tools you do — `read_file`, `list_files`, `search`, `git_show`, `git_diff` —
-  over the whole repository, not only the files you name. So "find every site
-  that does X and convert it" is a reasonable thing to ask for, and you do not
-  have to enumerate what it can find for itself.
-
-  What it has no tool for is running anything: no shell, no test invocation,
-  nothing whose output it could quote. Do not write "run `grep -n ...`" or
-  "run the specs and check" — there is no such tool, and asking for one is
-  worse than useless: it will invent the output and argue with itself about a
-  file it is already looking at. One such instruction cost ten minutes of a
-  model looping over hallucinated command results.
+%%EXECUTOR_CAPABILITY%%
 
   Anything you want checked mechanically goes to the orchestrator as a regex,
   deterministic and free, and there are two of them because they answer
@@ -1358,8 +1366,72 @@ def _output_config(cfg) -> dict:
     return {"effort": cfg.effort}
 
 
+_NO_DECLARED_TOOLS = """
+  What it has no tool for is running anything: no shell, no test invocation,
+  nothing whose output it could quote. Do not write "run `grep -n ...`" or
+  "run the specs and check" — there is no such tool, and asking for one is
+  worse than useless: it will invent the output and argue with itself about a
+  file it is already looking at. One such instruction cost ten minutes of a
+  model looping over hallucinated command results."""
+
+
+def executor_capability_block(project_tools=None) -> str:
+    """What the executor can do, generated from the config rather than asserted.
+
+    This paragraph used to be a fixed string saying the executor "cannot run
+    commands" and has "no tool for running anything". True of every project
+    until `project_tools` shipped, and false afterwards for any project that
+    declares one — while the plan documents, written by people who knew about
+    the new tools, said the opposite.
+
+    What that cost is the reason this is generated. The planner found the
+    contradiction, reported it correctly, and withheld the work: "the two
+    documents and the pipeline contract disagree, so check which holds before
+    drawing one of these". A whole stream of dependency work went undrawn on
+    the strength of a sentence in our own prompt — the expensive failure
+    direction, because a stage that is never drawn leaves no artifact for
+    anything downstream to find wrong.
+
+    The rule it breaks is the one about a tool declaring its own behaviour.
+    A capability the operator configures is a capability the planner is told
+    about, by construction, so the two cannot drift again.
+    """
+    lines = [
+        "- **The executor can look, and it can run what this project declares.**",
+        "  It has the same read tools you do — `read_file`, `list_files`, "
+        "`search`, `git_show`, `git_diff` — over the whole repository, not only "
+        "the files you name. So \"find every site that does X and convert it\" "
+        "is a reasonable thing to ask for, and you do not have to enumerate "
+        "what it can find for itself.",
+    ]
+    declared = list(project_tools or [])
+    if not declared:
+        lines.append(_NO_DECLARED_TOOLS)
+        return "\n".join(lines)
+
+    lines.append(
+        "\n  This project also declares tools it may call. These are real: it "
+        "runs them and reads the exit code and output inside its own attempt, "
+        "so a stage may depend on the answer rather than having to guess it."
+    )
+    for tool in declared:
+        args = ", ".join(a.name for a in tool.arguments)
+        signature = f"`{tool.name}({args})`" if args else f"`{tool.name}`"
+        lines.append(f"  - {signature} — {' '.join(tool.description.split())}")
+    lines.append(
+        "\n  Nothing else. There is still no shell and no arbitrary command: a "
+        "tool not in that list does not exist, and asking for one is worse than "
+        "useless — the executor will invent the output and argue with itself "
+        "about a file it is already looking at. One such instruction cost ten "
+        "minutes of a model looping over hallucinated command results."
+    )
+    return "\n".join(lines)
+
+
 def _system_blocks(
-    cache_ttl: str | None = None, guidance: str | None = None
+    cache_ttl: str | None = None,
+    guidance: str | None = None,
+    project_tools=None,
 ) -> list[dict]:
     """The system prompt as a cacheable block.
 
@@ -1374,7 +1446,11 @@ def _system_blocks(
     response schema for a command, and the allowlist filters the result
     regardless.
     """
-    text = PLANNER_SYSTEM_PROMPT
+    # Substituted rather than appended: the capability paragraph belongs
+    # where the rest of the executor contract is, not bolted on after it.
+    text = PLANNER_SYSTEM_PROMPT.replace(
+        "%%EXECUTOR_CAPABILITY%%", executor_capability_block(project_tools)
+    )
     if guidance and guidance.strip():
         text += (
             "\n\n## Guidance for this project\n\n"

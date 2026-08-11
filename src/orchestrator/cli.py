@@ -240,7 +240,7 @@ def reconcile(config_path: Path | None, dry_run: bool) -> None:
             "no plan_addendum_path configured; nowhere to record observations"
         )
 
-    planner = make_planner(cfg.planner, cfg.target_repo)
+    planner = make_planner(cfg.planner, cfg.target_repo, cfg.project_tools)
     if planner.reader is None:
         raise click.ClickException(
             "planner.repo_access must be on: reconciling means checking the "
@@ -634,7 +634,7 @@ def _drive(
             cfg,
             project,
             paths,
-            planner=make_planner(cfg.planner, cfg.target_repo),
+            planner=make_planner(cfg.planner, cfg.target_repo, cfg.project_tools),
             reviewer=make_reviewer(cfg.reviewer, cfg.target_repo),
             log=log,
             tool_log=tools,

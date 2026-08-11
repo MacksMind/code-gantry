@@ -438,16 +438,21 @@ class TestTheExecutorCannotRunCommands:
     """
 
     def test_the_prompt_says_the_executor_cannot_run_commands(self):
-        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+        # Asserted on the rendered prompt, not the constant. The capability
+        # paragraph is generated from the project's declared tools now, so the
+        # constant is a template and what a model actually reads is this. A
+        # project declaring none — which is every project by default — is told
+        # exactly what it was told before.
+        from orchestrator.planner import _system_blocks
 
-        lowered = PLANNER_SYSTEM_PROMPT.lower()
-        assert "cannot run" in lowered or "cannot execute" in lowered
+        lowered = _system_blocks()[0]["text"].lower()
+        assert "no tool for is running anything" in lowered
         assert "grep" in lowered
 
     def test_it_points_at_forbidden_patterns_as_the_alternative(self):
-        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+        from orchestrator.planner import _system_blocks
 
-        section = PLANNER_SYSTEM_PROMPT.lower()
+        section = _system_blocks()[0]["text"].lower()
         assert "forbidden_patterns" in section
         # The guidance has to connect the two: do not ask the executor to
         # check; declare the check instead. Anchored on the prohibition
@@ -2108,10 +2113,11 @@ class TestNoPromptDescribesTheExecutorThatWasDeleted:
 
     def test_the_planner_is_not_told_the_executor_cannot_search(self):
         # It has `search`, which is grep over the repository.
-        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+        from orchestrator.planner import _system_blocks
 
-        assert "cannot run `grep`" not in PLANNER_SYSTEM_PROMPT
-        assert "search" in PLANNER_SYSTEM_PROMPT
+        text = _system_blocks()[0]["text"]
+        assert "cannot run `grep`" not in text
+        assert "search" in text
 
     def test_the_planner_is_not_told_the_executor_never_sees_a_test_result(self):
         # The loop runs the gates after every batch and appends the failure to
