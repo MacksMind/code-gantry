@@ -238,3 +238,66 @@ class TestTheSemanticToolWarnsThatItLags:
 
     def test_it_is_absent_when_no_index_is_configured(self):
         assert "semantic_search" not in {t["name"] for t in tool_schemas(None)}
+
+
+class TestTheExecutorGetsTheSameUnderstanding:
+    """One description, one addendum — not two descriptions.
+
+    The executor's variant led with "good for locating the place to work on"
+    and spent the rest on the index lagging its own uncommitted edits. That has
+    the emphasis backwards. If a stage instruction is complete the executor has
+    no reason to ask the index anything; the cases where it does are a gap the
+    instruction did not cover, and interpreting reviewer feedback — and both of
+    those are *how does this work* questions, the same ones the planner and
+    reviewer ask.
+
+    Observed: a reviewer's rework issue named a chain across three files (the
+    place that checks, the model it delegates to, the model holding the values).
+    An executor handed that feedback needs to trace exactly what the reviewer
+    traced. Told only that the tool locates a place to work, it has been given
+    the wrong tool for the job it actually has.
+
+    The lag is real and is the executor's alone — it is the only role whose own
+    uncommitted edits are missing from what it is shown — so it stays. It is an
+    addendum. `executortools`' own docstring already argues the general form:
+    the read tools are imported rather than restated, because a planner and an
+    executor told different things reason from different contracts about the
+    same repository.
+    """
+
+    def _text(self):
+        from orchestrator.executortools import SEMANTIC_TOOL_FOR_EDITING
+
+        return SEMANTIC_TOOL_FOR_EDITING["description"]
+
+    def test_it_carries_the_shared_substance(self):
+        from orchestrator.plannertools import SEMANTIC_TOOL
+
+        shared = SEMANTIC_TOOL["description"]
+        assert shared in self._text(), (
+            "the executor should be given the same understanding, not a second "
+            "description that can drift from it"
+        )
+
+    def test_it_names_both_questions(self):
+        text = self._text().lower()
+        assert "every kind of this" in text
+        assert "how does this work" in text
+
+    def test_the_lag_survives_as_an_addendum(self):
+        text = self._text().lower()
+        assert "edited in this session" in text or "your own" in text
+
+    def test_the_lag_comes_after_the_substance(self):
+        # An addendum that leads is not an addendum; it is the description.
+        text = self._text().lower()
+        assert text.index("how does this work") < text.index("this session")
+
+    def test_it_is_still_one_tool(self):
+        from orchestrator.executortools import SEMANTIC_TOOL_FOR_EDITING
+        from orchestrator.plannertools import SEMANTIC_TOOL
+
+        assert SEMANTIC_TOOL_FOR_EDITING["name"] == SEMANTIC_TOOL["name"]
+        assert (
+            SEMANTIC_TOOL_FOR_EDITING["input_schema"] == SEMANTIC_TOOL["input_schema"]
+        )

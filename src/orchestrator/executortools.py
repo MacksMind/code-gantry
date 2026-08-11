@@ -119,21 +119,32 @@ EDIT_TOOLS: list[dict[str, Any]] = [
 
 SEMANTIC_TOOL_FOR_EDITING: dict[str, Any] = {
     "name": SEMANTIC_TOOL["name"],
+    # The planner's description, plus one paragraph that is true only here.
+    #
+    # It used to be a second description, opening "good for locating the place
+    # to work on" and spending the rest on the lag. That has the emphasis
+    # backwards. An executor with a complete instruction has no reason to ask
+    # the index anything; the cases where it does are a gap the instruction did
+    # not cover and interpreting reviewer feedback, and both are *how does this
+    # work* questions — the same ones the other two roles ask. Observed: a
+    # rework issue naming a chain across three files, handed to an executor
+    # that had been told the tool finds a place to work.
+    #
+    # Concatenated rather than restated for the reason this module's docstring
+    # already gives about the read tools: two descriptions of one tool drift,
+    # and then a planner and an executor reason from different contracts about
+    # the same repository.
     "description": (
-        "Find code by meaning when you do not know what it is called. Good for "
-        "locating the place to work on; useless as a source of text.\n\n"
-        "**What it returns is out of date.** The index is rebuilt from commits, "
-        "so it does not contain anything you have edited in this session, and "
-        "it may be several commits behind the working tree besides. The "
-        "snippets it shows you are the file as it *was*.\n\n"
-        "So treat every result as a pointer: take the path, then `read_file` "
-        "it to see what is there now. Never quote a snippet from here into an "
-        "`edit` — it is the single most reliable way to have that edit "
-        "refused, because you will be quoting bytes that have since changed or "
-        "that you yourself have already replaced.\n\n"
-        "It is also not an existence check. Asked about something with no "
-        "matches it returns the nearest things it has, which look like answers. "
-        "`list_files` and `search` answer existence; this does not."
+        SEMANTIC_TOOL["description"]
+        + "\n\nOne thing more, which is true for you and not for the roles "
+        "that drew this stage. **The index does not contain your own work.** "
+        "It is rebuilt from commits, so nothing you have edited in this "
+        "session is in it, and it may be several commits behind the working "
+        "tree besides. Never quote a snippet from here into an `edit`: it is "
+        "the most reliable way to have that edit refused, because you will be "
+        "quoting bytes that have since changed or that you yourself have "
+        "already replaced. Take the path, then `read_file` it to see what is "
+        "there now."
     ),
     "input_schema": SEMANTIC_TOOL["input_schema"],
 }
