@@ -1291,6 +1291,41 @@ about what the current code cannot do — when the operator's own script had bee
 written to handle exactly that case, with a comment citing the incident. When a
 number surprises, suspect the measurement first.
 
+**A watermark into a concatenation indexes a list whose middle moves.**
+`tools.log` was written by slicing `reader.calls + editor.calls` at one index,
+and every read appended during a turn pushed the whole editor half one place
+right — so the next slice began inside edits already logged, re-printed those,
+and skipped the reads that displaced them. Measured over 992 calls: 479 edits
+reported against 117, 267 reads against 455, and none of the 37 `git_diff`
+calls, with eleven consecutive `edit(config/routes.rb)` lines standing for two
+real edits. Nothing was wrong with either ledger, and the summary line beside
+it in `run.log` was exact the whole time, because it *counts* the pair rather
+than slicing them joined. That is the tell worth keeping: two views of the same
+data disagreeing means the derivation is wrong, not the data — and a joined
+view needs one watermark per source, derived from the sources so no call site
+can mis-shape it. It also arrived as an observation about the *executor*
+repeating itself, which the transcripts refuted: 12 duplicate calls in 992.
+
+**A flag that filters can undo the boundary you thought bounded it.**
+`search`'s docstring stated the tracked-only boundary as ripgrep's ignore
+handling — "ignored files out, untracked-but-not-ignored in" — and named this
+operator's convention of keeping identifiable values in ignored files as the
+reason it was safe. `-g` is a filter over the walk rather than within it, so a
+model-supplied glob overrides `.gitignore` entirely, and the guarantee held for
+exactly the calls that named no path. Under `-g '**/*'`: 41 hits out of the
+executor's own conversation transcript, 18 out of `tools.log`, and
+`planner.json` for the stage being executed — the planner's reasoning, which
+the executor is deliberately not given. Then it compounds, because output is
+capped: 31 of 369 searches hit the cap, so artifacts winning the first 12k push
+the real hits out and the model searches again. A leak surfaced as repetition.
+Ask what a stated boundary is *made of*, and re-measure it under the inputs a
+model actually supplies rather than the ones the docstring was written against.
+
+The fix carries a second lesson. The first fixture force-added the ignored
+files, which made them tracked, which made `git check-ignore` decline to report
+them — the test would have passed by making the leak legitimate. A fixture that
+has to reproduce an exclusion must be checked for whether it still excludes.
+
 ## Where things live
 
 `nodes.py` holds the loop's decisions — which failures route to the executor,
