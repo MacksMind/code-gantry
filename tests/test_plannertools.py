@@ -116,3 +116,52 @@ class TestCallDetailNamesTheRangeToo:
 
         assert call_detail({"pattern": "render", "glob": "app/**"}) == "render"
         assert call_detail({"glob": "app/**"}) == "app/**"
+
+
+class TestSemanticNamesBothQuestionsItAnswers:
+    """It described one use, and the other is the one that pays.
+
+    The description called sweep completeness — "have I found every kind of
+    this?" — its best use. That is an enumeration question. The case that
+    demonstrated the tool's value was a mechanism question: "how are admin
+    controller action permissions determined, and where are allowed action
+    names configured?" returned `Admin::ApplicationController#authorized?`,
+    `User#has_authority_to` and `Role`, none of them named in the question and
+    no one `search` reaching all three without already knowing the names.
+
+    Worth the words because the alternative is not a slower search, it is not
+    finding it. And because a model reaches for a tool on the strength of its
+    description alone: nothing carries a good result from one run into the
+    next, so improving what the index returns cannot make anything ask for it
+    more often. Only this string can.
+    """
+
+    def _text(self):
+        from orchestrator.plannertools import SEMANTIC_TOOL
+
+        return SEMANTIC_TOOL["description"].lower()
+
+    def test_it_names_the_enumeration_question(self):
+        assert "every kind of this" in self._text()
+
+    def test_it_names_the_mechanism_question(self):
+        text = self._text()
+        assert "how does this work" in text or "how it works" in text
+        assert "chain" in text or "several files" in text or "spread over" in text
+
+    def test_the_limits_survive(self):
+        # All three were expensive to learn and none of them changed.
+        text = self._text()
+        assert "not an existence check" in text
+        assert "pointer" in text
+        assert "not evidence" in text
+
+    def test_it_still_says_to_prefer_search_for_a_known_name(self):
+        assert "if you can spell" in self._text()
+
+    def test_it_carries_no_project_vocabulary(self):
+        # This ships to every project's planner and reviewer. The example that
+        # prompted the change is a Rails one and must not travel with it.
+        text = self._text()
+        for word in ("rails", "ruby", "controller", "role", "rspec", ".rb", "gem"):
+            assert word not in text, f"{word!r} is project knowledge in a tool description"
