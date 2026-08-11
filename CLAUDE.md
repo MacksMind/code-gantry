@@ -324,6 +324,46 @@ docstring made this argument first, about shas and timestamps: embedding them
 in append-only prose turns them into "claims about history that history had
 invalidated".
 
+**A prompt that describes a capability must be generated from the thing that
+grants it.** `PLANNER_SYSTEM_PROMPT` stated flatly that the executor "cannot
+run commands" and has "no tool for running anything". True of every project
+until `project_tools` shipped, false the same day for any project that declares
+one — while the plan documents, written by people who knew, said the opposite.
+The planner found the contradiction, reported it correctly and *withheld the
+work*: "the two documents and the pipeline contract disagree, so check which
+holds before drawing one of these". A stream of dependency work went undrawn on
+the strength of a sentence in our own prompt.
+
+That is the expensive failure direction, and it is worth naming as a general
+shape. A missing capability produces a stage whose premise the code
+contradicts, and the gates catch it. A *phantom* constraint makes work read as
+blocked — and a stage that is never drawn leaves no artifact for anything
+downstream to find wrong, so nothing catches it at all. It surfaced only
+because the planner is asked to report contradictions in the plan; without that
+channel it would still be true.
+
+So the capability paragraph is built from `cfg.project_tools` rather than
+asserted, and a project declaring none reads exactly what it read before. The
+same reasoning put the *wrong dependency* case into `PlanNote.kind`: the plan
+states what depends on what, the code decides whether that is true, and a
+prerequisite that does not exist can hold an item closed for the life of a
+project.
+
+**Improving a tool's answers cannot make anything reach for it more often.**
+There is no memory across runs, so a good result is not carried anywhere — a
+model decides whether to call a tool from the description in front of it and
+nothing else. The index decides what a call is *worth*; the description decides
+how many calls *happen*. Which means the two can never confound a measurement,
+and it is worth knowing before designing an experiment to separate them: I
+proposed landing an index fix and a prompt edit separately so the effect could
+be attributed, and there was nothing to attribute. It also means a usage rate
+is not a verdict on value. Semantic search sat at 0.9% of calls while returning
+five 2007-era migration filenames out of six hits; excluding `db/migrate` and
+an archived progress log from the index turned the same question into the three
+links of the chain it was actually asking about, with no change in score — the
+top hit moved 0.696 to 0.679. Rank was never the signal. What changed is what
+it was competing against.
+
 **A tool reads more than you hand it.** Aider scans the user message *and its
 own reply* for anything path-shaped and attaches the file, with `--yes-always`
 answering; there is no flag to disable it, and `--detect-urls` covers URLs
@@ -693,6 +733,27 @@ ran without it** — no error, no test, and the only visible symptom would be a
 model treating a rejection as something to add to. When a payload changes
 shape, enumerate what the old shape carried; the parts with no field of their
 own are the ones that vanish.
+
+**A test that forbids a name is not the same as a test that pins a decision.**
+`FEEDBACK_OUTPUT_CHARS = 4_000` was declared in `gates.py` and again in
+`nodes.py`, each with its own one-line helper — a regrowth of the duplication
+`clip_for_model` was extracted to end, one level up: the function was
+centralised and the number it is called with was not. Nothing fails when two
+copies of a constant disagree; one role simply starts giving a model less of a
+failure to read than the other.
+
+The first test written for it forbade any function called `clip` outside
+`gates`, and failed immediately on `verify._clip` — a one-line delegation
+carrying the reason the ordering inside it matters. A named wrapper is not the
+failure mode; a second *application* of a budget is. Rewritten to assert that
+`FEEDBACK_OUTPUT_CHARS` is spent exactly once, it leaves the other budgets
+alone, because a lint diff and a one-line log note are genuinely different
+decisions rather than copies. A test that bans a word forces unrelated things
+to be inlined to satisfy it.
+
+The same sweep is worth running deliberately rather than by accident: parse
+every module and list the names defined in more than one. Of five, four were
+delegating wrappers whose docstrings said why, and one was this.
 
 **Cut code with a parser, not a pattern.** Twice in five minutes, deleting
 Aider by regex removed the wrong span: a method boundary matched a `def`
@@ -1128,6 +1189,58 @@ actually sent, was 50 of 70. An absent field and a zero are indistinguishable
 to a reader, so an artifact that drops fields does not merely fail to answer —
 it answers wrongly, with the confidence of a record.
 
+**And the writer must be the model, not a list of keys.** Both rules above were
+written and `executor-loop.json` still carried ten fields of twenty. The four
+it omitted — `ok`, `timed_out`, `turns_exhausted`, `log` — are between them the
+entire answer to *why did this attempt end*, which is the only question the
+per-attempt record exists for. Found by making the mistake: asked why an
+attempt stopped after three reads and no edits, I read the file, got nothing
+for those four, and was one step from reporting that the loop had not recorded
+it. It had — in `executor.log` next door, where the model said the fix lay in a
+file outside `edit_files`. The enumeration is also what makes the *next* field
+go missing: `commit_refused` was added the same morning and was already absent.
+So the writer walks `dataclasses.fields` and a field has to be excluded on
+purpose. The rule generalises past artifacts: wherever a subset is written out
+by hand, the hand is the defect.
+
+**A counter added underneath another is not reset by the code that resets the
+first.** `plan()` cleared `calls` and zeroed `_lines_used`; `max_total_chars`
+arrived later, under `max_total_lines`, and nothing taught the reset about it.
+`_chars_used` then accumulated for the life of the process, and past the
+ceiling *every planner call was refused on its first read* — 14 of 31 on one
+run, each drawing a stage with no way to check a premise against the code,
+which is the documented cause of all-attempts-zero-diff stages. The cliff is
+the tell: stage 025 got 3 reads of 7 and every call after it got zero.
+
+The fix that matters is not a tidier reset. Clearing field by field is a list
+somebody maintains, and the next counter is one more line to forget in a place
+whose omission stays invisible until a long run crosses a ceiling. The spent
+state is one object now and clearing it is replacing it. That introduced its
+own hazard worth knowing: something else held the list being replaced —
+`SemanticSearch` was constructed with `calls=reader.calls` — so it would have
+gone on appending to an orphan, losing every semantic call from the log with
+nothing raising. Whatever shares a mutable structure has to reach *through* the
+owner, not hold the structure.
+
+**And the reviewer had no reset at all**, which is the same defect arriving by
+the other door: not a field forgotten but a whole call site written without
+one. Its ledger accumulated across every review a process made, so
+`review.json` recorded 685 calls for a review that made a handful, the ceilings
+named "for this step" were really for the run, and refusals climbed from zero
+to 58 as late reviews were starved by their predecessors' reads. Two roles,
+one mechanism, and only the one with the older code had the guard.
+
+**A budget whose consumption is never printed cannot be seen to leak.** That
+one ran for a whole run and the only outward sign was the planner saying, in
+prose, that it could not read — a claim it then misdiagnosed as its context
+being too large, recommending a fold that would not have moved the number by a
+byte. The planner and review lines carry ` (120k/800k chars)` now. The test is
+not the value but the *series*: a figure that returns to a low number each step
+is a budget being reset, and one that climbs is a leak anyone can see. It
+answers the tuning question too, which nothing could answer before — measured
+after the fix, the planner peaks at 15% of its ceiling and the reviewer at 5%,
+so neither is anywhere near binding.
+
 **Cache writes measure what was newly cached, not how big the job was.** The
 appealing alternative for sizing a multi-pass job is summing cache writes, and
 the artifacts refute it: a stage that reuses an earlier stage's prefix looks
@@ -1230,6 +1343,23 @@ removed to get there and both were the planner reading its own prior output:
 the deferral list, and a 4,000-character tail of `status.md`, which carries
 `status_entry` and `reasoning` verbatim. `status.md` is still written; nothing
 reads it back.
+
+`projecttools.py` is the menu an operator adds to the eight built-in tools:
+`ProjectTool` in config declares a name, a description and an **argv list**,
+and the executor calls it as it calls `read_file`. Argv and never a shell is
+the whole safety story — a model-supplied value is one inert element, so there
+is no metacharacter to escape — and a placeholder must occupy an entire
+element, which is what stops a value being interpolated into a larger string.
+An operator who writes a shell into their own config has chosen that; the
+protection is on the model's arguments, not on the operator. Nothing gates
+which stage may call which tool, deliberately: the scope gate already measures
+the outcome from the tree, and a per-stage permission would be a claim used to
+predict what an existing gate observes.
+
+`repotools.Spend` is everything mutable about a read budget in one object, so
+clearing it is replacing it rather than zeroing a list of fields; `count_calls`,
+`count_refusals` and `render_counts` are the one summariser all three roles
+report through, after each had grown its own.
 
 `configversion.py` is what replaced `approval.py`: a config is identified by
 its git blob sha, recorded at run start and checked on every resume, so an
