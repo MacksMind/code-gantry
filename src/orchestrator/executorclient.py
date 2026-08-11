@@ -106,7 +106,20 @@ class OpenAIExecutorModel:
         self.tool_log = tool_log
         self._client = client if client is not None else build_openai_client(cfg)
 
-    def _log_new_calls(self, reader, editor, seen: int) -> int:
+    @staticmethod
+    def _watermark(reader, editor) -> tuple[int, int]:
+        """Where each ledger stands, as one value the caller cannot mis-shape.
+
+        Derived from the ledgers rather than written out at the call site, for
+        the reason the pair exists at all: a second place that knows the shape
+        is a second place to get it wrong.
+        """
+        return (
+            len(getattr(reader, "calls", []) or []),
+            len(getattr(editor, "calls", []) or []),
+        )
+
+    def _log_new_calls(self, reader, editor, seen: tuple[int, int]) -> tuple[int, int]:
         """Emit the calls made since `seen`; return the new watermark.
 
         Two ledgers, because reads and edits are recorded by different objects
@@ -114,16 +127,29 @@ class OpenAIExecutorModel:
         within a turn is reads then edits rather than the true interleaving,
         which the split ledgers cannot recover; the turn boundary is preserved
         and that is what a reader following along actually needs.
+
+        **One watermark per ledger.** This was a single index into the two
+        concatenated, and a concatenation's middle moves: every read appended
+        during a turn pushes the whole editor half one place right, so the next
+        slice began inside edits already logged. It re-printed those and
+        skipped the reads that displaced them. Measured over one run of 992
+        calls, `tools.log` claimed 479 edits against 117, 267 reads against
+        455, and none of the 37 `git_diff` calls — eleven consecutive
+        `edit(config/routes.rb)` lines for two real edits, which reads as a
+        model thrashing on a file. Nothing was wrong with either ledger, and
+        the summary line beside it in `run.log` was exact the whole time,
+        because it counts the pair rather than slicing them joined.
         """
-        calls = list(getattr(reader, "calls", []) or []) + list(
-            getattr(editor, "calls", []) or []
-        )
+        reads, edits = seen
         if self.tool_log:
             from orchestrator.planner import _render_call
 
-            for call in calls[seen:]:
+            new = list((getattr(reader, "calls", []) or [])[reads:]) + list(
+                (getattr(editor, "calls", []) or [])[edits:]
+            )
+            for call in new:
                 self.tool_log(f"[execute] {_render_call(call)}")
-        return len(calls)
+        return self._watermark(reader, editor)
 
     def _max_turns(self) -> int:
         """Backstop, not the real ceiling.
@@ -161,8 +187,9 @@ class OpenAIExecutorModel:
         """
         out = ExecutorTurn()
         tools = self._tools(semantic)
-        # Both ledgers, cumulative across the turns of one attempt.
-        logged = len(reader.calls) + len(editor.calls)
+        # Both ledgers, cumulative across the turns of one attempt — and one
+        # watermark each, because they grow independently.
+        logged = self._watermark(reader, editor)
 
         extra: dict = {
             # GPT-5.6 caches at breakpoints and does not fall back to the

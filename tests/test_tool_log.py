@@ -122,6 +122,81 @@ class TestEachRoleWritesThere:
         assert timeline == ["[plan] search(X) -> 1 line(s)"]
 
 
+class TestTheExecutorsTwoLedgers:
+    """The executor reads through one object and writes through another.
+
+    Both grow during one attempt, and a watermark into their concatenation is
+    an index into a list whose *middle moves*: every read appended after a turn
+    pushes the whole editor half one place right, so the next slice starts
+    inside the edits that were already logged. Measured over one run of 992
+    calls, `tools.log` reported 479 edits against 117 real ones, 267 reads
+    against 455, and not one of the 37 `git_diff` calls — while `run.log`'s
+    summary line, which merges the same pair by counting rather than slicing,
+    was exact. A log that re-prints an edit nine times reads as a model
+    thrashing on one file.
+
+    One watermark per ledger, because the two lists are the only thing that
+    can be indexed without the other's growth changing the answer.
+    """
+
+    def _client(self, sink):
+        from orchestrator.config import ExecutorConfig
+        from orchestrator.executorclient import OpenAIExecutorModel
+
+        c = OpenAIExecutorModel.__new__(OpenAIExecutorModel)
+        c.cfg = ExecutorConfig(model="gpt-5.6-luna")
+        c.tool_log = sink
+        return c
+
+    def _turns(self, tmp_path, turns):
+        """Drive `_log_new_calls` once per turn, as `run` does."""
+        from orchestrator.runlog import RunLog
+
+        sink = RunLog(tmp_path / "tools.log", echo=None)
+        client = self._client(sink)
+        reader, editor = Reader(), Reader()
+        seen = client._watermark(reader, editor)
+        for reads, edits in turns:
+            for detail in reads:
+                reader.calls.append(ToolCall(tool="read_file", detail=detail, lines=1))
+            for detail in edits:
+                editor.calls.append(ToolCall(tool="edit", detail=detail, lines=1))
+            seen = client._log_new_calls(reader, editor, seen)
+        sink.close()
+        return (tmp_path / "tools.log").read_text().splitlines()
+
+    def test_every_call_is_logged_exactly_once(self, tmp_path):
+        lines = self._turns(
+            tmp_path,
+            [
+                (["a.rb", "b.rb"], ["x.rb"]),
+                (["c.rb", "d.rb", "e.rb"], ["y.rb"]),
+                (["f.rb"], ["z.rb", "w.rb"]),
+            ],
+        )
+        assert len(lines) == 10, lines
+        for detail in ("a.rb", "b.rb", "c.rb", "d.rb", "e.rb", "f.rb"):
+            assert sum(f"read_file({detail})" in line for line in lines) == 1, detail
+        for detail in ("x.rb", "y.rb", "z.rb", "w.rb"):
+            assert sum(f"edit({detail})" in line for line in lines) == 1, detail
+
+    def test_a_turn_that_only_reads_does_not_reprint_earlier_edits(self, tmp_path):
+        # The shape actually seen: reads outnumber edits, so the slice lands in
+        # the editor's tail and the same edit is emitted turn after turn.
+        lines = self._turns(
+            tmp_path,
+            [([], ["x.rb"]), (["a.rb", "b.rb"], []), (["c.rb", "d.rb"], [])],
+        )
+        assert sum("edit(x.rb)" in line for line in lines) == 1, lines
+
+    def test_reads_made_after_the_first_edit_are_not_skipped(self, tmp_path):
+        # The other half of the same slip: what the tail re-prints, it also
+        # displaces, and a read that never reaches the log reads as a model
+        # editing a file it never opened.
+        lines = self._turns(tmp_path, [([], ["x.rb"]), (["a.rb"], ["y.rb"])])
+        assert any("read_file(a.rb)" in line for line in lines), lines
+
+
 class TestTheTimelineIsOutputNotDiagnostics:
     """The run log echoes to stdout; errors keep stderr.
 
