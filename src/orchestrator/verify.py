@@ -67,6 +67,7 @@ class VerifyOutcome:
     # And the ordering seed each of them failed under, so an excusal leaves
     # something reproducible behind rather than only a name.
     flaky_seeds: dict[str, str] = field(default_factory=dict)
+    flaky_examples: dict[str, list[str]] = field(default_factory=dict)
     test_seconds: float = 0.0
     # Populated on a scope violation. The planner decides whether to adopt these
     # paths into the stage or have them reverted; the stage's other work is
@@ -584,6 +585,7 @@ def _layer_tests(ctx: _Context, outcome: VerifyOutcome):
     outcome.flake_reruns += found.flake_reruns
     outcome.flaky_files.extend(found.flaky_files)
     outcome.flaky_seeds.update(found.flaky_seeds)
+    outcome.flaky_examples.update(found.flaky_examples)
 
     if found.ok:
         # A file that passes whole and standalone is green, which is the same

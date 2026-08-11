@@ -484,3 +484,175 @@ class TestTheExcusalOutlivesTheRun:
         append_flakes(tmp_path, "s", ["spec/a_spec.rb"], {}, "2026-07-31T01:00:00-04:00")
         assert "no seed reported" in (tmp_path / FLAKES_FILENAME).read_text()
         assert recent_flakes(tmp_path / FLAKES_FILENAME)[0]["seed"] is None
+
+
+class TestTheExactExampleThatFailed:
+    """A file name is where to look; the locator is what to run.
+
+    `flakes.md` recorded the file and the seed, which between them say "this
+    file failed somewhere under this ordering". The runner had already printed
+    the answer — every RSpec failure ends in a re-run line naming the exact
+    example — and it was being read only far enough to extract the path, then
+    discarded. Measured over 276 excusals: 76 of them name one feature spec,
+    and nothing in the ledger says whether that is one example failing 76 times
+    or 76 different ones. Those are different bugs and the file could not tell
+    them apart.
+
+    Taken from the same lines `failed_file_pattern` already matches, so no
+    second regex has to be kept correct against the first. Everything before
+    the runner's ` # description` comment is the locator; the description is
+    prose and changes when someone renames a test.
+    """
+
+    def test_it_keeps_the_bracket_locator_whole(self):
+        from orchestrator.flake import failing_examples
+
+        found = failing_examples(RSPEC_OUTPUT, RSPEC_PATTERN)
+        assert found == {
+            "spec/requests/checkout_spec.rb": [
+                "rspec './spec/requests/checkout_spec.rb[1:1:1:1]'"
+            ]
+        }
+
+    def test_it_keeps_the_line_number_form_too(self):
+        from orchestrator.flake import failing_examples
+
+        output = (
+            "Failed examples:\n\n"
+            "rspec ./spec/models/user_spec.rb:531 # User does a thing\n"
+        )
+        assert failing_examples(output, RSPEC_PATTERN) == {
+            "spec/models/user_spec.rb": ["rspec ./spec/models/user_spec.rb:531"]
+        }
+
+    def test_several_examples_in_one_file_are_all_kept(self):
+        from orchestrator.flake import failing_examples
+
+        output = (
+            "rspec ./spec/a_spec.rb:1 # one\n"
+            "rspec ./spec/a_spec.rb:9 # two\n"
+        )
+        assert failing_examples(output, RSPEC_PATTERN)["spec/a_spec.rb"] == [
+            "rspec ./spec/a_spec.rb:1",
+            "rspec ./spec/a_spec.rb:9",
+        ]
+
+    def test_a_parallel_runners_repeated_block_is_deduplicated(self):
+        # Each worker prints its own summary, so the same locator arrives more
+        # than once — the same reason `failed_files` deduplicates.
+        from orchestrator.flake import failing_examples
+
+        output = "rspec ./spec/a_spec.rb:1 # one\n" * 3
+        assert failing_examples(output, RSPEC_PATTERN)["spec/a_spec.rb"] == [
+            "rspec ./spec/a_spec.rb:1"
+        ]
+
+    def test_it_survives_a_description_containing_a_hash(self):
+        # Split on the first ` # `, which is the runner's separator; a `#`
+        # inside the description belongs to the description.
+        from orchestrator.flake import failing_examples
+
+        output = "rspec ./spec/a_spec.rb:1 # renders #show for the user\n"
+        assert failing_examples(output, RSPEC_PATTERN)["spec/a_spec.rb"] == [
+            "rspec ./spec/a_spec.rb:1"
+        ]
+
+    def test_no_pattern_means_no_answer_rather_than_a_guess(self):
+        from orchestrator.flake import failing_examples
+
+        assert failing_examples(RSPEC_OUTPUT, None) == {}
+
+
+class TestTheLedgerCarriesTheLocator:
+    def test_it_is_written_beside_the_seed(self, tmp_path):
+        append_flakes(
+            tmp_path, "s", ["spec/a_spec.rb"], {"spec/a_spec.rb": "42"},
+            "2026-08-11T20:00:00-04:00",
+            examples={"spec/a_spec.rb": ["rspec ./spec/a_spec.rb:1"]},
+        )
+        body = (tmp_path / FLAKES_FILENAME).read_text()
+        assert "seed `42`" in body
+        assert "rspec ./spec/a_spec.rb:1" in body
+
+    def test_the_reader_gets_them_back(self, tmp_path):
+        append_flakes(
+            tmp_path, "s", ["spec/a_spec.rb"], {"spec/a_spec.rb": "42"},
+            "2026-08-11T20:00:00-04:00",
+            examples={
+                "spec/a_spec.rb": [
+                    "rspec ./spec/a_spec.rb:1", "rspec ./spec/a_spec.rb:9"
+                ]
+            },
+        )
+        found = recent_flakes(tmp_path / FLAKES_FILENAME)[0]
+        assert found["examples"] == [
+            "rspec ./spec/a_spec.rb:1", "rspec ./spec/a_spec.rb:9"
+        ]
+        assert found["seed"] == "42"
+
+    def test_an_older_line_without_them_still_parses(self, tmp_path):
+        # 276 entries predate this and nothing rewrites them.
+        (tmp_path / FLAKES_FILENAME).write_text(
+            "- flake `2026-08-01T00:00:00-04:00` `s` `spec/a_spec.rb` seed `9`\n"
+        )
+        found = recent_flakes(tmp_path / FLAKES_FILENAME)[0]
+        assert found["seed"] == "9"
+        assert found["examples"] == []
+
+    def test_a_flake_with_no_locator_says_nothing_extra(self, tmp_path):
+        append_flakes(
+            tmp_path, "s", ["spec/a_spec.rb"], {"spec/a_spec.rb": "42"},
+            "2026-08-11T20:00:00-04:00",
+        )
+        assert (tmp_path / FLAKES_FILENAME).read_text().rstrip().endswith("seed `42`")
+
+
+class TestTheLocatorSurvivesTheJourney:
+    """Runner output to `flakes.md`, through every schema between them.
+
+    The locator crosses five: `FlakeVerdict`, `GateResult`, `VerifyOutcome`,
+    `_record_flakes`'s arguments, and the line itself. Four separate defects in
+    this project have been values computed correctly and lost in transit, and
+    every one passed its unit tests on both ends — so the parser being right
+    and the writer being right is exactly the evidence that has proved
+    insufficient before.
+    """
+
+    def test_it_reaches_the_ledger_from_a_real_command(self, repo, tmp_path):
+        from types import SimpleNamespace
+
+        from orchestrator import gates
+        from orchestrator.config import Stage
+        from orchestrator.gitops import Git
+        from orchestrator.nodes import _record_flakes
+
+        cfg = config(
+            repo,
+            test_command=(
+                "echo 'Failed examples:'; "
+                "echo \"rspec ./spec/models/user_spec.rb:531 # User does a thing\"; "
+                "echo 'Randomized with seed 4845'; exit 1"
+            ),
+            scoped_test_command="true {paths}",
+            seed_pattern=r"^Randomized with seed (\d+)",
+        )
+        stage = Stage(id="s1", instruction="do it", edit_files=["app.py"])
+        found = gates.run_tests(
+            stage, cfg, Git(repo), CommandRunner(cwd=repo, timeout=60),
+            Git(repo).head_sha(), for_loop=False,
+        )
+        assert found.ok, "the file passes alone, so this is a flake"
+        assert found.flaky_examples == {
+            "spec/models/user_spec.rb": ["rspec ./spec/models/user_spec.rb:531"]
+        }
+
+        rt = SimpleNamespace(
+            project=SimpleNamespace(project_dir=tmp_path), log=lambda *a: None
+        )
+        _record_flakes(
+            rt, stage.id, found.flaky_files, found.flaky_seeds, found.flaky_examples
+        )
+        entry = recent_flakes(tmp_path / FLAKES_FILENAME)[0]
+        assert entry["file"] == "spec/models/user_spec.rb"
+        assert entry["seed"] == "4845"
+        assert entry["examples"] == ["rspec ./spec/models/user_spec.rb:531"]

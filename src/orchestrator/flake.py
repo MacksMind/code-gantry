@@ -59,6 +59,10 @@ class FlakeVerdict:
     # point is the ordering that broke, and the re-runs deliberately use a
     # different one.
     seeds: dict[str, str] = field(default_factory=dict)
+    # file -> the locators the runner printed for it, read from the same run
+    # and for the same reason as `seeds`: it is the ordering that broke, and
+    # the re-runs deliberately use another.
+    examples: dict[str, list[str]] = field(default_factory=dict)
 
     @property
     def output(self) -> str:
@@ -99,6 +103,54 @@ def failed_files(output: str, pattern: str | None) -> list[str]:
 def normalize(path: str) -> str:
     """Test runners print `./spec/a_spec.rb`; git prints `spec/a_spec.rb`."""
     return path[2:] if path.startswith("./") else path
+
+
+def failing_examples(output: str, pattern: str | None) -> dict[str, list[str]]:
+    """The exact examples that failed, grouped by file, deduplicated.
+
+    A file name says where to look and a seed says under which ordering; the
+    locator says *what to run*, and the runner had already printed it on the
+    line this tool was reading anyway. Measured over 276 excusals: 76 name one
+    feature spec, and nothing in the ledger said whether that was one example
+    failing 76 times or 76 different ones. Those are different bugs.
+
+    Taken from the lines `failed_file_pattern` already matches rather than from
+    a second regex, so there is nothing to keep in step with it — the operator
+    tunes one pattern and both answers follow. What is kept is the whole line
+    up to the runner's ` # description`: the locator is the part that can be
+    re-run, and the description is prose that changes when someone renames a
+    test. A runner that prints no such comment simply keeps its whole line,
+    which is still exactly the thing to re-run.
+
+    Deduplicated per file for the reason `failed_files` is: a parallel runner
+    concatenates one summary block per worker.
+    """
+    if not pattern or not output:
+        return {}
+    found: dict[str, list[str]] = {}
+    try:
+        matches = re.finditer(pattern, strip_ansi(output), re.MULTILINE)
+    except re.error:  # pragma: no cover - config validation rejects these
+        return {}
+    text = strip_ansi(output)
+    for match in matches:
+        path = normalize(match.group(1))
+        if not path:
+            continue
+        # Anchored on the end of the match, never the start. An operator's
+        # pattern typically opens `^\s*`, and `\s` matches the newline before
+        # the line — so `match.start()` sits on the *previous* line's break and
+        # slicing from it yields the blank line above the failure.
+        start = text.rfind("\n", 0, match.end()) + 1
+        end = text.find("\n", match.end())
+        line = text[start:] if end == -1 else text[start:end]
+        locator = line.split(" # ", 1)[0].strip()
+        if not locator:
+            continue
+        seen = found.setdefault(path, [])
+        if locator not in seen:
+            seen.append(locator)
+    return found
 
 
 def seeds_by_file(
@@ -171,6 +223,7 @@ def adjudicate(
     command_text = cfg.scoped_test_command.format(paths=paths)
     listed = ", ".join(files)
     seeds = seeds_by_file(output, cfg.failed_file_pattern, cfg.seed_pattern)
+    examples = failing_examples(output, cfg.failed_file_pattern)
 
     # Three strikes: the group run that got us here, then up to two alone. One
     # isolated attempt proved too few — a spec failed in the suite, failed
@@ -193,6 +246,7 @@ def adjudicate(
         results=results,
         files=files,
         seeds=seeds,
+        examples=examples,
         summary=(
             f"{len(files)} failing file(s) passed when re-run whole and alone "
             f"({listed}); recorded as a suite flake"
@@ -384,6 +438,7 @@ def append_flakes(
     files: list[str],
     seeds: dict[str, str],
     now: str,
+    examples: dict[str, list[str]] | None = None,
 ) -> Path:
     """Record what was excused, when, and under which ordering.
 
@@ -415,6 +470,19 @@ def append_flakes(
             # `seed_pattern`; a silently short line looks like the flake had
             # no ordering, which is never true.
             line += " — no seed reported"
+        # Trailing, and only when there is something to say. Every line written
+        # before this exists without it, and the reader has to keep parsing
+        # those — 276 of them at the time it was added — so the locators go
+        # where their absence is the old format rather than a broken one.
+        found = list((examples or {}).get(name) or [])
+        if found:
+            shown = found[:_MAX_LOCATORS]
+            text = ", ".join(f"`{one}`" for one in shown)
+            if len(found) > len(shown):
+                # Said rather than trimmed silently: a line that stops at ten
+                # reads as a flake with ten failing examples.
+                text += f", and {len(found) - len(shown)} more"
+            line += f" examples {text}"
         lines.append(line + "\n")
 
     with path.open("a") as fh:
@@ -432,18 +500,23 @@ def recent_flakes(path: Path | str) -> list[dict]:
     if not path.is_file():
         return []
     found = []
-    for when, stage_id, name, seed in _FLAKE.findall(path.read_text()):
+    for when, stage_id, name, seed, locators in _FLAKE.findall(path.read_text()):
         found.append(
             {
                 "at": when,
                 "stage_id": stage_id,
                 "file": name,
                 "seed": seed or None,
+                "examples": re.findall(r"`([^`]+)`", locators or ""),
             }
         )
     return found
 
 
+_MAX_LOCATORS = 10
+
 _FLAKE = re.compile(
-    r"^- flake `([^`]*)` `([^`]*)` `([^`]*)`(?: seed `([^`]*)`)?", re.MULTILINE
+    r"^- flake `([^`]*)` `([^`]*)` `([^`]*)`(?: seed `([^`]*)`)?"
+    r"(?:[^`\n]*examples ((?:`[^`]+`(?:, )?)+))?",
+    re.MULTILINE,
 )

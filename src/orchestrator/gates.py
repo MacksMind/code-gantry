@@ -64,6 +64,7 @@ class GateResult:
     failing_paths: list[str] = field(default_factory=list)
     flaky_files: list[str] = field(default_factory=list)
     flaky_seeds: dict[str, str] = field(default_factory=dict)
+    flaky_examples: dict[str, list[str]] = field(default_factory=dict)
     flake_reruns: int = 0
     test_seconds: float = 0.0
     # Set when a command was killed from outside rather than failing. Neither
@@ -681,6 +682,7 @@ def run_tests(
         if flaked:
             out.flaky_files.extend(verdict.files)
             out.flaky_seeds.update(verdict.seeds)
+            out.flaky_examples.update(verdict.examples)
     else:
         rerun = runner.run(command)
         out.results.append(rerun)

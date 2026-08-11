@@ -1177,7 +1177,10 @@ def verify(state: RunState, rt: Runtime) -> dict:
     )
 
     if outcome.flaky_files:
-        _record_flakes(rt, stage.id, outcome.flaky_files, outcome.flaky_seeds)
+        _record_flakes(
+            rt, stage.id, outcome.flaky_files, outcome.flaky_seeds,
+            outcome.flaky_examples,
+        )
 
 
     accumulated = {
@@ -1552,7 +1555,9 @@ def review(state: RunState, rt: Runtime) -> dict:
         seconds += verdict.seconds
         if verdict.flaked:
             rt.log(f"[review] {stage.id}: full suite flaked — {verdict.summary}")
-            _record_flakes(rt, stage.id, verdict.files, verdict.seeds)
+            _record_flakes(
+                rt, stage.id, verdict.files, verdict.seeds, verdict.examples
+            )
             return {
                 **base,
                 "test_seconds": state.get("test_seconds", 0.0) + seconds,
@@ -1634,7 +1639,11 @@ def review(state: RunState, rt: Runtime) -> dict:
 
 
 def _record_flakes(
-    rt: Runtime, stage_id: str, files: list[str], seeds: dict[str, str]
+    rt: Runtime,
+    stage_id: str,
+    files: list[str],
+    seeds: dict[str, str],
+    examples: dict[str, list[str]] | None = None,
 ) -> None:
     """Write the excusal down where it outlives the run.
 
@@ -1647,6 +1656,7 @@ def _record_flakes(
         files,
         seeds,
         datetime.now().astimezone().isoformat(timespec="seconds"),
+        examples=examples or {},
     )
     for name in files:
         seed = seeds.get(name)
