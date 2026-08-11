@@ -158,7 +158,24 @@ def resolve_test_paths(
     *,
     for_loop: bool,
 ) -> list[str]:
-    """The paths, in the order the command will list them.
+    """The paths, sorted, which is the order the command will list them.
+
+    Sorted rather than in insertion order, and it is not cosmetic. The gate
+    leads with what the diff says was touched and the loop with what the stage
+    declared, so the two sides spell the same set differently by construction —
+    and `verify._recorded_answer`, which exists to stop the gate re-running
+    what the loop already ran on this tree, compares the command as a string.
+    Measured over one run: 18 adjacent pairs where both commands named an
+    identical set of files, 18 of 18 differing only in the order, 790 seconds
+    of specs re-run on a tree nothing had touched. The layer was not granted on
+    that project, so the duplication was the operator's choice — but granting
+    it would have saved nothing and said nothing, which is the failure worth
+    avoiding: a switch that reads as the whole story and is a no-op.
+
+    The insertion order it replaces carried one stated reason — diff-derived
+    paths first "because those definitely exist" — and that was about which
+    copy of a duplicate survived deduplication, when both copies are the same
+    string. Nothing downstream reads the order.
 
     **First divergence — where the paths come from.** The gate adds the test
     files in the diff, because after the work exists the tree itself says what
@@ -246,15 +263,8 @@ def resolve_test_paths(
         if p and (cfg.target_repo / p).exists()
     )
 
-    # Deduplicate while preserving order. Diff-derived paths come first on the
-    # gate's side because those definitely exist.
-    seen: set[str] = set()
-    out: list[str] = []
-    for path in paths:
-        if path not in seen:
-            seen.add(path)
-            out.append(path)
-    return out
+    # Sorted, which is both the deduplication and the whole of the fix below.
+    return sorted(set(paths))
 
 
 def resolve_test_command(

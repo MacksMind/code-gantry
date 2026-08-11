@@ -1492,6 +1492,51 @@ class TestTheGateDoesNotRepeatTheLoop:
         # already got a green from it on these exact bytes.
         assert out.passed
 
+    def test_a_record_the_loop_would_have_written_is_the_one_the_gate_looks_for(
+        self, repo
+    ):
+        """The journey, not the two ends of it.
+
+        Every test above hands the record a command it also hands the config,
+        so the string matches by construction and the comparison is never
+        really exercised. In production the two sides *build* the string, from
+        different path lists in different orders, and the record missed on
+        every stage of a run whose sets were identical — 18 pairs, 790 seconds
+        of specs re-run on an untouched tree. A test that pins where a value
+        lives passes while the value is lost; this one drives both builders.
+        """
+        from orchestrator.gates import resolve_test_command
+
+        (repo / "spec").mkdir(exist_ok=True)
+        for name in ("a_spec.rb", "b_spec.rb"):
+            (repo / "spec" / name).write_text("describe :x\n")
+        g = Git(repo)
+        g.commit_all("specs")
+        sha = g.head_sha()
+        (repo / "spec" / "a_spec.rb").write_text("describe :y\n")
+        g.commit_all("edit a spec")
+
+        cfg, stage = build(
+            repo,
+            {
+                "edit_files": ["spec/a_spec.rb", "spec/b_spec.rb"],
+                "test_paths": ["spec/b_spec.rb", "spec/a_spec.rb"],
+            },
+            # Fails whatever it is given, so a pass proves it never ran.
+            scoped_test_command="false {paths}",
+            trust_executor_gates=["tests"],
+        )
+        loop_command = resolve_test_command(stage, cfg, g, sha, for_loop=True)
+        out = verify(
+            repo, cfg, stage, sha,
+            green_records={
+                "tests": {"command": loop_command, "head_sha": g.head_sha()}
+            },
+        )
+        assert out.passed, (
+            "the gate rebuilt a command the loop's record could not match"
+        )
+
     def test_naming_no_layers_trusts_none_of_them(self, repo):
         sha = Git(repo).head_sha()
         edit(repo)

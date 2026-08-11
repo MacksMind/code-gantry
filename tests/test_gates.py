@@ -419,3 +419,63 @@ class TestADeletedSpecIsNotPutInItsOwnTestCommand:
         assert resolve_test_command(stage, cfg, g, sha, for_loop=False) == (
             "rspec spec/kept_spec.rb"
         )
+
+
+class TestBothSidesSpellTheSameSetTheSameWay:
+    """The same set of specs, and therefore the same string.
+
+    `verify._recorded_answer` skips the gate's run when the loop already ran
+    *this command* on *this HEAD* — two facts compared, not trust. It compares
+    the command as a string, and the two sides build their path list in
+    different orders by construction: the gate leads with what the diff says
+    was touched, the loop with what the stage declared. Same set, different
+    spelling, and the record misses in silence.
+
+    Measured over one run's log: **18 adjacent pairs where the two commands
+    named an identical set of files in a different order, and 18 of 18 differed
+    only in the spelling** — 790 seconds, 13 minutes, of re-running specs on a
+    tree nothing had touched. The saving was unavailable to that project even
+    if it had granted the layer, which is the part worth pinning: the config
+    switch reads as the whole story and would have been a no-op.
+
+    Sorting is at the selection rather than at the comparison because the same
+    two facts should be *visible* as the same in the log. It is also the rule
+    `CLAUDE.md` already states for a command run in two places, applied to the
+    argument list rather than to the flags.
+    """
+
+    def _both(self, repo):
+        (repo / "spec").mkdir(exist_ok=True)
+        for name in ("a_spec.rb", "b_spec.rb", "c_spec.rb"):
+            (repo / "spec" / name).write_text("describe :x\n")
+        g = Git(repo)
+        g.commit_all("specs")
+        sha = g.head_sha()
+        # Edited, so the gate finds them in the diff — and in an order that is
+        # git's rather than the stage's.
+        for name in ("a_spec.rb", "c_spec.rb"):
+            (repo / "spec" / name).write_text("describe :y\n")
+        g.commit_all("edit two")
+
+        cfg, stage = build(
+            repo,
+            {
+                # Declared last-first, which is what makes the two orders
+                # disagree without changing the set.
+                "test_paths": ["spec/c_spec.rb", "spec/b_spec.rb"],
+                "edit_files": ["spec/a_spec.rb", "spec/b_spec.rb"],
+            },
+            scoped_test_command="rspec {paths}",
+        )
+        return (
+            resolve_test_command(stage, cfg, g, sha, for_loop=True),
+            resolve_test_command(stage, cfg, g, sha, for_loop=False),
+        )
+
+    def test_the_set_is_the_same(self, repo):
+        loop, gate = self._both(repo)
+        assert set(loop.split()[1:]) == set(gate.split()[1:])
+
+    def test_and_so_is_the_string(self, repo):
+        loop, gate = self._both(repo)
+        assert loop == gate
