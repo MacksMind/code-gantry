@@ -376,6 +376,32 @@ class RepoReader:
             )
         )
 
+    def reset(self) -> None:
+        """Forget everything spent, for the next step.
+
+        A method rather than three assignments at each call site, because a
+        reset that has to be *remembered* field by field is what failed here
+        twice. `plan()` cleared `calls` and `_lines_used` and was written
+        before `max_total_chars` existed; when that ceiling was added
+        underneath the line ceiling, nothing taught the reset about it, so
+        `_chars_used` accumulated for the life of the process and every planner
+        call past the ceiling was refused on its first read — 14 of 31 calls on
+        one measured run, permanently blind from the moment it crossed.
+
+        And `review()` had no reset at all, so one run's reviews shared a
+        budget: `review.json` recorded 685 calls for a review that made a
+        handful, and late reviews were starved by reads their predecessors had
+        done.
+
+        The list is cleared in place. `SemanticSearch` is constructed with
+        `calls=reader.calls` so the two share one list and the log stays
+        chronological; rebinding the attribute would hand them separate lists
+        and nothing would say so.
+        """
+        self.calls.clear()
+        self._lines_used = 0
+        self._chars_used = 0
+
     def _answered(self) -> int:
         """Calls the budget is actually spent on.
 

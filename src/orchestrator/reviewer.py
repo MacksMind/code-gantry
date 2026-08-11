@@ -170,6 +170,13 @@ class OpenAIReviewer:
         self.tool_log = None
         self._client = client if client is not None else _build_openai_client(cfg)
 
+    def _reset_reads(self) -> None:
+        """Forget the previous review's reads. See `RepoReader.reset`."""
+        if self.reader is not None:
+            self.reader.reset()
+        if self.semantic is not None:
+            self.semantic.calls.clear()
+
     def _looked_at(self) -> list[str]:
         """What the reviewer read, from the ledger rather than the request.
 
@@ -252,6 +259,15 @@ class OpenAIReviewer:
         back. The breakpoint itself is placed in `prompts.build_review_messages`;
         this is the request-side opt-in that makes it count.
         """
+        # Per review, not per run. Without this the reader was shared across
+        # every review a process made: `review.json` recorded 685 calls for a
+        # review that made a handful, the line and call ceilings named "for
+        # this step" were really for the whole run, and refusals climbed from
+        # zero to 58 as late reviews were starved by reads their predecessors
+        # had done. The planner had always reset; this site was written without
+        # one and nothing compared the two.
+        self._reset_reads()
+
         extra: dict = {
             "prompt_cache_options": {"mode": "explicit"},
             **_reasoning_param(self.cfg),

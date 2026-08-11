@@ -584,6 +584,24 @@ class AnthropicPlanner:
         # Bound by `build_runtime`. Reads go here rather than to the run log.
         self.tool_log = None
 
+    def _reset_reads(self) -> None:
+        """Forget the previous decision's reads before this one.
+
+        Delegated to the reader so the field list lives in one place. It used
+        to be spelled out here, and when `max_total_chars` was added underneath
+        `max_total_lines` this site was not updated — so the character counter
+        accumulated across the whole run and every planner call past the
+        ceiling was refused on its first read. Measured: 14 of 31 calls on one
+        run, drawing stages with no ability to check a premise against the
+        code.
+        """
+        if self.reader is not None:
+            self.reader.reset()
+        if self.semantic is not None:
+            # Usually the same list the reader just cleared; separate only if a
+            # project ever gives semantic search its own ledger.
+            self.semantic.calls.clear()
+
     def _tool_log(self) -> list[str]:
         """What was looked at, for the run log.
 
@@ -664,11 +682,7 @@ class AnthropicPlanner:
         billed = PlannerUsage()
         # Reset per decision, not per run: the log line answers "what did it
         # look at to draw *this* stage".
-        if self.reader is not None:
-            self.reader.calls.clear()
-            self.reader._lines_used = 0
-        if self.semantic is not None:
-            self.semantic.calls.clear()
+        self._reset_reads()
 
         for remaining in (_MALFORMED_RETRIES, 0):
             terminal, parsed, usage = self._attempt(conversation)

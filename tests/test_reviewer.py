@@ -143,6 +143,20 @@ class StubReader:
         self.asked = []
         self.calls = []
 
+    def reset(self):
+        """The real reader has one and `review()` calls it per review.
+
+        A stub missing it is the helper-laxer-than-the-node problem again, one
+        method along: without this the tests would pass while production
+        raised, or worse would force `review()` to reach for the method
+        defensively and swallow the very breakage it is meant to surface.
+
+        `asked` deliberately survives, because it is the test's own record of
+        what was requested across the whole exchange rather than the reader's
+        budget ledger.
+        """
+        self.calls.clear()
+
     def read_file(self, path, start=None, end=None):
         from orchestrator.repotools import ToolCall
 
