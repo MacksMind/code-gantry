@@ -514,14 +514,25 @@ def _environment_checks(
             # keep by being countable — the spec that motivated this was
             # identifiable as noise because it already had twenty-one entries —
             # so an excusal made here and not written down undercounts the next
-            # one. `preflight` stands in for the stage id, since there is no
-            # stage yet.
+            # one.
+            #
+            # `origin` rather than a sentinel in `stage_id`, which is where
+            # "preflight" used to go: there is genuinely no stage here, and a
+            # baseline flake is a different finding from a stage's suite going
+            # red. `run_id` is left null for the same reason — preflight runs
+            # before one is assigned, so null is the fact rather than a gap.
+            #
+            # The locators were missing here for as long as they have existed,
+            # because this call was written before the argument was and nothing
+            # made it follow. That is why the record is a dataclass now.
             append_flakes(
                 _project_root(project_dir),
-                "preflight",
+                None,
                 verdict.files,
                 verdict.seeds,
                 datetime.now().astimezone().isoformat(timespec="seconds"),
+                examples=verdict.examples,
+                origin="preflight",
             )
 
         if flaked:

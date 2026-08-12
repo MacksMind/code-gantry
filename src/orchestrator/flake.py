@@ -33,9 +33,10 @@ orchestrator never composes a shell command out of a model's output.
 
 from __future__ import annotations
 
+import json
 import re
 import shlex
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -427,18 +428,57 @@ def predates_stage(
 # files", which is enough to notice a pattern and not enough to chase one — and
 # it dies with the run, so the two-sighting bar for filing a bug is a question
 # nobody can answer without grepping an old log. This file is the answer:
-# append-only, one line per excusal, every run of every stage, small enough to
-# read whole and structured enough to count.
-FLAKES_FILENAME = "flakes.md"
+# append-only, one record per excusal, every run of every stage.
+#
+# JSONL rather than the markdown it started as. It was prose parsed by a
+# five-group regex with two optional tails, which is the shape this project has
+# been burned by often enough to have a rule about — and the ambiguity was
+# already live: a missing `seed` and a missing `examples` segment each meant
+# both "not captured" and "written before that field existed", so the reader
+# could not tell a gap from an era. Adding the locators cost a compatibility
+# branch across 276 entries; the next field would have cost another. Converted
+# while the file held twelve lines, which is the only moment the change is free.
+FLAKES_FILENAME = "flakes.jsonl"
+
+
+@dataclass
+class FlakeRecord:
+    """One excusal, exactly as it is written down.
+
+    The record is the writer. `append_flakes` used to assemble its line field
+    by field, and `preflight` — written before locators existed — therefore
+    called it without them and silently recorded none, for every baseline flake
+    this project has ever excused. That is the same defect `executor-loop.json`
+    had, where a hand-listed subset dropped the four fields answering the only
+    question the artifact existed for. A field left out of a dataclass dump has
+    to be left out on purpose.
+    """
+
+    at: str
+    file: str
+    seed: str | None = None
+    examples: list[str] = field(default_factory=list)
+    # `preflight` used to be written into `stage_id`, a sentinel occupying a
+    # field that means something else — so the two kinds could be separated
+    # only by string-comparing a stage that does not exist. They are different
+    # animals: one is a property of the suite before any work, the other is a
+    # suite failure during a stage.
+    origin: str = "stage"
+    stage_id: str | None = None
+    # Null for a preflight excusal, and truthfully so: preflight runs before a
+    # run id is assigned.
+    run_id: str | None = None
 
 
 def append_flakes(
     project_dir: Path | str,
-    stage_id: str,
+    stage_id: str | None,
     files: list[str],
     seeds: dict[str, str],
     now: str,
     examples: dict[str, list[str]] | None = None,
+    run_id: str | None = None,
+    origin: str = "stage",
 ) -> Path:
     """Record what was excused, when, and under which ordering.
 
@@ -458,32 +498,27 @@ def append_flakes(
     project_dir.mkdir(parents=True, exist_ok=True)
     path = project_dir / FLAKES_FILENAME
 
-    lines = []
-    for name in files:
-        seed = seeds.get(name)
-        line = f"- flake `{now}` `{stage_id}` `{name}`"
-        if seed:
-            line += f" seed `{seed}`"
-        else:
-            # Said plainly rather than left blank. "No seed" is a fact about
-            # the runner's output that the operator can go fix in
-            # `seed_pattern`; a silently short line looks like the flake had
-            # no ordering, which is never true.
-            line += " — no seed reported"
-        # Trailing, and only when there is something to say. Every line written
-        # before this exists without it, and the reader has to keep parsing
-        # those — 276 of them at the time it was added — so the locators go
-        # where their absence is the old format rather than a broken one.
-        found = list((examples or {}).get(name) or [])
-        if found:
-            shown = found[:_MAX_LOCATORS]
-            text = ", ".join(f"`{one}`" for one in shown)
-            if len(found) > len(shown):
-                # Said rather than trimmed silently: a line that stops at ten
-                # reads as a flake with ten failing examples.
-                text += f", and {len(found) - len(shown)} more"
-            line += f" examples {text}"
-        lines.append(line + "\n")
+    # No cap on the locators. The markdown format kept ten and wrote "and N
+    # more" for the rest, because a line of them stopped being readable — which
+    # answered *how many* when the question the ledger exists for is *which*.
+    lines = [
+        json.dumps(
+            asdict(
+                FlakeRecord(
+                    at=now,
+                    file=name,
+                    seed=seeds.get(name) or None,
+                    examples=list((examples or {}).get(name) or []),
+                    origin=origin,
+                    stage_id=stage_id,
+                    run_id=run_id,
+                )
+            ),
+            ensure_ascii=False,
+        )
+        + "\n"
+        for name in files
+    ]
 
     with path.open("a") as fh:
         fh.writelines(lines)
@@ -495,28 +530,22 @@ def recent_flakes(path: Path | str) -> list[dict]:
 
     Deliberately not deduplicated: two sightings of one file is the signal
     that it is worth filing, and collapsing them destroys exactly that.
+
+    A line that will not parse raises rather than being skipped. An unreadable
+    entry must not read as no entry — undercounting is the one failure a
+    ledger kept for counting cannot afford, and the silently-empty answer is
+    the shape that has fooled this project repeatedly.
     """
     path = Path(path)
     if not path.is_file():
         return []
     found = []
-    for when, stage_id, name, seed, locators in _FLAKE.findall(path.read_text()):
-        found.append(
-            {
-                "at": when,
-                "stage_id": stage_id,
-                "file": name,
-                "seed": seed or None,
-                "examples": re.findall(r"`([^`]+)`", locators or ""),
-            }
-        )
+    for number, line in enumerate(path.read_text().splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"{path}: line {number} is not a record: {e}") from e
+        found.append({**asdict(FlakeRecord(at="", file="")), **entry})
     return found
-
-
-_MAX_LOCATORS = 10
-
-_FLAKE = re.compile(
-    r"^- flake `([^`]*)` `([^`]*)` `([^`]*)`(?: seed `([^`]*)`)?"
-    r"(?:[^`\n]*examples ((?:`[^`]+`(?:, )?)+))?",
-    re.MULTILINE,
-)

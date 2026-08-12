@@ -1657,6 +1657,7 @@ def _record_flakes(
         seeds,
         datetime.now().astimezone().isoformat(timespec="seconds"),
         examples=examples or {},
+        run_id=rt.paths.run_id,
     )
     for name in files:
         seed = seeds.get(name)

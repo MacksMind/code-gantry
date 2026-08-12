@@ -268,9 +268,12 @@ green *including* the stage's edits to it, so whatever makes it fail in the grou
 is a property of the suite — to be fixed as its own work rather than charged to
 whichever stage was in flight.
 
-Every excusal is appended to `projects/<slug>/flakes.md` with the file, the
-timestamp and the ordering seed that produced it. It earns its keep by being
-countable: one line is noise, twenty lines naming the same file is a work item.
+Every excusal is appended to `flakes.jsonl` in the work directory as one JSON
+record carrying the file, the timestamp, the ordering seed, and the runner's own
+locators for the examples that failed. It earns its keep by being countable: one
+record is noise, twenty naming the same *example* is a work item — and a file
+answers a coarser question than the one worth asking, since a file's failures
+are as likely to be siblings sharing a setup as separate defects.
 Preflight adjudicates the same way, so a run is not refused at the door by the
 one failure the merge gate would have forgiven.
 

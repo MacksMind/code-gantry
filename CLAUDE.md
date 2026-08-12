@@ -1415,9 +1415,12 @@ paths, which they had done, correctly, for five separately-incident-shaped
 reasons — and it returns the selection *sorted*, so the loop's record and the
 gate's question are the same string whenever they are the same set. `flake.py`
 decides whether a red suite is the stage's fault or the suite's, and writes
-`flakes.md`: one append-only line per excusal carrying the file, the ordering
-seed, and the runner's own locators for the examples that failed, which is what
-makes "which flake is worst" a sort rather than a log scan.
+`flakes.jsonl`: one append-only record per excusal carrying the file, the
+ordering seed, the runner's own locators for the examples that failed, and which
+run and stage — or `origin: preflight` — produced it, which is what makes "which
+flake is worst" a sort rather than a log scan. JSONL because the markdown it
+started as was parsed by a five-group regex whose optional tails made "not
+captured" and "written before that field existed" the same bytes.
 `edittools.py` is the write-side counterpart to `repotools.py`: no
 model, refuses with `ToolError`, records what it did. `executorloop.py` is the
 cycle itself — edit until the model stops asking, lint, **commit, then test** —

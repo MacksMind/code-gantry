@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 from orchestrator.config import parse_config
+from orchestrator.flake import FLAKES_FILENAME, recent_flakes
 from orchestrator.preflight import check_executor_endpoint, run_preflight
 
 MODELS = {
@@ -325,7 +326,7 @@ class TestPreflightExcusesAFlakeTheRunWouldExcuse:
         assert "spec/features/a_spec.rb" in check.detail
 
     def test_the_excusal_is_recorded_where_the_count_lives(self, repo, tmp_path):
-        # `flakes.md` earns its keep by being countable — the spec that caused
+        # The ledger earns its keep by being countable — the spec that caused
         # this was identifiable as noise because it had twenty-one entries. An
         # excusal preflight makes and does not write down undercounts the next
         # one.
@@ -337,9 +338,13 @@ class TestPreflightExcusesAFlakeTheRunWouldExcuse:
             check_approval=False, check_endpoint=False,
         )
         assert any(c.ok for c in checks if "test_command passes" in c.name)
-        recorded = (project_dir / "flakes.md").read_text()
-        assert "spec/features/a_spec.rb" in recorded
-        assert "preflight" in recorded
+        entry = recent_flakes(project_dir / FLAKES_FILENAME)[0]
+        assert entry["file"] == "spec/features/a_spec.rb"
+        # Its own field, rather than a sentinel standing in for a stage that
+        # does not exist — and no run id, because there is not one yet.
+        assert entry["origin"] == "preflight"
+        assert entry["stage_id"] is None
+        assert entry["run_id"] is None
 
     def test_a_file_that_fails_alone_still_blocks(self, repo):
         # The whole point of adjudicating rather than ignoring: a real red

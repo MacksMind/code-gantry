@@ -19,7 +19,9 @@ excuse a stage that broke a spec it was working on, so a failure in a file the
 stage touched or named is never credited as a flake, however it re-runs.
 """
 
+import json
 import re
+from dataclasses import fields
 from pathlib import Path
 
 import pytest
@@ -28,6 +30,7 @@ from orchestrator.commands import CommandRunner
 from orchestrator.config import ConfigError, parse_config
 from orchestrator.flake import (
     FLAKES_FILENAME,
+    FlakeRecord,
     adjudicate,
     append_flakes,
     failed_files,
@@ -480,16 +483,57 @@ class TestTheExcusalOutlivesTheRun:
 
     def test_a_missing_seed_says_so(self, tmp_path):
         # A silently short line reads as "this flake had no ordering", which is
-        # never true; it means seed_pattern needs fixing.
+        # never true; it means seed_pattern needs fixing. The markdown format
+        # needed a sentence to say that. `null` is the field saying it.
         append_flakes(tmp_path, "s", ["spec/a_spec.rb"], {}, "2026-07-31T01:00:00-04:00")
-        assert "no seed reported" in (tmp_path / FLAKES_FILENAME).read_text()
+        written = json.loads((tmp_path / FLAKES_FILENAME).read_text())
+        assert written["seed"] is None
+        assert "seed" in written, "absent and null are different answers"
         assert recent_flakes(tmp_path / FLAKES_FILENAME)[0]["seed"] is None
+
+    def test_it_records_which_run_and_what_produced_it(self, tmp_path):
+        """`preflight` used to be a sentinel inside the stage field.
+
+        A baseline flake and a stage flake are different animals, and while the
+        only way to tell them apart was string equality on a field that means
+        something else, no sort could separate them.
+        """
+        append_flakes(
+            tmp_path, None, ["spec/a_spec.rb"], {}, "2026-07-31T01:00:00-04:00",
+            origin="preflight",
+        )
+        append_flakes(
+            tmp_path, "some-stage", ["spec/a_spec.rb"], {},
+            "2026-07-31T01:05:00-04:00", run_id="20260731-010000-x",
+        )
+        first, second = recent_flakes(tmp_path / FLAKES_FILENAME)
+        assert (first["origin"], first["stage_id"]) == ("preflight", None)
+        assert (second["origin"], second["stage_id"]) == ("stage", "some-stage")
+        # Preflight runs before a run id exists, so null is the true answer
+        # there rather than a gap.
+        assert first["run_id"] is None
+        assert second["run_id"] == "20260731-010000-x"
+
+    def test_every_field_of_the_record_is_written(self, tmp_path):
+        """The writer is the dataclass, not a list of keys somebody maintains.
+
+        `executor-loop.json` carried ten fields of twenty for exactly this
+        reason, and the field added the same morning was already missing. Here
+        the same hand-built line meant `preflight` never recorded a locator,
+        because that call site was written before the argument existed.
+        """
+        append_flakes(
+            tmp_path, "s", ["spec/a_spec.rb"], {"spec/a_spec.rb": "1"},
+            "2026-07-31T01:00:00-04:00",
+        )
+        written = json.loads((tmp_path / FLAKES_FILENAME).read_text())
+        assert set(written) == {f.name for f in fields(FlakeRecord)}
 
 
 class TestTheExactExampleThatFailed:
     """A file name is where to look; the locator is what to run.
 
-    `flakes.md` recorded the file and the seed, which between them say "this
+    The ledger recorded the file and the seed, which between them say "this
     file failed somewhere under this ordering". The runner had already printed
     the answer — every RSpec failure ends in a re-run line naming the exact
     example — and it was being read only far enough to extract the path, then
@@ -570,9 +614,23 @@ class TestTheLedgerCarriesTheLocator:
             "2026-08-11T20:00:00-04:00",
             examples={"spec/a_spec.rb": ["rspec ./spec/a_spec.rb:1"]},
         )
-        body = (tmp_path / FLAKES_FILENAME).read_text()
-        assert "seed `42`" in body
-        assert "rspec ./spec/a_spec.rb:1" in body
+        written = json.loads((tmp_path / FLAKES_FILENAME).read_text())
+        assert written["seed"] == "42"
+        assert written["examples"] == ["rspec ./spec/a_spec.rb:1"]
+
+    def test_every_locator_is_kept(self, tmp_path):
+        """The ten-cap existed because a markdown line became unreadable.
+
+        It threw away the data the ledger exists to hold, and said "and 11
+        more" in its place — a count, where the question is *which*. Nothing
+        about a JSON array is unreadable at twenty.
+        """
+        many = [f"rspec ./spec/a_spec.rb:{n}" for n in range(21)]
+        append_flakes(
+            tmp_path, "s", ["spec/a_spec.rb"], {}, "2026-08-11T20:00:00-04:00",
+            examples={"spec/a_spec.rb": many},
+        )
+        assert recent_flakes(tmp_path / FLAKES_FILENAME)[0]["examples"] == many
 
     def test_the_reader_gets_them_back(self, tmp_path):
         append_flakes(
@@ -590,25 +648,34 @@ class TestTheLedgerCarriesTheLocator:
         ]
         assert found["seed"] == "42"
 
-    def test_an_older_line_without_them_still_parses(self, tmp_path):
-        # 276 entries predate this and nothing rewrites them.
-        (tmp_path / FLAKES_FILENAME).write_text(
-            "- flake `2026-08-01T00:00:00-04:00` `s` `spec/a_spec.rb` seed `9`\n"
-        )
-        found = recent_flakes(tmp_path / FLAKES_FILENAME)[0]
-        assert found["seed"] == "9"
-        assert found["examples"] == []
-
-    def test_a_flake_with_no_locator_says_nothing_extra(self, tmp_path):
+    def test_a_flake_with_no_locator_records_an_empty_list(self, tmp_path):
+        # Not an absent key. The markdown format could only omit the segment,
+        # so "no locators captured" and "written before locators existed" were
+        # the same bytes and the reader could not separate them.
         append_flakes(
             tmp_path, "s", ["spec/a_spec.rb"], {"spec/a_spec.rb": "42"},
             "2026-08-11T20:00:00-04:00",
         )
-        assert (tmp_path / FLAKES_FILENAME).read_text().rstrip().endswith("seed `42`")
+        assert json.loads((tmp_path / FLAKES_FILENAME).read_text())["examples"] == []
+
+    def test_a_corrupt_line_is_loud(self, tmp_path):
+        """An unreadable entry must not read as no entry.
+
+        The failure this project keeps meeting is the empty answer that gets
+        believed — a search that returns nothing, an extraction that returns
+        `{}`. A ledger that silently drops what it cannot parse undercounts,
+        and undercounting is the one thing it exists not to do.
+        """
+        (tmp_path / FLAKES_FILENAME).write_text(
+            '{"at":"2026-08-01T00:00:00-04:00","file":"spec/a_spec.rb"}\n'
+            "not json at all\n"
+        )
+        with pytest.raises(ValueError, match="line 2"):
+            recent_flakes(tmp_path / FLAKES_FILENAME)
 
 
 class TestTheLocatorSurvivesTheJourney:
-    """Runner output to `flakes.md`, through every schema between them.
+    """Runner output to `flakes.jsonl`, through every schema between them.
 
     The locator crosses five: `FlakeVerdict`, `GateResult`, `VerifyOutcome`,
     `_record_flakes`'s arguments, and the line itself. Four separate defects in
@@ -647,7 +714,9 @@ class TestTheLocatorSurvivesTheJourney:
         }
 
         rt = SimpleNamespace(
-            project=SimpleNamespace(project_dir=tmp_path), log=lambda *a: None
+            project=SimpleNamespace(project_dir=tmp_path),
+            paths=SimpleNamespace(run_id="20260812-032911-x"),
+            log=lambda *a: None,
         )
         _record_flakes(
             rt, stage.id, found.flaky_files, found.flaky_seeds, found.flaky_examples
@@ -656,3 +725,7 @@ class TestTheLocatorSurvivesTheJourney:
         assert entry["file"] == "spec/models/user_spec.rb"
         assert entry["seed"] == "4845"
         assert entry["examples"] == ["rspec ./spec/models/user_spec.rb:531"]
+        # The run id crosses the same journey and had no field until now, so it
+        # is exactly the shape of value this class exists to catch in transit.
+        assert entry["run_id"] == "20260812-032911-x"
+        assert entry["origin"] == "stage"
