@@ -19,7 +19,11 @@ import pytest
 
 from orchestrator.config import parse_config
 from orchestrator.flake import FLAKES_FILENAME, recent_flakes
-from orchestrator.preflight import check_executor_endpoint, run_preflight
+from orchestrator.preflight import (
+    PREFLIGHT_SUITE_LOG,
+    check_executor_endpoint,
+    run_preflight,
+)
 
 MODELS = {
     "object": "list",
@@ -345,6 +349,43 @@ class TestPreflightExcusesAFlakeTheRunWouldExcuse:
         assert entry["origin"] == "preflight"
         assert entry["stage_id"] is None
         assert entry["run_id"] is None
+
+    def test_the_suite_output_is_kept_when_the_run_is_let_through(
+        self, repo, tmp_path
+    ):
+        """The one check with no artifact behind it was the one that forgives.
+
+        Observed live: preflight excused a red suite naming `(unnamed)` — the
+        extraction found no locator at all — and the output that would have
+        said why was parsed and dropped. `last-run.out` held 63 lines after the
+        run header and not one `Failed examples`, so the two live explanations
+        (the failure produced no locators, or the pattern stopped matching) were
+        indistinguishable an hour later. A gate that can wave a red suite
+        through has to leave the bytes it decided on.
+        """
+        project_dir = tmp_path / "proj"
+        run_preflight(
+            self._cfg(repo, scoped_ok=True),
+            project_dir=project_dir,
+            check_models=False,
+            check_approval=False, check_endpoint=False,
+        )
+        kept = (project_dir / PREFLIGHT_SUITE_LOG).read_text()
+        assert "rspec ./spec/features/a_spec.rb:40" in kept, "the runner's own output"
+        assert "9 examples, 1 failure" in kept
+
+    def test_a_green_preflight_writes_nothing(self, repo, tmp_path):
+        # Bounded by only writing what needs explaining. A full suite is
+        # thousands of lines and this file sits beside a 14MB `last-run.out`.
+        project_dir = tmp_path / "proj"
+        cfg = self._cfg(repo, scoped_ok=True)
+        cfg = parse_config({**cfg.model_dump(mode="json"), "test_command": "true",
+                            "full_test_command": "true"})
+        run_preflight(
+            cfg, project_dir=project_dir, check_models=False,
+            check_approval=False, check_endpoint=False,
+        )
+        assert not (project_dir / PREFLIGHT_SUITE_LOG).exists()
 
     def test_a_file_that_fails_alone_still_blocks(self, repo):
         # The whole point of adjudicating rather than ignoring: a real red

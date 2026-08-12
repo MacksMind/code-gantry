@@ -535,6 +535,27 @@ def _environment_checks(
                 origin="preflight",
             )
 
+        if not result.ok and project_dir is not None:
+            # Every byte the adjudication decided on, kept whenever the suite
+            # was not green — including the re-runs, because "it passed alone"
+            # is the claim being made and the re-run is its evidence.
+            #
+            # Written from the *failure*, not from `flaked`: a preflight that
+            # stops the run wants explaining just as much as one that forgives
+            # it, and the stopping case is where an operator is already reading.
+            #
+            # Observed live: a red suite was excused naming `(unnamed)`, the
+            # extraction having found no locator at all, and the output that
+            # would have said why had been parsed and dropped. `last-run.out`
+            # carried 63 lines after the run header and not one `Failed
+            # examples`, so "the failure produced no locators" and "the pattern
+            # stopped matching" were indistinguishable an hour later. This is
+            # the only gate that can wave a red repository through, and it was
+            # the only one with no artifact behind it.
+            _keep_suite_output(
+                _project_root(project_dir), label, command, result, verdict
+            )
+
         if flaked:
             files = ", ".join(verdict.files) or "(unnamed)"
             detail = (
@@ -567,6 +588,52 @@ def _environment_checks(
 
     checks.append(_tidiness_check(cfg))
     return checks
+
+
+PREFLIGHT_SUITE_LOG = "preflight-suite.log"
+
+
+def _keep_suite_output(
+    project_dir: Path | str,
+    label: str,
+    command: str,
+    result: CommandResult,
+    verdict: FlakeVerdict | None,
+) -> None:
+    """Append what a non-green preflight ran and what came back.
+
+    Appended rather than overwritten, and timestamped, because preflight runs
+    once per run start and the question is usually "was it red last time too" —
+    which a file replaced on every start cannot answer. Only written when the
+    suite was not green, which is what bounds it: a project whose preflight is
+    green never grows this file at all.
+
+    The re-runs are included with their exit statuses. A flake verdict is the
+    claim "red as a whole, green file by file", and `verdict.results` is the
+    only evidence for the second half.
+    """
+    project_dir = Path(project_dir)
+    project_dir.mkdir(parents=True, exist_ok=True)
+    when = datetime.now().astimezone().isoformat(timespec="seconds")
+
+    parts = [f"\n=== {when} {label} ===\n$ {command}\n  exit {result.exit_code}\n"]
+    parts.append(result.output)
+    for extra in (verdict.results if verdict else []):
+        parts.append(
+            f"\n--- re-run: {extra.command}\n  exit {extra.exit_code}\n{extra.output}"
+        )
+    if verdict is not None:
+        # The parse, beside the bytes it was parsed from. `(unnamed)` next to
+        # output full of locators means the pattern; `(unnamed)` next to output
+        # with none means the runner never printed one, and that distinction is
+        # the whole reason this file exists.
+        parts.append(
+            f"\n--- adjudication: flaked={verdict.flaked} "
+            f"files={verdict.files or '(unnamed)'} seeds={verdict.seeds}\n"
+        )
+
+    with (project_dir / PREFLIGHT_SUITE_LOG).open("a") as fh:
+        fh.write("".join(parts))
 
 
 def _tidiness_check(cfg: ProjectConfig) -> Check:
