@@ -1326,6 +1326,63 @@ files, which made them tracked, which made `git check-ignore` decline to report
 them — the test would have passed by making the leak legitimate. A fixture that
 has to reproduce an exclusion must be checked for whether it still excludes.
 
+**A cache keyed on a string is keyed on its spelling.** `verify._recorded_answer`
+skips the gate's test run when the loop already ran *this command* on *this
+HEAD* — two facts compared rather than trust, and exactly right. It compares
+the command as text, and the two sides build the path list in different orders
+by construction: the gate leads with what the diff says was touched, the loop
+with what the stage declared. Same set, different string, and the record missed
+in silence. Measured over one run's log: 18 adjacent pairs naming an identical
+set of files, **18 of 18 differing only in the order**, 790 seconds of specs
+re-run on a tree nothing had touched.
+
+The trap is one level out from the miss. The layer was not granted on that
+project, so the duplication read as the operator's choice and the fix looked
+like a one-line config change — which would have saved nothing and said
+nothing. A switch that reads as the whole story and is a no-op is worse than a
+switch nobody turned on, so verify that the mechanism *can* fire before
+recommending that someone enable it. `resolve_test_paths` sorts now, which also
+means two runs of the same set are visibly the same command in the log; this is
+the "same command in both places, spelled the same way" rule applied to the
+argument list rather than the flags.
+
+**A ledger that records the container cannot answer questions about the item.**
+`flakes.md` recorded a file and an ordering seed for every excused flake — 277
+entries, 77 of them naming one feature spec — and could not say whether that
+was one example failing 77 times or 77 different ones. Those are different
+bugs, and the question is the reason the file exists. The answer had been on
+the line the parser was already reading: RSpec ends every failure with a re-run
+locator, and `failed_file_pattern` matched that line, took the path out of it,
+and discarded the rest. Recovered afterwards from archived logs, it was **three
+examples, consecutive siblings in one context** — a shared setup, not three
+defects. Ask what the ledger is for, then check that the thing it records is
+the thing the question is about.
+
+The recovery is worth its own note, because the instinct was to add a field and
+move on: the run directory still held every failing suite's output, so the
+history was answerable without writing anything to the ledger. Before proposing
+a backfill of an append-only file, ask whether the raw material is still on
+disk — the answer arrived from a fifteen-line script and the operator declined
+the backfill, correctly, because the file only needs to be right going forward.
+
+**An operator's regex is data, and code must not depend on its spelling.**
+`failed_file_pattern` opens `^\s*`, `\s` matches newlines, and `^` in multiline
+mode can anchor on the blank line above — so `match.start()` sat on the
+*previous* line's break, and slicing a line from it yielded the blank line.
+The extraction returned `{}`: not an error, not a partial answer, an empty
+result that reads as "this runner prints no locators", which is the same shape
+as the empty search that gets believed. Anchoring on `match.end()`, which is
+always inside the line the capture came from, removes the dependency entirely.
+
+Measured before deciding anything: 1,743 locator lines across every archived
+log, **every one flush left**, none indented, none preceded by a carriage
+return — so the `\s*` had never matched a character of horizontal whitespace,
+and dropping it changes nothing (replayed over 1,531 logs, zero disagreements
+in files, seeds or locators). But dropping it is not the fix. The next
+project's pattern is written by someone else, and correctness that depends on
+it not beginning with `\s*` is a defect waiting on a config nobody will think
+to check.
+
 ## Where things live
 
 `nodes.py` holds the loop's decisions — which failures route to the executor,
@@ -1355,7 +1412,13 @@ at the next start.
 `gates.py` is the layer shared by the executor's loop and `verify.py` — patterns,
 residue, new tests, checks, tests — so the two cannot select different test
 paths, which they had done, correctly, for five separately-incident-shaped
-reasons. `edittools.py` is the write-side counterpart to `repotools.py`: no
+reasons — and it returns the selection *sorted*, so the loop's record and the
+gate's question are the same string whenever they are the same set. `flake.py`
+decides whether a red suite is the stage's fault or the suite's, and writes
+`flakes.md`: one append-only line per excusal carrying the file, the ordering
+seed, and the runner's own locators for the examples that failed, which is what
+makes "which flake is worst" a sort rather than a log scan.
+`edittools.py` is the write-side counterpart to `repotools.py`: no
 model, refuses with `ToolError`, records what it did. `executorloop.py` is the
 cycle itself — edit until the model stops asking, lint, **commit, then test** —
 and `executortools.py` and `executorclient.py` are its schemas and its provider
