@@ -122,6 +122,22 @@ not judgement, and the artifact reads the same either way. Recording what a
 gate *looked at*, not only what it decided, is what makes the difference
 visible afterwards.
 
+That last sentence went unapplied for a year in the one place it mattered most.
+Preflight is the only gate that can wave a *red repository* through — it
+adjudicates the opening suite exactly as the merge gate does, and a flake
+verdict lets the run start — and it was the only gate keeping no artifact at
+all. It excused a red suite reporting `(unnamed)`, meaning the extraction had
+found no locator to name, and the bytes it decided on were parsed and dropped:
+`last-run.out` held 63 lines after the run header and not one `Failed
+examples`. An hour later "the runner printed no locators" and "the pattern
+stopped matching" were indistinguishable, and the second had a change in it
+from that morning. A gate that reaches its evidence and then discards it is one
+outage away from being a gate that never reached it. The parse now goes in
+beside the bytes, because `(unnamed)` against output full of locators and
+`(unnamed)` against output with none are different failures that render
+identically — the classifier problem again, at the level of an artifact rather
+than a label.
+
 **A record of the work must be written after the work.** The progress log is
 what every later planning pass reads back as history, and for a long time its
 entries were produced by the planner *while deriving the stage* — before the
@@ -1457,6 +1473,38 @@ history was answerable without writing anything to the ledger. Before proposing
 a backfill of an append-only file, ask whether the raw material is still on
 disk — the answer arrived from a fifteen-line script and the operator declined
 the backfill, correctly, because the file only needs to be right going forward.
+
+**And nothing reads the ledger, which is where the whole doctrine leaks.** The
+flake rule is "a file that passes whole and standalone is green", applied per
+excusal, with no memory between them. Watched end to end over one sixteen-hour
+run: `order_funnel_add_item_spec.rb[1:2:1:2]` was excused **six times**, and I
+had already reported that morning that it was the run's worst offender by
+example — four sightings then, which is exactly the signal the locators were
+added to produce. Six stages landed over it. Then it stopped passing alone, and
+the cost arrived all at once: a stage that had passed every gate and been
+approved by the reviewer lost its landing to a red suite it had not caused, a
+whole extra stage was drawn to repair the spec, three attempts of it failed at
+~200s each, and the run was killed.
+
+Every individual excusal was correct. The doctrine has no escalation on
+*repetition*, so the second sighting reads exactly like the first, and the file
+built to make repetition countable is read by no code — `recent_flakes` has
+nine callers and all nine are tests. The ledger made the problem visible to a
+human who happened to sort it; nothing made it visible to the pipeline. A rule
+that is right about each case and silent about the sequence will let a
+deteriorating thing deteriorate at full speed, and the tell is that the record
+proving it exists and has no reader.
+
+**Approved work does not survive a redraw.** The stage above had a clean diff,
+all gates green and a reviewer approval, and its branch still holds three
+commits. It will not land from them: `cut_stage_branch` reuses an existing
+branch only in the *extend* case, and a stage the planner redraws after an
+unrelated failure comes back with `fresh=True`, which deletes and recreates it.
+So the executor runs again and the reviewer judges again, and the approval is
+paid for twice. Worth knowing before deciding whether to squash such a branch by
+hand — the diff is right there and the alternative is a repeat, which is the one
+case where reaching into the quarantine is cheaper than letting the machine
+redo it.
 
 **An operator's regex is data, and code must not depend on its spelling.**
 `failed_file_pattern` opens `^\s*`, `\s` matches newlines, and `^` in multiline

@@ -296,6 +296,18 @@ repository-state failure, so your fix is checked rather than discarded; at the
 planner for a planning failure. The clean-tree requirement is start-only, since
 your fix is normally uncommitted.
 
+`orchestrator pause` is the exception, and it is not a step in the plan — it is
+how you stop a healthy run to change something. It writes a flag that is read
+before each planner call and again before `precheck`, so the run finishes
+whatever stage is in flight, lands it or fails it normally, and stops with a
+clean tree and nothing half-done. Interrupting the process instead can leave a
+partly applied edit and a stage branch nobody owns.
+
+There is no `unpause`. `resume` clears the flag on its way in, so a pause you
+change your mind about is undone by deleting `runs/<run-id>/paused` — which
+works right up until the run reads it, and a run inside a derivation has not
+read it yet.
+
 ## What each role is given to read
 
 Three documents, three audiences, and the split is by what a reader can act on.
