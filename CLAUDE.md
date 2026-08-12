@@ -364,6 +364,27 @@ links of the chain it was actually asking about, with no change in score — the
 top hit moved 0.696 to 0.679. Rank was never the signal. What changed is what
 it was competing against.
 
+Reproduced end to end six weeks later, and the contaminant had become *our own
+output*. Replaying eight recorded queries against the live index: the live
+progress log, the plan tree, and `.claude/skills/` between them took 6 of 42
+hits, one of them a reviewer summary of a stage that had landed twenty minutes
+earlier, scored above the model the executor was asking about. Three successive
+exclusions — `docs/*/progress_log.md`, then `docs/*/*`, then `.claude/*` — took
+it 6/42 → 5/48 → 1/48 → **0/48**, while every top score stayed put (0.679 to
+0.688, 0.740 to 0.744, both explained by landed stages moving the corpus). The
+freed slots on one query became the view that renders the link and the
+controller method behind it. Same finding, twice, by different routes: the win
+is in what loses.
+
+Two things that only the second pass showed. The exclusion list lives in the
+*target repository's* indexer, so nothing here can pin it and nothing here will
+notice when it regresses — the pipeline's own artifacts are indexed by a tool
+this codebase does not own. And a bad query stays bad: the one call that was a
+stage id plus loose keywords still returns `CreditCardValidationError`,
+`ExampleApp` and `ItemPreview`, four of six matching on the token *card*.
+It was searching for a document rather than asking about code, and removing the
+document it was chasing does not turn it into a question.
+
 **A tool reads more than you hand it.** Aider scans the user message *and its
 own reply* for anything path-shaped and attaches the file, with `--yes-always`
 answering; there is no flag to disable it, and `--detect-urls` covers URLs
@@ -604,6 +625,18 @@ re-reading, because `current` and everything queued behind it were derived
 against the old text and loading the new does not make them valid. Ask of any
 two inputs read at different revisions whether anything ever moves between
 them.
+
+It fired for real, and not on a fold. A paused run refused to resume because
+`AGENTS.md` had changed — a human, in another session, had rewritten the
+paragraph on `action_on_unpermitted_parameters` to say the opposite of what the
+pinned copy said: `:raise` in test and development where the old text said
+nothing raises. Resuming would have planned against the reverse of what the
+branch now does. So the guard is not about folds, which is all the prose above
+describes; it is about *any* edit to a pinned document, and the most likely
+author of one is a person working in the same repository for unrelated reasons.
+A fresh run was the only way forward and cost almost nothing, because the queue
+was empty and landed work lives on the project branch — the expensive case is a
+refusal with a derived stage and a queue behind it.
 
 **A delimiter drawn from the content's own alphabet is not a delimiter.**
 `read_file` numbered with a five-character field and *two spaces*, and
@@ -1203,6 +1236,39 @@ So the writer walks `dataclasses.fields` and a field has to be excluded on
 purpose. The rule generalises past artifacts: wherever a subset is written out
 by hand, the hand is the defect.
 
+A third instance, in a module nobody would have looked in. `append_flakes`
+assembled its line field by field, and `preflight` — written before the
+`examples` argument existed — called it without one, so **every baseline flake
+this project has ever excused recorded no locator**, silently, for as long as
+locators have existed. Nothing was wrong at either end: the writer was right,
+the caller was right, and the caller was simply older than the argument. That
+is the shape to expect from an optional keyword — a new one does not reach the
+call sites that predate it, and the omission is indistinguishable from a value
+that was genuinely absent. The record is a dataclass now, and the fix is the
+same one twice over: make the writer the thing being written.
+
+**A sentinel is a value in the wrong field.** The same call site passed the
+string `"preflight"` as its `stage_id`, because there is no stage before a run
+starts. It reads as harmless and it means the ledger could separate a baseline
+flake from a stage's suite going red only by string-comparing a stage that does
+not exist — so any sort over the file put them in the same bucket, and any
+future stage literally named `preflight` would have joined them. `origin` is
+its own field now, and `run_id` is null rather than faked, because preflight
+genuinely runs before one is assigned. Ask of any magic value what question it
+is answering, and whether the field it is sitting in is the one that asks it.
+
+**Convert a format while the file is small, because the window closes.** The
+flake ledger was markdown parsed by a five-group regex with two optional tails,
+and the ambiguity was already live: a missing seed and a missing examples
+segment each meant both "not captured" and "written before that field existed",
+so the reader could not tell a gap from an era. Adding the locators had cost a
+compatibility branch across 276 entries — the code says so in its own comment —
+and the next field would have cost another. The operator deleted the file for
+unrelated reasons and it stood at twelve lines; that was the entire opportunity,
+and it existed for about a day. A format whose parser needs a
+backward-compatibility branch is one field from needing two, and the cost of
+changing it grows with the file rather than with the change.
+
 **A counter added underneath another is not reset by the code that resets the
 first.** `plan()` cleared `calls` and zeroed `_lines_used`; `max_total_chars`
 arrived later, under `max_total_lines`, and nothing taught the reset about it.
@@ -1291,6 +1357,18 @@ about what the current code cannot do — when the operator's own script had bee
 written to handle exactly that case, with a comment citing the incident. When a
 number surprises, suspect the measurement first.
 
+**One item from a ranked list is not a finding; the list is.** Reporting on
+semantic search I pulled a single hit — an orchestrator process document ranked
+third — and built a paragraph on it, without showing the other five. The
+operator noticed the list I *had* shown did not contain it, and the full result
+said something better and different: four of the six hits were matching on the
+token *card*, so the third-place intruder was ranked against near-noise and the
+query itself was the defect. The one line supported "one more exclusion is
+needed"; the six lines supported "this query was never a question". A rank means
+nothing without what it outranked — which is the same sentence as the semantic
+index rule above, pointed at how a result is *reported* rather than how it is
+produced.
+
 **A watermark into a concatenation indexes a list whose middle moves.**
 `tools.log` was written by slicing `reader.calls + editor.calls` at one index,
 and every read appended during a turn pushed the whole editor half one place
@@ -1346,8 +1424,23 @@ means two runs of the same set are visibly the same command in the log; this is
 the "same command in both places, spelled the same way" rule applied to the
 argument list rather than the flags.
 
+**And the measurement that argued against granting it was about something
+else.** The config had a careful note explaining why only `checks` was trusted:
+over 81 verdicts the gate disagreed with the loop about `tests` twelve times and
+about `checks` zero. Every word of that is true, and it is not an argument
+against the grant, because `trust_executor_gates` is a *precondition* for the
+memo rather than a substitute for it — an ungranted layer is refused outright,
+and a granted one must still match the command as text and the HEAD it was
+answered on. The twelve disagreements come from the gate's path set being a
+superset of the loop's, which spells a different command, misses, and runs. So
+the grant only ever unlocks the identical case. A real measurement attached to
+the wrong decision is harder to argue with than a wrong measurement, and the
+question that separates them is not "is this number right" but "what would have
+to be true for this number to change the answer".
+
 **A ledger that records the container cannot answer questions about the item.**
-`flakes.md` recorded a file and an ordering seed for every excused flake — 277
+The ledger — `flakes.md` then, `flakes.jsonl` now — recorded a file and an
+ordering seed for every excused flake — 277
 entries, 77 of them naming one feature spec — and could not say whether that
 was one example failing 77 times or 77 different ones. Those are different
 bugs, and the question is the reason the file exists. The answer had been on
