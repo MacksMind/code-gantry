@@ -145,6 +145,53 @@ class TestPlaceholders:
             )
         assert "{names}" in str(e.value)
 
+    def test_shell_braces_are_not_placeholders(self):
+        # The check was "does this element contain a `{` and a `}`", which was
+        # exact while no declared command could contain shell syntax. It can
+        # now: `sh` is refused as argv[0] and allowed as a later element, which
+        # is how an operator writes a tool that resolves a path and then reads
+        # under it — and the model's values arrive as positional parameters, so
+        # nothing is interpolated into the script. Every such script has braces:
+        # `|| { echo "$p" >&2; exit 1; }`, `awk "{ print }"`. Refusing them
+        # rejected a working tool for containing a character.
+        script = 'p=$(resolve "$1") || { echo "$p" >&2; exit 1; }\nawk "{ print }"'
+        cfg = cfg_with(
+            a_tool(
+                command=["docker", "exec", "c", "sh", "-c", script, "_", "{gem}"],
+                arguments=[{"name": "gem", "description": "d"}],
+            )
+        )
+        assert cfg.project_tools[0].command[5] == script
+
+    def test_a_shell_variable_in_braces_is_not_a_placeholder(self):
+        # `${gem}` is the shell's own expansion of a positional or named
+        # variable and names nothing of ours. Catching it would refuse a
+        # correct script for spelling a variable the long way.
+        cfg = cfg_with(
+            a_tool(
+                command=["docker", "exec", "c", "sh", "-c", 'echo "${gem}"', "{gem}"],
+                arguments=[{"name": "gem", "description": "d"}],
+            )
+        )
+        assert cfg.project_tools[0].command[5] == 'echo "${gem}"'
+
+    def test_an_embedded_placeholder_is_still_caught_beside_shell_braces(self):
+        # The guard has to survive the loosening: a real embedded placeholder
+        # in a script that also has legitimate braces is exactly the case a
+        # laxer check would wave through.
+        with pytest.raises(ConfigError) as e:
+            cfg_with(
+                a_tool(
+                    command=[
+                        "docker", "exec", "c", "sh", "-c",
+                        'x() { echo hi; }; run --gem={gem}',
+                        "{gem}",
+                    ],
+                    arguments=[{"name": "gem", "description": "d"}],
+                )
+            )
+        assert "{gem}" in str(e.value)
+
 
 class TestDenylist:
     def test_a_declared_tool_is_covered_by_the_denylist(self):

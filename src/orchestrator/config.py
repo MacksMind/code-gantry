@@ -619,6 +619,10 @@ _SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "fish", "csh", "tcsh"})
 # `{name}` occupying an entire argv element. Anything embedded in a longer
 # string is refused, so there is never a question of how a repeated value joins.
 _PLACEHOLDER = re.compile(r"^\{([a-z][a-z0-9_]*)\}$")
+# The same shape found anywhere inside a longer element. Only reached for
+# elements that are not wholly a placeholder, so a bare `{gem}` never matches
+# here. See the use site for why this is not simply "contains a brace".
+_EMBEDDED_PLACEHOLDER = re.compile(r"(?<!\$)\{[a-z][a-z0-9_]*\}")
 
 # The three roles that call tools. Named here rather than in `projecttools`
 # because config is where the partition is decided and pinned; the runtime
@@ -755,7 +759,19 @@ def _tool_problems(tool: ProjectTool) -> list[str]:
         # obviously intended and has no answer for how a repeated value joins,
         # so every answer is a quoting rule and quoting is what argv exists to
         # avoid.
-        if "{" in element and "}" in element:
+        #
+        # Matched as a placeholder rather than as "contains a brace". The
+        # cruder test was exact while no declared command could contain shell
+        # syntax, and stopped being so once one could: `sh` is refused as
+        # argv[0] and allowed as a later element, which is how an operator
+        # writes a tool that resolves something and then reads under it — with
+        # the model's values arriving as positional parameters, so nothing is
+        # interpolated. Every such script has braces (`|| { exit 1; }`,
+        # `awk "{ print }"`), and refusing them rejected a working tool for
+        # containing a character. `$` before the brace is excluded because
+        # `${name}` is the shell expanding its own variable, not us expanding
+        # ours.
+        if _EMBEDDED_PLACEHOLDER.search(element):
             problems.append(
                 f"project_tools.{tool.name}: {element!r} embeds a placeholder in "
                 "a larger argument. A placeholder must be an entire argv "
