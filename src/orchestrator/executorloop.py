@@ -422,7 +422,14 @@ def build_loop_parts(stage: Stage, cfg: ProjectConfig, repo: Path):
             max_calls=cfg.executor.max_read_calls,
         ),
     )
-    editor = FileEditor(repo=repo, edit_files=list(stage.edit_files))
+    editor = FileEditor(
+        repo=repo,
+        edit_files=list(stage.edit_files),
+        no_direct_edit=[
+            (entry.path_glob, entry.reason)
+            for entry in cfg.executor.no_direct_edit
+        ],
+    )
 
     # The index, when one is configured — as a locator for failed edits only,
     # never as a tool. `editor.calls` is shared so the lookup appears in the

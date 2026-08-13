@@ -334,6 +334,16 @@ class FileEditor:
     repo: Path
     edit_files: list[str]
     protected: Callable[[str], bool] | None = None
+    # `(path_glob, reason)` pairs: paths no model may write by hand, whatever
+    # the stage's scope says. Scope answers "may this stage touch this file";
+    # this answers a question scope cannot, which is that the file is
+    # *generated* and belongs to the tool that produces it.
+    #
+    # The reason is the operator's sentence and is rendered verbatim. What a
+    # generated file is and what to run instead are project knowledge — a
+    # message written here would ship one project's vocabulary to every
+    # other project's executor.
+    no_direct_edit: list[tuple[str, str]] = field(default_factory=list)
     # Given a repo-relative path and the text that was not found, returns
     # candidate line numbers in that file. Optional: the editor works
     # without one and every project that has no index gets today's
@@ -376,6 +386,17 @@ class FileEditor:
                 "changing it here would edit the instructions this work is "
                 "judged against."
             )
+
+        # Ahead of scope, because a generated file is usually *in* scope and
+        # the scope refusal would then name the wrong cause: a model told the
+        # path is out of bounds asks the planner to widen a list that is
+        # already wide enough, and the planner cannot see why that failed.
+        for pattern, reason in self.no_direct_edit:
+            if matches_any(rel, [pattern]):
+                raise ToolError(
+                    f"{rel!r} may not be edited directly: {reason}",
+                    kind="no direct edit",
+                )
 
         if not matches_any(rel, self.edit_files):
             raise ToolError(
