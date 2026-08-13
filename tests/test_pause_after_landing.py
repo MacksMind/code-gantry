@@ -193,6 +193,65 @@ class TestAPauseCaughtAfterDeriving:
         assert "derived" in held and "derived" not in between
 
 
+class TestTheLandingSiteRecordsWhatItWasAboutToDo:
+    """The argument existed and one of its two call sites did not pass it.
+
+    `_next_from_queue` promotes the next stage of a batch and returns
+    `next_hop: "precheck"` — a stage drawn, correct, and ready to start. The
+    pause check immediately below it called `_pause_escalation` with no
+    `ready_hop`, so `paused_before` was written empty and the escalation said
+    "between stages" when a stage was waiting.
+
+    On resume that is indistinguishable from a stage awaiting revision, which
+    is the confusion `paused_before` was added to prevent, and the resume
+    routes to `plan`. Observed: a pause taken after `error-messages-for-branch-guard`
+    landed came back as `[plan] revising query-trace-patch-guard` and spent a
+    planner call revising a stage nothing was wrong with.
+
+    The shape is an argument that never reached an older call site — except
+    here the call site is *newer*: batching added the queue promotion directly
+    above a pause check written when `advance` could only ever route to `plan`,
+    and back then "between stages" was the only thing it could mean.
+    """
+
+    def _paused_update(self, tmp_path, next_hop):
+        from orchestrator.nodes import _pause_escalation
+
+        flag = tmp_path / "paused"
+        flag.write_text("")
+        landed = {"stage_index": 3, "next_hop": next_hop}
+        return _pause_escalation(
+            flag, {"run_id": "r"}, _cfg(), _held_hop(landed)
+        )
+
+    def test_a_promoted_queue_stage_is_recorded_as_held(self, tmp_path):
+        assert self._paused_update(tmp_path, "precheck")["paused_before"] == "precheck"
+
+    def test_an_empty_queue_records_nothing_held(self, tmp_path):
+        assert self._paused_update(tmp_path, "plan")["paused_before"] == ""
+
+    def test_the_message_matches_what_was_recorded(self, tmp_path):
+        # The operator reads this. Saying "between stages" while holding a
+        # derived stage is the same wrong answer in prose.
+        held = self._paused_update(tmp_path, "precheck")["escalation_reason"]
+        empty = self._paused_update(tmp_path, "plan")["escalation_reason"]
+        assert "derived" in held and "derived" not in empty
+
+    def test_only_precheck_counts_as_held(self):
+        # `paused_before` is returned verbatim as the resume entry point, so
+        # anything truthy that is not a node the run can be resumed into would
+        # send it somewhere it was never about to go.
+        assert _held_hop({"next_hop": "plan"}) == ""
+        assert _held_hop({}) == ""
+        assert _held_hop({"next_hop": "precheck"}) == "precheck"
+
+
+def _held_hop(landed):
+    from orchestrator.nodes import held_hop
+
+    return held_hop(landed)
+
+
 class TestResumingIntoAHeldStage:
     def test_a_held_stage_runs_rather_than_being_re_derived(self):
         from orchestrator.state import resume_entry_point

@@ -1896,8 +1896,31 @@ def advance(state: RunState, rt: Runtime) -> dict:
     # and on the branch whatever the run does next; replacing this update with
     # the escalation would leave `completed` short by one and `stage_index`
     # unmoved, and a resume would re-derive work that is already landed.
-    paused = _pause_escalation(rt.paths.pause_flag, state, rt.cfg)
+    #
+    # `held_hop` reads what the landing decided rather than asking again. When
+    # a batch promoted its next stage this is a *held stage* pause, not a
+    # between-stages one, and saying so is what stops the resume re-planning
+    # it: without the argument, `paused_before` was empty and a stage that was
+    # drawn and correct came back as `[plan] revising <id>`, paying for a
+    # planner call to revise something nothing was wrong with.
+    paused = _pause_escalation(
+        rt.paths.pause_flag, state, rt.cfg, held_hop(landed)
+    )
     return {**landed, **paused} if paused else landed
+
+
+def held_hop(landed: dict) -> str:
+    """The hop this landing is holding a ready stage for, if any.
+
+    Derived from the landing update rather than recomputed, because
+    `_next_from_queue` has already decided — asking the queue a second time is
+    how two answers to one question come to disagree.
+
+    Only `precheck` counts. `paused_before` is returned verbatim as the resume
+    entry point, so any other truthy value would send a resume to a node the
+    run was never about to enter.
+    """
+    return "precheck" if landed.get("next_hop") == "precheck" else ""
 
 
 # --- finalize ------------------------------------------------------------
