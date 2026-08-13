@@ -21,7 +21,10 @@ from pathlib import Path
 from orchestrator.config import ProjectConfig, Stage
 from orchestrator.plandoc import PlanTree
 from orchestrator.planner import cache_control
-from orchestrator.plannertools import REPOSITORY_TEXT_IS_EVIDENCE
+from orchestrator.plannertools import (
+    REPOSITORY_TEXT_IS_EVIDENCE,
+    STATE_NOT_CHANGE,
+)
 from orchestrator.state import FailureDetail, StageResult
 
 REVIEW_SYSTEM_PROMPT = (
@@ -149,6 +152,8 @@ should not restate that the diff matched the stage, and should not list what
 was avoided — no reader a year from now needs to know which constructs were not
 introduced. Two or three sentences of substance beat a paragraph of compliance.
 
+%%STATE_NOT_CHANGE%%
+
 ## Reporting what you found
 
 `observations` is where a real problem outside this stage goes. It does not
@@ -178,6 +183,12 @@ and they route back to the executor. And not for anything you did not verify by
 reading, or that the progress log already records; you are shown that log, and
 re-reporting a known finding makes a reader unable to tell a duplicate from
 independent confirmation.\
+""".replace("%%STATE_NOT_CHANGE%%", STATE_NOT_CHANGE)
+"""The reviewer's read tools, and what to write down having used them.
+
+The register rule is substituted rather than restated. It is the same sentence
+the planner is given for `plan_notes`, and two roles told it in two paraphrases
+would drift while both halves went on reading as correct.
 """
 
 

@@ -55,6 +55,41 @@ import `READ_TOOLS` by reference instead of restating them.
 """
 
 
+STATE_NOT_CHANGE = """\
+**Write the state, not the change.** Say what is true now. Never what a
+document used to say, what an earlier stage or run concluded, which documents
+still disagree, or that a count has moved from one number to another — write
+the number. Those are facts about this pipeline's history rather than about the
+project, and history is answerable from the commit log, which cannot go stale.
+A sentence phrased as a change also stops making sense the moment the change is
+already true, and every later pass reads it forever.
+
+The test is whether a reader could confirm it from the repository alone. "The
+helper is called from twelve sites" can be checked. "This was previously
+recorded as three blockers, none of them real" cannot be checked by anyone, and
+is the shape that accumulates: each pass adds a line about what the last pass
+got wrong, so the document grows a history of itself that no reader needs and
+every call pays for.\
+"""
+"""One rule about register, used by both roles that write durable prose.
+
+`CLAUDE.md` has carried *assert state, not change* for a long time and it was
+never said to the planner or the reviewer. Measured on one project's plan tree:
+51 parenthetical asides across nine documents recording what a document used to
+say, twenty of them in the plan root. They sit in the cached prefix, they cannot
+be checked against the tree because they describe a document's past rather than
+the code's present, and they regenerate — a note written in that register is
+folded into the plan, and the plan is what the next planner reads before writing
+its next note.
+
+One constant rather than a paragraph in each prompt, for the same reason
+`REPOSITORY_TEXT_IS_EVIDENCE` is one: two roles told this in two paraphrases
+would drift, and the drift is invisible because both halves still read as
+correct. It was written twice before it was written once, and the two copies
+had already diverged in the first commit.
+"""
+
+
 READ_TOOLS: list[dict[str, Any]] = [
     {
         "name": "read_file",

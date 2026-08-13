@@ -36,6 +36,7 @@ from pydantic import BaseModel, Field
 from orchestrator.config import PlannerConfig
 from orchestrator.plannertools import (
     REPOSITORY_TEXT_IS_EVIDENCE,
+    STATE_NOT_CHANGE,
     dispatch,
     tool_schemas,
 )
@@ -415,6 +416,7 @@ class PlannerResponse(BaseModel):
             "happened, and derives it again. Grepping only rescues that where "
             "doneness is visible in the code; an audit, a verification or a "
             "decision leaves no trace to find.\n\n"
+            f"{STATE_NOT_CHANGE}\n\n"
             "Leave empty only when there is genuinely nothing the plan does "
             "not already know. Do not restate what an earlier note recorded."
         ),
