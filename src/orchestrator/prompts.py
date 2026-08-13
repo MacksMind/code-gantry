@@ -823,7 +823,9 @@ def _review_system_prompt(cfg: ProjectConfig | None) -> str:
     return REVIEW_SYSTEM_PROMPT
 
 
-def _conventions_block(agent_context: str | None, *, role: str = "reviewer") -> str:
+def _conventions_block(
+    agent_context: str | None, *, role: str = "reviewer", project_tools=()
+) -> str:
     """The repository's own agent-facing documents, framed for who is reading.
 
     Framed as what the repository requires rather than as background, because
@@ -841,13 +843,35 @@ def _conventions_block(agent_context: str | None, *, role: str = "reviewer") -> 
     if not agent_context or not agent_context.strip():
         return ""
     if role == "executor":
+        from orchestrator.projecttools import for_role
+
+        # The reason has to match the machinery. This sentence said flatly
+        # "you cannot run commands" for as long as that was true of every
+        # project, and stayed after `project_tools` made it false — the same
+        # defect, in the same words, as the planner paragraph that withheld a
+        # stream of work. A model can see its own tool schema, so a false
+        # reason is worse than none: it invites the model to discount the
+        # instruction the reason was attached to.
+        if for_role("executor", project_tools):
+            procedure = (
+                "Where a passage describes procedure rather than how code "
+                "should be written, it is context and not a rule. Reading a "
+                "procedure is not being asked to perform it: carry one out "
+                "only where it is exactly what one of your declared tools "
+                "does, and never by narrating steps you have no tool for."
+            )
+        else:
+            procedure = (
+                "Where a passage describes procedure rather than how code "
+                "should be written, it is context and not a rule — and you "
+                "cannot run commands, so a procedure is never something for "
+                "you to carry out."
+            )
         binding = (
             "They bind what you write as firmly as the stage's own instruction "
             "does: a change that breaks one is wrong even where the stage said "
             "nothing about it, and it will be rejected on that ground alone. "
-            "Where a passage describes procedure rather than how code should be "
-            "written, it is context and not a rule — and you cannot run "
-            "commands, so a procedure is never something for you to carry out."
+            + procedure
         )
     else:
         binding = (
@@ -1538,7 +1562,9 @@ def build_executor_messages(
         }
     ]
 
-    conventions = _conventions_block(agent_context, role="executor")
+    conventions = _conventions_block(
+        agent_context, role="executor", project_tools=cfg.project_tools
+    )
     messages.append(
         {
             "role": "user",

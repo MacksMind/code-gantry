@@ -408,6 +408,24 @@ class RepoReader:
         self.calls.append(ToolCall(tool=tool, detail=detail, lines=used))
         return text
 
+    def record_answer(self, tool: str, detail: str, text: str) -> str:
+        """Charge text this reader did not produce to the same budget.
+
+        An operator-declared tool answers with bytes that land in the same
+        context window as a `read_file`, and the ceilings are there to bound
+        that window — `max_total_chars` exists because a line is not a unit of
+        size, and a container's output is no more measured in lines than a
+        minified bundle is. Left uncharged, the one channel that can return a
+        whole vendored directory would be the only one that is free, and the
+        `(120k/800k chars)` line an operator reads would stop describing what
+        was actually spent.
+
+        It also puts the call in the ledger, which is what makes it visible in
+        `tools.log` and in the per-step counts. A tool whose use is invisible
+        cannot be judged worth its cost.
+        """
+        return self._spend(tool, detail, text)
+
     def record_refusal(
         self, tool: str, detail: str, reason: str, kind: str = ""
     ) -> None:

@@ -47,6 +47,18 @@ BUILTIN_TOOL_NAMES = frozenset(
 )
 
 
+def for_role(role: str, tools) -> list[ProjectTool]:
+    """The declared tools one role may call, in declaration order.
+
+    One selector, used by every caller that offers or runs a declared tool.
+    The alternative — each role filtering the list where it happens to need it
+    — is how a boundary ends up enforced in the place that advertises and not
+    in the place that runs, which is the shape of the `search` glob leak: a
+    filter over what is offered is not a constraint on what is reachable.
+    """
+    return [t for t in (tools or []) if role in (t.roles or [])]
+
+
 def tool_schema(tool: ProjectTool) -> dict[str, Any]:
     """One declared tool, in the same shape as a built-in.
 

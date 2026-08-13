@@ -365,6 +365,40 @@ states what depends on what, the code decides whether that is true, and a
 prerequisite that does not exist can hold an item closed for the life of a
 project.
 
+**And the same sentence goes stale twice, in two prompts, for one reason.**
+The rule above was written about `PLANNER_SYSTEM_PROMPT`; the identical claim
+was sitting in `_conventions_block`, telling the executor a procedure "is never
+something for you to carry out" because "you cannot run commands". True of
+every project until `project_tools` shipped and false since for any project
+declaring one — and a model can see its own tool schema, so a reason it can
+observe to be false is worse than no reason at all: it invites discounting the
+instruction the reason was attached to. The instruction was right the whole
+time. It was found by grepping every model-facing string for claims about the
+machinery while adding a capability, which is the pass this file already
+prescribes and which nothing runs on a schedule. When you fix a stale
+capability sentence, search for its *paraphrases* in the other roles' prompts
+before closing the task; one component describing another from memory is
+rarely a single site.
+
+**A feature's original role is the one that never gets scoped.** `project_tools`
+was built for the executor, so `executortools` took the whole declared list —
+by history rather than by decision. Adding a `roles` field and wiring the two
+new roles through it would have scoped two of three and left the founding role
+reading every declaration, and it would not have failed loudly: the tools most
+likely to belong to another role are read-only, so the symptom is a boundary
+that holds everywhere except where the feature started. Whenever a capability
+grows an audience, the first thing to check is the caller that predates the
+audience existing.
+
+The corollary is where the boundary goes. Scoping only where the schema is
+built is the `search` glob leak again — a filter over what is *advertised* is
+not a constraint on what is *reachable*, and a model can name a tool it was
+never offered. Both the schema builder and the dispatcher scope through one
+selector, `for_role`, called with the same role argument; that is one function
+evaluated twice rather than two filters that can drift, and it is why neither
+caller is allowed to hand over a pre-scoped list. A caller that could pass the
+wrong scope makes the wrong scope expressible.
+
 **Improving a tool's answers cannot make anything reach for it more often.**
 There is no memory across runs, so a good result is not carried anywhere — a
 model decides whether to call a tool from the description in front of it and

@@ -635,7 +635,7 @@ def _drive(
             project,
             paths,
             planner=make_planner(cfg.planner, cfg.target_repo, cfg.project_tools),
-            reviewer=make_reviewer(cfg.reviewer, cfg.target_repo),
+            reviewer=make_reviewer(cfg.reviewer, cfg.target_repo, project_tools=cfg.project_tools),
             log=log,
             tool_log=tools,
         )

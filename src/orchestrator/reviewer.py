@@ -171,7 +171,7 @@ def _blocked(reason: str) -> ReviewOutcome:
 
 class OpenAIReviewer:
     def __init__(self, cfg: ReviewerConfig, client=None, log=None, reader=None,
-                 semantic=None):
+                 semantic=None, project_tools=None):
         self.cfg = cfg
         # Assigned by `build_runtime`; the client predates the run log.
         self.log = log
@@ -179,7 +179,15 @@ class OpenAIReviewer:
         # reviewer judges from the diff alone as it always did.
         self.reader = reader
         self.semantic = semantic
+        # The project's whole declared menu, scoped per use. The reviewer had
+        # no route to it at all — `make_reviewer` never took one — so a project
+        # could declare a tool the gate needed and the gate could not reach it.
+        # That is the same shape as the reviewer having had no tools for most
+        # of this project's life: a checkpoint that cannot reach its evidence
+        # produces verdicts indistinguishable from judgement.
+        self.project_tools = list(project_tools or [])
         # Bound by `build_runtime`; see the planner's.
+        self.runner = None
         self.tool_log = None
         self._client = client if client is not None else _build_openai_client(cfg)
 
@@ -294,7 +302,11 @@ class OpenAIReviewer:
         if cache_key:
             extra["prompt_cache_key"] = cache_key
 
-        tools = openai_tool_schemas(self.semantic) if self.reader else []
+        tools = (
+            openai_tool_schemas(self.semantic, self.project_tools, "reviewer")
+            if self.reader
+            else []
+        )
         conversation = list(messages)
         usage = TokenUsage()
         response = None
@@ -371,7 +383,13 @@ class OpenAIReviewer:
                             {
                                 "type": "input_text",
                                 "text": dispatch(
-                                    name, args, self.reader, self.semantic
+                                    name,
+                                    args,
+                                    self.reader,
+                                    self.semantic,
+                                    project_tools=self.project_tools,
+                                    runner=self.runner,
+                                    role="reviewer",
                                 ),
                                 "prompt_cache_breakpoint": {"mode": "explicit"},
                             }
@@ -436,7 +454,7 @@ class OpenAIReviewer:
 
 
 def make_reviewer(
-    cfg: ReviewerConfig, target_repo=None, log=None
+    cfg: ReviewerConfig, target_repo=None, log=None, project_tools=None
 ) -> ReviewerClient:
     """The pluggable seam. Config validation already restricts the provider,
     so this only has to map it.
@@ -471,7 +489,9 @@ def make_reviewer(
             # order, and the order is most of how a conclusion was reached.
             semantic = SemanticSearch(search_cfg, reader=reader)
 
-    return OpenAIReviewer(cfg, log=log, reader=reader, semantic=semantic)
+    return OpenAIReviewer(
+        cfg, log=log, reader=reader, semantic=semantic, project_tools=project_tools
+    )
 
 
 def _build_openai_client(cfg: ReviewerConfig):

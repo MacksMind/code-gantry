@@ -166,11 +166,17 @@ def tool_schemas(
     marks them as project-supplied, because a tool the model reads as
     second-class is one it reaches for last — and the whole point is that
     `bundle install` should be as ordinary to it as `read_file`.
+
+    Scoped to the executor's own share of the menu. Easy to miss, because this
+    role had the menu to itself and takes the whole list by history rather than
+    by decision — but a declaration the operator wrote for the planner alone is
+    not an executor tool, and the ones most likely to be planner-only are
+    read-only, so nothing would fail loudly if this leaked.
     """
-    from orchestrator.projecttools import tool_schema
+    from orchestrator.projecttools import for_role, tool_schema
 
     read = [*READ_TOOLS, SEMANTIC_TOOL_FOR_EDITING] if semantic else list(READ_TOOLS)
-    declared = [tool_schema(t) for t in (project_tools or [])]
+    declared = [tool_schema(t) for t in for_role("executor", project_tools)]
     return [*read, *EDIT_TOOLS, *declared]
 
 
@@ -218,8 +224,12 @@ def dispatch(
     name is whichever the provider picks and the model cannot tell.
     """
     from orchestrator import plannertools
+    from orchestrator.projecttools import for_role
 
-    declared = {t.name: t for t in (project_tools or [])}
+    # Scoped here as well as where the schema is built, and for the reason the
+    # planner's dispatch is: a model can name a tool it was never offered, so
+    # advertising and permission have to be two checks over one selector.
+    declared = {t.name: t for t in for_role("executor", project_tools)}
     if name in declared:
         from orchestrator.projecttools import invoke
 

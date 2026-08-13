@@ -620,6 +620,12 @@ _SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "fish", "csh", "tcsh"})
 # string is refused, so there is never a question of how a repeated value joins.
 _PLACEHOLDER = re.compile(r"^\{([a-z][a-z0-9_]*)\}$")
 
+# The three roles that call tools. Named here rather than in `projecttools`
+# because config is where the partition is decided and pinned; the runtime
+# reads this set, it does not extend it.
+Role = Literal["planner", "executor", "reviewer"]
+ROLES: tuple[str, ...] = ("planner", "executor", "reviewer")
+
 
 class ToolArgument(_Strict):
     """One value the model supplies when calling a declared tool.
@@ -662,6 +668,25 @@ class ProjectTool(_Strict):
     description: str
     command: list[str]
     arguments: list[ToolArgument] = []
+    # Who may call it. The executor alone, until an operator says otherwise —
+    # which is what every declaration written before this field existed meant,
+    # so adding it moves nothing.
+    #
+    # The default is not timidity. The menu's original entries write:
+    # `bundle install` rewrites the lockfile, `rails app:update` overwrites
+    # templated config. The executor is the only role that runs inside the
+    # quarantine a stage branch provides, and the scope gate measures what it
+    # touched from the tree. A planner that dirtied the work tree mid-derivation
+    # would be caught by the *next* stage's precheck, which refuses to cut a
+    # branch over changes it cannot attribute — stopping a run on a stage with
+    # nothing wrong with it.
+    #
+    # A read-only tool is the case this field exists for. The planner reads to
+    # decide what to draw, and where a project keeps source the work tree does
+    # not contain — a dependency installed into a container volume, say — no
+    # built-in read tool can reach it and the planner is the role that most
+    # needs it.
+    roles: list[Role] = ["executor"]
     # None means the runner's own default, which is what every other declared
     # command already gets.
     timeout_seconds: int | None = None
@@ -697,6 +722,18 @@ def _tool_problems(tool: ProjectTool) -> list[str]:
             "Put the real program first, or wrap the shell script in a file and "
             "name the file."
         )
+
+    # A tool nobody may call reads in config exactly like one that works, and
+    # the symptom is a model never reaching for it — indistinguishable from a
+    # description that did not persuade it.
+    if not tool.roles:
+        problems.append(
+            f"project_tools.{tool.name}: roles must name at least one of "
+            f"{', '.join(ROLES)}. A tool with no audience is never offered to "
+            "anything, which is not distinguishable from one nobody chose to call."
+        )
+    if len(set(tool.roles)) != len(tool.roles):
+        problems.append(f"project_tools.{tool.name}: a role is named twice")
 
     declared = [a.name for a in tool.arguments]
     for name in declared:

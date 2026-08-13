@@ -448,6 +448,18 @@ def build_runtime(
         timeout=cfg.limits.command_timeout_seconds,
         log=logger,
     )
+    # An operator-declared tool is argv, and until now only the executor had
+    # anything to spawn it with — so a project could offer the planner a tool
+    # and the planner would refuse every call to it. Bound here, beside the log
+    # and the tool log, because the clients are built before the run exists and
+    # this is the only place that has both. The declared menu goes with it: the
+    # reviewer's factory never took one at all, and a role holding tools it
+    # cannot run is the same defect as a role that was never offered them.
+    for client in (planner, reviewer):
+        if hasattr(client, "runner"):
+            client.runner = runner
+        if hasattr(client, "project_tools") and not getattr(client, "project_tools", None):
+            client.project_tools = list(cfg.project_tools or [])
     git = Git(cfg.target_repo)
     return Runtime(
         cfg=cfg,

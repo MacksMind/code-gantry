@@ -223,12 +223,33 @@ SEMANTIC_TOOL: dict[str, Any] = {
 }
 
 
-def tool_schemas(semantic: SemanticSearch | None) -> list[dict[str, Any]]:
-    """What this project offers. Semantic search only when configured."""
-    return [*READ_TOOLS, SEMANTIC_TOOL] if semantic else list(READ_TOOLS)
+def tool_schemas(
+    semantic: SemanticSearch | None, project_tools=(), role: str = "planner"
+) -> list[dict[str, Any]]:
+    """What this project offers this role. Semantic search only when configured.
+
+    `project_tools` is the *whole* declared menu and the scoping happens here,
+    against `role`. Deliberately not the caller's job: `dispatch` scopes the
+    same way from the same argument, so the list a model is offered and the
+    list it is permitted to run are one selector called twice rather than two
+    filters that can drift. A caller that passed a pre-scoped list would make
+    the wrong scope expressible, which is the whole class of bug this is here
+    to close.
+
+    A declared tool renders exactly like a built-in and carries the operator's
+    description verbatim. Nothing marks it as project-declared, for the reason
+    `projecttools.tool_schema` gives: a tool a model treats as second-class is
+    one it reaches for last.
+    """
+    from orchestrator.projecttools import for_role, tool_schema
+
+    built_in = [*READ_TOOLS, SEMANTIC_TOOL] if semantic else list(READ_TOOLS)
+    return built_in + [tool_schema(t) for t in for_role(role, project_tools)]
 
 
-def openai_tool_schemas(semantic: SemanticSearch | None) -> list[dict[str, Any]]:
+def openai_tool_schemas(
+    semantic: SemanticSearch | None, project_tools=(), role: str = "reviewer"
+) -> list[dict[str, Any]]:
     """The same tools, in the shape the other provider's API wants.
 
     One definition, two renderings. The descriptions are the part that matters
@@ -252,7 +273,9 @@ def openai_tool_schemas(semantic: SemanticSearch | None) -> list[dict[str, Any]]
     with `.get`, so a null arrives as a missing argument and nothing
     downstream can tell the difference.
     """
-    return [as_strict_tool(tool) for tool in tool_schemas(semantic)]
+    return [
+        as_strict_tool(tool) for tool in tool_schemas(semantic, project_tools, role)
+    ]
 
 
 def as_strict_tool(tool: dict[str, Any]) -> dict[str, Any]:
@@ -313,13 +336,28 @@ def dispatch(
     args: dict,
     reader: RepoReader,
     semantic: SemanticSearch | None,
+    project_tools=(),
+    runner=None,
+    role: str = "planner",
 ) -> str:
     """Run one tool call and render its result as text.
 
     Every failure becomes a readable string rather than an exception. The
     planner must be able to recover from a bad path or an exhausted budget by
     answering with what it has.
+
+    `project_tools` is what *this role* may call, and the check that a named
+    tool is in it happens here rather than only where the schema is built. A
+    model can name anything; being offered a tool and being permitted to run it
+    are two facts, and enforcing only the first leaves the command reachable by
+    whoever asks for it by name. This codebase has twice found a boundary that
+    turned out to be a filter over what was advertised.
     """
+    from orchestrator.projecttools import for_role
+
+    declared = {t.name: t for t in for_role(role, project_tools)}
+    if name in declared:
+        return _run_declared(declared[name], args, runner, reader, role)
     try:
         if name == "read_file":
             return reader.read_file(
@@ -344,6 +382,41 @@ def dispatch(
     except ToolError as e:
         reader.record_refusal(name, call_detail(args), str(e))
         return f"cannot do that: {e}"
+
+
+def _run_declared(tool, args: dict, runner, reader, role: str) -> str:
+    """One operator-declared tool, run for a reading role.
+
+    A non-zero exit is returned rather than raised, as it is for the executor:
+    the whole point of the tool is that the model learns what the command said,
+    and an exception ends the decision instead of informing it.
+
+    The answer is charged to the same read budget as a `read_file`, because it
+    lands in the same context window and is measured in the same bytes. It is
+    also the one channel that can return a whole vendored directory, so leaving
+    it free would make the largest reads the only uncounted ones.
+    """
+    from orchestrator.projecttools import invoke
+
+    detail = call_detail(args) or tool.name
+    if runner is None:
+        reason = (
+            f"{tool.name} cannot run here: the {role} has no command runner. "
+            "That is a wiring fault in the orchestrator, not something to work "
+            "around — report it rather than retrying."
+        )
+        if reader is not None:
+            reader.record_refusal(tool.name, detail, reason)
+        return f"cannot do that: {reason}"
+    try:
+        answer = invoke(tool, args, runner)
+    except ToolError as e:
+        if reader is not None:
+            reader.record_refusal(tool.name, detail, str(e))
+        return f"cannot do that: {e}"
+    if reader is not None:
+        return reader.record_answer(tool.name, detail, answer)
+    return answer
 
 
 def call_detail(args: dict) -> str:

@@ -116,7 +116,7 @@ property; everything else is mechanism.
 
 | Role | May write | May not |
 |---|---|---|
-| **Executor** (via Aider) | Product code inside the stage's `edit_files` | Anything outside it; any command; **any code the planner authored for it** |
+| **Executor** | Product code inside the stage's `edit_files` | Anything outside it; any command it was not declared; **any code the planner authored for it** |
 | **Planner** | Stage specs — declarative fields only — plan revisions, the status log | Product code; **any executable field**; **any fenced code block in an instruction** |
 | **Reviewer** | Nothing | Everything |
 
@@ -152,6 +152,68 @@ scoped_test_command: "docker compose run --rm test bundle exec rspec {paths}"
 
 `{paths}` is filled from the stage diff, optionally widened by planner-declared
 spec globs. Paths are declarative; the command string is yours.
+
+### Tools you declare, and who may call them
+
+`project_tools` is a menu you write. Each entry is a name, a description the
+model reads, and an **argv list** — never a shell, which is the whole safety
+story: a value the model supplies is one inert element, so there is no
+metacharacter to escape. A placeholder must occupy a whole element, so a
+repeated value expands into elements rather than needing a quoting rule.
+
+Each tool names its audience. `roles` defaults to `["executor"]`, which is what
+every declaration written before the field existed meant:
+
+```yaml
+project_tools:
+  - name: bundle_install
+    description: Install what the manifest names, in the app container.
+    command: ["docker", "compose", "exec", "-T", "app", "bundle", "install"]
+    # roles: ["executor"] — the default
+
+  - name: gem_search
+    description: >
+      Search one dependency's installed source. Its own directory is the root.
+    command: ["docker", "compose", "exec", "-T", "app", "sh", "-c", "…",
+              "_", "{gem}", "{pattern}"]
+    roles: ["planner", "reviewer"]
+    arguments:
+      - name: gem
+        description: The dependency, named as the manifest names it.
+      - name: pattern
+        description: A regular expression.
+```
+
+Scope by what a tool *does*, not by who asked for it. The menu's original
+entries write — `bundle install` rewrites a lockfile, a framework's own
+generator overwrites templated config — and the executor is the only role that
+runs inside the quarantine a stage branch provides, where the scope gate
+measures from the tree what was touched. A planner that dirtied the work tree
+mid-derivation would be caught by the *next* stage's precheck, which refuses to
+cut a branch over changes it cannot attribute — stopping a run on a stage with
+nothing wrong with it.
+
+A **read-only** tool is the case `roles` exists for. Where a project keeps
+source the work tree does not contain — a dependency installed into a container
+volume, say — no built-in read tool can reach it, and the planner is the role
+that most needs it: it decides what work to draw, and a premise it cannot check
+is one it guesses at or declares undrawable.
+
+Three things follow, and each is enforced rather than described:
+
+- **Being offered a tool and being allowed to run it are two checks.** Both the
+  schema a role is shown and the dispatcher that runs its calls scope through
+  the same selector. A model can name anything; a filter over what is
+  advertised is not a boundary.
+- **The planner is told what the executor can run, separately from what it can
+  run itself.** Both matter. It reasons about executor tools it cannot call —
+  on one run it ruled a framework bump undrawable partly from what a generator
+  overwrites — and it must not write a stage instruction that depends on a tool
+  the executor was never given, because that instruction cannot be carried out
+  and the attempt is spent finding out.
+- **What a declared tool returns is charged to the same read budget as a file.**
+  It lands in the same context window, and it is the one channel that can
+  return a whole vendored directory.
 
 ## Branch topology
 

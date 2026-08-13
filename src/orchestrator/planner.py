@@ -602,11 +602,19 @@ class AnthropicPlanner:
         # always been.
         self.reader = reader
         self.semantic = semantic
-        # What this project lets the executor run. The system prompt
-        # describes the executor's capabilities, and describing them from a
-        # fixed string is how the planner came to withhold a stream of work
-        # the operator had already enabled.
+        # The project's whole declared menu, every role's. Held unscoped
+        # because two different questions are asked of it: which tools *this*
+        # role may call, and which the *executor* may — the second is what the
+        # system prompt describes, and describing it from a fixed string is how
+        # the planner came to withhold a stream of work the operator had
+        # already enabled. Scoping happens at each use through `for_role`, so
+        # neither question can be answered with the other's list.
         self.project_tools = list(project_tools or [])
+        # Bound by `build_runtime`, like the log and the tool log: declared
+        # tools are argv, and there is nothing here to spawn one with until the
+        # run exists. A planner-scoped tool with no runner refuses in words
+        # rather than raising, because a wiring fault must be legible.
+        self.runner = None
         # Bound by `build_runtime`. Reads go here rather than to the run log.
         self.tool_log = None
 
@@ -805,7 +813,11 @@ class AnthropicPlanner:
         or the answer was truncated. Otherwise `parsed` is what came back, still
         to be checked for contradictions the schema cannot express.
         """
-        tools = tool_schemas(self.semantic) if self.reader else []
+        tools = (
+            tool_schemas(self.semantic, self.project_tools, "planner")
+            if self.reader
+            else []
+        )
         conversation = list(messages)
         usage = PlannerUsage()
         response = None
@@ -879,7 +891,13 @@ class AnthropicPlanner:
                             "type": "tool_result",
                             "tool_use_id": req["id"],
                             "content": dispatch(
-                                req["name"], req["input"], self.reader, self.semantic
+                                req["name"],
+                                req["input"],
+                                self.reader,
+                                self.semantic,
+                                project_tools=self.project_tools,
+                                runner=self.runner,
+                                role="planner",
                             ),
                         }
                         for req in requests
@@ -1408,7 +1426,19 @@ def executor_capability_block(project_tools=None) -> str:
     The rule it breaks is the one about a tool declaring its own behaviour.
     A capability the operator configures is a capability the planner is told
     about, by construction, so the two cannot drift again.
+
+    It stays about the *executor* even though the planner can now be given
+    declared tools of its own, because these are two different facts and the
+    planner reasons from both. Live evidence for the first: it ruled the whole
+    framework bump undrawable partly from what `rails_app_update` overwrites —
+    `config/routes.rb` and forty initializers — which is a correct judgement
+    about a tool it cannot call, reached from this description alone. So the
+    list here is scoped to the executor, and what the planner holds instead is
+    named separately rather than merged in.
     """
+    from orchestrator.projecttools import for_role
+
+    project_tools = for_role("executor", project_tools)
     lines = [
         "- **The executor can look, and it can run what this project declares.**",
         "  It has the same read tools you do — `read_file`, `list_files`, "
@@ -1441,6 +1471,59 @@ def executor_capability_block(project_tools=None) -> str:
     return "\n".join(lines)
 
 
+# The sentence that separates the two menus, and the anchor its test reads.
+# A constant because the test must find the generated line rather than
+# recompute the answer from the config — a check that re-derives what the code
+# derives passes when both are wrong together.
+PLANNER_ONLY_MARKER = "the executor cannot call:"
+
+
+def planner_capability_block(project_tools=None) -> str:
+    """What *you*, the planner, can run — and where that differs from the executor.
+
+    Two menus reach this prompt and they are different facts. The executor's
+    list is above, and the planner reasons from it about work it will hand
+    over; this one is about what the planner can do while deciding.
+
+    The dangerous confusion is one-directional. Reading the executor's list as
+    its own costs a refused call and nothing else. Reading *its own* as the
+    executor's costs a stage: an instruction that says "search the gem source"
+    is unsatisfiable if the executor was never offered that tool, and an
+    unsatisfiable instruction burns a rework cycle before anyone sees why. That
+    is the phantom-capability direction this file has already paid for once, so
+    the difference is stated outright rather than left to be inferred from two
+    lists that look alike.
+
+    Silent when the planner has no declared tools, which is every project that
+    predates the `roles` field: it reads exactly as it did before.
+    """
+    from orchestrator.projecttools import for_role
+
+    mine = for_role("planner", project_tools)
+    if not mine:
+        return ""
+    lines = [
+        "\n- **You can run some of this project's declared tools yourself.**",
+        "  These are yours, not the executor's — you call them while deciding, "
+        "and what they return is evidence you can plan against rather than a "
+        "premise to guess at.",
+    ]
+    for tool in mine:
+        args = ", ".join(a.name for a in tool.arguments)
+        signature = f"`{tool.name}({args})`" if args else f"`{tool.name}`"
+        lines.append(f"  - {signature} — {' '.join(tool.description.split())}")
+    withheld = [t.name for t in mine if "executor" not in (t.roles or [])]
+    if withheld:
+        named = ", ".join(f"`{name}`" for name in withheld)
+        lines.append(
+            f"\n  Of these, {PLANNER_ONLY_MARKER} {named}. Use them to establish "
+            "a fact and then write the stage in terms of the fact — an "
+            "instruction that tells the executor to run one of these cannot be "
+            "carried out, and the attempt is spent finding that out."
+        )
+    return "\n".join(lines)
+
+
 def _system_blocks(
     cache_ttl: str | None = None,
     guidance: str | None = None,
@@ -1462,7 +1545,9 @@ def _system_blocks(
     # Substituted rather than appended: the capability paragraph belongs
     # where the rest of the executor contract is, not bolted on after it.
     text = PLANNER_SYSTEM_PROMPT.replace(
-        "%%EXECUTOR_CAPABILITY%%", executor_capability_block(project_tools)
+        "%%EXECUTOR_CAPABILITY%%",
+        executor_capability_block(project_tools)
+        + planner_capability_block(project_tools),
     )
     if guidance and guidance.strip():
         text += (
