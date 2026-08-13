@@ -215,6 +215,16 @@ class ToolCall:
     # before an edit could be refused by three different routes to the same
     # sentence.
     refusal_kind: str = ""
+    # How a spawned command ended. `None` for everything that is not one, and
+    # that is most entries: a read has no exit code and its size is what its
+    # ledger line should say.
+    #
+    # An operator-declared tool is the exception, and `lines` is the wrong fact
+    # about it. Measured on one run: 27 `bundle install` / `bundle update` calls
+    # rendered as `bundle_install() -> 11 line(s)`, where the eleven lines were
+    # bundler saying it could not see its own gems and `exit 11` was the whole
+    # diagnosis. The size of a failure message is not information; the code is.
+    exit_code: int | None = None
     # What the call returned, kept for semantic search alone.
     #
     # Every other read here is reproducible: the ledger records the path
@@ -398,17 +408,23 @@ class RepoReader:
         """
         return self.spend.calls
 
-    def _spend(self, tool: str, detail: str, text: str) -> str:
+    def _spend(
+        self, tool: str, detail: str, text: str, exit_code: int | None = None
+    ) -> str:
         used = text.count("\n") + (0 if text.endswith("\n") or not text else 1)
         self.spend.lines += used
         # Charged where the lines are, and only on an answered call — a refusal
         # costs nothing here for the same reason it costs no call: recording a
         # denial must not make the next one more likely.
         self.spend.chars += len(text)
-        self.calls.append(ToolCall(tool=tool, detail=detail, lines=used))
+        self.calls.append(
+            ToolCall(tool=tool, detail=detail, lines=used, exit_code=exit_code)
+        )
         return text
 
-    def record_answer(self, tool: str, detail: str, text: str) -> str:
+    def record_answer(
+        self, tool: str, detail: str, text: str, exit_code: int | None = None
+    ) -> str:
         """Charge text this reader did not produce to the same budget.
 
         An operator-declared tool answers with bytes that land in the same
@@ -424,7 +440,7 @@ class RepoReader:
         `tools.log` and in the per-step counts. A tool whose use is invisible
         cannot be judged worth its cost.
         """
-        return self._spend(tool, detail, text)
+        return self._spend(tool, detail, text, exit_code)
 
     def record_refusal(
         self, tool: str, detail: str, reason: str, kind: str = ""

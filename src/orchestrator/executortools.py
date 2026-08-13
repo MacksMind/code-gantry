@@ -247,8 +247,13 @@ def dispatch(
             # listed the failures and nothing else — and the output is context
             # the attempt is paying for either way.
             if reader is not None:
+                from orchestrator.plannertools import _exit_code
+
                 return reader.record_answer(
-                    name, declared_detail(declared[name], args), answer
+                    name,
+                    declared_detail(declared[name], args),
+                    answer,
+                    exit_code=_exit_code(answer),
                 )
             return answer
         except ToolError as e:

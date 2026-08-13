@@ -419,6 +419,21 @@ def dispatch(
         return f"cannot do that: {e}"
 
 
+def _exit_code(rendered: str) -> int | None:
+    """The exit code `projecttools.render` put on its second line.
+
+    Read back rather than threaded through, because `invoke` returns rendered
+    text by design — that text is what the model sees, and giving it a second
+    return value would put the same fact in two shapes. `render` writes
+    `exit <n>` as the second line and nothing else does.
+    """
+    for line in (rendered or "").splitlines()[:2]:
+        if line.startswith("exit "):
+            head = line[5:].split()[0]
+            return int(head) if head.lstrip("-").isdigit() else None
+    return None
+
+
 def _run_declared(tool, args: dict, runner, reader, role: str) -> str:
     """One operator-declared tool, run for a reading role.
 
@@ -452,7 +467,9 @@ def _run_declared(tool, args: dict, runner, reader, role: str) -> str:
             reader.record_refusal(tool.name, detail, str(e))
         return f"cannot do that: {e}"
     if reader is not None:
-        return reader.record_answer(tool.name, detail, answer)
+        return reader.record_answer(
+            tool.name, detail, answer, exit_code=_exit_code(answer)
+        )
     return answer
 
 

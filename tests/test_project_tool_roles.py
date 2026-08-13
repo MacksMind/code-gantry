@@ -70,7 +70,10 @@ class FakeRunner:
         self.calls = []
         self._stdout = stdout
 
-    def run_argv(self, argv, timeout=None):
+    # `log` is part of the contract: a declared tool passes `log=None` so its
+    # command stays out of the run log. A fake that omits it passes while the
+    # real runner would reject the call.
+    def run_argv(self, argv, timeout=None, log=None):
         self.calls.append(list(argv))
 
         class Result:
@@ -337,7 +340,7 @@ class TestHowADeclaredCallIsNamedInTheLedger:
             def __init__(self):
                 self.recorded = []
 
-            def record_answer(self, tool, detail, text):
+            def record_answer(self, tool, detail, text, exit_code=None):
                 self.recorded.append((tool, detail))
                 return text
 
@@ -381,7 +384,7 @@ class TestTheExecutorRecordsOneToo:
             def __init__(self):
                 self.recorded = []
 
-            def record_answer(self, tool, detail, text):
+            def record_answer(self, tool, detail, text, exit_code=None):
                 self.recorded.append((tool, detail))
                 return text
 

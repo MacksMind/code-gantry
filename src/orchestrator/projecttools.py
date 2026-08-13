@@ -187,7 +187,12 @@ def invoke(tool: ProjectTool, args: dict, runner) -> str:
     which is the outcome the tool was added to avoid.
     """
     argv = build_argv(tool, args)
-    result = runner.run_argv(argv, timeout=tool.timeout_seconds)
+    # `log=None` keeps the `$ command` line out of the run log. A declared tool
+    # is a model's tool call and belongs in the tool log beside the others; the
+    # timeline is for the loop's own commands. Measured on one run: 27 declared
+    # calls put 54 lines into a 140-line timeline, all of them already recorded
+    # in `tools.log`.
+    result = runner.run_argv(argv, timeout=tool.timeout_seconds, log=None)
     return render(result)
 
 

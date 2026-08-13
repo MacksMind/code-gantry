@@ -34,6 +34,10 @@ from typing import Callable, Sequence
 # spec.
 DEFAULT_MAX_OUTPUT_CHARS = 5_000_000
 
+# `run_argv(log=...)` distinguishes "not asked" from "asked for silence", which
+# `None` alone cannot: `None` is a legitimate sink meaning discard.
+_INHERIT = object()
+
 
 # Long enough that no meaningful line reaches it, short enough to catch a
 # progress bar early. A suite reporting `....F....` says something with every
@@ -188,7 +192,12 @@ class CommandRunner:
         (`a && b`, `! grep -q x`), so a shell is required."""
         return self._spawn(command, shell=True, label=command, timeout=timeout)
 
-    def run_argv(self, argv: Sequence[str], timeout: int | None = None) -> CommandResult:
+    def run_argv(
+        self,
+        argv: Sequence[str],
+        timeout: int | None = None,
+        log: Callable[[str], None] | None = _INHERIT,
+    ) -> CommandResult:
         """Run an argv list with no shell.
 
         The counterpart to `run`, and the difference is the whole safety story
@@ -199,10 +208,18 @@ class CommandRunner:
         `label` is the joined form because that is what an operator reads in the
         log and what the denylist scanned; the list is what actually runs, and
         the two can only disagree by whitespace in an element.
+
+        `log=None` sends the `$ command` line nowhere. A declared tool is a
+        model's tool call and belongs in the tool log with the others; the run
+        log is the timeline, and the loop's own commands — lint, the suite,
+        setup — are what belongs there. Measured on one run: 27 declared calls
+        put 54 lines into a 140-line timeline, every one already recorded in
+        `tools.log`. Defaulted to the runner's own sink rather than to `None`,
+        so nothing that does not ask loses its logging.
         """
         argv = list(argv)
         return self._spawn(
-            argv, shell=False, label=" ".join(argv), timeout=timeout
+            argv, shell=False, label=" ".join(argv), timeout=timeout, log=log
         )
 
     def _spawn(
@@ -212,6 +229,7 @@ class CommandRunner:
         label: str,
         timeout: int | None = None,
         extra_env: dict[str, str] | None = None,
+        log=_INHERIT,
     ) -> CommandResult:
         effective_timeout = self.timeout if timeout is None else timeout
         started = time.monotonic()
@@ -264,7 +282,8 @@ class CommandRunner:
             timed_out=timed_out,
         )
 
-        if self._log:
+        sink = self._log if log is _INHERIT else log
+        if sink:
             # Collapsed for the log line only. The run log is one line per
             # event and is read by skimming; an argv element may now hold a
             # whole shell script, because a declared tool written as
@@ -280,9 +299,9 @@ class CommandRunner:
             # keeps the command whole: this is a rendering, not a record.
             one_line = " ".join(label.split())
             if timed_out:
-                self._log(f"$ {one_line}\n  timed out after {duration:.1f}s")
+                sink(f"$ {one_line}\n  timed out after {duration:.1f}s")
             else:
-                self._log(f"$ {one_line}\n  exit {result.exit_code} in {duration:.1f}s")
+                sink(f"$ {one_line}\n  exit {result.exit_code} in {duration:.1f}s")
 
         return result
 

@@ -1330,11 +1330,13 @@ def _render_call(call) -> str:
     copies of the numbered-source format string is how that one drifted while
     every test stayed green.
     """
-    tail = (
-        f"refused: {call.refusal}"
-        if getattr(call, "refusal", "")
-        else f"{call.lines} line(s)"
-    )
+    if getattr(call, "refusal", ""):
+        tail = f"refused: {call.refusal}"
+    elif getattr(call, "exit_code", None) is not None:
+        # A spawned command is named by how it ended, not by how much it said.
+        tail = f"exit {call.exit_code}"
+    else:
+        tail = f"{call.lines} line(s)"
     return f"{call.tool}({call.detail}) -> {tail}"
 
 

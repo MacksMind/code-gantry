@@ -333,7 +333,10 @@ class Recorder:
         self.timeout = None
         self._result = (exit_code, stdout, stderr)
 
-    def run_argv(self, argv, timeout=None):
+    # `log` is part of the contract: a declared tool passes `log=None` so its
+    # command stays out of the run log. A fake that omits it passes while the
+    # real runner would reject the call.
+    def run_argv(self, argv, timeout=None, log=None):
         from orchestrator.commands import CommandResult
 
         self.argv = list(argv)
