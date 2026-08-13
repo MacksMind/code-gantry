@@ -151,6 +151,69 @@ def tests_the_stage_may_edit(stage: Stage, cfg: ProjectConfig) -> list[str]:
     ]
 
 
+def runnable_test_patterns(patterns: list[str]) -> list[str]:
+    """Those of `test_file_patterns` that describe a *file*, not a tree.
+
+    One list answers two questions. `**/*_spec.rb` says "the runner can be
+    pointed at this"; `spec/**` says "this is inside the test tree", which is
+    what the new-tests gate and the forbidden-pattern exemption want and is
+    much broader — under it a factory, a fixture, a support helper and
+    `rails_helper.rb` are all test files.
+
+    Naming one of those on a command line is not merely useless. Measured: a
+    manual commit touched `spec/factories/user_factory.rb`, the diff-derived
+    selector matched it on `spec/**` and added it, and the runner loaded the
+    factory a second time on top of the load its own helper had already done.
+    The suite broke, the failure was handed to the executor as its diff's
+    fault, and it started editing the factory to defend against a double load
+    the machinery had caused — a repair for our defect, landing in the project
+    for good.
+
+    The test is whether the final segment carries any literal text. `*_spec.rb`
+    constrains the name; `**` and `*` constrain only the directory, so a
+    pattern ending in one of them tells you where a file is and nothing about
+    what it is.
+    """
+    kept = []
+    for pattern in patterns:
+        last = (pattern or "").rstrip("/").rsplit("/", 1)[-1]
+        if last.strip("*?[]"):
+            kept.append(pattern)
+    return kept
+
+
+def _diff_test_patterns(patterns: list[str]) -> list[str]:
+    """What a diff-named file must match to reach the command line.
+
+    The file-shaped patterns, or all of them when there are none. Kept apart
+    from `runnable_test_patterns` so that function stays a straight answer to
+    "does this pattern describe a file" and the policy about having no answer
+    lives at the one place that needs it.
+    """
+    return runnable_test_patterns(patterns) or list(patterns)
+
+
+def prune_contained(paths: list[str]) -> list[str]:
+    """The same set, minus any path an ancestor already covers. Sorted.
+
+    `sorted(set(...))` removes identical strings and has no notion of one path
+    containing another, so a directory and a file inside it both survive —
+    `spec/models` beside `spec/models/user_spec.rb`. The runner does the right
+    thing with that, but the command is then a spelling no other side produces,
+    and `verify._recorded_answer` compares the command as text.
+
+    Segment-wise, never by string prefix: `spec/model` is a prefix of
+    `spec/models/user_spec.rb` and contains nothing.
+    """
+    unique = sorted(set(p for p in paths if p))
+    kept = []
+    for path in unique:
+        if any(path.startswith(f"{parent}/") for parent in kept):
+            continue
+        kept.append(path)
+    return kept
+
+
 def resolve_test_paths(
     stage: Stage,
     cfg: ProjectConfig,
@@ -222,7 +285,17 @@ def resolve_test_paths(
         paths.extend(
             p
             for p in changed
-            if matches_any(p, cfg.test_file_patterns)
+            # `runnable_test_patterns` rather than the whole list: a diff names
+            # files, and a file that matches only a tree pattern is inside the
+            # spec directory without being something the runner may be handed.
+            #
+            # Falling back to the whole list when none of them describe a file
+            # is not a loose end. A project whose patterns are *all* trees has
+            # told us nothing about which files are specs, and selecting
+            # nothing would quietly stop scoping tests to the diff for it —
+            # narrower than what it had, decided by a change made for somebody
+            # else's project. With no signal, keep the old behaviour.
+            if matches_any(p, _diff_test_patterns(cfg.test_file_patterns))
             # A *deleted* spec is in the diff too, and naming it in the command
             # makes that command unable to pass by construction. Observed live:
             # a stage whose whole job was to fold one spec into another and
@@ -264,8 +337,10 @@ def resolve_test_paths(
         if p and (cfg.target_repo / p).exists()
     )
 
-    # Sorted, which is both the deduplication and the whole of the fix below.
-    return sorted(set(paths))
+    # Sorted, which is both the deduplication and the whole of the fix below —
+    # and pruned, so a file never rides alongside a directory that already
+    # covers it.
+    return prune_contained(paths)
 
 
 def resolve_test_command(
