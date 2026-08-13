@@ -396,9 +396,11 @@ def _run_declared(tool, args: dict, runner, reader, role: str) -> str:
     also the one channel that can return a whole vendored directory, so leaving
     it free would make the largest reads the only uncounted ones.
     """
-    from orchestrator.projecttools import invoke
+    from orchestrator.projecttools import call_detail as declared_detail, invoke
 
-    detail = call_detail(args) or tool.name
+    # Named by its own declared arguments, not by the built-ins' field list —
+    # which knows `path` and `pattern` and nothing an operator invents.
+    detail = declared_detail(tool, args) or tool.name
     if runner is None:
         reason = (
             f"{tool.name} cannot run here: the {role} has no command runner. "

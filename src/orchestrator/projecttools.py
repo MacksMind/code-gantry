@@ -59,6 +59,48 @@ def for_role(role: str, tools) -> list[ProjectTool]:
     return [t for t in (tools or []) if role in (t.roles or [])]
 
 
+# Per value, so one long regex cannot crowd the others out of a log line that
+# is read by skimming. Generous enough that a path or a gem name is never cut.
+_DETAIL_VALUE_CHARS = 60
+
+
+def call_detail(tool: ProjectTool, args: dict) -> str:
+    """What to name this call in the ledger: its arguments, as declared.
+
+    `plannertools.call_detail` picks the one field worth naming a call by from
+    a fixed list — `path`, `pattern`, `glob`, `question`, `ref`. That is exact
+    for the five built-in read tools, whose arguments it was written against,
+    and a guess about anything else. Applied to declared tools it went wrong in
+    both directions on the first two an operator wrote: a search taking
+    `(gem, pattern, glob)` was logged under its pattern, so the ledger could
+    not say which dependency had been searched, and a read taking
+    `(gem, file, first_line, last_line)` matched nothing in the list at all and
+    logged with no detail whatsoever.
+
+    Order comes from the config because the operator writes the identifying
+    argument first — that is simply how a signature reads — and this way
+    nothing here has to know what any argument *means*. There is no gem, no
+    path and no line number in this function, which is the rule about project
+    knowledge applied to a log line.
+
+    Missing values are skipped rather than blanked, because this is what a
+    refusal is recorded under and a refusal is exactly the case where an
+    argument is absent.
+    """
+    parts: list[str] = []
+    for argument in tool.arguments:
+        value = (args or {}).get(argument.name)
+        if isinstance(value, list):
+            value = " ".join(str(v) for v in value)
+        if value is None or value == "":
+            continue
+        text = str(value)
+        if len(text) > _DETAIL_VALUE_CHARS:
+            text = text[: _DETAIL_VALUE_CHARS - 1] + "…"
+        parts.append(text)
+    return ", ".join(parts)
+
+
 def tool_schema(tool: ProjectTool) -> dict[str, Any]:
     """One declared tool, in the same shape as a built-in.
 

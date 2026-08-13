@@ -265,10 +265,24 @@ class CommandRunner:
         )
 
         if self._log:
+            # Collapsed for the log line only. The run log is one line per
+            # event and is read by skimming; an argv element may now hold a
+            # whole shell script, because a declared tool written as
+            # `sh -c '<script>'` with the model's values arriving as positional
+            # parameters is how an operator resolves something before reading
+            # under it without giving up the argv safety property. Joined
+            # naively, one such call put five lines into the timeline and the
+            # `exit 0` belonged to whichever of them came last.
+            #
+            # `run_argv`'s docstring said the joined label and the list "can
+            # only disagree by whitespace in an element", which was true right
+            # up until an element could contain a newline. `result.command`
+            # keeps the command whole: this is a rendering, not a record.
+            one_line = " ".join(label.split())
             if timed_out:
-                self._log(f"$ {label}\n  timed out after {duration:.1f}s")
+                self._log(f"$ {one_line}\n  timed out after {duration:.1f}s")
             else:
-                self._log(f"$ {label}\n  exit {result.exit_code} in {duration:.1f}s")
+                self._log(f"$ {one_line}\n  exit {result.exit_code} in {duration:.1f}s")
 
         return result
 

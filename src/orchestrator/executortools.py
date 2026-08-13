@@ -238,14 +238,27 @@ def dispatch(
                 f"cannot do that: {name} is declared but this executor was "
                 "built without a command runner"
             )
+        from orchestrator.projecttools import call_detail as declared_detail
+
         try:
-            return invoke(declared[name], args, runner)
+            answer = invoke(declared[name], args, runner)
+            # On the reader's ledger, where every other answered call goes. A
+            # refusal was already recorded and a success was not, so the ledger
+            # listed the failures and nothing else — and the output is context
+            # the attempt is paying for either way.
+            if reader is not None:
+                return reader.record_answer(
+                    name, declared_detail(declared[name], args), answer
+                )
+            return answer
         except ToolError as e:
             # Recorded on the editor's ledger for the same reason its own
             # refusals are: an attempt that achieved nothing because every call
             # was refused must not read like one that finished.
             if editor is not None:
-                editor.record_refusal(name, call_detail(args), str(e), "declared")
+                editor.record_refusal(
+                    name, declared_detail(declared[name], args), str(e), "declared"
+                )
             return f"cannot do that: {e}"
 
     if name in {"edit", "create_file", "delete_file"}:

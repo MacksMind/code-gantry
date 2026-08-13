@@ -253,6 +253,151 @@ class TestRunningOne:
         assert "pattern" in out
 
 
+class TestHowADeclaredCallIsNamedInTheLedger:
+    """A declared call is named by its own arguments, in declaration order.
+
+    `plannertools.call_detail` picks the one field worth naming a call by, from
+    a fixed list — `path`, `pattern`, `glob`, `question`, `ref` — which is right
+    for the five built-in read tools and is a guess about anything else. Applied
+    to declared tools it went wrong in both directions on the first two written:
+    a search taking `(gem, pattern, glob)` was logged under its *pattern*, so
+    the ledger could not say which dependency was searched; and a read taking
+    `(gem, file, first_line, last_line)` matched nothing in the list at all and
+    logged with no detail whatsoever.
+
+    The fix takes the order from the config rather than a list in code — the
+    operator declares the identifying argument first because that is how a
+    signature reads, and the renderer has no opinion about what any of them
+    mean. Nothing here can name a gem, a path or a line number.
+    """
+
+    def _detail(self, tool, args):
+        from orchestrator.projecttools import call_detail
+
+        return call_detail(tool, args)
+
+    def test_every_argument_is_named_in_declaration_order(self):
+        tool = declared(
+            name="gem_search",
+            command=["x", "{gem}", "{pattern}", "{glob}"],
+            arguments=[
+                ToolArgument(name="gem", description="d"),
+                ToolArgument(name="pattern", description="d"),
+                ToolArgument(name="glob", description="d"),
+            ],
+        )
+        detail = self._detail(
+            tool, {"gem": "paperclip", "pattern": "validate_attachment", "glob": "*.rb"}
+        )
+        assert detail.index("paperclip") < detail.index("validate_attachment")
+        assert "*.rb" in detail
+
+    def test_a_tool_whose_arguments_match_nothing_known_still_says_something(self):
+        tool = declared(
+            name="gem_read",
+            command=["x", "{gem}", "{file}"],
+            arguments=[
+                ToolArgument(name="gem", description="d"),
+                ToolArgument(name="file", description="d"),
+            ],
+        )
+        assert "actionpack" in self._detail(tool, {"gem": "actionpack", "file": "a.rb"})
+
+    def test_a_missing_argument_does_not_lose_the_others(self):
+        # The detail is what a refusal is recorded under, and a refusal is
+        # exactly the case where an argument is absent.
+        tool = declared(
+            name="gem_read",
+            command=["x", "{gem}", "{file}"],
+            arguments=[
+                ToolArgument(name="gem", description="d"),
+                ToolArgument(name="file", description="d"),
+            ],
+        )
+        assert "actionpack" in self._detail(tool, {"gem": "actionpack"})
+
+    def test_a_long_value_cannot_crowd_out_the_rest(self):
+        tool = declared(
+            name="gem_search",
+            command=["x", "{gem}", "{pattern}"],
+            arguments=[
+                ToolArgument(name="gem", description="d"),
+                ToolArgument(name="pattern", description="d"),
+            ],
+        )
+        detail = self._detail(tool, {"gem": "rails", "pattern": "z" * 500})
+        assert "rails" in detail
+        assert len(detail) < 200
+
+    def test_it_reaches_the_ledger(self):
+        # Held is not recorded. The whole point is the line an operator reads.
+        from orchestrator.plannertools import dispatch
+
+        class Reader:
+            def __init__(self):
+                self.recorded = []
+
+            def record_answer(self, tool, detail, text):
+                self.recorded.append((tool, detail))
+                return text
+
+        tool = declared(
+            name="gem_search",
+            roles=["planner"],
+            command=["docker", "{gem}", "{pattern}"],
+            arguments=[
+                ToolArgument(name="gem", description="d"),
+                ToolArgument(name="pattern", description="d"),
+            ],
+        )
+        reader = Reader()
+        dispatch(
+            "gem_search",
+            {"gem": "paperclip", "pattern": "attachment"},
+            reader=reader,
+            semantic=None,
+            project_tools=[tool],
+            runner=FakeRunner(),
+            role="planner",
+        )
+        assert reader.recorded == [("gem_search", "paperclip, attachment")]
+
+
+class TestTheExecutorRecordsOneToo:
+    """A declared call that worked has to be in the ledger, not only one that didn't.
+
+    The executor recorded a refused declared call on the editor's ledger and an
+    answered one nowhere — so a tool that ran and returned appeared in no tool
+    log, no per-cycle count, and no budget, while the same tool failing showed
+    up. The ledger therefore listed only the failures, which is the shape this
+    codebase has been bitten by before: a step that succeeded and a step that
+    never happened rendering identically.
+    """
+
+    def test_an_answered_call_is_recorded(self):
+        from orchestrator.executortools import dispatch
+
+        class Reader:
+            def __init__(self):
+                self.recorded = []
+
+            def record_answer(self, tool, detail, text):
+                self.recorded.append((tool, detail))
+                return text
+
+        reader = Reader()
+        dispatch(
+            "gem_search",
+            {"pattern": "x"},
+            reader=reader,
+            editor=None,
+            semantic=None,
+            project_tools=[declared(roles=["executor"])],
+            runner=FakeRunner(),
+        )
+        assert reader.recorded == [("gem_search", "x")]
+
+
 class TestTheConventionsFramingStopsContradictingTheMenu:
     """A fixed sentence about what a role cannot do, found by sweeping.
 

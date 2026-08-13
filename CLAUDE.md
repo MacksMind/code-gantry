@@ -399,6 +399,43 @@ evaluated twice rather than two filters that can drift, and it is why neither
 caller is allowed to hand over a pre-scoped list. A caller that could pass the
 wrong scope makes the wrong scope expressible.
 
+**A renderer written against a fixed set of names is a guess once the set is
+extensible.** `call_detail` names a call by the first of `path`, `pattern`,
+`glob`, `question`, `ref` that it finds — exact for the five built-in read
+tools it was written against, and applied to operator-declared tools it went
+wrong in both directions on the first two anyone wrote. A search taking
+`(gem, pattern, glob)` was logged under its *pattern*, so the ledger could not
+say which dependency had been searched; a read taking
+`(gem, file, first_line, last_line)` matched nothing in the list at all and
+logged with no detail whatsoever. The fix takes the order from the config,
+because the operator writes the identifying argument first — that is how a
+signature reads — and then nothing in the renderer has to know what any
+argument *means*. Whenever a fixed list of field names meets a structure an
+operator can extend, the list stops being a specification and becomes a bet.
+
+**And the same feature broke the log's one-line contract, which no test held.**
+`run_argv` joins argv for the log line and its docstring said the joined form
+and the list "can only disagree by whitespace in an element". True until an
+element could hold a newline — a declared tool written as `sh -c '<script>'`,
+which is how an operator resolves something before reading under it while
+keeping the argv property, because the model's values arrive as positional
+parameters and are never interpolated into the script. One call put **five
+lines** into a timeline that is one line per event, with the `exit 0` attached
+to whichever fragment came last. Collapsed for the log line only;
+`result.command` keeps the command whole, because that is a record and the log
+is a rendering. Worth noticing that the docstring stated the invariant
+correctly and nothing enforced it — a sentence describing a format is not a
+test of it.
+
+**A ledger that records refusals and not successes lists only the failures.**
+The executor recorded a refused declared call on the editor's ledger and an
+answered one nowhere, so a tool that ran and returned appeared in no tool log,
+no per-cycle count and no budget, while the same tool failing showed up. This
+is the reverse of the usual shape here and reads as harmless — the error path
+is the one people remember to instrument. It is the same defect either way: two
+different things rendering identically, and the missing half is whichever one
+nobody wrote down.
+
 **Improving a tool's answers cannot make anything reach for it more often.**
 There is no memory across runs, so a good result is not carried anywhere — a
 model decides whether to call a tool from the description in front of it and

@@ -173,6 +173,34 @@ class TestLogging:
         runner.run("sleep 30")
         assert any("timed out" in line for line in lines)
 
+    def test_a_multi_line_command_stays_one_event_in_the_log(self, tmp_path):
+        # The run log is one line per event and is read by skimming it. An argv
+        # element may now legitimately contain newlines — an operator declares a
+        # tool as `sh -c '<script>'` with the model's values arriving as
+        # positional parameters, which is the shape that keeps the argv safety
+        # property while still resolving a path before reading under it. Joined
+        # naively, one such call put five lines into the timeline, the last of
+        # them the `exit 0` that belongs to the first.
+        #
+        # `run_argv`'s docstring said the joined label and the list "can only
+        # disagree by whitespace in an element", which was true until an element
+        # could hold a newline.
+        lines = []
+        runner = CommandRunner(cwd=tmp_path, timeout=30, log=lines.append)
+        runner.run_argv(["sh", "-c", "x=1\nif [ $x = 1 ]; then\n  echo hi\nfi"])
+        entry = "\n".join(lines)
+        assert "echo hi" in entry, "the command is no longer legible"
+        # One line for the command, one for the outcome. Not five.
+        assert len(entry.splitlines()) == 2, entry
+
+    def test_the_result_keeps_the_command_whole(self, tmp_path):
+        # Collapsed for the log only. What the model is shown, and what the
+        # denylist scanned, is the command as written — a rendering choice must
+        # not become a change to the record.
+        runner = CommandRunner(cwd=tmp_path, timeout=30)
+        result = runner.run_argv(["sh", "-c", "echo a\necho b"])
+        assert "echo a\necho b" in result.command
+
 
 class TestStdinIsClosed:
     """Nothing the orchestrator runs may read from the terminal.
