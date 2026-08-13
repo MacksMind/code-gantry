@@ -777,6 +777,49 @@ the native executor `checks` is the *only* run of the linter, because
 fixer must follow a fallible step, chain it into the same entry with `&&` so a
 `break` cannot leave the output uncleaned.
 
+**And the `&&` that fixes the ordering makes an environment failure look like
+a defect.** The same entry, one incident later. `annotate` runs through
+`docker compose exec`, so when the container is down it exits 1 in 0.3s — and
+`_layer_checks` routes an ordinary non-zero back to the executor as "a required
+check failed", because only `failed.signal` gets `Route.HUMAN`. A stopped
+container and a real disagreement about the routes file are the same exit code.
+Measured: an attempt spent 42 minutes and 347 tool calls, 77 of them
+`bundle_install`, being told repeatedly that its own work was wrong by an
+environment that was not there. The signal branch exists for exactly this
+distinction and 128+N is too narrow a definition of it.
+
+**A fingerprint written before the work it stands for makes a failure
+permanent.** The target's bring-up stopped its app container when the Gemfile
+hash moved and wrote the new hash in the same breath, so an install that could
+not succeed was recorded as done: every later call saw no change, did nothing,
+and left the container stopped. This is the prediction problem with a worse
+ending than usual — the record does not merely become wrong, it *suppresses the
+retry that would have fixed it*, and the suppression is silent because "no
+change" is indistinguishable from "nothing to do". Write the fingerprint after
+the thing it fingerprints succeeds, and a failure leaves it unwritten, which is
+the same as asking again.
+
+**The diagnosis can be in a place nothing reads.** In that incident bundler
+named the missing dependency and the fix — `bundle update prawn-templates` — in
+the first minute. It was in `docker compose logs app`, because the install that
+got far enough to know was the *entrypoint's*, not the one the executor
+`exec`'d. Every one of the 93 tool results the model received was truthful and
+useless: it reported on the process it ran, and that process died earlier. When
+a component runs work on your behalf, its output is not in yours, and the
+failure you can see is a description of the corpse. Ask where the thing that
+knows would have written it.
+
+**Liveness can be read without a race, if you can name why.** Waiting for a
+container is the obvious place to introduce one: "not running" means "not yet"
+as often as it means "dead". It is answerable here for two reasons that had to
+be established rather than assumed — `docker compose start` returns with the
+container already running, so any later `exited` is a new death and not a stale
+reading; and no service declares a `restart:` policy, so `exited` is terminal.
+Both are written beside the check as conditions to recheck, because the
+reasoning fails the moment either changes. It turned an 89-second timeout into
+a 5-second answer. A bounded wait is the fallback for when you *cannot* name
+the ordering, not the first resort.
+
 **Measure the artifact in the state your claim is about.** Asked to confirm
 that `annotate` emits trailing whitespace, three separate checks over the
 working tree found none — because the operator had already run RuboCop over it.
@@ -1443,6 +1486,20 @@ worked; and a project memory describing a manual remedy, read as a statement
 about what the current code cannot do — when the operator's own script had been
 written to handle exactly that case, with a comment citing the incident. When a
 number surprises, suspect the measurement first.
+
+**And do not propose a fix for a mechanism you have not established.** Three
+times in one incident I named a cause from its shape and started building
+against it: a start-up race, then a truncated bind mount, then an implied link
+between 53 `delete_file` calls and a directory that vanished. Each was
+plausible, each was refuted in a minute by a command I had not run, and the
+first two had working code drafted before the refutation. What settled it every
+time was the cheapest available reading — the gem was in the volume, the host
+file was 6,581 bytes and intact, the delete log named only `Gemfile`. The tell
+is that a fix arrives before a measurement does; the operator's "the guess is
+this is a race condition" was worth more than the code I had written under it.
+A remedy built on an unestablished mechanism is not merely wasted, it is
+*confirming*, because it will be adopted and the real cause will keep firing
+underneath it.
 
 **One item from a ranked list is not a finding; the list is.** Reporting on
 semantic search I pulled a single hit — an orchestrator process document ranked
