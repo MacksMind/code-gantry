@@ -1,4 +1,15 @@
-# Replace Aider and LangGraph; make verify a trust boundary
+# Replacing the subprocess editor and LangGraph; making verify a trust boundary
+
+> **Closed record.** Every step below landed, and the last open item — this
+> project's config living in the orchestrator repo rather than the repository it
+> describes — closed with it. Kept for the measurements, which are readings with
+> instruments behind them and would otherwise have to be taken again; the design
+> reasoning that outlived the migration has been restated in `architecture.md`
+> and `CLAUDE.md`, where it is checkable against code that exists.
+>
+> The executor was a subprocess editor driven over a CLI. It is an in-process
+> client now, and the tool it replaced is named here only where the record would
+> not otherwise make sense.
 
 ## Where this stands
 
@@ -16,7 +27,7 @@ artifact it came from.
 | 4 · `executorclient.py` | done | `93dab0e` |
 | 5 · the loop behind a provider switch | done | `7479631` |
 | 6 · flip the default, take a live run | done | measured in `CLAUDE.md` |
-| 7 · delete Aider | done | `5c298c4`, `57c3b39` |
+| 7 · delete the subprocess editor | done | `5c298c4`, `57c3b39` |
 | 8 · replace LangGraph with `driver.py` | done | `6a3225d`, this commit |
 | 9 · simplify `nodes.execute` | done, absorbed | `5c298c4`, `5192d1a` |
 | 10 · up to five stages per derivation | done | `c15e5ee`, `f36f746`, then `10f87d8`, `0d6be66`, `553de02` |
@@ -78,7 +89,7 @@ path has never run live. What did hold is the premise under it —
 ahead of it and its spec was still valid when its turn came.
 
 **Step 9 was absorbed into step 7 rather than done on its own.** Both removals
-it named — the attach block and the `is_clean()` dance — went with Aider, and
+it named — the attach block and the `is_clean()` dance — went with the editor, and
 the second was replaced by a fact rather than deleted: `diff_names()` against
 the stage's start sha, because the loop commits before every gate, where the
 old inference was drawing a conclusion from a subprocess that could be killed
@@ -87,12 +98,13 @@ separation and did not deliver one; a reader looking for step 9's commit should
 find step 7's.
 
 **Step 7 is done.** The last of it was worse than residue: the executor block
-`orchestrator init` drafted was entirely Aider-era and two of its keys were on
+`orchestrator init` drafted was entirely of that era and two of its keys were on
 the retired list, so a freshly drafted config could not load. The linter moved
-to `stage_defaults.checks` where it now runs, `aider_timeout_seconds` is gone
-(it lived on `Limits`, which `RETIRED_EXECUTOR_KEYS` could not reach — the
-guard is `RETIRED_KEYS` and per-section now), and `scripts/smoke.py` is the one
-remaining fake-`aider`-on-`PATH`, which is a test harness rather than shipped
+to `stage_defaults.checks` where it now runs, its timeout setting is gone
+(it lived on `Limits`, which the executor-only retirement guard could not
+reach; that guard has since been removed entirely, along with the last key it
+named), and `scripts/smoke.py` is the one
+remaining stub-on-`PATH`, which is a test harness rather than shipped
 behaviour.
 
 **Step 8 needed a fresh run and still does for the cutover itself** — the old
@@ -129,7 +141,7 @@ audience rather than of content and pulled several things with it.
 | `base_ref` may move forward; asked at startup, not after the work | `bd9cf62` |
 | `init` drafts a config fit to commit into a shared repo | `e1f5cc9` |
 
-Not done: the example config itself still lives in the orchestrator repo, so
+Not done: this project's config itself still lives in the orchestrator repo, so
 `config_rel_path` is `None` and preflight warns rather than pinning a sha. The
 move needs two commits in the target repo — the config, and `.code_gantry/` in
 a `.gitignore` beside the plan — after which `problem_starting` becomes fatal
@@ -138,15 +150,15 @@ and an uncommitted config edit refuses to start a run.
 ## Context
 
 The orchestrator drives an LLM executor over a target repo. The executor is
-Aider, run as a subprocess. Aider is a pair-programming tool being driven
+a pair-programming tool, run as a subprocess and being driven
 headless, and the mismatch is now measured rather than suspected:
 
-- **17% of invocations (11 of 65)** on the current run were hit by Aider's
+- **17% of invocations (11 of 65)** on the current run were hit by the editor's
   file-mention scan, which attaches any path-shaped string it finds in the
   message *or in its own reply* — and, per its own log line, *a reply that
   names a file loses that reply's edits*. There is no flag. We cannot stop the
   model naming a path in its own prose, so this is unfixable from outside.
-- Usage accounting is blind: Aider's cache fields read Anthropic's and
+- Usage accounting is blind: its cache fields read Anthropic's and
   DeepSeek's but never OpenAI's `prompt_tokens_details.cached_tokens`, and its
   "received" count excludes reasoning tokens. Recorded executor spend was
   $3.30 against $5.54 actually billed.
@@ -155,7 +167,7 @@ headless, and the mismatch is now measured rather than suspected:
   measured, three orders in four runs. The cache prefix breaks between attempts.
 
 None of this is about money. Executor spend is $3.30 against $199 of planner
-spend; Aider time is ~3,800s against 10,100s of test suite. **The case is that
+spend; editor time is ~3,800s against 10,100s of test suite. **The case is that
 we don't control the failure surface, and the failures are the expensive thing.**
 
 Doing it now, during the Rails 4.2→5.2 migration, is deliberate: the next
@@ -169,7 +181,7 @@ No interrupts, reducers, streaming, `Send`, or `update_state`. Pause is already
 our own filesystem flag.
 
 **Decisions taken:** the executor commits its own work, before tests. It runs
-lint (`rubocop -A`-style) inside its own loop. Clear removal of Aider — no
+lint (`rubocop -A`-style) inside its own loop. Clear removal of the editor — no
 dual-path beyond the transition; back out via git if unworkable.
 
 ## What verify becomes
@@ -196,7 +208,7 @@ Two earlier drafts of this were wrong and the corrections are the design. The
 first had verify re-run the moved layers unconditionally, as independent
 confirmation. That is duplication: a deterministic set on an unchanged tree
 gives the same answer twice. We only ever re-ran in verify because we could not
-make Aider run the set we wanted — the re-run was compensating for not
+make the editor run the set we wanted — the re-run was compensating for not
 controlling the executor, and controlling the executor is the point of this
 change. It is also exactly why `_resolve_declared` and `_auto_test_command`
 diverged.
@@ -257,11 +269,11 @@ and you may not have it". A batch applies to an in-memory buffer and writes
 once — any failure leaves the file byte-identical, because a partially applied
 batch leaves the model reasoning against a file neither party has seen.
 
-What replaces Aider's fuzzy matching: Aider compensated for a *lossy channel*
+What replaces its fuzzy matching: the editor compensated for a *lossy channel*
 — a text format reproduced byte-exactly inside free-form prose. A tool call
 removes the channel (provider-escaped JSON, `strict` schema), returns the
 refusal *inside the same turn* naming the file and occurrence count, and the
-model has a read tool to close the loop itself. Aider's model learned from an
+model has a read tool to close the loop itself. Its model learned from an
 exit code one reflection later. This claim is **bounded and unproven for this
 project** until step 6 measures `edit_refusals` per cycle — which is why that
 field exists.
@@ -345,20 +357,20 @@ Each step keeps the suite green.
    with `executor._auto_test_command` into one `resolve_test_command(...,
    for_loop=)`. These two diverged correctly and each divergence has an
    incident behind it — the fix is making them impossible to change
-   independently. **Aider still runs.** Largest risk-free win; lands first.
+   independently. **The old path still runs.** Largest risk-free win; lands first.
 2. **`edittools.py`** — pure module, full test file, nothing calls it.
 3. **`executortools.py`** — schemas + dispatch, nothing calls it.
 4. **`executorclient.py`** — Responses client, scripted-fake tested.
-5. **The loop, behind `ExecutorConfig.provider: "aider" | "openai"`.** Both
+5. **The loop, behind `ExecutorConfig.provider`, either path.** Both
    paths live, both suites green. A live run happens here, before any deletion.
 6. **Flip the default; migrate project configs; take a live run.** Measure
    attempts/stage, cycles/attempt, edit refusals/cycle, and **the cache read
    rate on the Responses path** — the figure `CLAUDE.md` currently records as
    unmeasured.
-7. **Delete Aider.** `shield_path_mentions`, `attached_by_mention`,
-   `build_aider_argv`, the three log-scrapers, `CommandRunner.run_argv`,
-   `NO_BROWSER`, `GIT_CONFIG_OVERRIDES`, `preflight.check_aider_flags`,
-   `scripts/smoke.py`'s fake-aider-on-PATH (replaced by an injected scripted
+7. **Delete the subprocess editor.** `shield_path_mentions`, `attached_by_mention`,
+   the argv builder, the three log-scrapers, `CommandRunner.run_argv`,
+   `NO_BROWSER`, `GIT_CONFIG_OVERRIDES`, the CLI-flag check,
+   `scripts/smoke.py`'s stub-on-PATH (replaced by an injected scripted
    client), and the dead `ExecutorConfig` fields. Removing a config field
    fails `_Strict` load on existing project configs — the error must name the
    key and its replacement, not dump a pydantic schema.
@@ -522,7 +534,7 @@ Each step keeps the suite green.
   the tool refusing *and* the scope gate never firing; and `execute` then
   `verify` on a real fixture proving the commit is on the stage branch — driven
   through the nodes, not `with_stage`, which is laxer than the node.
-- **Live**: step 5 runs against `example` with both providers available; step 6
+- **Live**: step 5 runs against a real project with both providers available; step 6
   flips the default and measures. `executor_context_tokens` changes instrument
   at the cutover — write one line into `stage-costs.md` marking it, because a
   series that silently changes instrument is worse than a gap.
@@ -535,7 +547,7 @@ Qdrant/semantic search and the litellm price map stay.
 listed here to be revisited *after* step 7, because they change what the
 reviewer sees. Both were, and both stay.
 
-`strip_added_trailing_whitespace` never depended on Aider: it exists because
+`strip_added_trailing_whitespace` never depended on the editor: it exists because
 `git diff --cached --check` is the usual form of a pre-commit hook and a linter
 that dispatches on a file's detected language does nothing for ERB, YAML or
 most non-source files. It leaves carriage returns alone, so it has no bearing

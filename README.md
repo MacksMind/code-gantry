@@ -19,7 +19,8 @@ uv sync --group dev
 uv run orchestrator --help
 ```
 
-Requires Python 3.11+, `git`, and — for agent stages — `aider` on PATH.
+Requires Python 3.11+ and `git`. The executor runs in-process against the
+provider's own SDK, so there is no agent binary to install.
 
 ## The four terms
 
@@ -56,7 +57,7 @@ flowchart TD
     precheck -->|precondition unmet —<br/>an ordering error| plan
     precheck -->|setup failed| escalate
 
-    execute[execute<br/><i>Aider, confined to edit_files</i>] --> verify
+    execute[execute<br/><i>the executor, confined to edit_files</i>] --> verify
 
     verify{{verify<br/><i>nine layers, cheapest first, short-circuiting</i>}}
     verify -->|all passed| review
@@ -229,10 +230,10 @@ Child branches sit **beside** the project branch, not under it — git refs are
 filesystem paths, so `refs/heads/feature/thing` and
 `refs/heads/feature/thing/stage-001` cannot coexist.
 
-A stage squash-merges on approval, so Aider's intermediate commits — some red,
-since it commits before it tests — never reach the project branch. That's how
-"every commit on the project branch is green" and "Aider commits before testing"
-are both true.
+A stage squash-merges on approval, so the executor's intermediate commits —
+some red, since it commits before it tests — never reach the project branch.
+That's how "every commit on the project branch is green" and "the executor
+commits before it tests" are both true.
 
 Two commits per stage reach the project branch, in this order:
 
@@ -387,13 +388,11 @@ blocked because nobody had told it the container reinstalls the bundle on a
 Gemfile edit. The executor runs no commands, so a page of them invites it to
 narrate one it never ran.
 
-The executor receives its copy as a `--read` file rather than as prompt text.
-Aider scans the message — and its own reply — for anything path-shaped and
-attaches it, with `--yes-always` answering. A conventions document is dense with
-paths, so putting its text in the message once attached `config/routes.rb`,
-`db/structure.sql` and `docker-compose.yml`, reaching 258,854 tokens against a
-229,376 limit and killing every attempt in three seconds. Files supplied through
-`--read` are never scanned.
+The executor receives its copy inside the cached prefix, ahead of the plan and
+inside the same breakpoint. Both are fixed for the life of a run, so that
+placement is paid for once rather than per stage — and the model it is sent to
+caches at an explicit breakpoint without falling back to the longest matching
+prefix, so static content placed after the mark misses every time.
 
 ## Plan documents
 
@@ -444,8 +443,8 @@ completed history are meant to be a stable cacheable prefix, so a low figure
 means every review is costing more than it should.
 
 Its cost section names the model **and the reasoning effort** beside each
-role's figure, and prices the tokens from the same public rate table Aider
-prices against — fetched once and cached, so the report and `stage-costs.md`
+role's figure, and prices the tokens from a public rate table rather than one
+of ours — fetched once and cached, so the report and `stage-costs.md`
 cannot disagree about what a token costs and no rate is maintained by hand. A
 model with no entry reports `not priced` rather than `$0.00`; a priced model
 that spent nothing still reports `$0.00`, and those are different facts.
@@ -489,10 +488,12 @@ shell against a real git repository, completes a whole project unattended.
 — child branches deleted, `main` untouched, one squashed commit per stage,
 `gc.auto` restored, artifacts written.
 
-Three things stand in for the outside world: a fake `aider` on PATH that speaks
-the real flag surface, and one HTTP server answering in Anthropic's and OpenAI's
-actual wire formats. Everything else — git, the merges, the checkpointer, the
-subprocess runner — is real.
+One HTTP server stands in for all three models, answering `/v1/messages` in
+Anthropic's wire format for the planner, `/v1/chat/completions` in OpenAI's for
+the reviewer, and `/v1/responses` for the executor. The real SDKs, the real
+parsing and the real defensive paths all run; only the inference is fake.
+Everything else — git, the merges, the checkpointer, the subprocess runner — is
+real.
 
 The stand-in planner derives its answer from **what has landed on the project
 branch**, not from a call counter, so it is idempotent under retries. A

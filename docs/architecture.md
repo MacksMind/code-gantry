@@ -19,8 +19,7 @@ A standalone Python tool that drives a long, multistage code refactor by
 pairing a local executor model with two paid models: a planner that decides
 what to do next, and a reviewer that decides whether it was done acceptably.
 
-The executor (Aider, backed by a local model on a DGX Spark) does all the
-editing. The reviewer inspects each finished unit of work and approves or
+The executor does all the editing, in-process against the provider's own SDK. The reviewer inspects each finished unit of work and approves or
 rejects it. The planner derives units of work from a plan document, revises
 them when they turn out to be wrongly drawn, and revises the plan itself when
 reality diverges from it. The orchestrator owns the loop: it decides when to
@@ -40,7 +39,7 @@ proceeds or it escalates, and `resume` picks up after the human has fixed
 whatever stopped it.
 
 This tool lives in its own repository. It operates on a target repo from the
-outside, the same way Aider does.
+outside, never from within it.
 
 ## Terminology
 
@@ -54,8 +53,8 @@ work and map onto branches; one describes an execution session.
 | **attempt** | One executor invocation within a stage | Nothing; a counter |
 | **run** | One resumable execution session against a project | A directory under `runs/`; no branch |
 
-**A stage is the shippable unit.** The planner derives it, Aider builds it on
-a child branch across any number of commits, the reviewer approves it, and it
+**A stage is the shippable unit.** The planner derives it, the executor builds
+it on a child branch across any number of commits, the reviewer approves it, and it
 is squash-merged to the project branch as one commit. The analogy is a pull
 request targeting something other than the default branch: mergeable to its
 target, not necessarily deployable to production. The project branch is what
@@ -95,7 +94,7 @@ mechanism.
 
 | Role | Default | May write | May not |
 |---|---|---|---|
-| **Executor** | Local model on the Spark, via Aider | Product code, within the stage's declared `edit_files` | Anything outside that scope; any command |
+| **Executor** | A hosted model, called in-process | Product code, within the stage's declared `edit_files` | Anything outside that scope; any command |
 | **Planner** | Opus | Stage specs (declarative fields only); plan-document revisions; the status log | Product code; any executable config field |
 | **Reviewer** | An OpenAI model | Nothing | Everything |
 
@@ -137,7 +136,7 @@ unreachable.** A `script` stage needs an operator-authored `command`, and with n
 static stage list there is nowhere for the operator to put one. So every
 planner-derived stage is an `agent` stage, and a mechanical transform across
 hundreds of files is expressed as an instruction to write and run a script —
-Aider doing that inside its own edit loop is Aider's business, and the
+what the executor does inside its own edit loop is its business, and the
 orchestrator still never executes model-authored shell itself. The `script` kind
 remains in the schema for a future operator-authored stage source; today it is
 reachable only from a test.
@@ -284,9 +283,6 @@ policy, not whether `bin/test` exists. Checks:
 - Every `forbidden_patterns` entry compiles as a regex.
 - No configured command matches the **denylist** (below).
 - Both model endpoints are reachable; required env vars are set.
-- **Aider still accepts every flag the executor builds**, checked by parsing
-  `aider --help`. Aider's CLI changes between releases, and a renamed flag
-  should fail here rather than an hour into an unattended run.
 
 `run` re-runs all of this at startup. Failing fast beats failing on stage 30.
 
@@ -407,10 +403,10 @@ greppable and deletable together:
   branch, so fifty of them stay greppable, deletable as a group, and unable to
   collide with real branches.
 - A stage is squash-merged to the project branch on approval, producing one
-  commit per stage. Aider's intermediate commits — some of them red, since
-  Aider commits before it tests — are discarded by the squash. **This is why
-  "every commit on the project branch is green" and "Aider commits before
-  testing" are both true.** Do not replace the squash with `--no-ff`; it would
+  commit per stage. The executor's intermediate commits — some of them red,
+  since it commits before it tests — are discarded by the squash. **This is why
+  "every commit on the project branch is green" and "the executor commits
+  before it tests" are both true.** Do not replace the squash with `--no-ff`; it would
   drag red commits onto the project branch.
 - **All orchestrator work stays on the project branch and its children.**
   Nothing else is ever written.
@@ -454,10 +450,10 @@ Routes to `execute`.
 **`execute`**
 Dispatches on stage kind:
 
-- `agent` — invokes Aider on the child branch. First attempt: the stage
-  instruction plus any `context_commands` output. Rework attempt: the
-  instruction plus the specific failure detail. Aider owns its own edit → lint
-  → test → fix cycle inside this node.
+- `agent` — runs the executor's edit loop on the child branch. First attempt:
+  the stage instruction plus any `context_commands` output. Rework attempt: the
+  instruction plus the specific failure detail. The loop owns its own edit →
+  lint → commit → test cycle inside this node.
 - `script` — runs the stage's declared `command`. For mechanical transforms
   across hundreds of files, a script is more reliable and vastly cheaper than a
   model. These stages still go through `verify` and the review gate; only the
@@ -632,7 +628,8 @@ remains a genuine prefix.
 Every stage diff is computed as `git diff <stage_start_sha>` — against the
 working tree, **not** `<stage_start_sha>..HEAD`.
 
-Aider auto-commits, so `..HEAD` happens to work for `agent` stages, but a
+The executor commits its own work, so `..HEAD` happens to work for `agent`
+stages, but a
 `script` stage leaves its transform uncommitted, and so does a human's fix
 after an escalation. A `..HEAD` diff would be empty for both, which means the
 scope guard would pass vacuously, `forbidden_patterns` would match nothing, and
@@ -981,92 +978,37 @@ read five plan items as blocked because nothing had told it the container
 reinstalls the bundle on a Gemfile edit; the executor runs no commands, so a
 page of them invites it to narrate one it never ran.
 
-The executor's copy arrives as a `--read` file, not as prompt text, and the
-distinction is not stylistic. Aider scans the user message — and the model's own
-reply — for anything path-shaped and attaches the file, with `--yes-always`
-answering; there is no flag to turn it off. A conventions document is dense with
-paths, so its text in the message once attached `config/routes.rb`,
-`db/structure.sql` and `docker-compose.yml`, reaching 258,854 tokens against a
-229,376 limit. Files given through `--read` are never scanned.
-
-That fixed the document and not the mechanism, because the mechanism was never
-about that document: the planner writes prose, prose names files, and the scan
-runs either way. Measured across one project's history, 1,713 files were
-attached this way — roughly 30.8M tokens — led by a 453,480-byte lint-exclusion
-list that attached on all 117 executor inputs naming it, taking one stage from
-~20k tokens a message to 137k. Nothing showed it: the scan on the *message*
-discards its own return value, so unlike the scan on the reply it leaves no "I
-added these files" line behind.
-
-Both channels are handled, differently, because only one is ours to write.
-
-- **The message.** `shield_path_mentions` reimplements Aider's normaliser from
-  the installed source and prefixes `./` on any word that would resolve to a
-  tracked path. Aider compares against the repo-relative path verbatim, so the
-  prefix defeats the comparison while the executor reads the same file. Fenced
-  blocks are skipped — excerpts and diffs are quoted from the repository, and
-  rewriting inside one would corrupt the only copy the executor has.
-- **The reply.** Not ours to rewrite: Aider receives it from litellm inside its
-  own process. But Aider *asks* for the content that triggers it —
-  `coders/shell.py` instructs the model to suggest shell commands, listing "if
-  you added a test, suggest how to run it" among the examples — so a stage that
-  requires tests gets a reply naming the test runner, and Aider's scan of that
-  reply attaches the runner and returns at `base_coder.py:1567`, before
-  `apply_updates()` at `:1585`. The reply's edits are discarded. Measured: three
-  SEARCH/REPLACE blocks emitted, zero applied, and every one of 29 attempts
-  reported as producing no changes was preceded by an attach.
-  `--no-suggest-shell-commands` removes the clause rather than arguing with it,
-  and what is attached anyway is now recorded on `ExecutionResult` and named in
-  the retry feedback, so a discarded reply stops looking like a model that did
-  nothing.
+The executor's copy arrives inside the cached prefix, ahead of the plan and
+inside the same breakpoint. Both are fixed for the life of a run, so that
+placement is paid for once rather than per stage, and the model it is sent to
+caches at an explicit breakpoint without falling back to the longest matching
+prefix — static content after the mark misses every time.
 
 Reasoning effort is per-role config rather than a constant in each client:
 `planner.effort` and `reviewer.effort` name the provider's own literals, and
-`executor.reasoning_effort` reaches Aider as `--reasoning-effort`. The ceiling
-is a property of the *endpoint*, not the model — chat/completions refuses `max`
-for both GPT-5.6 models while `/v1/responses` accepts it for both — and Aider
-calls `litellm.completion`, so reaching `max` through Aider means routing the
-call to `/v1/responses`.
-
-Two things trigger litellm's bridge, and only one of them works from here. A
-`mode: responses` entry in `--model-metadata-file` does not: `register_models`
-puts it in Aider's own `local_model_metadata` and, in its words, defers
-registering with litellm — litellm's registry never sees it, so the bridge
-never fires and every attempt died in 1.9s on "does not support 'max'". Routing
-comes from a `responses/` infix in the model string (`openai/responses/<model>`),
-which litellm's `responses_api_bridge_check` matches. The metadata file is still
-needed, for the opposite job: that model string misses litellm's registry, so
-without it the context window and the prices are gone — and the prices are what
-make Aider report a dollar figure at all, via its
-`compute_costs_from_tokens` fallback. Routing from the model string, pricing
-from the metadata file. Verified by running Aider, not litellm; testing the
-library proved a thing about the library, and the failure was entirely in the
-layer between them.
-
-Aider also
-consults its own metadata and drops the flag for a model it believes cannot
-take it, which the live API contradicts, so an explicit effort carries
-`--no-check-model-accepts-settings` with it.
+`executor.reasoning_effort` becomes a `reasoning.effort` field on the request,
+omitted entirely when unset so a model that does not reason is never sent it.
+The ceiling is a property of the *endpoint* rather than of the model —
+chat/completions refuses `max` for both GPT-5.6 models while `/v1/responses`
+accepts it — which is one reason the executor calls the responses endpoint.
 
 And the executor is priced now. It never was, because a local model is free and
 the measured economics — the planner at 91% of tokens against the executor's
-2.2% of prompt volume — assumed that. `stage-costs.md` carries dollars beside
-the context figure, taken from Aider's own report, which appears only when
-litellm knows the model's input cost. Two blind spots worth knowing: a zero
-means "not priced" as often as "free", and Aider's cache accounting reads
-Anthropic's and DeepSeek's usage fields but never OpenAI's
-`prompt_tokens_details.cached_tokens`, so a zero there is the instrument rather
-than the cache. Measured at the API instead, an identical 16k prefix caches at
-99.9% with nothing configured.
+2.2% of prompt volume — assumed that. The figure comes from the usage block the
+provider returns on the call, which is what makes it trustworthy: an accounting
+scraped from another tool's console reports a zero for "not priced" as readily
+as for "free", and reads whichever cache fields that tool happened to
+implement. Holding the provider's own numbers removed both blind spots and cost
+nothing to add.
 
 The planner and reviewer are priced too, and not from a table anyone here
 maintains. The first design put hand-written rates in project config, which is
 the "config holds the path, not the copy" mistake with money in it — a second
-copy that drifts, and the copy is the one the report reads. Aider prices every
-attempt from `model_prices_and_context_window.json`, which litellm fetches from
-a public URL at import; the copy bundled in the package is a stale fallback.
-`pricing.py` reads the same URL, caches it, and never fails a run over it — a
-price list is a report, not a gate. Cache writes get their own bucket because
+copy that drifts, and the copy is the one the report reads. The rates live in
+`model_prices_and_context_window.json`, published at a public URL and kept
+current by people who are not us; the copy bundled in any package that vendors
+it is a stale fallback. `pricing.py` reads that URL, caches it, and never fails
+a run over it — a price list is a report, not a gate. Cache writes get their own bucket because
 they are billed above base (6.25e-06 against 5e-06 on Opus), which meant
 threading `cache_write_tokens` through `RunState`: both clients had computed it
 per call for as long as they had existed, and it stopped at the artifact.
@@ -1156,7 +1098,6 @@ limits:
   max_rework_retries: 2          # per stage-revision
   max_planner_interventions: 12  # global, across the run
   max_stages: 60                 # global; runaway-planner cap
-  aider_timeout_seconds: 1800
   command_timeout_seconds: 3600
   wall_clock_hours: 14           # abort the run cleanly at this point
 ```
@@ -1169,8 +1110,8 @@ escalates.
 
 ## Rework prompt construction
 
-Each attempt is a **fresh** Aider invocation rather than a continuation of the
-prior conversation, carrying:
+Each attempt is a **fresh** conversation rather than a continuation of the
+prior one, carrying:
 
 1. The stage instruction, at its current revision.
 2. The specific failure — reviewer issues, failing test names, matched lines.
@@ -1178,7 +1119,7 @@ prior conversation, carrying:
    amended rather than as a description of what to do.
 4. An opening that reflects which gate sent it back.
 
-The failed attempt's Aider conversation history is not carried forward. That
+The failed attempt's conversation history is not carried forward. That
 keeps the prompt focused, avoids the local model anchoring on its own earlier
 reasoning, and keeps context small — which matters on bandwidth-constrained
 local inference.
@@ -1245,21 +1186,18 @@ scoped_test_command: "docker compose run --rm test bundle exec rspec {paths}"
 full_suite_on_approval: true
 
 executor:
-  # llama-swap on the Spark. `openai/` is a litellm provider prefix — Aider
-  # routes through litellm, which needs telling that this endpoint speaks the
-  # OpenAI dialect. litellm strips it, so what reaches llama-swap in the request
-  # body's `model` field is the remainder, and that must match a model id from
-  # `curl <api_base>/models`. llama-swap never sees the prefix.
-  model: "openai/<model-id-from-/v1/models>"
+  # Must match a model id the endpoint serves — `curl <api_base>/models` is the
+  # list. The executor calls the responses endpoint, which is also what makes
+  # the top reasoning effort reachable; chat/completions refuses it.
+  model: "<model-id-from-/v1/models>"
   # The endpoint address lives in the environment, not in this file. A hostname
   # is an infrastructure fact rather than a project decision, and this file is
-  # tracked and hashed for approval. `api_base` remains available for a literal.
+  # tracked and hashed. `api_base` remains available for a literal.
   api_base_env: "ORCHESTRATOR_EXECUTOR_API_BASE"
-  # No api_key_env. A local endpoint serves without auth, so there is no key to
-  # name; the placeholder Aider's client insists on is supplied by the executor.
-  # Set one only for an authenticating gateway in front of the endpoint.
-  lint_command: "docker compose run --rm test bundle exec rubocop -a"
-  map_tokens: 0                          # repo map off; stages declare their files
+  # Omit for an endpoint that serves without auth. Set one only for an
+  # authenticating gateway in front of it.
+  api_key_env: "OPENAI_API_KEY"
+  reasoning_effort: "high"               # omitted from the request when unset
 
 planner:
   provider: "anthropic"
@@ -1375,6 +1313,8 @@ loop is ours. Under the framework it surfaced as an opaque error, and that was
 named here as the one failure mode this tool must not have while being the one
 thing that layer would not let us fix.
 
-Aider's flag names are verified by `validate` parsing `aider --help` rather than
-by trusting this document. Its CLI surface changes between releases, and the
-check belongs somewhere that runs before every unattended pass.
+What the provider's SDK actually accepts is established by calling it, not by
+trusting this document. Two facts here were only ever produced by a live call —
+that tools must be declared `strict` for structured output to auto-parse, and
+that a reasoning model's tool call must be echoed back with the reasoning item
+it declares as required. Neither is visible to a stub.
