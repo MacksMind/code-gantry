@@ -1,9 +1,10 @@
 # Working on this codebase
 
 [README.md](README.md) is how to use the orchestrator.
-[docs/rewrite-plan.md](docs/rewrite-plan.md) is the work in flight — what has
-landed, what has not, and why each remaining step is shaped the way it is. Read
-its status table before starting anything structural.
+[docs/archive/rewrite-plan.md](docs/archive/rewrite-plan.md) is a closed
+record of the rewrite that produced the current shape. Nothing in it is
+outstanding; it is kept for its measurements, and is not a status table to
+check before starting work.
 [docs/architecture.md](docs/architecture.md) is the design authority on why it
 works this way. Neither is repeated here.
 
@@ -467,22 +468,21 @@ Two things that only the second pass showed. The exclusion list lives in the
 *target repository's* indexer, so nothing here can pin it and nothing here will
 notice when it regresses — the pipeline's own artifacts are indexed by a tool
 this codebase does not own. And a bad query stays bad: the one call that was a
-stage id plus loose keywords still returns `CreditCardValidationError`,
-`ExampleApp` and `ItemPreview`, four of six matching on the token *card*.
-It was searching for a document rather than asking about code, and removing the
+stage id plus loose keywords still returns three unrelated classes whose names
+happen to share one token with it — four of six hits matching on that token
+alone. It was searching for a document rather than asking about code, and removing the
 document it was chasing does not turn it into a question.
 
-**A tool reads more than you hand it.** Aider scans the user message *and its
-own reply* for anything path-shaped and attaches the file, with `--yes-always`
-answering; there is no flag to disable it, and `--detect-urls` covers URLs
-only. Putting a conventions document — dense with paths — into the message
-attached `config/routes.rb`, `db/structure.sql` and the rest, reaching 258,854
-tokens against a 229,376 limit, so every attempt died in three seconds having
-written nothing and the run looped. Files supplied through `--read` are never
-scanned, which is where they go now. The general lesson is that the shipped
-tool's behaviour is discovered by reading its source, not by reasoning about
-what a sensible tool would do: this one was found by grepping
-`check_for_file_mentions`, after two wrong theories.
+**A tool reads more than you hand it.** The subprocess editor this project
+once shelled out to scanned the message *and its own reply* for anything
+path-shaped and attached the file, auto-answering the prompt; no flag disabled
+it. Putting a conventions document — dense with paths — into that message
+attached the route file, the schema dump and the rest, reaching 258,854 tokens
+against a 229,376 limit, so every attempt died in three seconds having written
+nothing and the run looped. Its read-only channel was never scanned, which is
+where the document went. The general lesson outlives the tool: a third-party
+tool's behaviour is a property of its source, not of what a sensible tool would
+do, and this was found by grepping that source after two wrong theories.
 
 **The same command in both places, spelled the same way.** `rubocop -A` exits
 zero *after* rewriting files. Run it one way inside the executor's loop and
@@ -537,19 +537,20 @@ place.
 **The executor is not free any more.** The economics the design rests on —
 planner at 91% of tokens, executor at 2.2% of prompt volume — were measured
 against a local model on a Spark. A hosted executor invalidates both, so
-`stage-costs.md` now carries dollars beside the context figure. Aider reports
-cost only when litellm knows `input_cost_per_token`, so a zero means "not
-priced" as often as it means "free"; and its cache accounting reads Anthropic's
-and DeepSeek's fields but never OpenAI's `prompt_tokens_details.cached_tokens`,
-so a silent zero there is the instrument, not the cache. Measured directly at
+`stage-costs.md` now carries dollars beside the context figure. The
+subprocess editor reported cost only when its rate table knew
+`input_cost_per_token`, so a zero meant "not priced" as often as it meant
+"free"; and its cache accounting read two providers' fields but never OpenAI's
+`prompt_tokens_details.cached_tokens`, so a silent zero there was the
+instrument, not the cache. Measured directly at
 the API: an identical 16k prefix caches at 99.9% on chat/completions with
 nothing configured — **and that figure does not cover the path the executor
 now takes.** It routes through `openai/responses/<model>`, and the measurement
 was made against chat/completions, which is the same substitution the rule two
 paragraphs up was written about: a fact established on the layer beside the one
 being called. Three artifacts were checked for a reading on the real path and
-none carries one — `aider-chat.md` reports `38k sent` with no cache fields,
-`aider-llm.txt` holds prompt and response text with no usage block at all, and
+none carries one — its console log reports `38k sent` with no cache fields,
+its raw prompt-and-response dump holds no usage block at all, and
 our own accounting bills every token at full input price while
 `executor-model.json` declares a `cache_read_input_token_cost` it never
 applies. So the honest state is *unmeasured*, not *zero* and not *99.9%*.
@@ -562,8 +563,8 @@ decision attached to it. The instinct to close an open question is right about
 the question and wrong about the priority: what makes a reading worth taking is
 that something changes depending on the answer.
 
-**And then it closed itself, which is the more useful half.** Replacing Aider
-with an in-process client made the reading free: we now hold the usage block the
+**And then it closed itself, which is the more useful half.** Replacing the
+subprocess editor with an in-process client made the reading free: we now hold the usage block the
 provider returns instead of scraping someone else's console. Measured over 46
 attempts of one run, instrument `executor-loop.json`: **36,790,654 of 39,218,473
 prompt tokens cached, 93.8%**, and on opening turns alone 207,141 of 369,840,
@@ -612,10 +613,10 @@ clock.
 
 **Test the layer you are actually going to call.** Reaching `max` on the
 executor needed litellm's Responses bridge, and a metadata file with
-`mode: responses` triggered it perfectly — in litellm. Through Aider it did
-nothing: `register_models` puts the entry in Aider's own `local_model_metadata`
-and, in its own comment, *defers registering with litellm*, so the registry the
-bridge consults never sees it. Every attempt died in 1.9s and the run burned
+`mode: responses` triggered it perfectly — in litellm. Through the editor in
+between it did nothing: its own `register_models` put the entry in a local
+metadata map and, in its own comment, *deferred* registering with litellm, so
+the registry the bridge consults never saw it. Every attempt died in 1.9s and the run burned
 four of them plus a planner revision before it was caught. The verification had
 called `litellm.register_model` directly, which proved a fact about litellm and
 nothing about the thing in between. The working split is worth remembering
@@ -663,8 +664,8 @@ zero rather than the behaviour of a stage, and stayed green throughout. A field
 whose value crosses nodes wants a test that drives both nodes; a test that can
 be satisfied by the constant it is checking for is not testing the journey.
 
-**An inner loop that skips the file under edit is worse than none.** Aider's
-`--test-cmd` was built from `test_paths` alone, so a stage declaring none ran
+**An inner loop that skips the file under edit is worse than none.** The
+subprocess editor's in-session test command was built from `test_paths` alone, so a stage declaring none ran
 with no in-session test at all — 12 of 35 on one run. The fallback to the tests
 in `edit_files` was the obvious fix and it was half of one: of the 17 stages
 that *did* declare paths and also edited a test, 11 named a different file than
@@ -771,9 +772,8 @@ docstring says so: "once one has failed the stage is failing, and running the
 rest only costs time." That stops being right when a later entry also *repairs*.
 Ordering `annotate` ahead of `bin/rubocop -A` would have meant any docker
 hiccup skipped RuboCop for that cycle, so the model's own edits went
-uncorrected and its only feedback was about a tool it never invoked — and on
-the native executor `checks` is the *only* run of the linter, because
-`executor.lint_command` is read solely where Aider's argv is built. Where a
+uncorrected and its only feedback was about a tool it never invoked — and
+`checks` is the *only* run of the linter. Where a
 fixer must follow a fallible step, chain it into the same entry with `&&` so a
 `break` cannot leave the output uncleaned.
 
@@ -874,9 +874,10 @@ where it was uniform* was written without ever counting the base. Ask what the
 number was before, not only what it is now.
 
 **A test suite can be exercising the path you are about to delete.** The
-integration tests drove a fake `aider` binary on `PATH`, and they were green
+integration tests drove a fake executor binary on `PATH`, and they were green
 the whole time the in-process executor was running live — because
-`executor.provider` still defaulted to `"aider"`, and nothing made the tests
+`executor.provider` still defaulted to the subprocess one, and nothing made the
+tests
 follow production. So the end-to-end coverage was entirely on the dead path
 while every real stage took the other one, and the first honest signal was
 23 tests failing the moment the default went away. A default that only tests
@@ -918,8 +919,8 @@ The same sweep is worth running deliberately rather than by accident: parse
 every module and list the names defined in more than one. Of five, four were
 delegating wrappers whose docstrings said why, and one was this.
 
-**Cut code with a parser, not a pattern.** Twice in five minutes, deleting
-Aider by regex removed the wrong span: a method boundary matched a `def`
+**Cut code with a parser, not a pattern.** Twice in five minutes, deleting the
+subprocess executor by regex removed the wrong span: a method boundary matched a `def`
 nested inside a *later* function and swallowed six module-level definitions,
 then a docstring line reading `stage: some blocks match` matched a
 "top-level assignment" pattern mid-sentence. Both were caught, one by the
@@ -957,8 +958,9 @@ reviewer's ledger had to be fixed before its cap could be tuned at all.
 **A value written in three places and read in none.** `ExecutorTurn.stopped`
 carried the comment "the loop must not treat this as 'finished'" and nothing
 ever consulted it. `executor.log` was declared "assigned by `build_runtime`"
-and never assigned. `aider_timeout_seconds` survived the deletion of the tool
-it was named for, read by nothing and still written into every drafted config.
+and never assigned. The subprocess editor's timeout setting survived the
+deletion of the tool it was named for, read by nothing and still written into
+every drafted config.
 Three shapes of the same defect in one session, all of which review as correct
 — the field exists, the comment explains it, the caller is right there. Only
 grepping for the *reader* finds them: after adding a field, or deleting a
@@ -974,7 +976,8 @@ that a check naming what it is *not* does not.
 
 **Deleting a producer leaves its consumers guarded on a value nobody sets.**
 `context_tokens` and `cost_usd` are assigned in exactly one place — from
-`context_tokens_from_log` and `cost_from_log`, which scrape Aider's console.
+`context_tokens_from_log` and `cost_from_log`, which scraped the subprocess
+editor's console.
 The in-process loop sets neither, so `advance`'s guard
 `if executor_context_tokens or executor_cost_usd` is never true and
 `append_stage_cost` is never called. `stage-costs.md` stopped being written the
@@ -1131,12 +1134,12 @@ in and whether the thing it is protecting is measured in that unit — context i
 bytes, and calls, lines and files are all proxies that decouple under load.
 
 **Do not explain the present with a component that is absent.** Roughly thirty
-comments and docstrings still described current behaviour in terms of Aider —
-what it reported, what its linter skipped, what its accounting could not
-distinguish — months after it was deleted. Each reads as an explanation of the
+comments and docstrings still described current behaviour in terms of a
+component that had been deleted months earlier — what it reported, what its
+linter skipped, what its accounting could not distinguish. Each reads as an explanation of the
 code in front of you, and none is checkable by anyone who does not already know
 the tool is gone. The reasons were worth keeping and every one restated in
-present terms: "Aider's accounting reports zero for not-priced as often as for
+present terms: "that accounting reports zero for not-priced as often as for
 free" is really a statement about rate tables, which is what the
 `None`-rather-than-`0.0` distinction guards. The first instinct — that deleting
 the history leaves the code looking arbitrary — is wrong for the same reason
@@ -1301,7 +1304,7 @@ command actually returns, and both were committed to before anyone asked what
 the number counted.
 
 **A value that fits is a value that fits *where it is*.** `prompt_cache_key` is
-capped at 64 characters and nothing had been near it: `orchestrator:example` is
+capped at 64 characters and nothing had been near it: a slug-shaped key ran to
 19. Moving the config into the repository it describes made `work_dir` the
 project's identity, the identity a path, and the key 98 — so the first reviewer
 call of the first run on the new layout came back 400. Nothing about the value
@@ -1750,13 +1753,19 @@ held was either the machine describing itself, or already arriving through the
 stage-costs block, or a hand copy of a live feed that the feed had overtaken.
 
 `executor.py` is now only what shapes an attempt before it starts — the read
-budget, the excerpts, the conventions — plus `run_script_stage`. Aider is gone
-(2,418 lines), and with it nine `ExecutorConfig` settings; `RETIRED_EXECUTOR_KEYS`
-names each one and its replacement, because `extra="forbid"` reports a retired
-key exactly as it reports a typo. `scripts/smoke.py` still writes a fake `aider`
-and is the one caller left: it drives the real CLI in a subprocess, so it needs
-the executor pointed at the stub server it already runs rather than a binary on
-`PATH`.
+budget, the excerpts, the conventions — plus `run_script_stage`. The subprocess
+editor is gone (2,418 lines), and with it nine `ExecutorConfig` settings. A
+removed key is reported by `extra="forbid"` exactly as a typo is, which was
+worth a naming-and-replacement table while there were configs still carrying
+them; there are none now, and the table went with the last entry rather than
+being kept warm for a hypothetical one.
+
+`scripts/smoke.py` stands up one HTTP server for all three roles and no binary
+on `PATH`. It used to plant a stub executable, back when the executor shelled
+out; keeping that after the switch would have driven a code path production no
+longer takes, which is the "a test suite can be exercising the path you are
+about to delete" failure with the roles reversed. A test asserts the stub is
+gone, because that is the sort of thing that grows back.
 
 The docstrings carry the reasoning, usually including the incident that produced
 it. They are worth reading before changing the behaviour they describe.

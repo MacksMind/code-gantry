@@ -84,7 +84,7 @@ def stage_spec(stages_dir: Path, stage_id: str) -> dict | None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("run_id")
-    ap.add_argument("--project", default="example")
+    ap.add_argument("--project", required=True)
     ap.add_argument("--out", default=None, help="Where to write the verdicts.")
     ap.add_argument("--limit", type=int, default=0, help="Replay only the first N.")
     ap.add_argument("--only", default="", help="Replay one stage id.")

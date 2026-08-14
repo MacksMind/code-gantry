@@ -2,12 +2,12 @@
 
 OpenAI's `prompt_cache_key` is capped at 64 characters and rejects anything
 longer with a 400. That was invisible while a project's identity was a slug:
-`orchestrator:example` is 19 characters and nothing was going to grow it.
+under twenty characters, and nothing was going to grow it.
 
 Then the config moved into the repository it describes, `work_dir` became the
-project's identity, and the identity became a path —
-`…/docs/migration_project/.code_gantry`, 85 characters, 98 with the
-role prefix. The value did not change meaning; it changed *length*, and a
+project's identity, and the identity became a path — the plan directory plus a
+work directory beneath it, 85 characters on the project that found this and 98
+with the role prefix. The value did not change meaning; it changed *length*, and a
 limit nobody had thought about since it was set began to bind. It is the same
 shape as a value that was private while its file was private: what a field can
 hold is a property of where it comes from, and moving the source re-opens

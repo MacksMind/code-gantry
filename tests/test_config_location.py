@@ -72,12 +72,12 @@ class TestTheWorkDir:
         # dirs, and the config is now the same file for both.
         monkeypatch.setenv("ORCH_TEST_WORK", str(repo / "elsewhere"))
         cfg = parse_config(
-            _data(target_repo=str(repo), work_dir="${ORCH_TEST_WORK}/example")
+            _data(target_repo=str(repo), work_dir="${ORCH_TEST_WORK}/proj")
         )
-        assert cfg.work_dir == repo / "elsewhere" / "example"
+        assert cfg.work_dir == repo / "elsewhere" / "proj"
 
     def test_a_home_relative_path_is_expanded(self, repo):
-        cfg = parse_config(_data(target_repo=str(repo), work_dir="~/o/example"))
+        cfg = parse_config(_data(target_repo=str(repo), work_dir="~/o/proj"))
         assert str(cfg.work_dir).startswith(os.path.expanduser("~"))
         assert "~" not in str(cfg.work_dir)
 

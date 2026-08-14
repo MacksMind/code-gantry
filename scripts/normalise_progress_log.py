@@ -11,8 +11,8 @@ Run it during a pause, never against a live run — it rewrites a file the
 orchestrator appends to, and `advance` writing an entry underneath it would
 lose that entry.
 
-    uv run python scripts/normalise_progress_log.py example --plan-sha <sha>
-    uv run python scripts/normalise_progress_log.py example --plan-sha <sha> --write
+    uv run python scripts/normalise_progress_log.py <project> --plan-sha <sha>
+    uv run python scripts/normalise_progress_log.py <project> --plan-sha <sha> --write
 
 Dry run by default: it prints the counts and a preview and touches nothing.
 Verify it first with `uv run pytest scripts/` — it is destructive, one-shot,
@@ -325,7 +325,7 @@ def _main(argv: list[str] | None = None) -> int:
     from orchestrator.runtime import ProjectPaths  # noqa: PLC0415
 
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("slug", help="project slug, e.g. example")
+    parser.add_argument("slug", help="project slug")
     parser.add_argument(
         "--plan-sha",
         required=True,

@@ -9,7 +9,7 @@ Finished in 2 minutes 16.4 seconds (files took 5.18 seconds to load)
 
 Failed examples:
 
-rspec ./spec/models/user_spec.rb:443 # User#merge_into copies over any user personalizations used by this signature
+rspec ./spec/models/user_spec.rb:443 # User#merge_into copies the source record's preferences onto the target
 
 Randomized with seed 4845
 
@@ -22,7 +22,7 @@ Finished in 2 minutes 24.7 seconds (files took 5.14 seconds to load)
 
 Failed examples:
 
-rspec './spec/requests/checkout_spec.rb[1:1:1:1]' # Checkout Storefront checkout process existing account check out with cart created at login
+rspec './spec/requests/checkout_spec.rb[1:1:1:1]' # Checkout an existing account checking out with a cart created at login
 
 Randomized with seed 58072
 

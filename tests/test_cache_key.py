@@ -1,7 +1,7 @@
 """A provider limit that only began to bind when a value moved.
 
 `prompt_cache_key` is capped at 64 characters. Nothing was near it while a
-project's identity was a slug — `orchestrator:example` is 19. Moving the config
+project's identity was a slug, well under 20 characters. Moving the config
 into the repository it describes made `work_dir` the identity, the identity a
 path, and the key 98 characters. The reviewer's first call of the first run on
 the new layout came back 400, and was then retried twice on a schedule meant

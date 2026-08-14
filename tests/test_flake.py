@@ -45,17 +45,18 @@ from orchestrator.flake import (
 RSPEC_PATTERN = r"^\s*rspec\s+'?\.?/?([^'\s\[:]+_spec\.rb)"
 
 
-# Verbatim from a real `bin/parallel_rspec` run, trimmed. Note that each worker
-# prints its own block, so the markers repeat and the locators are quoted.
+# From a real parallel run, trimmed, with the example descriptions rewritten.
+# Note that each worker prints its own block, so the markers repeat and the
+# locators are quoted.
 RSPEC_OUTPUT = """\
 Failures:
 
-  1) Checkout Storefront checkout process existing account check out with cart
-     Failure/Error: expect(@cart.shipping_address).to(eq(@user.user_addresses.first))
+  1) Checkout an existing account checking out with a cart
+     Failure/Error: expect(@cart.shipping_address).to(eq(@user.addresses.first))
 
 Failed examples:
 
-rspec './spec/requests/checkout_spec.rb[1:1:1:1]' # Checkout Storefront checkout process existing account check out with cart created at login
+rspec './spec/requests/checkout_spec.rb[1:1:1:1]' # Checkout an existing account checking out with a cart created at login
 
 Randomized with seed 9830
 """
@@ -392,8 +393,10 @@ class TestTheSeedThatProducedTheFailure:
 
     SEED = r"^Randomized with seed (\d+)"
 
-    # Verbatim from a `bin/parallel_rspec` run that flaked: two workers, two
-    # files, two different seeds. A single-seed reading gets one of them wrong.
+    # From a two-worker run that flaked, with the example descriptions
+    # rewritten: two workers, two files, two different seeds. Everything the
+    # parsers read — the markers, the quoted locators, the seed placement — is
+    # the runner's own output. A single-seed reading gets one of them wrong.
     REAL = (
         Path(__file__).parent / "fixtures" / "parallel_rspec_two_workers.txt"
     ).read_text()
