@@ -171,23 +171,27 @@ for it to return, not merely discouraged.
 
 ## Hosts
 
-- **CodeGantry and test suite: the operator's MacBook (M4 Pro).** The suite
-  is Ruby — single-thread-bound per worker and sensitive to memory latency —
-  so the laptop is the better host. Run under `caffeinate -i` for the duration
-  of a long unattended pass.
-- **Inference: the Spark, over Tailscale.** llama.cpp exposes an
-  OpenAI-compatible endpoint. Co-hosting the suite on the Spark was considered
-  and rejected: at Q6 an 80B model commits roughly 70GB, and freeing room for
-  Postgres and Rails workers would mean dropping quant to buy a worse test host
-  than the one already available.
-- **Docker stays in the setup path.** Production runs from containers, so a
-  containerized dev/test environment is a good proxy and worth the overhead.
+- **CodeGantry and the test suite share a host.** The suite is most of a run's
+  wall clock, so that machine is chosen by what the suite is bound on — often
+  single-threaded per worker and sensitive to memory latency rather than to
+  core count, which is not the machine a throughput benchmark would pick. Keep
+  it awake for the duration of a long unattended pass.
+- **Inference is wherever an OpenAI-compatible endpoint is**, on the same
+  machine or across a network. The tradeoff worth thinking about is co-hosting
+  a large local model with the suite: a model resident at a usable
+  quantisation can leave too little memory for the database and application
+  workers, and dropping quantisation to make room buys a worse test host than
+  a second machine already provides.
+- **A containerised dev/test environment is worth its overhead** wherever
+  production runs from containers, because that is what makes the test
+  environment a proxy for the real one.
 
-**Commands in the config are host-specific.** `setup_command`, `test_command`,
-and `full_test_command` assume a particular machine's Docker, Ruby, and paths.
-`validate` therefore validates *this host*, not the config in the abstract.
-Record the intended host in the config as documentation, so a future reader
-does not try to run a project config elsewhere and misread the failures.
+**Commands in the config are host-specific.** `setup_command`, `test_command`
+and `full_test_command` assume one machine's toolchain and paths, so `validate`
+validates *this host* rather than the config in the abstract. Do not record
+which machine that is: the config is a tracked file, and a hostname in it is
+one operator's private detail published to everyone who checks the repository
+out.
 
 ## Filesystem layout
 
@@ -248,10 +252,10 @@ overwritten by a stale original.
 **Discovery splits along the same line as the planner's write permissions.**
 
 *Executable fields come from deterministic repo inspection, never a model:*
-`Gemfile` and `Gemfile.lock` for framework and gem versions; `.tool-versions`
-or `.ruby-version` for the runtime; `bin/` and `.github/workflows/` for the
-canonical test invocation; `docker-compose.yml` for services and setup. Free,
-fast, reproducible.
+the dependency manifest and its lockfile for framework and library versions; a
+language-version file such as `.tool-versions` for the runtime; `bin/` and
+`.github/workflows/` for the canonical test invocation; `docker-compose.yml`
+for services and setup. Free, fast, reproducible.
 
 *Declarative fields are where a model earns its keep:* reading the plan
 document to propose `forbidden_patterns` and per-stage `constraints`, which no
@@ -1171,9 +1175,9 @@ the reviewer criteria to judge against.
 ## Configuration
 
 ```yaml
-# projects/rails-upgrade/config.yaml
-host: "macbook"                  # documentation: these commands assume this machine
-target_repo: /Users/me/code/some-app
+# <target-repo>/docs/<project>/code_gantry.yaml
+# No host, target_repo or work_dir: the first would publish one machine's name
+# in a tracked file, and the other two are derived from where this was read.
 base_ref: main
 project_branch: upgrade/rails-5
 
