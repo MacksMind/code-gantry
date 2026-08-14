@@ -141,11 +141,10 @@ audience rather than of content and pulled several things with it.
 | `base_ref` may move forward; asked at startup, not after the work | `e8090d1` |
 | `init` drafts a config fit to commit into a shared repo | `5eb7606` |
 
-Not done: this project's config itself still lives in the orchestrator repo, so
-`config_rel_path` is `None` and preflight warns rather than pinning a sha. The
-move needs two commits in the target repo — the config, and `.code_gantry/` in
-a `.gitignore` beside the plan — after which `problem_starting` becomes fatal
-and an uncommitted config edit refuses to start a run.
+That last item closed too. The config lives in the repository it describes,
+`config_rel_path` resolves, and preflight pins its blob sha rather than
+warning — so `problem_starting` is fatal and an uncommitted config edit refuses
+to start a run.
 
 ## Context
 
