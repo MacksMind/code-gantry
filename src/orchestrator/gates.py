@@ -367,9 +367,9 @@ def resolve_test_command(
     inner loop at all, because a command that can never pass is worse than no
     command: the attempt ends believing it succeeded.
 
-    The directory swap is common to both, and the loop's extra condition —
-    only when `auto_test_command` was not set — is preserved: an operator who
-    named the loop's command meant that command.
+    There is no third template. `directory_test_command` chose a second
+    command when the selection held a directory; a runner that scales down
+    removes the reason, and two names for one string drift apart.
     """
     if not for_loop and stage.test_command:
         return stage.test_command
@@ -401,15 +401,7 @@ def resolve_test_command(
     if not paths:
         return fallback
 
-    template = template_base
-    swap_allowed = (not for_loop) or cfg.auto_test_command is None
-    if (
-        swap_allowed
-        and cfg.directory_test_command
-        and any((cfg.target_repo / p).is_dir() for p in paths)
-    ):
-        template = cfg.directory_test_command
-    return template.format(paths=" ".join(paths))
+    return template_base.format(paths=" ".join(paths))
 
 
 # --- the layers a caller can fix by editing -------------------------------

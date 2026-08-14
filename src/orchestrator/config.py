@@ -912,12 +912,6 @@ class ProjectConfig(_Strict):
     agent_context: list[str] | None = None
     # Optional. `{paths}` is filled by the orchestrator from the stage diff.
     scoped_test_command: str | None = None
-    # Used instead of `scoped_test_command` when any of those paths is a
-    # directory rather than a file. A directory can hold hundreds of files, and
-    # running it serially costs minutes on every attempt and every re-run; a
-    # single file is not worth starting workers for. Both strings are yours —
-    # this only chooses between them, on a fact about the filesystem.
-    directory_test_command: str | None = None
     # What the executor runs inside its own edit loop.
     # Separate from the above because the two have opposite needs from the same
     # runner: verify *parses* the output to find which files failed, so it needs
@@ -1197,7 +1191,6 @@ class ProjectConfig(_Strict):
             ("test_command", self.test_command),
             ("full_test_command", self.full_test_command),
             ("scoped_test_command", self.scoped_test_command),
-            ("directory_test_command", self.directory_test_command),
             ("auto_test_command", self.auto_test_command),
         ):
             if command:
@@ -1251,48 +1244,6 @@ def denylist_violations(commands: list[tuple[str, str]]) -> list[str]:
                     f"(/{pattern.pattern}/) — {why}. This is refused regardless "
                     "of approval."
                 )
-    return problems
-
-
-# Keys this tool used to have, and where the intent moved.
-#
-# `extra="forbid"` renders a retired key as "Extra inputs are not permitted" —
-# the same message a typo gets, against a key the operator set deliberately and
-# that worked yesterday. The failure is correct and only the wording is wrong;
-# a config that *silently ignored* one would be worse, leaving someone
-# believing it still bounds something.
-#
-# **Empty right now, and that is temporary rather than normal.** There is one
-# config, in this repository, owned by whoever removes the key — so an entry
-# survives only as long as it takes to update that file, and ten of them
-# explaining settings nobody had left was a table no one could ever read.
-#
-# **That stops the moment this tool is public**, and the change is one-way.
-# Once configs exist that we do not own and cannot see, an entry is permanent:
-# there is no way to know whether the last config carrying the key has been
-# updated, and removing it turns a clear explanation back into "Extra inputs
-# are not permitted" for someone upgrading from a version we no longer track.
-# Cleaning out entries is a habit that has to be dropped deliberately, on that
-# day, rather than continued because it was right before.
-RETIRED_KEYS: dict[str, dict[str, str]] = {}
-"""Retired settings, per config section, and what to use instead.
-
-Per section rather than per executor, because the key that most needed it last
-time lived on `Limits` and a guard looking at one block could not see it.
-"""
-
-
-def _retired_key_problems(data: dict) -> list[str]:
-    problems: list[str] = []
-    for section, keys in RETIRED_KEYS.items():
-        block = data.get(section)
-        if not isinstance(block, dict):
-            continue
-        problems += [
-            f"{section}.{key}: retired — {why}"
-            for key, why in keys.items()
-            if key in block
-        ]
     return problems
 
 
@@ -1352,12 +1303,6 @@ def parse_config(data: dict, source: Path | str | None = None) -> ProjectConfig:
             ["target_repo is not set and the config was not read from a file, "
              "so the repository it describes cannot be derived"]
         )
-
-    # Before validation, so a retired key is explained rather than reported as
-    # an unknown one. A genuine typo still falls through to pydantic.
-    retired = _retired_key_problems(data)
-    if retired:
-        raise ConfigError(retired)
 
     try:
         cfg = ProjectConfig.model_validate(data)
@@ -1539,7 +1484,6 @@ def _structural_problems(cfg: ProjectConfig) -> list[str]:
 
     for label in (
         "scoped_test_command",
-        "directory_test_command",
         "auto_test_command",
     ):
         command = getattr(cfg, label)
@@ -1548,13 +1492,6 @@ def _structural_problems(cfg: ProjectConfig) -> list[str]:
                 f"{label} must contain a {{paths}} placeholder — that is the "
                 "slot the orchestrator fills with the stage's changed files"
             )
-
-    if cfg.directory_test_command and not cfg.scoped_test_command:
-        problems.append(
-            "directory_test_command needs scoped_test_command: it is the "
-            "variant used when the selection contains a directory, not a "
-            "scoping mechanism on its own"
-        )
 
     if cfg.failed_file_pattern:
         try:

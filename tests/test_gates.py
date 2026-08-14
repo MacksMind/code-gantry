@@ -130,7 +130,8 @@ class TestWhatBothDoIdentically:
         assert resolve_test_paths(stage, cfg, for_loop=True) == []
         assert resolve_test_paths(stage, cfg, Git(repo), sha, for_loop=False) == []
 
-    def test_both_swap_in_the_directory_command_on_the_same_input(self, repo):
+    def test_both_use_the_scoped_command_on_the_same_input(self, repo):
+        """A directory selection is not a different command any more."""
         (repo / "spec" / "models").mkdir(parents=True, exist_ok=True)
         (repo / "spec" / "models" / "keep_spec.rb").write_text("x\n")
         Git(repo).commit_all("specs")
@@ -140,19 +141,16 @@ class TestWhatBothDoIdentically:
             repo,
             {"test_paths": ["spec/models"], "edit_files": ["spec/models"]},
             scoped_test_command="rspec {paths}",
-            directory_test_command="rspec-dir {paths}",
         )
 
-        assert resolve_test_command(stage, cfg, for_loop=True) == "rspec-dir spec/models"
+        assert resolve_test_command(stage, cfg, for_loop=True) == "rspec spec/models"
         assert (
             resolve_test_command(stage, cfg, Git(repo), sha, for_loop=False)
-            == "rspec-dir spec/models"
+            == "rspec spec/models"
         )
 
-    def test_an_operator_named_loop_command_is_not_swapped(self, repo):
-        # An operator who named the loop's command meant that command. The
-        # gate has no equivalent override, so this asymmetry is the loop's
-        # alone.
+    def test_an_operator_named_loop_command_is_used(self, repo):
+        # An operator who named the loop's command meant that command.
         (repo / "spec" / "models").mkdir(parents=True, exist_ok=True)
         (repo / "spec" / "models" / "keep_spec.rb").write_text("x\n")
         Git(repo).commit_all("specs")
@@ -162,7 +160,6 @@ class TestWhatBothDoIdentically:
             {"test_paths": ["spec/models"], "edit_files": ["spec/models"]},
             auto_test_command="loop-cmd {paths}",
             scoped_test_command="rspec {paths}",
-            directory_test_command="rspec-dir {paths}",
         )
 
         assert resolve_test_command(stage, cfg, for_loop=True) == "loop-cmd spec/models"
