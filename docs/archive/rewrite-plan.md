@@ -20,17 +20,17 @@ artifact it came from.
 
 | step | state | commit |
 |---|---|---|
-| 0 · extract `openaiclient.py` | done | `9143c4d` |
-| 1 · `gates.py`, one test-path selection | done | `1e037ca` |
-| 2 · `edittools.py` | done | `8daa670` |
-| 3 · `executortools.py` | done | `93dab0e` |
-| 4 · `executorclient.py` | done | `93dab0e` |
-| 5 · the loop behind a provider switch | done | `7479631` |
+| 0 · extract `openaiclient.py` | done | `b700010` |
+| 1 · `gates.py`, one test-path selection | done | `c8e54c0` |
+| 2 · `edittools.py` | done | `a85de00` |
+| 3 · `executortools.py` | done | `0b4e23e` |
+| 4 · `executorclient.py` | done | `0b4e23e` |
+| 5 · the loop behind a provider switch | done | `408a12f` |
 | 6 · flip the default, take a live run | done | measured in `CLAUDE.md` |
-| 7 · delete the subprocess editor | done | `5c298c4`, `57c3b39` |
-| 8 · replace LangGraph with `driver.py` | done | `6a3225d`, this commit |
-| 9 · simplify `nodes.execute` | done, absorbed | `5c298c4`, `5192d1a` |
-| 10 · up to five stages per derivation | done | `c15e5ee`, `f36f746`, then `10f87d8`, `0d6be66`, `553de02` |
+| 7 · delete the subprocess editor | done | `3959471`, `79fcd7b` |
+| 8 · replace LangGraph with `driver.py` | done | `0104392`, this commit |
+| 9 · simplify `nodes.execute` | done, absorbed | `3959471`, `8d7d0a5` |
+| 10 · up to five stages per derivation | done | `40f133a`, `774ed52`, then `c7c5d9a`, `aaa1129`, `8e1d800` |
 
 **Step 10 is done and measured.** One run, 17 derivations, 32 stages:
 
@@ -134,12 +134,12 @@ audience rather than of content and pulled several things with it.
 
 | change | commit |
 | --- | --- |
-| every command takes a config path; the slug is deleted | `f063c01` |
-| config identified by its git sha; `approval.py` deleted | `c55213f` |
-| `work_dir` named in config, defaulting under the plan directory | `9399c28` |
-| the linter's diff fed back to the executor, attributed | `c6d3529` |
-| `base_ref` may move forward; asked at startup, not after the work | `bd9cf62` |
-| `init` drafts a config fit to commit into a shared repo | `e1f5cc9` |
+| every command takes a config path; the slug is deleted | `efa3335` |
+| config identified by its git sha; `approval.py` deleted | `c9ac97d` |
+| `work_dir` named in config, defaulting under the plan directory | `992dbcf` |
+| the linter's diff fed back to the executor, attributed | `12d970d` |
+| `base_ref` may move forward; asked at startup, not after the work | `e8090d1` |
+| `init` drafts a config fit to commit into a shared repo | `5eb7606` |
 
 Not done: this project's config itself still lives in the orchestrator repo, so
 `config_rel_path` is `None` and preflight warns rather than pinning a sha. The
