@@ -171,7 +171,7 @@ for it to return, not merely discouraged.
 
 ## Hosts
 
-- **Orchestrator and test suite: the operator's MacBook (M4 Pro).** The suite
+- **CodeGantry and test suite: the operator's MacBook (M4 Pro).** The suite
   is Ruby — single-thread-bound per worker and sensitive to memory latency —
   so the laptop is the better host. Run under `caffeinate -i` for the duration
   of a long unattended pass.
