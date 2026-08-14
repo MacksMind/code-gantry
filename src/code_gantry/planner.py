@@ -1153,7 +1153,7 @@ stage, an environment problem.
   `instruction`.
 %%EXECUTOR_CAPABILITY%%
 
-  Anything you want checked mechanically goes to the orchestrator as a regex,
+  Anything you want checked mechanically goes to CodeGantry as a regex,
   deterministic and free, and there are two of them because they answer
   opposite questions. `forbidden_patterns` reads the diff's added lines and
   catches what must not be *introduced*. `must_not_remain` reads the files in
@@ -1163,8 +1163,8 @@ stage, an environment problem.
   backwards means an incomplete conversion passes every mechanical gate and is
   caught, if at all, by a paid review turn.
 
-  Describe the *requirement* to the executor; declare the *check* to the
-  orchestrator.
+  Describe the *requirement* to the executor; declare the *check* to
+  CodeGantry.
 
   It does see test results, but never by asking. The loop runs the checks and
   the suite after every batch of edits and hands back whatever failed, so the
@@ -1179,7 +1179,7 @@ stage, an environment problem.
   Quoting the repository is not writing code, and the executor needs it — a
   function as it stands, the line a caller depends on, the declaration a change
   has to stay compatible with. **Quote by reference, not by transcription:**
-  put a path and a line range in `read_excerpts` and the orchestrator reads it
+  put a path and a line range in `read_excerpts` and CodeGantry reads it
   at the stage's starting commit and hands the executor the real lines,
   numbered. A fenced code block in `instruction` is rejected before the stage
   runs.

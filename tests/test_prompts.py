@@ -431,8 +431,8 @@ class TestTheExecutorCannotRunCommands:
     before the client cancelled it at ten minutes. Three times in one evening.
 
     Capping output bounds what that costs. It does not stop it. The fix is not
-    to ask: mechanical verification belongs in `forbidden_patterns`, which the
-    orchestrator checks against the diff deterministically and for free, and
+    to ask: mechanical verification belongs in `forbidden_patterns`, which
+    CodeGantry checks against the diff deterministically and for free, and
     which this very stage already used for unrelated patterns while omitting
     the one that was its actual goal.
     """
@@ -2038,7 +2038,7 @@ class TestTheScopeListSaysWhichFilesDoNotExist:
     that caused it. It was live on the first stage of the run started today,
     which declared a brand-new spec file.
 
-    Replaced with the fact rather than a claim about machinery: the orchestrator
+    Replaced with the fact rather than a claim about machinery: CodeGantry
     knows which of these paths exist, so it says so per entry. That cannot go
     stale the way the sentence it replaces did, and it answers the question the
     model actually has — `edit` or `create_file` — at the point where it is

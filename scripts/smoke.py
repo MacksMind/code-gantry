@@ -106,7 +106,7 @@ STAGES = [
 # *existing* test file rather than written to a new one: a real planner scopes a
 # stage to the files it expects to change and says "add tests in the existing
 # test file", so inventing `tests/test_multiply.py` violated that scope on every
-# attempt — a stand-in ignoring its instructions rather than an orchestrator
+# attempt — a stand-in ignoring its instructions rather than CodeGantry
 # mis-scoping.
 TEST_FILE = "tests/test_calc.py"
 
@@ -195,7 +195,7 @@ class ModelStub(BaseHTTPRequestHandler):
     The planner's answer is derived from **what has landed on the project
     branch**, not from a call counter. A counter would hand out a different
     stage on every retry or rework, and the resulting confusion would look
-    like an orchestrator bug. This way the stand-in is idempotent: called
+    like a CodeGantry bug. This way the stand-in is idempotent: called
     twice for the same repository state, it says the same thing.
     """
 
@@ -490,8 +490,8 @@ def _await_port(attempts: int = 50) -> None:
 
     A health-check request would be answered like any other request, and — when
     the stand-in planner was counter-driven — silently consumed the first
-    stage. That cost an hour of debugging a bug that was in the test, not the
-    orchestrator. So: TCP only, never a request.
+    stage. That cost an hour of debugging a bug that was in the test, not
+    CodeGantry. So: TCP only, never a request.
     """
     for _ in range(attempts):
         try:
@@ -691,7 +691,7 @@ def verify_outcome(work: Path, repo: Path, report: str, live: bool = False, main
 
     Live mode asserts outcomes rather than counts. A real planner decides how
     many stages the plan needs and what to call them, so pinning either would
-    be asserting the model's wording rather than the orchestrator's behaviour.
+    be asserting the model's wording rather than CodeGantry's behaviour.
     """
     # Where the config says, not where a slug used to put it. The work dir
     # defaults beside the plan documents inside the target repo, which is the

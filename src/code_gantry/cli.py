@@ -139,7 +139,7 @@ def init(plan_doc: Path, config_path: Path | None) -> None:
         click.echo(
             f"{plan_doc} is not inside a git repository.\n\n"
             "The plan document must live in the target repo: the repo copy is "
-            "what the orchestrator operates against and what the planner "
+            "what CodeGantry operates against and what the planner "
             "revises. Copy it in, commit it, and re-run init against the copy.",
             err=True,
         )

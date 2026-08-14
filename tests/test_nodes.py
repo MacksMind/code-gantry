@@ -1999,7 +1999,7 @@ class TestExecutorFeedbackIsBounded:
 class TestStuckWithoutLanding:
     """Three planner passes with nothing landing, and the run stops.
 
-    A flat global cap needs a stage count nobody has: the orchestrator's stages
+    A flat global cap needs a stage count nobody has: CodeGantry's stages
     are not the plan document's stages, and the planner derives them as it
     goes. An allowance that accrues per landed stage fixes that but builds a
     reserve, which then gets spent all at once on the very stage it should have

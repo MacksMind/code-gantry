@@ -260,7 +260,7 @@ class TestWhenNotToAdjudicate:
 
     def test_no_scoped_command_means_no_way_to_re_run_one_file(self, repo):
         # Without an operator-supplied template there is nothing to substitute
-        # the paths into, and the orchestrator will not invent shell.
+        # the paths into, and CodeGantry will not invent shell.
         cfg = config(repo, scoped_test_command=None)
         out = judge(repo, RSPEC_OUTPUT, cfg, command="exit 1")
         assert not out.flaked
@@ -383,7 +383,7 @@ class TestThreeStrikes:
 class TestTheSeedThatProducedTheFailure:
     """Excusing a flake without its seed makes the flake permanent.
 
-    The orchestrator excused the same handful of files all night, and the only
+    CodeGantry excused the same handful of files all night, and the only
     record of *which ordering* did it lived in output nobody kept. The target
     repo already ships `bin/fragile_bisect <seed> <spec>`, which pins those two
     and searches the other 220 spec files for the minimal set that reproduces

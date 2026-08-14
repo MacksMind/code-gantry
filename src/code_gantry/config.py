@@ -66,12 +66,12 @@ PLANNER_WRITABLE_FIELDS = frozenset(
 DENYLIST: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(r"\bgit\s+push\b"),
-        "the orchestrator must never push; the outer merge is the operator's",
+        "CodeGantry must never push; the outer merge is the operator's",
     ),
     (
         re.compile(r"\bgit\s+(checkout|switch)\b"),
         "changing branches from inside a command would break the stage's "
-        "branch identity; the orchestrator manages checkout itself",
+        "branch identity; CodeGantry manages checkout itself",
     ),
     (
         re.compile(r"\bgit\s+merge\b"),
@@ -277,7 +277,7 @@ class ExecutorConfig(_EndpointConfig):
     # Replaces rather than appends. Appending would leave two statements of the
     # tool contract in one prompt with no way to tell which the model followed,
     # and an operator who wants the default plus additions can start from the
-    # default — `orchestrator prompts executor` prints it.
+    # default, which `prompts.py` builds.
     system_prompt_file: str | None = None
     # Same shape as the planner's and the reviewer's, and kept separate for the
     # same reason: the three ask different questions of the index and whoever
@@ -516,7 +516,7 @@ class Limits(_Strict):
     max_planner_interventions: int = 12
     # Consecutive planner passes with nothing landing in between.
     #
-    # A flat global cap needs a stage count nobody has — the orchestrator's
+    # A flat global cap needs a stage count nobody has — CodeGantry's
     # stages are not the plan document's stages, and the planner derives them
     # as it goes. An allowance that accrues per landed stage answers that, but
     # builds a reserve which is then spent all at once on the very stage it
@@ -571,7 +571,7 @@ class Stage(_Strict):
     # thirty-three lines, and that file cannot be a reference file at all.
     #
     # Declarative by construction — a path and two integers. Nothing here is
-    # executed, and the orchestrator does the reading.
+    # executed, and CodeGantry does the reading.
     read_excerpts: list[Excerpt] = []
     constraints: str | None = None
     acceptance: str | None = None
@@ -693,7 +693,7 @@ class ToolArgument(_Strict):
 class ProjectTool(_Strict):
     """A command the operator declares and the executor may call.
 
-    The orchestrator ships eight tools and knows nothing about any project's
+    CodeGantry ships eight tools and knows nothing about any project's
     toolchain. A migration needs more — resolve the manifest, precompile
     assets, run a generator — and every one of those is project knowledge,
     which belongs in config rather than in a Python feature named after
@@ -852,8 +852,8 @@ class ProjectConfig(_Strict):
     # disagree with reality. Still settable: the tests build configs from no
     # file at all, and an operator may point at a worktree.
     target_repo: Path | None = None
-    # Everything the orchestrator writes: runs, logs, the flake and cost
-    # ledgers, the approval record. Named here so the orchestrator's own tree
+    # Everything CodeGantry writes: runs, logs, the flake and cost
+    # ledgers. Named here so CodeGantry's own tree
     # holds code and nothing else, and defaults to the config's directory,
     # which is inside the repo and gitignorable there.
     #
@@ -888,7 +888,7 @@ class ProjectConfig(_Strict):
     # a human, or a tool outside this loop — can fold it into the plan
     # documents properly.
     #
-    # Written by the orchestrator from the planner's structured output, never
+    # Written by CodeGantry from the planner's structured output, never
     # by a stage. The scope guard treats it as a plan document precisely so an
     # executor cannot edit the record of its own work.
     plan_addendum_path: str | None = None
@@ -910,7 +910,7 @@ class ProjectConfig(_Strict):
     # conventions from must not be editable by the executor those conventions
     # govern.
     agent_context: list[str] | None = None
-    # Optional. `{paths}` is filled by the orchestrator from the stage diff.
+    # Optional. `{paths}` is filled by CodeGantry from the stage diff.
     scoped_test_command: str | None = None
     # What the executor runs inside its own edit loop.
     # Separate from the above because the two have opposite needs from the same
@@ -943,8 +943,8 @@ class ProjectConfig(_Strict):
     failed_file_pattern: str | None = None
     # Regex, group 1 capturing the ordering seed a runner reports. Same
     # reasoning as above about defaults, and one more: excusing a flake without
-    # recording how to reproduce it is what makes a flake permanent. The
-    # orchestrator has excused the same handful of files all night and the only
+    # recording how to reproduce it is what makes a flake permanent.
+    # CodeGantry has excused the same handful of files all night and the only
     # record of *which ordering* did it lives in an output nobody keeps.
     #
     # Matched after each failing file, not once for the whole run: a parallel
@@ -1459,7 +1459,7 @@ def _structural_problems(cfg: ProjectConfig) -> list[str]:
     if cfg.project_branch == cfg.base_ref:
         problems.append(
             f"project_branch {cfg.project_branch!r} must differ from base_ref "
-            f"{cfg.base_ref!r}: the orchestrator must never commit to the "
+            f"{cfg.base_ref!r}: CodeGantry must never commit to the "
             "branch it cuts from"
         )
 
@@ -1490,7 +1490,7 @@ def _structural_problems(cfg: ProjectConfig) -> list[str]:
         if command and "{paths}" not in command:
             problems.append(
                 f"{label} must contain a {{paths}} placeholder — that is the "
-                "slot the orchestrator fills with the stage's changed files"
+                "slot CodeGantry fills with the stage's changed files"
             )
 
     if cfg.failed_file_pattern:

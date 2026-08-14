@@ -512,7 +512,7 @@ class Git:
     def strip_added_trailing_whitespace(self, since_sha: str) -> list[str]:
         """Remove trailing blanks from the lines this stage added.
 
-        What the orchestrator commits must survive a pre-commit hook, and
+        What CodeGantry commits must survive a pre-commit hook, and
         `git diff --cached --check` — the usual form of one — rejects trailing
         whitespace on added lines. Nothing upstream reliably prevents it.
         The operator's `checks` run inside the executor's loop and can correct

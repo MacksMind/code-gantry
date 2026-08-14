@@ -1,6 +1,6 @@
 # Working on this codebase
 
-[README.md](README.md) is how to use the orchestrator.
+[README.md](README.md) is how to use CodeGantry.
 [docs/archive/rewrite-plan.md](docs/archive/rewrite-plan.md) is a closed
 record of the rewrite that produced the current shape. Nothing in it is
 outstanding; it is kept for its measurements, and is not a status table to
@@ -212,7 +212,7 @@ budget on exactly that.
 
 **The tool states its own behaviour.** The editor normalises final newlines and
 line endings on every file it writes. No model chose it and no instruction
-prevents it, so the orchestrator says so once — in the reviewer's prompt, and by
+prevents it, so CodeGantry says so once — in the reviewer's prompt, and by
 hiding line-ending churn from the diff it judges — rather than letting every
 planner rediscover it by burning a rework budget. Anything the shipped machinery
 does is the tool's to declare, not the operator's to work around.
@@ -1505,7 +1505,7 @@ A remedy built on an unestablished mechanism is not merely wasted, it is
 underneath it.
 
 **One item from a ranked list is not a finding; the list is.** Reporting on
-semantic search I pulled a single hit — an orchestrator process document ranked
+semantic search I pulled a single hit — a CodeGantry process document ranked
 third — and built a paragraph on it, without showing the other five. The
 operator noticed the list I *had* shown did not contain it, and the full result
 said something better and different: four of the six hits were matching on the

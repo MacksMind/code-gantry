@@ -40,7 +40,7 @@ def derive_target_repo(plan_doc: Path) -> Path | None:
     """Walk up from the plan document to the git root.
 
     The plan document must live inside the target repo: the repo copy is what
-    the orchestrator operates against and what the planner revises. Deriving the
+    CodeGantry operates against and what the planner revises. Deriving the
     repo from the document's location rather than asking makes that structural.
     """
     current = plan_doc.resolve().parent

@@ -132,7 +132,7 @@ class TestPlanRoot:
 
 class TestScopedTestCommand:
     def test_requires_a_paths_placeholder(self):
-        # Without the slot there is nowhere for the orchestrator to inject the
+        # Without the slot there is nowhere for CodeGantry to inject the
         # stage's changed files, and the "planner supplies arguments, not
         # commands" mechanism silently does nothing.
         with pytest.raises(ConfigError) as e:
@@ -231,13 +231,13 @@ class TestPlannerPartition:
     def test_allowlist_contains_only_declarative_fields(self):
         # Pinned deliberately: adding a field here has to be an edit someone
         # made on purpose, having asked whether it is declarative.
-        # `must_not_remain` is — a regex the orchestrator runs over files it
+        # `must_not_remain` is — a regex CodeGantry runs over files it
         # already reads, with no command anywhere in it. It is the mirror of
         # `forbidden_patterns`, which was always in the allowlist for the same
         # reason.
         #
         # `read_excerpts` is too, and more plainly than either: a path and two
-        # integers. It names lines the orchestrator reads and quotes; there is
+        # integers. It names lines CodeGantry reads and quotes; there is
         # no string in it that anything executes, and the widest damage a wrong
         # one can do is show the executor the wrong part of a file it was
         # already allowed to read.

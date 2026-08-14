@@ -1,6 +1,6 @@
 """The declared-command runner.
 
-Every command the orchestrator executes goes through this: setup, tests,
+Every command CodeGantry executes goes through this: setup, tests,
 checks, preconditions, context commands, script-stage transforms. It is the
 foundation the rest of the system sits on, so it is tested hard.
 """
@@ -203,7 +203,7 @@ class TestLogging:
 
 
 class TestStdinIsClosed:
-    """Nothing the orchestrator runs may read from the terminal.
+    """Nothing CodeGantry runs may read from the terminal.
 
     A command that waits on stdin in an unattended run does not fail — it
     hangs, silently, until the timeout kills it an hour later. Worse, if the

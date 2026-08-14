@@ -1200,7 +1200,7 @@ class TestThePlanIsReadFromTheBranchBeingWorkedOn:
 class TestTheAddendumIsNotTheExecutorsToWrite:
     """The addendum records what a run did. A stage must not edit it.
 
-    It lives inside the plan directory and the orchestrator does append to it —
+    It lives inside the plan directory and CodeGantry does append to it —
     from the planner's structured output, at advance time, outside any stage's
     diff. So it never appears in a scope check legally, and an executor edit to
     it is the executor reaching into the record of its own work.
@@ -1236,7 +1236,7 @@ class TestAnUncommittedAddendumWouldPoisonTheNextStage:
     file is written into the working tree, and the next stage's scope guard
     diffs the working tree against its start sha. An uncommitted addendum
     therefore shows up as a plan document modified by a stage that never
-    touched it, and the stage fails for something the orchestrator did.
+    touched it, and the stage fails for something CodeGantry did.
     """
 
     def test_an_uncommitted_addendum_fails_the_next_stage(self, repo):
@@ -1254,7 +1254,7 @@ class TestAnUncommittedAddendumWouldPoisonTheNextStage:
         )
         # The stage does its own work...
         edit(repo)
-        # ...and the orchestrator left an addendum behind, uncommitted.
+        # ...and CodeGantry left an addendum behind, uncommitted.
         (repo / "docs" / "addendum" / "plan-addendum.md").write_text("# Notes\n")
 
         out = verify(repo, cfg, stage, sha)

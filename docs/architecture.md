@@ -1,4 +1,4 @@
-# Refactor Orchestrator — Architecture
+# CodeGantry — Architecture
 
 This describes the system as built, and mostly answers *why* rather than *what*.
 [README.md](../README.md) is how to use it and [CLAUDE.md](../CLAUDE.md) is what to
@@ -15,14 +15,18 @@ paying for.
 
 ## What this is
 
-A standalone Python tool that drives a long, multistage code refactor by
-pairing a local executor model with two paid models: a planner that decides
-what to do next, and a reviewer that decides whether it was done acceptably.
+A standalone Python tool that drives a long, multistage code refactor across
+three model roles: an executor that edits, a planner that decides what to do
+next, and a reviewer that decides whether it was done acceptably. Every role
+carries the same endpoint settings, so each points at whatever model the
+operator chooses — local or hosted — and nothing in the design assumes which.
+Where a role's cost is discussed below, that is a property of the model in
+front of it on one run, not of the role.
 
 The executor does all the editing, in-process against the provider's own SDK. The reviewer inspects each finished unit of work and approves or
 rejects it. The planner derives units of work from a plan document, revises
 them when they turn out to be wrongly drawn, and revises the plan itself when
-reality diverges from it. The orchestrator owns the loop: it decides when to
+reality diverges from it. CodeGantry owns the loop: it decides when to
 retry, when to re-plan, when to merge, and — rarely — when to stop and wake a
 human.
 
@@ -61,8 +65,8 @@ target, not necessarily deployable to production. The project branch is what
 eventually targets `main`, and that outer merge is a human's decision, outside
 this tool.
 
-**A run is orthogonal to that hierarchy.** It is one invocation of the
-orchestrator — possibly executing every stage in the project, possibly resumed
+**A run is orthogonal to that hierarchy.** It is one invocation of
+CodeGantry — possibly executing every stage in the project, possibly resumed
 after an interruption. There is no run branch. Runs exist to scope
 checkpoints, logs, and reports.
 
@@ -109,7 +113,7 @@ Declarative — the planner may author and revise these:
 - `instruction` — the task text the executor receives
 - `edit_files`, `read_files` — globs, for executor scoping and the scope guard
 - `read_excerpts` — a path and two line numbers, read at the stage's starting
-  commit and quoted by the orchestrator; declarative in the strongest sense
+  commit and quoted by CodeGantry; declarative in the strongest sense
   available, since there is no string in it that anything executes, and it can
   only point at code that already exists. That last property is what makes it
   the *only* way the planner puts code in front of the executor: a fenced block
@@ -126,7 +130,7 @@ Executable — operator-declared in the config, never model-authored:
 - `preconditions`
 - a `script` stage's `command`
 
-The orchestrator never executes a shell command that originated from model
+CodeGantry never executes a shell command that originated from model
 output. Every command it runs is declared by the operator in an approved
 config file. `context_commands` inject command *output* into a prompt; no path
 exists in the reverse direction.
@@ -136,22 +140,22 @@ unreachable.** A `script` stage needs an operator-authored `command`, and with n
 static stage list there is nowhere for the operator to put one. So every
 planner-derived stage is an `agent` stage, and a mechanical transform across
 hundreds of files is expressed as an instruction to write and run a script —
-what the executor does inside its own edit loop is its business, and the
-orchestrator still never executes model-authored shell itself. The `script` kind
+what the executor does inside its own edit loop is its business, and
+CodeGantry still never executes model-authored shell itself. The `script` kind
 remains in the schema for a future operator-authored stage source; today it is
 reachable only from a test.
 
 **Where the planner needs to influence a command, it supplies arguments, not
 the command.** A stage's test run should be scoped to the specs it affects, and
 the planner knows which those are — but it may not author shell. So the
-operator writes the command with a slot and the orchestrator fills it:
+operator writes the command with a slot and CodeGantry fills it:
 
 ```yaml
 scoped_test_command: "docker compose run --rm test bundle exec rspec {paths}"
 ```
 
 The paths come from `git diff --name-only` against the stage baseline — which
-the orchestrator already computes for the scope guard — optionally widened by
+CodeGantry already computes for the scope guard — optionally widened by
 planner-declared spec globs. Globs are declarative and already trusted; the
 command string stays operator-authored and approval-hashed.
 
@@ -187,7 +191,7 @@ does not try to run a project config elsewhere and misread the failures.
 
 ## Filesystem layout
 
-Everything the orchestrator owns lives in the orchestrator repo. The target
+Everything CodeGantry owns lives in CodeGantry repo. The target
 repo receives product code, plan-document revisions, and nothing else.
 
 ```
@@ -235,7 +239,7 @@ execute unattended and must never block on input.
 **Derive the target repo from the plan document's location.** Walk up from the
 plan doc to the git root; that is `target_repo`. If the plan doc is not inside
 a git repo, init's first action is to ask where to copy it — the plan document
-must end up in the target repo, because the repo copy is what the orchestrator
+must end up in the target repo, because the repo copy is what CodeGantry
 operates against and what the planner revises. Copy **once**, at init: the
 repo copy then becomes the living document and the original is a seed. Never
 re-copy on later runs, or the planner's revisions would be silently
@@ -286,16 +290,18 @@ policy, not whether `bin/test` exists. Checks:
 
 `run` re-runs all of this at startup. Failing fast beats failing on stage 30.
 
-### 3. `orchestrator approve <project>`
+### 3. Config identity
 
-Records a hash of `config.yaml` in `approval.json`. `run` refuses to start
-unless the current config's hash matches an approved one.
+There is no approve command. A config is identified by the git blob sha of the
+file itself, recorded when a run starts and checked again on every resume, so
+an edited config refuses to continue the run it was read for rather than
+needing a command run against it.
 
 This makes operator approval mechanical rather than conventional — there is no
-`approved: true` field, because such a field could be set by anything. Editing
-the config invalidates approval and requires one command to restore it. The
-friction is small and it lands exactly where friction belongs: on a file full
-of shell commands about to run unattended for hours.
+`approved: true` field, because such a field could be set by anything, and
+nothing has to remember to re-approve. The friction is small and it lands
+exactly where friction belongs: on a file full of shell commands about to run
+unattended for hours.
 
 ### 4. `code-gantry run <project>` / `resume <run_id>` / `status <run_id>`
 
@@ -408,7 +414,7 @@ greppable and deletable together:
   "every commit on the project branch is green" and "the executor commits
   before it tests" are both true.** Do not replace the squash with `--no-ff`; it would
   drag red commits onto the project branch.
-- **All orchestrator work stays on the project branch and its children.**
+- **All CodeGantry work stays on the project branch and its children.**
   Nothing else is ever written.
 - Set `gc.auto=0` in the target repo for the duration of a run. Rework
   discards child branches, and the reflog is the only recovery path for a
@@ -1045,7 +1051,7 @@ Three tiers. The design goal is that a run stops only for a good reason.
    branch-identity failure, which go straight here: a broken environment is not
    a planning defect, and a containment breach does not negotiate.
 
-   This is also where work the orchestrator cannot do at all arrives — a
+   This is also where work CodeGantry cannot do at all arrives — a
    runtime bump, a dependency upgrade needing resolution. The planner returns
    `blocked`, the run notifies and stops, the human does the work, and `resume`
    re-enters at `verify` to confirm it landed green. That is the same machinery
@@ -1120,9 +1126,9 @@ prior one, carrying:
 4. An opening that reflects which gate sent it back.
 
 The failed attempt's conversation history is not carried forward. That
-keeps the prompt focused, avoids the local model anchoring on its own earlier
-reasoning, and keeps context small — which matters on bandwidth-constrained
-local inference.
+keeps the prompt focused, avoids the executor anchoring on its own earlier
+reasoning, and keeps context small — which costs something wherever the model
+runs, and most where inference is bandwidth-constrained.
 
 Point 3 is what makes editing forward reasonable: a reviewer leaves comments on
 the work in front of it and does not ask for the work again, and an author who
@@ -1180,7 +1186,7 @@ test_command: "docker compose run --rm test bundle exec rspec"
 full_test_command: "docker compose run --rm test bundle exec rspec"
 
 # Optional. When set, per-stage iteration runs only the specs the stage
-# touched. {paths} is filled by the orchestrator from the stage diff.
+# touched. {paths} is filled by CodeGantry from the stage diff.
 scoped_test_command: "docker compose run --rm test bundle exec rspec {paths}"
 
 full_suite_on_approval: true

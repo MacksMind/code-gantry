@@ -337,7 +337,7 @@ def _is_plan_document(path: str, ctx: _Context) -> bool:
     unrelated files that stages may legitimately touch.
 
     The addendum counts as one, even though a run does add to it. It is
-    written by the orchestrator from the planner's structured output, at
+    written by CodeGantry from the planner's structured output, at
     advance time, outside any stage's diff — so it never appears here legally.
     An executor edit to it is the executor wandering into the record of its own
     work, which is exactly the thing to catch.

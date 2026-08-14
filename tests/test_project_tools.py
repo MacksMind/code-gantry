@@ -1,10 +1,10 @@
 """Operator-declared tools the executor may call.
 
-The orchestrator ships five read tools and three edit tools. A migration needs
+CodeGantry ships five read tools and three edit tools. A migration needs
 more than that — `bundle install` after a manifest edit, `bundle update rails`
 at the framework bump, an asset precompile — and every one of those is project
 knowledge. Encoding a `dependencies:` block in Python would put "dependency
-management" into the orchestrator as a domain it knows about, and the next
+management" into CodeGantry as a domain it knows about, and the next
 command would need another block. So config declares a menu and the model
 reaches for it, indistinguishable from the built-ins.
 
@@ -282,7 +282,7 @@ class TestTheFrameworkNamesNothing:
 
     `bundle_install` belongs in a config, and calling it `sync_dependencies`
     would only make it harder for a model to know what it does. But everything
-    the orchestrator itself authors on this path ships to every project, and
+    CodeGantry itself authors on this path ships to every project, and
     the two places it authors anything are the refusal messages and the result
     header. Pinned by the names, because the leak that has happened here twice
     is prose illustrated with whatever repository was in front of the author.

@@ -9,7 +9,7 @@ why the planner guessed at file names it could have found.
 Talks to Qdrant and to an OpenAI-compatible embeddings endpoint directly. The
 target project ships a `semantic-search` MCP server, and reading it showed a
 wrapper over exactly two HTTP calls: embed the query, search the collection.
-The orchestrator has no Node dependency, and adding `npx`, a subprocess and a
+CodeGantry has no Node dependency, and adding `npx`, a subprocess and a
 JSON-RPC client to reach two endpoints it can already reach would buy nothing
 and add a moving part to an unattended loop.
 

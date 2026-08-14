@@ -1,6 +1,6 @@
 """Operator-declared tools: their schemas, and running one.
 
-The orchestrator ships eight tools and knows nothing about any project's
+CodeGantry ships eight tools and knows nothing about any project's
 toolchain. What a Rails migration needs next — resolve the manifest, precompile
 assets — is project knowledge, and the rule is that project knowledge lives in
 config rather than in code. A `dependencies:` block in Python would be that rule

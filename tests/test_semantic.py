@@ -7,7 +7,7 @@ Both questions came up in the first long run and only one was answerable.
 This talks to Qdrant and to an OpenAI-compatible embeddings endpoint directly
 rather than through the project's `semantic-search` MCP server. Reading that
 server showed it to be a wrapper over exactly two HTTP calls — embed the query,
-search the collection — and the orchestrator is a Python tool with no Node
+search the collection — and CodeGantry is a Python tool with no Node
 dependency. Adding `npx`, a subprocess and a JSON-RPC client to reach two
 endpoints it can already reach would buy nothing and cost a moving part.
 

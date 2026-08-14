@@ -27,8 +27,8 @@ small threshold the failure is treated as real without spending the re-run.
 
 Nothing here knows what a test runner is. The regex that finds failing files
 and the command they are substituted into are both operator-supplied, because
-they are properties of a project rather than of this tool — and because the
-orchestrator never composes a shell command out of a model's output.
+they are properties of a project rather than of this tool — and because
+CodeGantry never composes a shell command out of a model's output.
 """
 
 from __future__ import annotations

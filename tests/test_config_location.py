@@ -6,12 +6,12 @@ Two things move together, and each is the reason the other is safe.
 `bin/parallel_rspec`, `bin/rubocop -A`, the docker invocation — is that
 repository's, and drifts when that repository does. Versioned beside the code
 it describes, a change to the suite and the change to how the suite is invoked
-land in one commit and are reviewed together. Versioned in the orchestrator,
+land in one commit and are reviewed together. Versioned in CodeGantry,
 they are two commits in two repositories and only one of them gets read.
 
-**Everything the orchestrator writes moves out of its own tree.** `work_dir` is
+**Everything CodeGantry writes moves out of its own tree.** `work_dir` is
 the single place runs, logs, the flake ledger, the cost ledger and the approval
-record live, so the orchestrator repository holds code and nothing else.
+record live, so CodeGantry repository holds code and nothing else.
 
 The relocation creates one hazard and closes it twice. Arbitrary shell —
 `checks`, `test_command`, `setup_command` — is now a file inside the tree the

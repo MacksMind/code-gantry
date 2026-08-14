@@ -679,7 +679,7 @@ def _stage_size_block() -> str:
     paragraphs named no framework, no file extension and no directory: they
     were never project knowledge, they were this machine describing itself.
 
-    All three are facts about the orchestrator rather than about a repository.
+    All three are facts about CodeGantry rather than about a repository.
     A stage lands completely or not at all, so blast radius is a property of
     the merge; `must_not_remain` reads file contents, so it catches a sweep
     that stopped early; a stage is reviewed as one diff, so the cost of
@@ -1558,7 +1558,7 @@ def _executor_system_prompt(cfg: ProjectConfig | None) -> str:
         "already has it needs nothing.",
         "## What happens when you stop\n\n"
         "Ending your turn without calling a tool means you are finished "
-        "editing. The orchestrator then runs the project's checks, commits "
+        "editing. CodeGantry then runs the project's checks, commits "
         "your work, and runs the tests. If those fail you are usually told "
         "what and continue from there.\n\n"
         "**Usually, not always.** There may be no further pass: the attempt "

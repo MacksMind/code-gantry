@@ -1,6 +1,6 @@
 """Dollars, from the public rate table.
 
-The orchestrator reported tokens for the planner and reviewer and dollars for
+CodeGantry reported tokens for the planner and reviewer and dollars for
 the executor only — so the file carrying money covered the role that spends
 1-3% of it, and the two roles worth ~$1-2 a review and ~$3.40 a planner call
 were unpriced. Effort could therefore be argued about but not settled.

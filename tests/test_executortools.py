@@ -87,7 +87,7 @@ class TestTheProviderContract:
 
 class TestInvariants:
     def test_no_tool_runs_a_command(self):
-        # The orchestrator never executes model-authored shell, and a tool that
+        # CodeGantry never executes model-authored shell, and a tool that
         # scheduled the tests would hand over the scheduling even though the
         # command itself stayed operator config. Lint, commit and tests are
         # loop steps precisely so the executor cannot finish without being

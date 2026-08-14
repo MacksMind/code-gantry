@@ -7,8 +7,8 @@ changes, and the fix is to migrate the file once rather than teach every
 reader to interpret all five. A second project will not need it; if one does,
 it will need a different one.
 
-Run it during a pause, never against a live run — it rewrites a file the
-orchestrator appends to, and `advance` writing an entry underneath it would
+Run it during a pause, never against a live run — it rewrites a file
+CodeGantry appends to, and `advance` writing an entry underneath it would
 lose that entry.
 
     uv run python scripts/normalise_progress_log.py <project> --plan-sha <sha>

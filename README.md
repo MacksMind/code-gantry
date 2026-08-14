@@ -1,8 +1,10 @@
-# Refactor Orchestrator
+# CodeGantry
 
-Drives a long, multistage refactor by pairing a **local executor model** with two
-paid ones: a **planner** that decides what to do next, and a **reviewer** that
-decides whether it was done acceptably.
+Drives a long, multistage refactor across three model roles: an **executor**
+that edits, a **planner** that decides what to do next, and a **reviewer** that
+decides whether it was done acceptably. Each role is configured independently
+and points at whatever model the operator chooses — local or hosted, same
+provider or three different ones.
 
 The operating goal is to run as long as feasible without a human. A ten-page plan
 should execute in one unattended pass, producing a branch of granular,
@@ -16,7 +18,7 @@ the authority on *why* it works this way. This file is how to use it.
 
 ```bash
 uv sync --group dev
-uv run orchestrator --help
+uv run code-gantry --help
 ```
 
 Requires Python 3.11+ and `git`. The executor runs in-process against the
@@ -95,7 +97,6 @@ reworks, or planner interventions — so no loop in the diagram can run forever.
 ```bash
 code-gantry init docs/my_plan.md      # draft a config from a plan document
 code-gantry validate <slug>           # prove it works on this host
-orchestrator approve <slug>            # record that you read it
 code-gantry run <slug>                # go
 code-gantry resume <run_id>           # continue after an interruption or escalation
 code-gantry status <run_id>           # where it stopped and why
@@ -141,7 +142,7 @@ role *looked at*, not only what it decided.
 
 **The planner may never author a command.** It is enforced twice: its
 structured-output schema has no field for one, and its response is filtered
-against an allowlist regardless. The orchestrator never runs a shell command that
+against an allowlist regardless. CodeGantry never runs a shell command that
 originated from model output — every command it executes is declared by you in an
 approved config.
 
@@ -307,7 +308,7 @@ Reviewer verdicts:
 ### When the suite is red for reasons the stage didn't cause
 
 Legacy suites are rarely order-independent, and a stage should not be blamed for
-that. When a broad suite fails, the orchestrator re-runs **the files that failed,
+that. When a broad suite fails, CodeGantry re-runs **the files that failed,
 on their own**. A file that passes whole *and* standalone is green: that tests
 order dependence directly, instead of re-rolling every other example in the suite
 and hoping.
@@ -351,8 +352,8 @@ one failure the merge gate would have forgiven.
    branch-identity failures.
 
 There is **no planned human step**. A human's involvement means something broke,
-so a deliberate mid-run pause would contradict one-shotting a plan. Work the
-orchestrator can't do escalates, you do it, and `resume` verifies it.
+so a deliberate mid-run pause would contradict one-shotting a plan. Work
+CodeGantry can't do escalates, you do it, and `resume` verifies it.
 
 `resume` re-enters based on how the run stopped: at `verify` for a
 repository-state failure, so your fix is checked rather than discarded; at the
@@ -498,4 +499,4 @@ real.
 The stand-in planner derives its answer from **what has landed on the project
 branch**, not from a call counter, so it is idempotent under retries. A
 counter-driven stub hands out a different stage on every rework, and the
-confusion looks exactly like an orchestrator bug.
+confusion looks exactly like a CodeGantry bug.

@@ -115,7 +115,7 @@ def resolve_plan_tree(git: Git, plan_root: str, at_sha: str) -> PlanTree:
         tree.problems.append(
             f"plan_root {plan_root!r} could not be read at {at_sha[:12]}: {e}. "
             "The plan document must be committed in the target repo — the repo "
-            "copy is what the orchestrator operates against and what the "
+            "copy is what CodeGantry operates against and what the "
             "planner revises."
         )
         return tree

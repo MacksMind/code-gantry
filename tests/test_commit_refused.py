@@ -6,7 +6,7 @@ commit hook rejected the staged content. The cause was ours — the editor
 normalises line endings on write, so a CRLF file came back as a whole-file
 rewrite and every pre-existing trailing space became an *added* line for the
 hook to find — but the shape is general. A hook is operator policy, it can fire
-on anything, and the orchestrator's answer to "the repository said no" cannot be
+on anything, and CodeGantry's answer to "the repository said no" cannot be
 a stack trace.
 
 Two call sites, and they want opposite handling for the same reason. `verify`

@@ -1700,7 +1700,7 @@ def advance(state: RunState, rt: Runtime) -> dict:
     # document modified by a stage that never touched it. That ordering means
     # the content is unexamined by the gates, which is acceptable here in a way
     # it would not be for code — this is markdown at a configured path, written
-    # by the orchestrator from structured planner output, not a model editing
+    # by CodeGantry from structured planner output, not a model editing
     # the repository. The guards exist to catch the executor wandering.
     plan_sha = state.get("plan_sha") or state.get("base_sha") or ""
 

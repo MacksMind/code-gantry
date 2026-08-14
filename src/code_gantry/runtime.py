@@ -22,10 +22,10 @@ from code_gantry.planner import PlannerClient
 from code_gantry.reviewer import ReviewerClient
 
 class ProjectPaths:
-    """Layout of the work directory: everything the orchestrator writes.
+    """Layout of the work directory: everything CodeGantry writes.
 
     Built from `cfg.work_dir` rather than a slug under a fixed root. The
-    orchestrator's own tree holds code and nothing else, and the work dir
+    CodeGantry's own tree holds code and nothing else, and the work dir
     defaults beside the plan documents in the target repo — the plan says what
     the migration is and this says what happened to it, and a later reader
     wants them together.
@@ -194,7 +194,7 @@ class Runtime:
         the code, which is why it kept rediscovering counts the log already
         knew.
 
-        Read from the worktree rather than a commit. The orchestrator writes
+        Read from the worktree rather than a commit. CodeGantry writes
         this file itself and commits it inside each stage, so between stages
         the worktree copy is the project branch's, and during one it is the
         same file the last landing left. There is no revision at which it is

@@ -23,7 +23,7 @@ Two properties this file exists to guarantee.
 turns out to be wrong is corrected by a later note, in the open, not by
 rewriting the record.
 
-**Written outside the stage's diff.** The orchestrator appends after a stage has
+**Written outside the stage's diff.** CodeGantry appends after a stage has
 landed, from the planner's structured output. No executor ever writes here — the
 scope guard treats this path as a plan document precisely so an attempt to is
 caught. A stage that could edit the record of its own work is a stage that can
@@ -355,7 +355,7 @@ def _ensure_header(target: Path) -> None:
     target.write_text(
         "# Plan addendum\n\n"
         "Observations recorded during automated runs, each citing what was "
-        "read to support it. Append-only and written by the orchestrator; "
+        "read to support it. Append-only and written by CodeGantry; "
         "no stage may edit this file.\n\n"
         "These are notes for a later pass, not changes to the plan. The "
         "plan documents still say what they said.\n\n"

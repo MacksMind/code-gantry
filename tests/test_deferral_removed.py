@@ -1,6 +1,6 @@
 """Deferrals are gone, and what they carried has a durable home.
 
-`deferred` was a structured channel the orchestrator carried between planner
+`deferred` was a structured channel CodeGantry carried between planner
 calls so that a step taken out of order could not be quietly forgotten. Its
 framing was ordering — `safe_because` read "why nothing already done or still to
 come depends on it. If you cannot say this, the order is required and you must

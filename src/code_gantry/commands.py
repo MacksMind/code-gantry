@@ -1,6 +1,6 @@
 """Execution of operator-declared commands.
 
-Every command the orchestrator runs passes through here: setup, tests,
+Every command CodeGantry runs passes through here: setup, tests,
 checks, preconditions, context commands, and script-stage transforms. None
 of them ever originate from model output — see PLAN.md's safety
 requirements. `context_commands` push command output *into* a prompt; no

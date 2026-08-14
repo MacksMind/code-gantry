@@ -421,7 +421,7 @@ class TestCommit:
 
 
 class TestTrailingWhitespaceOnAddedLines:
-    """What the orchestrator commits must not carry trailing whitespace.
+    """What CodeGantry commits must not carry trailing whitespace.
 
     A repository-side hook rejecting it is common — `git diff --cached --check`
     in a pre-commit hook is the usual form — and the executor cannot be relied
