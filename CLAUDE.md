@@ -6,7 +6,10 @@ record of the rewrite that produced the current shape. Nothing in it is
 outstanding; it is kept for its measurements, and is not a status table to
 check before starting work.
 [docs/architecture.md](docs/architecture.md) is the design authority on why it
-works this way. Neither is repeated here.
+works this way.
+[docs/future-work.md](docs/future-work.md) is the open counterpart to the
+archive: decisions that are still outstanding, each with the evidence for it.
+None of them is repeated here.
 
 This file is for whoever is *changing* the code. It records the invariants that
 are easy to break without noticing, and the rules that were learned by breaking
