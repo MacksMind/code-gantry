@@ -1,9 +1,9 @@
 """Everything the nodes need that is not run state.
 
-LangGraph nodes receive only state, so the collaborators are bound in via a
-Runtime the graph closes over. Keeping them here rather than reaching for
-globals is what lets the node logic be tested with a stubbed planner, executor,
-and reviewer and no network.
+Nodes receive state and a Runtime, and the collaborators are bound into the
+latter. Keeping them here rather than reaching for globals is what lets the
+node logic be tested with a stubbed planner, executor, and reviewer and no
+network.
 """
 
 from __future__ import annotations

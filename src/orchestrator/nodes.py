@@ -1,8 +1,8 @@
 """Node logic.
 
-Each function takes (state, runtime) and returns a partial state update — the
-contract LangGraph expects, but with the runtime passed explicitly so every node
-is callable from a test with a stubbed planner, executor, and reviewer.
+Each function takes (state, runtime) and returns a partial state update. The
+runtime is passed explicitly rather than reached for, which is what makes every
+node callable from a test with a stubbed planner, executor, and reviewer.
 
 The shape of the loop is three escalation tiers. A failure goes back to the
 executor if the executor can plausibly fix it, back to the planner if the

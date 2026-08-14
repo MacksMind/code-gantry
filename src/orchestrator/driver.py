@@ -112,9 +112,8 @@ class UnreadableCheckpoint(RuntimeError):
 def open_checkpointer(db_path: Path | str) -> tuple[Callable, sqlite3.Connection]:
     """A writer and its connection, whose lifetime the caller owns.
 
-    Returned as a pair for the reason the LangGraph version was: a resume
-    happens in a fresh process and must reopen the same file, so nothing here
-    may hold the handle past the run.
+    Returned as a pair because a resume happens in a fresh process and must
+    reopen the same file, so nothing here may hold the handle past the run.
     """
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
