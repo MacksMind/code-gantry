@@ -22,8 +22,8 @@ import subprocess
 
 import pytest
 
-from orchestrator.gitops import Git
-from orchestrator.repotools import ReadBudget, RepoReader
+from code_gantry.gitops import Git
+from code_gantry.repotools import ReadBudget, RepoReader
 
 
 @pytest.fixture
@@ -82,7 +82,7 @@ class TestExclusionsKeepUnreadablePathsOutOfSearch:
 
 class TestItIsProjectKnowledge:
     def test_the_config_field_exists_and_defaults_to_empty(self):
-        from orchestrator.config import parse_config
+        from code_gantry.config import parse_config
 
         cfg = parse_config({
             "target_repo": ".", "base_ref": "main", "project_branch": "p",
@@ -96,7 +96,7 @@ class TestItIsProjectKnowledge:
     def test_no_default_ships_one_projects_layout(self):
         # A default naming `vendor/` or `public/` would be this repository's
         # shape shipped to every other project's planner.
-        from orchestrator.config import ProjectConfig
+        from code_gantry.config import ProjectConfig
 
         default = ProjectConfig.model_fields["search_exclude_globs"].default_factory()
         assert default == []

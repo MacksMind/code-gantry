@@ -27,7 +27,7 @@ existing one already measures.
 
 import pytest
 
-from orchestrator.config import ConfigError, parse_config
+from code_gantry.config import ConfigError, parse_config
 
 from test_config import minimal
 
@@ -210,14 +210,14 @@ class TestDenylist:
 
 class TestSchemas:
     def test_a_declared_tool_reaches_the_executor_menu(self):
-        from orchestrator.executortools import tool_schemas
+        from code_gantry.executortools import tool_schemas
 
         cfg = cfg_with(a_tool())
         names = [t["name"] for t in tool_schemas(None, cfg.project_tools)]
         assert "sync_dependencies" in names
 
     def test_the_operator_description_is_what_the_model_reads(self):
-        from orchestrator.executortools import tool_schemas
+        from code_gantry.executortools import tool_schemas
 
         cfg = cfg_with(a_tool(description="Runs the thing. Slow."))
         tool = next(
@@ -228,7 +228,7 @@ class TestSchemas:
         assert tool["description"] == "Runs the thing. Slow."
 
     def test_a_zero_argument_tool_takes_no_properties(self):
-        from orchestrator.executortools import tool_schemas
+        from code_gantry.executortools import tool_schemas
 
         cfg = cfg_with(a_tool())
         tool = next(
@@ -239,7 +239,7 @@ class TestSchemas:
         assert tool["input_schema"]["properties"] == {}
 
     def test_a_repeated_argument_is_an_array_of_strings(self):
-        from orchestrator.executortools import tool_schemas
+        from code_gantry.executortools import tool_schemas
 
         cfg = cfg_with(
             a_tool(
@@ -259,7 +259,7 @@ class TestSchemas:
     def test_strict_mode_survives_a_declared_tool(self):
         # The SDK refuses to auto-parse otherwise, and a declared tool is the
         # first schema built from operator input rather than a literal here.
-        from orchestrator.executortools import openai_tool_schemas
+        from code_gantry.executortools import openai_tool_schemas
 
         cfg = cfg_with(
             a_tool(
@@ -289,8 +289,8 @@ class TestTheFrameworkNamesNothing:
     """
 
     def _authored_strings(self):
-        from orchestrator.projecttools import build_argv, render
-        from orchestrator.repotools import ToolError
+        from code_gantry.projecttools import build_argv, render
+        from code_gantry.repotools import ToolError
 
         tool = cfg_with(
             a_tool(
@@ -337,7 +337,7 @@ class Recorder:
     # command stays out of the run log. A fake that omits it passes while the
     # real runner would reject the call.
     def run_argv(self, argv, timeout=None, log=None):
-        from orchestrator.commands import CommandResult
+        from code_gantry.commands import CommandResult
 
         self.argv = list(argv)
         self.timeout = timeout
@@ -357,14 +357,14 @@ class TestInvocation:
         return cfg_with(a_tool(**over)).project_tools[0]
 
     def test_a_zero_argument_tool_runs_its_command(self):
-        from orchestrator.projecttools import invoke
+        from code_gantry.projecttools import invoke
 
         runner = Recorder()
         invoke(self._tool(), {}, runner)
         assert runner.argv == ["bundle", "install"]
 
     def test_a_repeated_argument_expands_in_place(self):
-        from orchestrator.projecttools import invoke
+        from code_gantry.projecttools import invoke
 
         tool = self._tool(
             command=["bundle", "update", "{names}"],
@@ -375,7 +375,7 @@ class TestInvocation:
         assert runner.argv == ["bundle", "update", "rails", "nokogiri"]
 
     def test_a_scalar_argument_becomes_one_element(self):
-        from orchestrator.projecttools import invoke
+        from code_gantry.projecttools import invoke
 
         tool = self._tool(
             command=["rake", "{task}"],
@@ -387,7 +387,7 @@ class TestInvocation:
 
     def test_a_metacharacter_is_one_inert_element(self):
         # The whole reason arguments can be model-supplied.
-        from orchestrator.projecttools import invoke
+        from code_gantry.projecttools import invoke
 
         tool = self._tool(
             command=["bundle", "update", "{names}"],
@@ -400,8 +400,8 @@ class TestInvocation:
     def test_an_empty_repeated_argument_is_refused(self):
         # Not "then update everything": an omitted scope must never widen to
         # the unscoped command by accident.
-        from orchestrator.projecttools import invoke
-        from orchestrator.repotools import ToolError
+        from code_gantry.projecttools import invoke
+        from code_gantry.repotools import ToolError
 
         tool = self._tool(
             command=["bundle", "update", "{names}"],
@@ -413,8 +413,8 @@ class TestInvocation:
         assert runner.argv is None, "nothing may run when an argument is missing"
 
     def test_a_missing_required_argument_is_refused(self):
-        from orchestrator.projecttools import invoke
-        from orchestrator.repotools import ToolError
+        from code_gantry.projecttools import invoke
+        from code_gantry.repotools import ToolError
 
         tool = self._tool(
             command=["rake", "{task}"],
@@ -424,8 +424,8 @@ class TestInvocation:
             invoke(tool, {}, Recorder())
 
     def test_a_non_string_argument_is_refused(self):
-        from orchestrator.projecttools import invoke
-        from orchestrator.repotools import ToolError
+        from code_gantry.projecttools import invoke
+        from code_gantry.repotools import ToolError
 
         tool = self._tool(
             command=["rake", "{task}"],
@@ -440,7 +440,7 @@ class TestWhatTheModelSeesBack:
         return cfg_with(a_tool(**over)).project_tools[0]
 
     def test_success_carries_the_exit_code(self):
-        from orchestrator.projecttools import invoke
+        from code_gantry.projecttools import invoke
 
         out = invoke(self._tool(), {}, Recorder(exit_code=0, stdout="Bundle complete"))
         assert "exit 0" in out
@@ -449,7 +449,7 @@ class TestWhatTheModelSeesBack:
     def test_failure_is_returned_as_text_not_raised(self):
         # The point of the tool is that the model learns immediately. An
         # exception here would end the cycle instead of informing it.
-        from orchestrator.projecttools import invoke
+        from code_gantry.projecttools import invoke
 
         out = invoke(
             self._tool(),
@@ -462,7 +462,7 @@ class TestWhatTheModelSeesBack:
     def test_stderr_is_included_even_when_stdout_is_empty(self):
         # Bundler puts its resolution errors on stderr, and an empty answer
         # reads to a model as "nothing happened".
-        from orchestrator.projecttools import invoke
+        from code_gantry.projecttools import invoke
 
         out = invoke(self._tool(), {}, Recorder(exit_code=1, stdout="", stderr="boom"))
         assert "boom" in out
@@ -470,7 +470,7 @@ class TestWhatTheModelSeesBack:
 
 class TestDispatch:
     def test_a_declared_tool_dispatches_to_its_command(self):
-        from orchestrator.executortools import dispatch
+        from code_gantry.executortools import dispatch
 
         cfg = cfg_with(a_tool())
         runner = Recorder()
@@ -487,7 +487,7 @@ class TestDispatch:
         assert "exit 0" in out
 
     def test_a_refusal_comes_back_as_text(self):
-        from orchestrator.executortools import dispatch
+        from code_gantry.executortools import dispatch
 
         cfg = cfg_with(
             a_tool(
@@ -522,8 +522,8 @@ class TestWiring:
     def test_the_model_is_handed_the_declared_tools_and_a_runner(
         self, repo, tmp_path, monkeypatch
     ):
-        from orchestrator import executorclient
-        from orchestrator.config import Stage
+        from code_gantry import executorclient
+        from code_gantry.config import Stage
 
         from test_runtime import a_config
 
@@ -542,8 +542,8 @@ class TestWiring:
         cfg = cfg.model_copy(
             update={"project_tools": cfg_with(a_tool()).project_tools}
         )
-        from orchestrator.commands import CommandRunner
-        from orchestrator.executor import Executor
+        from code_gantry.commands import CommandRunner
+        from code_gantry.executor import Executor
 
         runner = CommandRunner(cwd=repo, timeout=60)
         executor = Executor(cfg, runner)
@@ -559,7 +559,7 @@ class TestWiring:
 
     def test_a_declared_tool_reaches_the_schemas_the_provider_is_sent(self):
         # One step further than construction: held is not sent.
-        from orchestrator.executorclient import OpenAIExecutorModel
+        from code_gantry.executorclient import OpenAIExecutorModel
 
         cfg = cfg_with(a_tool())
         model = OpenAIExecutorModel(

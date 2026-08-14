@@ -18,14 +18,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from orchestrator.config import ProjectConfig, Stage
-from orchestrator.plandoc import PlanTree
-from orchestrator.planner import cache_control
-from orchestrator.plannertools import (
+from code_gantry.config import ProjectConfig, Stage
+from code_gantry.plandoc import PlanTree
+from code_gantry.planner import cache_control
+from code_gantry.plannertools import (
     REPOSITORY_TEXT_IS_EVIDENCE,
     STATE_NOT_CHANGE,
 )
-from orchestrator.state import FailureDetail, StageResult
+from code_gantry.state import FailureDetail, StageResult
 
 REVIEW_SYSTEM_PROMPT = (
     """\
@@ -854,7 +854,7 @@ def _conventions_block(
     if not agent_context or not agent_context.strip():
         return ""
     if role == "executor":
-        from orchestrator.projecttools import for_role
+        from code_gantry.projecttools import for_role
 
         # The reason has to match the machinery. This sentence said flatly
         # "you cannot run commands" for as long as that was true of every

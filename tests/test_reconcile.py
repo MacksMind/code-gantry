@@ -1,4 +1,4 @@
-"""`orchestrator reconcile` — checking the plan against what the branch did.
+"""`code-gantry reconcile` — checking the plan against what the branch did.
 
 This file exists because of how its subject was written. The command called
 `Git.commits_between`, which had been deleted an hour earlier when its only
@@ -18,8 +18,8 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from orchestrator import cli
-from orchestrator.planner import PlannerOutcome
+from code_gantry import cli
+from code_gantry.planner import PlannerOutcome
 
 
 @pytest.fixture
@@ -322,7 +322,7 @@ class TestThePlanDirectoryIsNotWork:
     """
 
     def _prompt_text(self):
-        from orchestrator.cli import _load, _reconcile_prompt
+        from code_gantry.cli import _load, _reconcile_prompt
 
         cfg = _load(Path("projects/demo/config.yaml"))
         return _reconcile_prompt(cfg)[0]["content"]

@@ -18,17 +18,17 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from orchestrator import gates
-from orchestrator.cachekey import cache_key
-from orchestrator.commands import (
+from code_gantry import gates
+from code_gantry.cachekey import cache_key
+from code_gantry.commands import (
     CommandResult,
     CommandRunner,
     collapse_progress_runs,
 )
-from orchestrator.config import ProjectConfig, Stage
-from orchestrator.gitops import Git, GitError
-from orchestrator.globs import matches_any
-from orchestrator.repotools import number_lines
+from code_gantry.config import ProjectConfig, Stage
+from code_gantry.gitops import Git, GitError
+from code_gantry.globs import matches_any
+from code_gantry.repotools import number_lines
 
 
 
@@ -230,8 +230,8 @@ class Executor:
         have to be re-scoped on every stage, which is the same thing with a
         longer-lived object to get wrong.
         """
-        from orchestrator.executorclient import OpenAIExecutorModel
-        from orchestrator.executorloop import build_loop_parts, run_loop
+        from code_gantry.executorclient import OpenAIExecutorModel
+        from code_gantry.executorloop import build_loop_parts, run_loop
 
         reader, editor, semantic = build_loop_parts(
             stage, self.cfg, self.cfg.target_repo
@@ -249,7 +249,7 @@ class Executor:
         )
         kept = set(_within_read_budget(stage.read_files, self.cfg))
 
-        from orchestrator.prompts import build_executor_messages
+        from code_gantry.prompts import build_executor_messages
 
         # Recording from here on, not from the way out. The opening messages
         # are complete before the first call, so the two artifacts that explain
@@ -683,7 +683,7 @@ def _count_tool_use(out: ExecutionResult, reader, editor) -> None:
     reading the log wants one answer, so they are merged here rather than at
     the log site. Same reason `_tool_log` merges the planner's two.
     """
-    from orchestrator.repotools import count_calls, count_refusals
+    from code_gantry.repotools import count_calls, count_refusals
 
     out.tool_counts = count_calls(reader, editor)
     out.refusal_counts = count_refusals(reader, editor)

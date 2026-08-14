@@ -225,7 +225,7 @@ a first-class object in code. Nothing in the graph needs a `Project` class.
 Four commands, each separately re-runnable. That is what makes the
 edit-and-reload loop cheap.
 
-### 1. `orchestrator init <plan-doc-path>`
+### 1. `code-gantry init <plan-doc-path>`
 
 Produces a draft `config.yaml`. **`init` may prompt** — it is a human at a
 terminal doing one-time setup, and a question is cheaper than a fail-and-retry
@@ -262,7 +262,7 @@ test_command: "docker compose run --rm test bundle exec rspec"
 # ^ from .github/workflows/ci.yml:31; services from docker-compose.yml
 ```
 
-### 2. `orchestrator validate <project>`
+### 2. `code-gantry validate <project>`
 
 Proves the config works against this host, *before* a human is asked to
 approve it. This is what makes approval meaningful — the operator reviews
@@ -297,7 +297,7 @@ the config invalidates approval and requires one command to restore it. The
 friction is small and it lands exactly where friction belongs: on a file full
 of shell commands about to run unattended for hours.
 
-### 4. `orchestrator run <project>` / `resume <run_id>` / `status <run_id>`
+### 4. `code-gantry run <project>` / `resume <run_id>` / `status <run_id>`
 
 `resume` continues an interrupted run, or one that escalated and has since
 been fixed by a human.

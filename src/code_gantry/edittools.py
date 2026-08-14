@@ -27,8 +27,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from orchestrator.globs import matches_any
-from orchestrator.repotools import ToolCall, ToolError, number_lines
+from code_gantry.globs import matches_any
+from code_gantry.repotools import ToolCall, ToolError, number_lines
 
 
 @dataclass(frozen=True)

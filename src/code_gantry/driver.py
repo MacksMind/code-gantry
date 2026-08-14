@@ -30,8 +30,8 @@ import sqlite3
 from pathlib import Path
 from typing import Callable
 
-from orchestrator import nodes
-from orchestrator.state import RunState, resume_entry_point
+from code_gantry import nodes
+from code_gantry.state import RunState, resume_entry_point
 
 NODES: dict[str, Callable] = {
     "plan": nodes.plan,

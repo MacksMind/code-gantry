@@ -23,10 +23,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from orchestrator.edittools import Edit, FileEditor
-from orchestrator.plannertools import READ_TOOLS, SEMANTIC_TOOL, call_detail
-from orchestrator.repotools import RepoReader, ToolError
-from orchestrator.semantic import SemanticSearch
+from code_gantry.edittools import Edit, FileEditor
+from code_gantry.plannertools import READ_TOOLS, SEMANTIC_TOOL, call_detail
+from code_gantry.repotools import RepoReader, ToolError
+from code_gantry.semantic import SemanticSearch
 
 EDIT_TOOLS: list[dict[str, Any]] = [
     {
@@ -173,7 +173,7 @@ def tool_schemas(
     not an executor tool, and the ones most likely to be planner-only are
     read-only, so nothing would fail loudly if this leaked.
     """
-    from orchestrator.projecttools import for_role, tool_schema
+    from code_gantry.projecttools import for_role, tool_schema
 
     read = [*READ_TOOLS, SEMANTIC_TOOL_FOR_EDITING] if semantic else list(READ_TOOLS)
     declared = [tool_schema(t) for t in for_role("executor", project_tools)]
@@ -196,7 +196,7 @@ def openai_tool_schemas(
     never had to do because none of its schemas nest. `edit` carries a list of
     objects with an optional `replace_all`.
     """
-    from orchestrator.plannertools import as_strict_tool
+    from code_gantry.plannertools import as_strict_tool
 
     return [as_strict_tool(tool) for tool in tool_schemas(semantic, project_tools)]
 
@@ -223,22 +223,22 @@ def dispatch(
     refuses a declared tool named after a built-in, because two tools with one
     name is whichever the provider picks and the model cannot tell.
     """
-    from orchestrator import plannertools
-    from orchestrator.projecttools import for_role
+    from code_gantry import plannertools
+    from code_gantry.projecttools import for_role
 
     # Scoped here as well as where the schema is built, and for the reason the
     # planner's dispatch is: a model can name a tool it was never offered, so
     # advertising and permission have to be two checks over one selector.
     declared = {t.name: t for t in for_role("executor", project_tools)}
     if name in declared:
-        from orchestrator.projecttools import invoke
+        from code_gantry.projecttools import invoke
 
         if runner is None:  # pragma: no cover - defensive
             return (
                 f"cannot do that: {name} is declared but this executor was "
                 "built without a command runner"
             )
-        from orchestrator.projecttools import call_detail as declared_detail
+        from code_gantry.projecttools import call_detail as declared_detail
 
         try:
             answer = invoke(declared[name], args, runner)
@@ -247,7 +247,7 @@ def dispatch(
             # listed the failures and nothing else — and the output is context
             # the attempt is paying for either way.
             if reader is not None:
-                from orchestrator.plannertools import _exit_code
+                from code_gantry.plannertools import _exit_code
 
                 return reader.record_answer(
                     name,

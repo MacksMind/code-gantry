@@ -16,14 +16,14 @@ from __future__ import annotations
 
 import os
 
-from orchestrator.config import ProjectConfig
-from orchestrator.pricing import (
+from code_gantry.config import ProjectConfig
+from code_gantry.pricing import (
     PRICE_MAP_FILENAME,
     entry_for,
     load_price_map,
     price_usage,
 )
-from orchestrator.state import RunState
+from code_gantry.state import RunState
 
 
 def build_report(state: RunState, cfg: ProjectConfig) -> str:

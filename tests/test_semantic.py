@@ -27,7 +27,7 @@ import json
 
 import pytest
 
-from orchestrator.semantic import SemanticSearch, SemanticSearchConfig
+from code_gantry.semantic import SemanticSearch, SemanticSearchConfig
 
 
 class FakeHttp:
@@ -231,7 +231,7 @@ class TestChunksForIsASearchKeyNotAnAnswer:
     """
 
     def _search(self, hits):
-        from orchestrator.semantic import SemanticSearch, SemanticSearchConfig
+        from code_gantry.semantic import SemanticSearch, SemanticSearchConfig
 
         s = SemanticSearch(
             SemanticSearchConfig(
@@ -261,7 +261,7 @@ class TestChunksForIsASearchKeyNotAnAnswer:
         assert s.chunks_for("x", "a.rb") == []
 
     def test_a_failing_index_is_simply_no_locator(self):
-        from orchestrator.semantic import SemanticSearch, SemanticSearchConfig
+        from code_gantry.semantic import SemanticSearch, SemanticSearchConfig
 
         s = SemanticSearch(
             SemanticSearchConfig(

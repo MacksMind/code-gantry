@@ -23,8 +23,8 @@ import subprocess
 
 import pytest
 
-from orchestrator.gitops import Git
-from orchestrator.repotools import ReadBudget, RepoReader
+from code_gantry.gitops import Git
+from code_gantry.repotools import ReadBudget, RepoReader
 
 
 @pytest.fixture
@@ -45,7 +45,7 @@ class TestStdinCannotSubstituteForTheRepository:
     def test_a_path_argument_is_always_passed(self, repo, monkeypatch):
         # The property, asserted on the argv rather than the result, because a
         # result can be right by luck depending on what stdin happens to be.
-        import orchestrator.repotools as rt
+        import code_gantry.repotools as rt
 
         seen = {}
         real = rt.subprocess.run
@@ -71,8 +71,8 @@ class TestStdinCannotSubstituteForTheRepository:
         script = (
             "import sys, json;"
             "sys.path.insert(0, 'src');"
-            "from orchestrator.gitops import Git;"
-            "from orchestrator.repotools import ReadBudget, RepoReader;"
+            "from code_gantry.gitops import Git;"
+            "from code_gantry.repotools import ReadBudget, RepoReader;"
             f"print(len(RepoReader(Git({str(repo)!r}), {str(repo)!r}, ReadBudget())"
             ".search('NEEDLE')))"
         )

@@ -17,9 +17,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from orchestrator.config import parse_config
-from orchestrator.flake import FLAKES_FILENAME, recent_flakes
-from orchestrator.preflight import (
+from code_gantry.config import parse_config
+from code_gantry.flake import FLAKES_FILENAME, recent_flakes
+from code_gantry.preflight import (
     PREFLIGHT_SUITE_LOG,
     check_executor_endpoint,
     run_preflight,
@@ -499,12 +499,12 @@ class TestCredentialsAreActuallyTested:
         return type("C", (), {"_client": Inner, "cfg": type("X", (), {"model": "m"})})()
 
     def test_a_live_key_passes(self):
-        from orchestrator.preflight import _credential_check
+        from code_gantry.preflight import _credential_check
 
         assert _credential_check("planner", self._client()).ok
 
     def test_an_expired_key_fails_fatally(self):
-        from orchestrator.preflight import _credential_check
+        from code_gantry.preflight import _credential_check
 
         exc = type("E", (Exception,), {"status_code": 401})("API key is invalid.")
         check = _credential_check("planner", self._client(exc))
@@ -518,7 +518,7 @@ class TestCredentialsAreActuallyTested:
         # answered — which is everything this needs to know. Chasing a clean
         # 200 across providers means tracking each one's parameter spellings,
         # and a check that breaks when a vendor renames a field gets skipped.
-        from orchestrator.preflight import _credential_check
+        from code_gantry.preflight import _credential_check
 
         exc = type("E", (Exception,), {"status_code": 400})(
             "Could not finish the message because max_completion_tokens"
@@ -528,7 +528,7 @@ class TestCredentialsAreActuallyTested:
         assert "the key is live" in check.detail
 
     def test_a_rate_limit_does_not_block_a_run(self):
-        from orchestrator.preflight import _credential_check
+        from code_gantry.preflight import _credential_check
 
         exc = type("E", (Exception,), {"status_code": 429})("slow down")
         assert _credential_check("planner", self._client(exc)).ok
@@ -563,8 +563,8 @@ class TestFilesTooLargeToEverBeReference:
         return repo
 
     def _check(self, repo, cap):
-        from orchestrator.gitops import Git
-        from orchestrator.preflight import _read_budget_check
+        from code_gantry.gitops import Git
+        from code_gantry.preflight import _read_budget_check
 
         cfg = parse_config({
             "target_repo": str(repo), "base_ref": "main", "project_branch": "proj",
@@ -619,14 +619,14 @@ class TestRipgrepIsPresent:
     """
 
     def test_it_reports_where_rg_was_found(self):
-        from orchestrator.preflight import _ripgrep_check
+        from code_gantry.preflight import _ripgrep_check
 
         check = _ripgrep_check()
         assert check.ok
         assert check.detail.endswith("rg")
 
     def test_it_fails_with_a_fix_when_rg_is_absent(self, monkeypatch):
-        import orchestrator.preflight as pf
+        import code_gantry.preflight as pf
 
         monkeypatch.setattr(pf.shutil, "which", lambda _: None)
         check = pf._ripgrep_check()
@@ -649,7 +649,7 @@ class TestTheRunLogExistsBeforePreflight:
         # about the contract — a line, before anything slow, naming the run.
         import os
 
-        from orchestrator.runlog import RunLog
+        from code_gantry.runlog import RunLog
 
         path = tmp_path / "run.log"
         log = RunLog(path, echo=None)
@@ -665,7 +665,7 @@ class TestTheRunLogExistsBeforePreflight:
     def test_a_refused_start_leaves_no_resumable_run(self, tmp_path):
         # The reason creating the directory early is safe: `_locate_run` keys
         # on `run.json`, which is written only once preflight has passed.
-        from orchestrator.runlog import RunLog
+        from code_gantry.runlog import RunLog
 
         run_dir = tmp_path / "runs" / "r1"
         run_dir.mkdir(parents=True)

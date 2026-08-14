@@ -838,7 +838,7 @@ out from wherever it was last learned.
 **A monitor over an append-only log must be anchored to this run.**
 `last-run.out` is appended across every resume, so grepping it for "Paused at
 your request" matched **24 historical pauses** and reported a stop that had not
-happened. A `pgrep -f "orchestrator resume"` in the same wait loop matched the
+happened. A `pgrep -f "code-gantry resume"` in the same wait loop matched the
 loop's own command line, so a run that had exited read as alive. Both failures
 look like the run misbehaving and are the instrument describing itself. Anchor
 to the tail, or to a line count taken at the start.
@@ -1085,7 +1085,7 @@ assuming before pointing a walking searcher at an unfamiliar repository.
 believed killed was still live; a fresh run started 68 seconds later and both
 ran against the same worktree. Nothing collided only because the second was
 still in its planner call — the collision would have been the moment it tried
-to cut a branch. `orchestrator pause` is checked at two points, and the one
+to cut a branch. `code-gantry pause` is checked at two points, and the one
 after derivation and before `precheck` is what makes stopping safe here: it
 holds the derived stage and never touches the tree. "I killed it" is a claim
 to verify with `ps`, not a state to assume, and the run directory rather than

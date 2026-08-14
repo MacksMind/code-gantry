@@ -27,7 +27,7 @@ def _final_state():
 
 class TestTheLogNamesTheReportRatherThanContainingIt:
     def test_the_timeline_carries_the_path(self, tmp_path, capsys):
-        from orchestrator.runlog import RunLog
+        from code_gantry.runlog import RunLog
 
         report_path = tmp_path / "report.md"
         log = RunLog(tmp_path / "run.log", echo=None)
@@ -42,7 +42,7 @@ class TestTheLogNamesTheReportRatherThanContainingIt:
     def test_the_body_is_not_in_the_log(self, tmp_path):
         # The regression this guards: a 60-line markdown report appended to a
         # timeline, unreadable as either.
-        from orchestrator.runlog import RunLog
+        from code_gantry.runlog import RunLog
 
         log = RunLog(tmp_path / "run.log", echo=None)
         log("[run] report written to /somewhere/report.md")
@@ -61,7 +61,7 @@ class TestTheEscalationReasonSurvivesIndependently:
         before the report is built. Checked here so a later change cannot
         quietly make the path-only line the sole record of a stop.
         """
-        from orchestrator.runlog import RunLog
+        from code_gantry.runlog import RunLog
 
         log = RunLog(tmp_path / "run.log", echo=None)
         log("[escalate] Paused at your request, between stages.")

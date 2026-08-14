@@ -40,7 +40,7 @@ def _nodes(**fns):
 
 class TestTheLoop:
     def test_it_walks_until_a_node_ends_the_run(self, rt):
-        from orchestrator.driver import drive
+        from code_gantry.driver import drive
 
         seen = []
 
@@ -60,7 +60,7 @@ class TestTheLoop:
         assert final["status"] == "complete"
 
     def test_a_node_may_reach_itself_when_the_table_allows_it(self, rt):
-        from orchestrator.driver import drive
+        from code_gantry.driver import drive
 
         calls = {"n": 0}
 
@@ -74,7 +74,7 @@ class TestTheLoop:
     def test_routing_outside_the_table_is_a_bug_not_a_reroute(self, rt):
         # A node asking for an edge the spec does not have is a bug in the
         # node; silently rerouting would hide it.
-        from orchestrator.driver import drive
+        from code_gantry.driver import drive
 
         def a(state, _rt):
             return {"next_hop": "nowhere"}
@@ -85,7 +85,7 @@ class TestTheLoop:
     def test_a_node_that_says_nothing_escalates(self, rt):
         # `_router` read a missing `next_hop` as "escalate", and that stays:
         # the run must not stop silently on a node that forgot to route.
-        from orchestrator.driver import drive
+        from code_gantry.driver import drive
 
         def a(state, _rt):
             return {}
@@ -102,7 +102,7 @@ class TestTheLoop:
 
 class TestStateMerging:
     def test_an_update_is_merged_not_replaced(self, rt):
-        from orchestrator.driver import drive
+        from code_gantry.driver import drive
 
         def a(state, _rt):
             return {"stage_index": 4, "next_hop": "end"}
@@ -121,7 +121,7 @@ class TestStateMerging:
         shipped broken the first time — written, discarded, and silently never
         read.
         """
-        from orchestrator.driver import drive
+        from code_gantry.driver import drive
 
         def a(state, _rt):
             return {"stage_index": 1, "stage_indx": 99, "next_hop": "end"}
@@ -134,8 +134,8 @@ class TestStateMerging:
 
     def test_every_declared_key_survives(self, rt):
         # The filter must be the schema, not a hand-written list that drifts.
-        from orchestrator.driver import drive
-        from orchestrator.state import RunState
+        from code_gantry.driver import drive
+        from code_gantry.state import RunState
 
         keys = list(RunState.__annotations__)
         assert "full_suite_digest" in keys, "the key the docstring is about"
@@ -149,7 +149,7 @@ class TestStateMerging:
 
 class TestCheckpointing:
     def test_each_step_is_recorded_and_the_last_one_reloads(self, tmp_path, rt):
-        from orchestrator.driver import drive, load_state, open_checkpointer
+        from code_gantry.driver import drive, load_state, open_checkpointer
 
         db = tmp_path / "state.db"
         write, conn = open_checkpointer(db)
@@ -176,7 +176,7 @@ class TestCheckpointing:
         own, the last completed node's state is what reloads, and the entry
         point always decides where to go. More predictable, and different.
         """
-        from orchestrator.driver import drive, load_state, open_checkpointer
+        from code_gantry.driver import drive, load_state, open_checkpointer
 
         db = tmp_path / "state.db"
         write, conn = open_checkpointer(db)
@@ -199,7 +199,7 @@ class TestCheckpointing:
         assert reloaded["stage_index"] == 1, "b's work must not be half-recorded"
 
     def test_an_unknown_run_reloads_as_nothing(self, tmp_path):
-        from orchestrator.driver import load_state, open_checkpointer
+        from code_gantry.driver import load_state, open_checkpointer
 
         db = tmp_path / "state.db"
         _write, conn = open_checkpointer(db)
@@ -207,7 +207,7 @@ class TestCheckpointing:
         assert load_state(db, "never-ran") is None
 
     def test_two_runs_in_one_file_do_not_see_each_other(self, tmp_path, rt):
-        from orchestrator.driver import drive, load_state, open_checkpointer
+        from code_gantry.driver import drive, load_state, open_checkpointer
 
         db = tmp_path / "state.db"
         write, conn = open_checkpointer(db)
@@ -231,7 +231,7 @@ class TestTheStepCeiling:
         not have." Owning the loop is what lets that be fixed instead of
         described.
         """
-        from orchestrator.driver import drive
+        from code_gantry.driver import drive
 
         def a(state, _rt):
             return {"next_hop": "a"}
@@ -248,7 +248,7 @@ class TestTheStepCeiling:
         assert "step" in (final.get("escalation_reason") or "").lower()
 
     def test_a_run_inside_the_ceiling_is_untouched(self, rt):
-        from orchestrator.driver import drive
+        from code_gantry.driver import drive
 
         def a(state, _rt):
             return {"next_hop": "end", "status": "complete"}
@@ -290,7 +290,7 @@ class TestAnOldCheckpointSaysWhatItIs:
         conn.close()
 
     def test_it_is_named_as_the_older_format(self, tmp_path):
-        from orchestrator.driver import UnreadableCheckpoint, load_state
+        from code_gantry.driver import UnreadableCheckpoint, load_state
 
         db = tmp_path / "state.db"
         self._langgraph_shaped(db)
@@ -302,7 +302,7 @@ class TestAnOldCheckpointSaysWhatItIs:
     def test_a_run_that_never_existed_is_still_just_missing(self, tmp_path):
         # The two cases must stay distinguishable: nothing to resume is not the
         # same as something that cannot be read.
-        from orchestrator.driver import load_state, open_checkpointer
+        from code_gantry.driver import load_state, open_checkpointer
 
         db = tmp_path / "state.db"
         _w, conn = open_checkpointer(db)
@@ -314,7 +314,7 @@ class TestAnOldCheckpointSaysWhatItIs:
         # empty `steps` table behind, and the detection then saw both formats.
         import sqlite3
 
-        from orchestrator.driver import UnreadableCheckpoint, load_state
+        from code_gantry.driver import UnreadableCheckpoint, load_state
 
         db = tmp_path / "state.db"
         self._langgraph_shaped(db)
@@ -330,7 +330,7 @@ class TestAnOldCheckpointSaysWhatItIs:
         # destroyed the evidence the check above depends on.
         import sqlite3
 
-        from orchestrator.driver import load_state
+        from code_gantry.driver import load_state
 
         db = tmp_path / "state.db"
         sqlite3.connect(str(db)).close()
@@ -342,7 +342,7 @@ class TestAnOldCheckpointSaysWhatItIs:
         assert tables == [], f"read created {tables}"
 
     def test_an_absent_file_is_missing_not_unreadable(self, tmp_path):
-        from orchestrator.driver import load_state
+        from code_gantry.driver import load_state
 
         assert load_state(tmp_path / "nope.db", "r") is None
 
@@ -360,7 +360,7 @@ class TestTheCheckpointSequenceSurvivesAResume:
     """
 
     def _write(self, tmp_path, run_id, steps):
-        from orchestrator.driver import open_checkpointer
+        from code_gantry.driver import open_checkpointer
 
         write, conn = open_checkpointer(tmp_path / "s.db")
         try:
@@ -370,13 +370,13 @@ class TestTheCheckpointSequenceSurvivesAResume:
             conn.close()
 
     def test_a_resume_appends_rather_than_renumbering(self, tmp_path):
-        from orchestrator.driver import last_step
+        from code_gantry.driver import last_step
 
         self._write(tmp_path, "r", [1, 2, 3])
         assert last_step(tmp_path / "s.db", "r") == 3
 
     def test_an_unknown_run_starts_at_zero(self, tmp_path):
-        from orchestrator.driver import last_step, open_checkpointer
+        from code_gantry.driver import last_step, open_checkpointer
 
         write, conn = open_checkpointer(tmp_path / "s.db")
         conn.close()
@@ -386,7 +386,7 @@ class TestTheCheckpointSequenceSurvivesAResume:
     def test_the_latest_write_wins_even_when_its_step_is_lower(self, tmp_path):
         # The live shape: a long old session, then a short new one that
         # renumbered over its head. Ordering by `step` picks the stale tail.
-        from orchestrator.driver import load_state, open_checkpointer
+        from code_gantry.driver import load_state, open_checkpointer
 
         self._write(tmp_path, "r", list(range(1, 11)))     # old session, steps 1-10
         write, conn = open_checkpointer(tmp_path / "s.db")
@@ -400,7 +400,7 @@ class TestTheCheckpointSequenceSurvivesAResume:
         # Seeded from the sequence it would trip on the first node of any
         # resumed run, which is a ceiling deciding an outcome rather than
         # catching a loop.
-        from orchestrator.driver import drive
+        from code_gantry.driver import drive
 
         seen = []
 

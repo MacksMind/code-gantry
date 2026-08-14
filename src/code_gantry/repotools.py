@@ -47,8 +47,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from orchestrator.gitops import Git, GitError
-from orchestrator.globs import matches_any
+from code_gantry.gitops import Git, GitError
+from code_gantry.globs import matches_any
 
 
 class ToolError(Exception):
@@ -925,7 +925,7 @@ def count_refusals(*ledgers) -> dict[str, int]:
     that sentence recovers which fired — a classifier over rendered text cannot
     separate classes the text renders identically.
     """
-    from orchestrator.executor import _refusal_kind
+    from code_gantry.executor import _refusal_kind
 
     counts: dict[str, int] = {}
     for ledger in ledgers:

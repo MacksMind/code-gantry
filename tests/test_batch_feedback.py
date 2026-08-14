@@ -12,7 +12,7 @@ and each round trip is a whole derivation. Telling it costs a paragraph.
 
 import pytest
 
-from orchestrator.prompts import build_planner_messages
+from code_gantry.prompts import build_planner_messages
 from test_prompts import _cfg, a_plan, all_text
 
 

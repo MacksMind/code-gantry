@@ -23,7 +23,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
-from orchestrator.gitops import Git, GitError
+from code_gantry.gitops import Git, GitError
 
 # Markdown inline links. Deliberately only markdown: a plan document is prose,
 # and anything cleverer becomes a way to pull in files nobody reviewed.

@@ -49,7 +49,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from orchestrator.addendum import heading_at, locate
+from code_gantry.addendum import heading_at, locate
 
 _ENTRY = re.compile(r"(?m)^## ")
 _BULLET = re.compile(r"(?m)^- \*\*([a-z ]+)\*\* (.*)$")
@@ -320,9 +320,9 @@ def _main(argv: list[str] | None = None) -> int:
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-    from orchestrator.config import load_config  # noqa: PLC0415
-    from orchestrator.gitops import Git, GitError  # noqa: PLC0415
-    from orchestrator.runtime import ProjectPaths  # noqa: PLC0415
+    from code_gantry.config import load_config  # noqa: PLC0415
+    from code_gantry.gitops import Git, GitError  # noqa: PLC0415
+    from code_gantry.runtime import ProjectPaths  # noqa: PLC0415
 
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("slug", help="project slug")

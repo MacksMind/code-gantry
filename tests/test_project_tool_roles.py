@@ -31,7 +31,7 @@ codebase has now learned twice.
 
 import pytest
 
-from orchestrator.config import ConfigError, ProjectTool, ToolArgument, parse_config
+from code_gantry.config import ConfigError, ProjectTool, ToolArgument, parse_config
 
 from test_config import minimal
 
@@ -123,7 +123,7 @@ class TestDeclaration:
 
 class TestSelection:
     def test_it_selects_by_role(self):
-        from orchestrator.projecttools import for_role
+        from code_gantry.projecttools import for_role
 
         planner_only = declared(name="gem_search", roles=["planner"])
         executor_only = declared(name="bundle_install", roles=["executor"])
@@ -141,7 +141,7 @@ class TestSelection:
         assert for_role("reviewer", tools) == []
 
     def test_no_tools_is_not_an_error(self):
-        from orchestrator.projecttools import for_role
+        from code_gantry.projecttools import for_role
 
         assert for_role("planner", None) == []
         assert for_role("planner", []) == []
@@ -149,7 +149,7 @@ class TestSelection:
 
 class TestThePlannerIsOfferedItsOwn:
     def test_a_planner_tool_appears_in_the_schemas(self):
-        from orchestrator.plannertools import tool_schemas
+        from code_gantry.plannertools import tool_schemas
 
         names = [
             t["name"]
@@ -158,7 +158,7 @@ class TestThePlannerIsOfferedItsOwn:
         assert "gem_search" in names
 
     def test_an_executor_only_tool_does_not(self):
-        from orchestrator.plannertools import tool_schemas
+        from code_gantry.plannertools import tool_schemas
 
         names = [
             t["name"]
@@ -167,7 +167,7 @@ class TestThePlannerIsOfferedItsOwn:
         assert "gem_search" not in names
 
     def test_the_built_ins_are_still_there(self):
-        from orchestrator.plannertools import tool_schemas
+        from code_gantry.plannertools import tool_schemas
 
         names = [t["name"] for t in tool_schemas(None, [declared(roles=["planner"])])]
         assert "read_file" in names and "search" in names
@@ -175,7 +175,7 @@ class TestThePlannerIsOfferedItsOwn:
     def test_the_reviewers_rendering_carries_it_too(self):
         # Two renderings of one definition. The reviewer is on the other
         # provider, and a tool it is offered must survive `strict` mode.
-        from orchestrator.plannertools import openai_tool_schemas
+        from code_gantry.plannertools import openai_tool_schemas
 
         tools = openai_tool_schemas(None, [declared(roles=["reviewer"])])
         mine = [t for t in tools if t["name"] == "gem_search"]
@@ -187,7 +187,7 @@ class TestThePlannerIsOfferedItsOwn:
 
 class TestRunningOne:
     def test_a_planner_tool_runs_through_the_runner(self):
-        from orchestrator.plannertools import dispatch
+        from code_gantry.plannertools import dispatch
 
         runner = FakeRunner()
         out = dispatch(
@@ -208,7 +208,7 @@ class TestRunningOne:
         # The boundary is here, not in the schema. A model can name anything;
         # advertising is not authorization, and a filter over what is offered
         # would leave the command reachable to whoever asked for it by name.
-        from orchestrator.plannertools import dispatch
+        from code_gantry.plannertools import dispatch
 
         runner = FakeRunner()
         out = dispatch(
@@ -226,7 +226,7 @@ class TestRunningOne:
     def test_without_a_runner_it_says_so_rather_than_raising(self):
         # Every other failure in this dispatch becomes readable text, because
         # the planner has to be able to answer with what it has.
-        from orchestrator.plannertools import dispatch
+        from code_gantry.plannertools import dispatch
 
         out = dispatch(
             "gem_search",
@@ -240,7 +240,7 @@ class TestRunningOne:
         assert "cannot" in out.lower() or "no " in out.lower()
 
     def test_a_refusal_from_the_tool_is_returned_not_raised(self):
-        from orchestrator.plannertools import dispatch
+        from code_gantry.plannertools import dispatch
 
         runner = FakeRunner()
         out = dispatch(
@@ -275,7 +275,7 @@ class TestHowADeclaredCallIsNamedInTheLedger:
     """
 
     def _detail(self, tool, args):
-        from orchestrator.projecttools import call_detail
+        from code_gantry.projecttools import call_detail
 
         return call_detail(tool, args)
 
@@ -334,7 +334,7 @@ class TestHowADeclaredCallIsNamedInTheLedger:
 
     def test_it_reaches_the_ledger(self):
         # Held is not recorded. The whole point is the line an operator reads.
-        from orchestrator.plannertools import dispatch
+        from code_gantry.plannertools import dispatch
 
         class Reader:
             def __init__(self):
@@ -378,7 +378,7 @@ class TestTheExecutorRecordsOneToo:
     """
 
     def test_an_answered_call_is_recorded(self):
-        from orchestrator.executortools import dispatch
+        from code_gantry.executortools import dispatch
 
         class Reader:
             def __init__(self):
@@ -418,13 +418,13 @@ class TestTheConventionsFramingStopsContradictingTheMenu:
     """
 
     def test_with_no_declared_tools_it_reads_as_it_always_did(self):
-        from orchestrator.prompts import _conventions_block
+        from code_gantry.prompts import _conventions_block
 
         text = _conventions_block("Some conventions.", role="executor")
         assert "cannot run" in text.lower()
 
     def test_with_a_declared_tool_it_stops_claiming_it_cannot_run_anything(self):
-        from orchestrator.prompts import _conventions_block
+        from code_gantry.prompts import _conventions_block
 
         text = _conventions_block(
             "Some conventions.",
@@ -436,7 +436,7 @@ class TestTheConventionsFramingStopsContradictingTheMenu:
     def test_the_instruction_itself_survives(self):
         # The point of the sentence is unchanged: a document describing a
         # procedure is not a licence to go and perform it.
-        from orchestrator.prompts import _conventions_block
+        from code_gantry.prompts import _conventions_block
 
         text = _conventions_block(
             "Some conventions.",
@@ -446,7 +446,7 @@ class TestTheConventionsFramingStopsContradictingTheMenu:
         assert "procedure" in text.lower()
 
     def test_a_planner_only_tool_does_not_soften_it(self):
-        from orchestrator.prompts import _conventions_block
+        from code_gantry.prompts import _conventions_block
 
         text = _conventions_block(
             "Some conventions.",
@@ -469,20 +469,20 @@ class TestTheExecutorIsScopedToo:
     """
 
     def test_a_planner_only_tool_is_not_offered_to_the_executor(self):
-        from orchestrator.executortools import tool_schemas
+        from code_gantry.executortools import tool_schemas
 
         names = [t["name"] for t in tool_schemas(None, [declared(roles=["planner"])])]
         assert "gem_search" not in names
 
     def test_an_executor_tool_still_is(self):
-        from orchestrator.executortools import tool_schemas
+        from code_gantry.executortools import tool_schemas
 
         names = [t["name"] for t in tool_schemas(None, [declared(roles=["executor"])])]
         assert "gem_search" in names
         assert "edit" in names and "read_file" in names
 
     def test_a_planner_only_tool_is_not_run_for_the_executor(self):
-        from orchestrator.executortools import dispatch
+        from code_gantry.executortools import dispatch
 
         runner = FakeRunner()
         out = dispatch(
@@ -520,7 +520,7 @@ class TestTheTwoMenusAreDistinguishable:
     """
 
     def test_a_tool_only_the_planner_has_is_marked_as_not_the_executors(self):
-        from orchestrator.planner import _system_blocks
+        from code_gantry.planner import _system_blocks
 
         text = _system_blocks(
             project_tools=[
@@ -535,7 +535,7 @@ class TestTheTwoMenusAreDistinguishable:
         assert "cannot" in text.lower() or "not available" in text.lower()
 
     def test_a_shared_tool_is_not_described_as_withheld(self):
-        from orchestrator.planner import _system_blocks
+        from code_gantry.planner import _system_blocks
 
         text = _system_blocks(
             project_tools=[declared(name="gem_read", roles=["planner", "executor"])]
@@ -546,14 +546,14 @@ class TestTheTwoMenusAreDistinguishable:
     def test_with_no_planner_tools_nothing_new_is_said(self):
         # A project that declares only executor tools must read exactly as it
         # did before this field existed.
-        from orchestrator.planner import _system_blocks
+        from code_gantry.planner import _system_blocks
 
         text = _system_blocks(project_tools=[declared(roles=["executor"])])[0]["text"]
         assert "gem_search" in text
         assert not _withheld_names(text)
 
     def test_the_placeholder_never_survives(self):
-        from orchestrator.planner import _system_blocks
+        from code_gantry.planner import _system_blocks
 
         for tools in ([], [declared(roles=["planner"])], [declared(roles=["executor"])]):
             assert "%%" not in _system_blocks(project_tools=tools)[0]["text"]
@@ -566,7 +566,7 @@ def _withheld_names(text: str) -> list[str]:
     config: a test that recomputes what the code computes passes when both are
     wrong together.
     """
-    from orchestrator.planner import PLANNER_ONLY_MARKER
+    from code_gantry.planner import PLANNER_ONLY_MARKER
 
     for line in text.splitlines():
         if PLANNER_ONLY_MARKER in line:
@@ -578,13 +578,13 @@ class TestTheCapabilityParagraph:
     """What the planner is told the *executor* can do stays about the executor."""
 
     def test_a_planner_only_tool_is_not_described_as_the_executors(self):
-        from orchestrator.planner import executor_capability_block
+        from code_gantry.planner import executor_capability_block
 
         text = executor_capability_block([declared(roles=["planner"])])
         assert "gem_search" not in text
 
     def test_an_executor_tool_is_still_described(self):
-        from orchestrator.planner import executor_capability_block
+        from code_gantry.planner import executor_capability_block
 
         text = executor_capability_block([declared(roles=["executor"])])
         assert "gem_search" in text
@@ -593,7 +593,7 @@ class TestTheCapabilityParagraph:
         # The denial is about the executor. A tool the planner alone may call
         # does not make it false, and softening it here would recreate the
         # contradiction the generated paragraph exists to prevent.
-        from orchestrator.planner import executor_capability_block
+        from code_gantry.planner import executor_capability_block
 
         text = executor_capability_block([declared(roles=["planner"])]).lower()
         assert "no tool for is running anything" in text or "cannot run" in text
@@ -611,9 +611,9 @@ class TestItIsWiredForReal:
 
     @pytest.fixture
     def assembled(self, repo, tmp_path):
-        from orchestrator.planner import AnthropicPlanner
-        from orchestrator.reviewer import OpenAIReviewer
-        from orchestrator.runtime import ProjectPaths, RunPaths, build_runtime
+        from code_gantry.planner import AnthropicPlanner
+        from code_gantry.reviewer import OpenAIReviewer
+        from code_gantry.runtime import ProjectPaths, RunPaths, build_runtime
 
         cfg = parse_config(
             minimal(
@@ -645,7 +645,7 @@ class TestItIsWiredForReal:
         assert "gem_search" in [t.name for t in assembled.reviewer.project_tools]
 
     def test_each_role_sees_only_its_own(self, assembled):
-        from orchestrator.projecttools import for_role
+        from code_gantry.projecttools import for_role
 
         assert [t.name for t in for_role("planner", assembled.planner.project_tools)] == [
             "gem_search"

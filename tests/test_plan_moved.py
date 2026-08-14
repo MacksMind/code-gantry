@@ -25,9 +25,9 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator.config import parse_config
-from orchestrator.gitops import Git
-from orchestrator.preflight import _plan_unmoved
+from code_gantry.config import parse_config
+from code_gantry.gitops import Git
+from code_gantry.preflight import _plan_unmoved
 
 
 def commit(repo, run_git, files: dict[str, str], message="plan") -> str:
@@ -157,7 +157,7 @@ class TestMoved:
     def test_names_the_fresh_run_as_the_way_forward(self, repo, run_git, planned):
         commit(repo, run_git, {"docs/gems.md": "# Gems\nfolded\n"})
         check = _plan_unmoved(cfg_for(repo), Git(repo), planned)
-        assert "orchestrator run" in check.detail
+        assert "code-gantry run" in check.detail
 
 
 class TestWiring:
@@ -166,7 +166,7 @@ class TestWiring:
     def test_run_preflight_asks_when_given_a_recorded_plan_sha(
         self, repo, run_git, planned
     ):
-        from orchestrator.preflight import run_preflight
+        from code_gantry.preflight import run_preflight
 
         commit(repo, run_git, {"docs/gems.md": "# Gems\nfolded\n"})
         checks = run_preflight(
@@ -181,7 +181,7 @@ class TestWiring:
         assert moved, [c.name for c in checks]
 
     def test_run_preflight_does_not_ask_on_a_fresh_run(self, repo, run_git, planned):
-        from orchestrator.preflight import run_preflight
+        from code_gantry.preflight import run_preflight
 
         commit(repo, run_git, {"docs/gems.md": "# Gems\nfolded\n"})
         checks = run_preflight(
@@ -204,8 +204,8 @@ class TestWiring:
         """
         import yaml
 
-        from orchestrator import cli
-        from orchestrator.preflight import Check
+        from code_gantry import cli
+        from code_gantry.preflight import Check
 
         config_path = Path(repo) / "docs" / "code_gantry.yaml"
         config_path.write_text(

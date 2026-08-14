@@ -6,10 +6,10 @@ or human — and which failure goes where is the substance of the escalation
 tiers.
 """
 
-from orchestrator.commands import CommandRunner
-from orchestrator.config import parse_config
-from orchestrator.gitops import Git
-from orchestrator.verify import Layer, Route, resolve_test_command, run_verify
+from code_gantry.commands import CommandRunner
+from code_gantry.config import parse_config
+from code_gantry.gitops import Git
+from code_gantry.verify import Layer, Route, resolve_test_command, run_verify
 
 RSPEC_PATTERN = r"^\s*rspec\s+'?\.?/?([^'\s\[:]+_spec\.rb)"
 
@@ -30,7 +30,7 @@ def build(repo, stage_overrides=None, **cfg_overrides):
 
     fields = {"id": "s1", "instruction": "do it", "edit_files": ["app.py", "src/**"]}
     fields.update(stage_overrides or {})
-    from orchestrator.config import Stage
+    from code_gantry.config import Stage
 
     return cfg, Stage(**fields)
 
@@ -1428,7 +1428,7 @@ class TestTheGateDoesNotRepeatTheLoop:
         of specs re-run on an untouched tree. A test that pins where a value
         lives passes while the value is lost; this one drives both builders.
         """
-        from orchestrator.gates import resolve_test_command
+        from code_gantry.gates import resolve_test_command
 
         (repo / "spec").mkdir(exist_ok=True)
         for name in ("a_spec.rb", "b_spec.rb"):

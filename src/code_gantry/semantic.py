@@ -40,8 +40,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Callable
 
-from orchestrator.apistatus import classify
-from orchestrator.repotools import ToolCall
+from code_gantry.apistatus import classify
+from code_gantry.repotools import ToolCall
 
 
 def _post(url: str, payload: dict, timeout: float) -> dict:

@@ -15,7 +15,7 @@ import pytest
 
 def _cfg_for_pause():
     """Only the resume hint reads this; the queue behaviour does not care."""
-    from orchestrator.config import parse_config
+    from code_gantry.config import parse_config
 
     return parse_config({
         "target_repo": "/tmp", "base_ref": "main", "project_branch": "p",
@@ -38,14 +38,14 @@ class TestTheQueueIsHeldInState:
         # The merge filters against the schema. Undeclared, the queue would be
         # written by `plan` and dropped before `advance` ever saw it — the
         # silent loss `full_suite_digest` shipped with.
-        from orchestrator.state import RunState
+        from code_gantry.state import RunState
 
         assert "stage_queue" in RunState.__annotations__
 
     def test_a_fresh_run_starts_with_none(self):
         import time
 
-        from orchestrator.state import new_state
+        from code_gantry.state import new_state
 
         s = new_state(
             run_id="r", project_slug="p", config_hash="h", target_repo="/tmp",
@@ -58,7 +58,7 @@ class TestTheQueueIsHeldInState:
 class TestAdvanceTakesTheNextQueuedStage:
     def _advanced(self, queue, index=3):
         """What `advance` returns, given a queue, without running a stage."""
-        from orchestrator.nodes import _next_from_queue
+        from code_gantry.nodes import _next_from_queue
 
         return _next_from_queue(
             {"stage_queue": queue, "stage_index": index}, landed_index=index
@@ -94,14 +94,14 @@ class TestAdvanceTakesTheNextQueuedStage:
 
 class TestTheEdgeTableAllowsTheShortcut:
     def test_advance_may_reach_precheck(self):
-        from orchestrator.driver import EDGES
+        from code_gantry.driver import EDGES
 
         assert "precheck" in EDGES["advance"], (
             "a node routing outside its edges raises rather than rerouting"
         )
 
     def test_advance_still_reaches_plan_and_escalate(self):
-        from orchestrator.driver import EDGES
+        from code_gantry.driver import EDGES
 
         assert {"plan", "escalate"} <= set(EDGES["advance"])
 
@@ -116,7 +116,7 @@ class TestThePauseStillWins:
     """
 
     def test_a_pause_stops_the_run_and_keeps_the_queue(self, tmp_path):
-        from orchestrator.nodes import _next_from_queue, _pause_escalation
+        from code_gantry.nodes import _next_from_queue, _pause_escalation
 
         flag = tmp_path / "paused"
         flag.write_text("")

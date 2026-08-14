@@ -23,7 +23,7 @@ accident.
 import ast
 import pathlib
 
-SRC = pathlib.Path(__file__).resolve().parent.parent / "src" / "orchestrator"
+SRC = pathlib.Path(__file__).resolve().parent.parent / "src" / "code_gantry"
 
 
 def _assignments(name: str) -> list[str]:
@@ -75,18 +75,18 @@ class TestOneDefinition:
 
 class TestTheValueStillReachesBothCallers:
     def test_nodes_clips_through_the_shared_budget(self):
-        from orchestrator import gates, nodes
+        from code_gantry import gates, nodes
 
         assert nodes._clip is gates.clip or (
             nodes._clip("x" * 10_000) == gates.clip("x" * 10_000)
         )
 
     def test_it_actually_clips(self):
-        from orchestrator import gates
+        from code_gantry import gates
 
         assert len(gates.clip("x" * 50_000)) <= gates.FEEDBACK_OUTPUT_CHARS
 
     def test_short_output_is_untouched(self):
-        from orchestrator import gates
+        from code_gantry import gates
 
         assert gates.clip("a failure summary") == "a failure summary"

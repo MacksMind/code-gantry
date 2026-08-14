@@ -20,7 +20,7 @@ diverge later.
 import ast
 import pathlib
 
-SRC = pathlib.Path(__file__).resolve().parent.parent / "src" / "orchestrator"
+SRC = pathlib.Path(__file__).resolve().parent.parent / "src" / "code_gantry"
 
 
 def _module(name):
@@ -80,20 +80,20 @@ class TestAllThreeRolesUseThem:
 
 class TestTheBehaviourTheyShare:
     def test_counts_are_busiest_first(self):
-        from orchestrator.repotools import render_counts
+        from code_gantry.repotools import render_counts
 
         out = render_counts({"search": 2, "read_file": 9, "git_show": 5})
         assert out == "9 read_file, 5 git_show, 2 search"
 
     def test_nothing_renders_as_empty_not_as_a_stray_separator(self):
-        from orchestrator.repotools import render_counts
+        from code_gantry.repotools import render_counts
 
         assert render_counts({}) == ""
 
     def test_two_ledgers_merge(self):
         # The executor's case, and the reason the helper is variadic.
-        from orchestrator.repotools import count_calls
-        from orchestrator.repotools import ToolCall
+        from code_gantry.repotools import count_calls
+        from code_gantry.repotools import ToolCall
 
         reader = [ToolCall(tool="read_file", detail="a", lines=1)]
         editor = [
@@ -103,7 +103,7 @@ class TestTheBehaviourTheyShare:
         assert count_calls(reader, editor) == {"read_file": 1, "edit": 2}
 
     def test_strictify_recurses_which_is_the_half_that_had_forked(self):
-        from orchestrator.plannertools import strictify
+        from code_gantry.plannertools import strictify
 
         out = strictify(
             {

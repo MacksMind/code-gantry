@@ -20,7 +20,7 @@ decisions the model made, and asking again does not change them.
 
 import pytest
 
-from orchestrator.retry import (
+from code_gantry.retry import (
     Backoff,
     delays,
     is_spurious_request_status,
@@ -207,14 +207,14 @@ class TestTheDefaultBudgetCoversAnHour:
     """
 
     def test_the_default_covers_an_hour(self):
-        from orchestrator.config import PlannerConfig, ReviewerConfig
+        from code_gantry.config import PlannerConfig, ReviewerConfig
 
         for role in (PlannerConfig, ReviewerConfig):
             field = role.model_fields["transport_retry_seconds"]
             assert field.default == 3600.0, role.__name__
 
     def test_no_single_wait_exceeds_five_minutes(self):
-        from orchestrator.config import PlannerConfig, ReviewerConfig
+        from code_gantry.config import PlannerConfig, ReviewerConfig
 
         for role in (PlannerConfig, ReviewerConfig):
             cap = role.model_fields["transport_retry_max_delay_seconds"].default
@@ -369,7 +369,7 @@ class TestADeterministic400IsNotWaitedOut:
     """
 
     def test_a_context_overflow_is_not_replayed(self):
-        from orchestrator.retry import is_spurious_request_status
+        from code_gantry.retry import is_spurious_request_status
 
         assert not is_spurious_request_status(
             400,
@@ -379,14 +379,14 @@ class TestADeterministic400IsNotWaitedOut:
     def test_an_unexplained_400_is_still_replayed(self):
         # The case the replay exists for. Nothing in the message identifies a
         # property of the request, so the provider may simply have been wrong.
-        from orchestrator.retry import is_spurious_request_status
+        from code_gantry.retry import is_spurious_request_status
 
         assert is_spurious_request_status(400, "invalid_request_error")
         assert is_spurious_request_status(400, "")
         assert is_spurious_request_status(400, None)
 
     def test_neighbouring_codes_are_unaffected(self):
-        from orchestrator.retry import is_spurious_request_status
+        from code_gantry.retry import is_spurious_request_status
 
         for status in (401, 404, 422, 500, None):
             assert not is_spurious_request_status(status, "prompt is too long")
@@ -405,7 +405,7 @@ class TestTheTwoBudgetsAreNamedApart:
     """
 
     def _log_of(self, status, message):
-        from orchestrator.retry import Backoff, with_provider_retry
+        from code_gantry.retry import Backoff, with_provider_retry
 
         seen: list[str] = []
         calls = {"n": 0}

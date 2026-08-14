@@ -8,7 +8,7 @@ foundation the rest of the system sits on, so it is tested hard.
 import os
 import sys
 
-from orchestrator.commands import CommandRunner, truncate_middle
+from code_gantry.commands import CommandRunner, truncate_middle
 
 
 class TestBasics:
@@ -355,7 +355,7 @@ class TestOutputPreparedForAModel:
     """
 
     def test_a_long_run_is_collapsed(self):
-        from orchestrator.commands import collapse_progress_runs
+        from code_gantry.commands import collapse_progress_runs
 
         out = collapse_progress_runs("Inspecting\n" + "." * 1575 + "\nOffenses:")
         assert "." * 1575 not in out
@@ -364,14 +364,14 @@ class TestOutputPreparedForAModel:
     def test_it_says_how_much_it_dropped(self):
         # Lossy about the characters, honest about the quantity: a reader can
         # still tell a 1,575-dot run from a 40-dot one.
-        from orchestrator.commands import collapse_progress_runs
+        from code_gantry.commands import collapse_progress_runs
 
         assert "1575" in collapse_progress_runs("." * 1575).replace(",", "")
 
     def test_short_runs_are_left_alone(self):
         # `...F...` is the whole result of a small suite. Collapsing that would
         # destroy the signal rather than the noise.
-        from orchestrator.commands import collapse_progress_runs
+        from code_gantry.commands import collapse_progress_runs
 
         text = "....F....\n1 failure"
         assert collapse_progress_runs(text) == text
@@ -380,7 +380,7 @@ class TestOutputPreparedForAModel:
         # This ships to every project. A rule written around dots, `F`/`E`, or
         # RuboCop is a Ruby hint in a framework string.
         import inspect
-        from orchestrator.commands import collapse_progress_runs
+        from code_gantry.commands import collapse_progress_runs
 
         source = inspect.getsource(collapse_progress_runs).lower()
         for word in ("rubocop", "rspec", "ruby", "pytest", "eslint"):
@@ -392,14 +392,14 @@ class TestOutputPreparedForAModel:
         With the run intact the dots are the head and survive truncation while
         the finding, sitting after them, is dropped as the middle.
         """
-        from orchestrator.commands import clip_for_model
+        from code_gantry.commands import clip_for_model
 
         text = "start\n" + "." * 5000 + "\nOFFENCE_HERE\n" + "tail\n"
         out = clip_for_model(text, 400)
         assert "OFFENCE_HERE" in out
 
     def test_it_still_bounds_the_result(self):
-        from orchestrator.commands import clip_for_model
+        from code_gantry.commands import clip_for_model
 
         assert len(clip_for_model("x " * 50_000, 500)) <= 600
 

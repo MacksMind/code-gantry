@@ -12,7 +12,7 @@ worth making, and what did the service actually say.
 
 import urllib.error
 
-from orchestrator.apistatus import classify
+from code_gantry.apistatus import classify
 
 
 class FakeSdkError(Exception):

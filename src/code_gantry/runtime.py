@@ -12,14 +12,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from orchestrator.commands import CommandRunner
-from orchestrator.config import ProjectConfig, validate_stage
-from orchestrator.executor import Executor
-from orchestrator.gitops import Git, GitError
-from orchestrator.layout import summarize_layout
-from orchestrator.plandoc import PlanDocument, PlanTree, load_snapshot
-from orchestrator.planner import PlannerClient
-from orchestrator.reviewer import ReviewerClient
+from code_gantry.commands import CommandRunner
+from code_gantry.config import ProjectConfig, validate_stage
+from code_gantry.executor import Executor
+from code_gantry.gitops import Git, GitError
+from code_gantry.layout import summarize_layout
+from code_gantry.plandoc import PlanDocument, PlanTree, load_snapshot
+from code_gantry.planner import PlannerClient
+from code_gantry.reviewer import ReviewerClient
 
 class ProjectPaths:
     """Layout of the work directory: everything the orchestrator writes.
@@ -125,7 +125,7 @@ class RunPaths:
 
     @property
     def pause_flag(self) -> Path:
-        """Written by `orchestrator pause`, read before each planner call.
+        """Written by `code-gantry pause`, read before each planner call.
 
         A file rather than a signal: the run may be on another terminal, in a
         different session, or under nohup, and a file is the one channel that
@@ -403,10 +403,10 @@ def pin_modules() -> None:
     import importlib
     import pkgutil
 
-    import orchestrator
+    import code_gantry
 
-    for module in pkgutil.iter_modules(orchestrator.__path__):
-        importlib.import_module(f"orchestrator.{module.name}")
+    for module in pkgutil.iter_modules(code_gantry.__path__):
+        importlib.import_module(f"code_gantry.{module.name}")
 
 
 def build_runtime(

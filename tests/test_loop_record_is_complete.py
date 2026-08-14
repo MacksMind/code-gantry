@@ -28,7 +28,7 @@ import json
 
 import pytest
 
-from orchestrator.executor import ExecutionResult
+from code_gantry.executor import ExecutionResult
 
 # Written under a different name because the artifact says what the number is
 # for rather than what the attribute is called.
@@ -38,7 +38,7 @@ NESTED = {"first_prompt_tokens", "first_cached_tokens"}
 
 
 def _written(tmp_path, result):
-    from orchestrator.executor import _write_loop_record
+    from code_gantry.executor import _write_loop_record
 
     _write_loop_record(tmp_path, result)
     return json.loads((tmp_path / "executor-loop.json").read_text())
@@ -97,7 +97,7 @@ class TestEveryFieldIsCarried:
 
 class TestItStaysBestEffort:
     def test_an_unwritable_directory_does_not_raise(self, tmp_path):
-        from orchestrator.executor import _write_loop_record
+        from code_gantry.executor import _write_loop_record
 
         # The attempt has already happened; failing to describe it must not
         # take the run down.

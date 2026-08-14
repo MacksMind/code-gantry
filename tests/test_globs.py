@@ -5,7 +5,7 @@ guard permits. Getting `**` wrong means either escalating on legitimate edits
 or letting the executor roam.
 """
 
-from orchestrator.globs import matches_any
+from code_gantry.globs import matches_any
 
 
 class TestSingleStar:

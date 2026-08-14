@@ -33,14 +33,14 @@ from typing import Callable, Literal, Protocol
 
 from pydantic import BaseModel, Field
 
-from orchestrator.config import PlannerConfig
-from orchestrator.plannertools import (
+from code_gantry.config import PlannerConfig
+from code_gantry.plannertools import (
     REPOSITORY_TEXT_IS_EVIDENCE,
     STATE_NOT_CHANGE,
     dispatch,
     tool_schemas,
 )
-from orchestrator.retry import Backoff, with_provider_retry
+from code_gantry.retry import Backoff, with_provider_retry
 
 Verdict = Literal["next_stage", "revise", "project_complete", "blocked"]
 RevisionMode = Literal["extend", "restart"]
@@ -631,7 +631,7 @@ class AnthropicPlanner:
         run, drawing stages with no ability to check a premise against the
         code.
         """
-        from orchestrator.repotools import Spend
+        from code_gantry.repotools import Spend
 
         if self.reader is not None:
             self.reader.spend = Spend()
@@ -646,13 +646,13 @@ class AnthropicPlanner:
 
     def _semantic_results(self) -> list[dict]:
         """What the index was asked, and what it answered."""
-        from orchestrator.repotools import semantic_results
+        from code_gantry.repotools import semantic_results
 
         return semantic_results(self.reader)
 
     def _tool_counts(self) -> dict[str, int]:
         """The same ledger by tool, for the run log's one-line summary."""
-        from orchestrator.repotools import count_calls
+        from code_gantry.repotools import count_calls
 
         return count_calls(self.reader)
 
@@ -1029,9 +1029,9 @@ def make_planner(
 
     reader = semantic = None
     if cfg.repo_access and target_repo is not None:
-        from orchestrator.gitops import Git
-        from orchestrator.repotools import ReadBudget, RepoReader
-        from orchestrator.semantic import SemanticSearch, SemanticSearchConfig
+        from code_gantry.gitops import Git
+        from code_gantry.repotools import ReadBudget, RepoReader
+        from code_gantry.semantic import SemanticSearch, SemanticSearchConfig
 
         reader = RepoReader(
             Git(target_repo),
@@ -1440,7 +1440,7 @@ def executor_capability_block(project_tools=None) -> str:
     list here is scoped to the executor, and what the planner holds instead is
     named separately rather than merged in.
     """
-    from orchestrator.projecttools import for_role
+    from code_gantry.projecttools import for_role
 
     project_tools = for_role("executor", project_tools)
     lines = [
@@ -1501,7 +1501,7 @@ def planner_capability_block(project_tools=None) -> str:
     Silent when the planner has no declared tools, which is every project that
     predates the `roles` field: it reads exactly as it did before.
     """
-    from orchestrator.projecttools import for_role
+    from code_gantry.projecttools import for_role
 
     mine = for_role("planner", project_tools)
     if not mine:

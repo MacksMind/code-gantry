@@ -26,12 +26,12 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum
 
-from orchestrator import gates
-from orchestrator.commands import CommandResult, CommandRunner
-from orchestrator.config import ProjectConfig, Stage
-from orchestrator.gitops import Git, GitError
-from orchestrator.globs import matches_any
-from orchestrator.plandoc import resolve_plan_tree
+from code_gantry import gates
+from code_gantry.commands import CommandResult, CommandRunner
+from code_gantry.config import ProjectConfig, Stage
+from code_gantry.gitops import Git, GitError
+from code_gantry.globs import matches_any
+from code_gantry.plandoc import resolve_plan_tree
 
 
 

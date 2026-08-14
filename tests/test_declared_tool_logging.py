@@ -19,7 +19,7 @@ itself is on the model's side of the conversation and in the artifacts.
 
 import pytest
 
-from orchestrator.config import ProjectTool, ToolArgument
+from code_gantry.config import ProjectTool, ToolArgument
 
 
 def a_tool(**overrides):
@@ -69,14 +69,14 @@ class Reader:
 
 class TestTheTimelineStaysClean:
     def test_a_declared_call_writes_nothing_to_the_run_log(self):
-        from orchestrator.projecttools import invoke
+        from code_gantry.projecttools import invoke
 
         runner = Runner(exit_code=11)
         invoke(a_tool(), {}, runner)
         assert runner.logged == [], "the declared command reached the run log"
 
     def test_the_command_still_runs(self):
-        from orchestrator.projecttools import invoke
+        from code_gantry.projecttools import invoke
 
         runner = Runner()
         invoke(a_tool(), {}, runner)
@@ -85,7 +85,7 @@ class TestTheTimelineStaysClean:
     def test_the_model_still_sees_the_command_and_its_output(self):
         # Suppressing the log line must not narrow what the model is told: it
         # has to know what ran and what came back, or a failure is unreadable.
-        from orchestrator.projecttools import invoke
+        from code_gantry.projecttools import invoke
 
         answer = invoke(a_tool(), {}, Runner(exit_code=11))
         assert "bundle install" in answer
@@ -95,8 +95,8 @@ class TestTheTimelineStaysClean:
 
 class TestTheToolLogCarriesTheExitCode:
     def test_a_declared_entry_renders_its_exit_code(self):
-        from orchestrator.planner import _render_call
-        from orchestrator.repotools import ToolCall
+        from code_gantry.planner import _render_call
+        from code_gantry.repotools import ToolCall
 
         call = ToolCall(tool="bundle_install", detail="", lines=11, exit_code=11)
         assert _render_call(call) == "bundle_install() -> exit 11"
@@ -104,15 +104,15 @@ class TestTheToolLogCarriesTheExitCode:
     def test_a_read_entry_still_renders_its_size(self):
         # `exit_code` is absent for everything that is not a spawned command,
         # and those entries must read exactly as they did.
-        from orchestrator.planner import _render_call
-        from orchestrator.repotools import ToolCall
+        from code_gantry.planner import _render_call
+        from code_gantry.repotools import ToolCall
 
         call = ToolCall(tool="read_file", detail="a.rb", lines=42)
         assert _render_call(call) == "read_file(a.rb) -> 42 line(s)"
 
     def test_a_refusal_still_wins(self):
-        from orchestrator.planner import _render_call
-        from orchestrator.repotools import ToolCall
+        from code_gantry.planner import _render_call
+        from code_gantry.repotools import ToolCall
 
         call = ToolCall(tool="gem_read", detail="x", lines=0, refusal="no such path")
         assert "refused: no such path" in _render_call(call)
@@ -122,7 +122,7 @@ class TestTheToolLogCarriesTheExitCode:
         # Held is not recorded. This is the whole point of the change: the run
         # that spent fifteen minutes on `exit 11` had that number in the
         # timeline and nowhere a later reader would look.
-        from orchestrator.plannertools import dispatch
+        from code_gantry.plannertools import dispatch
 
         reader = Reader()
         dispatch(

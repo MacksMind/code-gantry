@@ -23,7 +23,7 @@ class TestRebuildingAStageIgnoresFieldsThatNoLongerExist:
     def test_a_retired_field_in_the_checkpoint_is_dropped(self):
         from types import SimpleNamespace
 
-        from orchestrator.nodes import current_stage
+        from code_gantry.nodes import current_stage
 
         state = {
             "current": {
@@ -46,7 +46,7 @@ class TestRebuildingAStageIgnoresFieldsThatNoLongerExist:
         # worse failure than the one it prevents, because nothing would raise.
         from types import SimpleNamespace
 
-        from orchestrator.nodes import current_stage
+        from code_gantry.nodes import current_stage
 
         stage = current_stage(
             {"current": {"id": "s", "instruction": "do it",
@@ -58,6 +58,6 @@ class TestRebuildingAStageIgnoresFieldsThatNoLongerExist:
     def test_no_stage_is_still_no_stage(self):
         from types import SimpleNamespace
 
-        from orchestrator.nodes import current_stage
+        from code_gantry.nodes import current_stage
 
         assert current_stage({}, SimpleNamespace()) is None

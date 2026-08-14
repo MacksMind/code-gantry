@@ -40,10 +40,10 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from orchestrator.commands import CommandResult, CommandRunner
+from code_gantry.commands import CommandResult, CommandRunner
 
 if TYPE_CHECKING:
-    from orchestrator.config import ProjectConfig
+    from code_gantry.config import ProjectConfig
 
 
 @dataclass

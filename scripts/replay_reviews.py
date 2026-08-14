@@ -36,14 +36,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from orchestrator.config import load_config  # noqa: E402
-from orchestrator.gitops import Git  # noqa: E402
-from orchestrator.plandoc import load_snapshot  # noqa: E402
-from orchestrator.prompts import build_review_messages  # noqa: E402
-from orchestrator.repotools import ReadBudget, RepoReader  # noqa: E402
-from orchestrator.reviewer import OpenAIReviewer, _build_openai_client  # noqa: E402
-from orchestrator.runtime import ProjectPaths, RunPaths  # noqa: E402
-from orchestrator.semantic import SemanticSearch, SemanticSearchConfig  # noqa: E402
+from code_gantry.config import load_config  # noqa: E402
+from code_gantry.gitops import Git  # noqa: E402
+from code_gantry.plandoc import load_snapshot  # noqa: E402
+from code_gantry.prompts import build_review_messages  # noqa: E402
+from code_gantry.repotools import ReadBudget, RepoReader  # noqa: E402
+from code_gantry.reviewer import OpenAIReviewer, _build_openai_client  # noqa: E402
+from code_gantry.runtime import ProjectPaths, RunPaths  # noqa: E402
+from code_gantry.semantic import SemanticSearch, SemanticSearchConfig  # noqa: E402
 
 
 def landed_stages(run_log: Path) -> list[tuple[str, str]]:

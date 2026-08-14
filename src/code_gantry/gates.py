@@ -24,16 +24,16 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from orchestrator.commands import (
+from code_gantry.commands import (
     CommandResult,
     CommandRunner,
     clip_for_model,
     collapse_progress_runs,
 )
-from orchestrator.config import ProjectConfig, Stage
-from orchestrator.flake import adjudicate
-from orchestrator.gitops import Git
-from orchestrator.globs import matches_any
+from code_gantry.config import ProjectConfig, Stage
+from code_gantry.flake import adjudicate
+from code_gantry.gitops import Git
+from code_gantry.globs import matches_any
 
 
 @dataclass

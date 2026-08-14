@@ -14,8 +14,8 @@ it shows up here rather than on an invoice.
 
 from types import SimpleNamespace
 
-from orchestrator.plandoc import PlanDocument, PlanTree
-from orchestrator.prompts import build_planner_messages, build_review_messages
+from code_gantry.plandoc import PlanDocument, PlanTree
+from code_gantry.prompts import build_planner_messages, build_review_messages
 
 
 def a_plan(text="do the thing"):
@@ -65,13 +65,13 @@ class TestCacheLifetime:
     """
 
     def test_the_configured_ttl_reaches_the_cache_control_marker(self):
-        from orchestrator.planner import _system_blocks
+        from code_gantry.planner import _system_blocks
 
         blocks = _system_blocks(cache_ttl="1h")
         assert blocks[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
 
     def test_no_ttl_leaves_the_provider_default(self):
-        from orchestrator.planner import _system_blocks
+        from code_gantry.planner import _system_blocks
 
         assert _system_blocks()[0]["cache_control"] == {"type": "ephemeral"}
 
@@ -272,7 +272,7 @@ class TestPerProjectGuidance:
     """
 
     def test_guidance_reaches_the_system_prompt(self):
-        from orchestrator.planner import _system_blocks
+        from code_gantry.planner import _system_blocks
 
         blocks = _system_blocks(guidance="Prefer stages of one file each.")
         assert "Prefer stages of one file each." in blocks[0]["text"]
@@ -280,28 +280,28 @@ class TestPerProjectGuidance:
     def test_guidance_is_inside_the_cached_block(self):
         # It is fixed for the run, so it belongs in the prefix rather than
         # being re-sent uncached on every call.
-        from orchestrator.planner import _system_blocks
+        from code_gantry.planner import _system_blocks
 
         blocks = _system_blocks(guidance="G", cache_ttl="1h")
         assert len(blocks) == 1
         assert blocks[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
 
     def test_no_guidance_changes_nothing(self):
-        from orchestrator.planner import _system_blocks
+        from code_gantry.planner import _system_blocks
 
         assert _system_blocks()[0]["text"] == _system_blocks(guidance="")[0]["text"]
 
     def test_guidance_is_attributed_to_the_operator(self):
         # The planner should be able to tell project policy from the standing
         # contract, and weigh a conflict knowingly rather than silently.
-        from orchestrator.planner import _system_blocks
+        from code_gantry.planner import _system_blocks
 
         text = _system_blocks(guidance="G")[0]["text"]
         assert "project" in text.lower().split("## ")[-1]
 
     def test_it_is_not_a_planner_writable_field(self):
-        from orchestrator.config import PLANNER_WRITABLE_FIELDS
-        from orchestrator.planner import PlannedStage
+        from code_gantry.config import PLANNER_WRITABLE_FIELDS
+        from code_gantry.planner import PlannedStage
 
         assert "guidance" not in PlannedStage.model_fields
         assert "guidance" not in PLANNER_WRITABLE_FIELDS
@@ -309,7 +309,7 @@ class TestPerProjectGuidance:
 
 class TestDeployableIncrements:
     def test_the_prompt_asks_for_independently_shippable_stages(self):
-        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
 
         lowered = PLANNER_SYSTEM_PROMPT.lower()
         assert "deploy" in lowered
@@ -318,7 +318,7 @@ class TestDeployableIncrements:
         # A step needing access this run does not have must not stop the run,
         # and a plan's line order is not an instruction. Both have to be said,
         # or the planner escalates on the first thing it cannot reach.
-        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
 
         lowered = PLANNER_SYSTEM_PROMPT.lower()
         assert "depends on what" in lowered
@@ -333,7 +333,7 @@ class TestScopedTestGuidance:
         # naming the specs that cover the code it touches. Left as a neutral
         # optional field, it will be skipped, and every stage pays for a full
         # suite on every retry.
-        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
 
         lowered = PLANNER_SYSTEM_PROMPT.lower()
         assert "test_paths" in lowered
@@ -357,8 +357,8 @@ class TestReviewerCacheBreakpoint:
     """
 
     def a_review(self, **over):
-        from orchestrator.config import Stage
-        from orchestrator.prompts import build_review_messages
+        from code_gantry.config import Stage
+        from code_gantry.prompts import build_review_messages
 
         args = dict(
             stage=Stage(id="s", instruction="do it", edit_files=["a.py"]),
@@ -443,14 +443,14 @@ class TestTheExecutorCannotRunCommands:
         # constant is a template and what a model actually reads is this. A
         # project declaring none — which is every project by default — is told
         # exactly what it was told before.
-        from orchestrator.planner import _system_blocks
+        from code_gantry.planner import _system_blocks
 
         lowered = _system_blocks()[0]["text"].lower()
         assert "no tool for is running anything" in lowered
         assert "grep" in lowered
 
     def test_it_points_at_forbidden_patterns_as_the_alternative(self):
-        from orchestrator.planner import _system_blocks
+        from code_gantry.planner import _system_blocks
 
         section = _system_blocks()[0]["text"].lower()
         assert "forbidden_patterns" in section
@@ -467,7 +467,7 @@ class TestTheExecutorCannotRunCommands:
 
     def test_the_field_description_says_it_too(self):
         # The planner sees field descriptions even when it skims the prose.
-        from orchestrator.planner import PlannedStage
+        from code_gantry.planner import PlannedStage
 
         description = PlannedStage.model_fields["forbidden_patterns"].description
         assert "verif" in description.lower() or "check" in description.lower()
@@ -493,8 +493,8 @@ class TestTheCachedPrefixSurvivesALandedStage:
     """
 
     def a_review(self, completed=None, diff="d"):
-        from orchestrator.config import Stage
-        from orchestrator.prompts import build_review_messages
+        from code_gantry.config import Stage
+        from code_gantry.prompts import build_review_messages
 
         return build_review_messages(
             stage=Stage(id="s", instruction="i", edit_files=["a.py"]),
@@ -544,7 +544,7 @@ class TestThePlannerPrefixAlsoSurvivesALanding:
     """
 
     def test_the_plan_and_layout_are_marked(self):
-        from orchestrator.prompts import build_planner_messages
+        from code_gantry.prompts import build_planner_messages
 
         messages = build_planner_messages(
             cfg=None, plan=a_plan("PLAN_TEXT"), completed=[], layout="LAYOUT_TEXT"
@@ -557,7 +557,7 @@ class TestThePlannerPrefixAlsoSurvivesALanding:
         assert "cache_control" not in messages[0]["content"][-1]
 
     def test_the_history_is_outside_the_marked_block(self):
-        from orchestrator.prompts import build_planner_messages
+        from code_gantry.prompts import build_planner_messages
 
         landed = [{"id": "earlier", "index": 0, "merge_sha": "abc123"}]
         messages = build_planner_messages(
@@ -572,7 +572,7 @@ class TestThePlannerPrefixAlsoSurvivesALanding:
         at the end, which is what lets the provider extend the cached prefix
         rather than rebuild it.
         """
-        from orchestrator.prompts import build_planner_messages
+        from code_gantry.prompts import build_planner_messages
 
         one = build_planner_messages(
             cfg=None, plan=a_plan(), completed=[{"id": "x", "index": 0}], layout="L"
@@ -591,7 +591,7 @@ class TestThePlannerPrefixAlsoSurvivesALanding:
         ), "the history must grow at the end, never be rewritten"
 
     def test_the_history_still_reaches_the_planner(self):
-        from orchestrator.prompts import build_planner_messages
+        from code_gantry.prompts import build_planner_messages
 
         landed = [{"id": "earlier", "index": 0, "merge_sha": "abc123"}]
         messages = build_planner_messages(
@@ -680,7 +680,7 @@ class TestTheReviewerIsToldWhatTheEditorDoes:
     """
 
     def test_the_exemption_is_stated(self):
-        from orchestrator.prompts import REVIEW_SYSTEM_PROMPT
+        from code_gantry.prompts import REVIEW_SYSTEM_PROMPT
 
         text = REVIEW_SYSTEM_PROMPT.lower()
         assert "final newline" in text
@@ -691,7 +691,7 @@ class TestTheReviewerIsToldWhatTheEditorDoes:
         # it before committing, because a pre-commit hook rejecting it killed a
         # stage four times — so the diff the reviewer reads and the commit that
         # lands genuinely differ, and only the tool can say so.
-        from orchestrator.prompts import REVIEW_SYSTEM_PROMPT
+        from code_gantry.prompts import REVIEW_SYSTEM_PROMPT
 
         text = REVIEW_SYSTEM_PROMPT.lower()
         assert "trailing whitespace" in text
@@ -701,7 +701,7 @@ class TestTheReviewerIsToldWhatTheEditorDoes:
         # Not a licence on whitespace generally. Everything else about it stays
         # the reviewer's to judge, which is the difference between an exemption
         # and a hole.
-        from orchestrator.prompts import REVIEW_SYSTEM_PROMPT
+        from code_gantry.prompts import REVIEW_SYSTEM_PROMPT
 
         assert "anything else about whitespace" in REVIEW_SYSTEM_PROMPT.lower()
 
@@ -723,7 +723,7 @@ class TestTheBreakpointBudgetIsFullySpent:
         return [b for b in blocks if isinstance(b, dict) and "cache_control" in b]
 
     def test_the_built_message_spends_exactly_two(self):
-        from orchestrator.prompts import build_planner_messages
+        from code_gantry.prompts import build_planner_messages
 
         messages = build_planner_messages(
             cfg=SimpleNamespace(cache_ttl="1h"),
@@ -735,8 +735,8 @@ class TestTheBreakpointBudgetIsFullySpent:
         assert len(self._marks(messages[0]["content"])) == 2
 
     def test_system_plus_message_plus_the_moving_one_is_four(self):
-        from orchestrator.planner import _system_blocks, _with_loop_breakpoint
-        from orchestrator.prompts import build_planner_messages
+        from code_gantry.planner import _system_blocks, _with_loop_breakpoint
+        from code_gantry.prompts import build_planner_messages
 
         messages = build_planner_messages(
             cfg=SimpleNamespace(cache_ttl="1h"), plan=a_plan(), completed=[]
@@ -1049,7 +1049,7 @@ class TestReviewerToolGuidance:
     """
 
     def _cfg(self, repo_access):
-        from orchestrator.config import parse_config
+        from code_gantry.config import parse_config
 
         return parse_config(
             {
@@ -1064,7 +1064,7 @@ class TestReviewerToolGuidance:
         )
 
     def _system(self, repo_access):
-        from orchestrator.config import Stage
+        from code_gantry.config import Stage
 
         return build_review_messages(
             stage=Stage(id="s", instruction="do it", edit_files=["a.py"]),
@@ -1184,8 +1184,8 @@ class TestEveryParticipantSeesTheRepositoryConventions:
     def test_neither_prompt_invents_a_section_when_there_is_none(self):
         # A project without such a document is an ordinary case, and an empty
         # heading promising conventions is worse than no heading.
-        from orchestrator.config import Stage, parse_config
-        from orchestrator.prompts import build_executor_prompt
+        from code_gantry.config import Stage, parse_config
+        from code_gantry.prompts import build_executor_prompt
 
         cfg = parse_config(
             {
@@ -1229,7 +1229,7 @@ class TestThePlannerIsToldWhatTheChecksWillDo:
     """
 
     def _cfg(self, checks):
-        from orchestrator.config import parse_config
+        from code_gantry.config import parse_config
 
         return parse_config(
             {
@@ -1317,7 +1317,7 @@ class TestThePlannerIsToldToStateTheEndState:
     """
 
     def _system(self):
-        from orchestrator.planner import _system_blocks
+        from code_gantry.planner import _system_blocks
 
         return _system_blocks()[0]["text"]
 
@@ -1405,8 +1405,8 @@ class TestExecutorPromptCarriesNoProjectVocabulary:
     """
 
     def test_the_scaffolding_names_no_framework(self):
-        from orchestrator.config import Stage, parse_config
-        from orchestrator.prompts import build_executor_prompt
+        from code_gantry.config import Stage, parse_config
+        from code_gantry.prompts import build_executor_prompt
 
         cfg = parse_config(
             {
@@ -1450,7 +1450,7 @@ class TestTheExecutorSystemPrompt:
     """
 
     def test_it_states_the_tool_contract_and_what_runs_after(self, tmp_path):
-        from orchestrator.prompts import _executor_system_prompt
+        from code_gantry.prompts import _executor_system_prompt
 
         text = _executor_system_prompt(_exec_cfg(tmp_path))
         assert "exactly once" in text
@@ -1461,14 +1461,14 @@ class TestTheExecutorSystemPrompt:
         assert "no tool to do so" in text
 
     def test_it_names_no_projects_vocabulary(self, tmp_path):
-        from orchestrator.prompts import _executor_system_prompt
+        from code_gantry.prompts import _executor_system_prompt
 
         text = _executor_system_prompt(_exec_cfg(tmp_path)).lower()
         for word in ("rails", "rspec", "ruby", "python", "django", ".rb", ".py"):
             assert word not in text, word
 
     def test_an_operator_file_replaces_it(self, tmp_path):
-        from orchestrator.prompts import _executor_system_prompt
+        from code_gantry.prompts import _executor_system_prompt
 
         (tmp_path / "PROMPT.md").write_text("Follow the house style.\n")
         cfg = _exec_cfg(tmp_path, system_prompt_file="PROMPT.md")
@@ -1477,7 +1477,7 @@ class TestTheExecutorSystemPrompt:
     def test_a_named_file_that_cannot_be_read_raises(self, tmp_path):
         import pytest
 
-        from orchestrator.prompts import _executor_system_prompt
+        from code_gantry.prompts import _executor_system_prompt
 
         cfg = _exec_cfg(tmp_path, system_prompt_file="missing.md")
         # Not a silent fallback to the default: an operator who named a file
@@ -1487,10 +1487,10 @@ class TestTheExecutorSystemPrompt:
             _executor_system_prompt(cfg)
 
     def test_the_static_region_is_marked_and_the_stage_is_not(self, tmp_path):
-        from orchestrator.prompts import build_executor_messages
+        from code_gantry.prompts import build_executor_messages
 
         cfg = _exec_cfg(tmp_path)
-        from orchestrator.config import Stage
+        from code_gantry.config import Stage
 
         stage = Stage(id="s", instruction="do", edit_files=["a.py"])
         messages = build_executor_messages(
@@ -1509,7 +1509,7 @@ class TestTheExecutorSystemPrompt:
 
 
 def _exec_cfg(tmp_path, **executor_over):
-    from orchestrator.config import parse_config
+    from code_gantry.config import parse_config
 
     executor = {"model": "m"}
     executor.update(executor_over)
@@ -1535,7 +1535,7 @@ class TestTheConventionsAreFramedForWhoReadsThem:
     """
 
     def test_the_executor_is_not_told_it_is_judging(self):
-        from orchestrator.prompts import _conventions_block
+        from code_gantry.prompts import _conventions_block
 
         text = _conventions_block("SOME CONVENTIONS", role="executor").lower()
         assert "judging" not in text
@@ -1546,7 +1546,7 @@ class TestTheConventionsAreFramedForWhoReadsThem:
         # The repository's own file makes this argument about why its
         # operations document is kept separate: an agent handed a coding task
         # follows a command it cannot run rather than ignoring it.
-        from orchestrator.prompts import _conventions_block
+        from code_gantry.prompts import _conventions_block
 
         text = _conventions_block("SOME CONVENTIONS", role="executor")
         assert "cannot run commands" in text
@@ -1555,14 +1555,14 @@ class TestTheConventionsAreFramedForWhoReadsThem:
         # It sits inside a cached prefix that is written once per run, so a
         # change here is a cache miss on every stage as well as a change of
         # meaning.
-        from orchestrator.prompts import _conventions_block
+        from code_gantry.prompts import _conventions_block
 
         text = _conventions_block("SOME CONVENTIONS")
         assert "the diff you are judging" in text
         assert "a defect even where" in text
 
     def test_neither_invents_a_heading_when_there_is_no_document(self):
-        from orchestrator.prompts import _conventions_block
+        from code_gantry.prompts import _conventions_block
 
         assert _conventions_block(None, role="executor") == ""
         assert _conventions_block("   ") == ""
@@ -1583,7 +1583,7 @@ class TestTheTwoBehaviouralRulesTheOldEditorHad:
     """
 
     def test_a_placeholder_is_named_as_not_being_a_change(self, tmp_path):
-        from orchestrator.prompts import _executor_system_prompt
+        from code_gantry.prompts import _executor_system_prompt
 
         text = _executor_system_prompt(_exec_cfg(tmp_path))
         assert "TODO" in text
@@ -1596,14 +1596,14 @@ class TestTheTwoBehaviouralRulesTheOldEditorHad:
         # The tool enforces file-level scope and cannot enforce this one, so
         # the prompt has to say which half is which — otherwise "scope is
         # refused at the tool" reads as covering everything.
-        from orchestrator.prompts import _executor_system_prompt
+        from code_gantry.prompts import _executor_system_prompt
 
         text = _executor_system_prompt(_exec_cfg(tmp_path))
         assert "Within a file it may legitimately edit" in text
         assert "rejected even when it is an improvement" in text
 
     def test_neither_rule_names_a_projects_vocabulary(self, tmp_path):
-        from orchestrator.prompts import _executor_system_prompt
+        from code_gantry.prompts import _executor_system_prompt
 
         text = _executor_system_prompt(_exec_cfg(tmp_path)).lower()
         for word in ("rails", "rspec", "rubocop", "ruby", "python", ".rb"):
@@ -1635,21 +1635,21 @@ class TestTheTwoWaysAStageIsLeftHalfDone:
     """
 
     def test_a_partial_sweep_is_named_as_not_finished(self, tmp_path):
-        from orchestrator.prompts import _executor_system_prompt
+        from code_gantry.prompts import _executor_system_prompt
 
         text = _executor_system_prompt(_exec_cfg(tmp_path))
         assert "every site" in text
         assert "count" in text
 
     def test_work_that_is_already_true_is_named_as_success(self, tmp_path):
-        from orchestrator.prompts import _executor_system_prompt
+        from code_gantry.prompts import _executor_system_prompt
 
         text = _executor_system_prompt(_exec_cfg(tmp_path))
         assert "already true" in text
         assert "Do not manufacture a change" in text
 
     def test_neither_names_a_projects_vocabulary(self, tmp_path):
-        from orchestrator.prompts import _executor_system_prompt
+        from code_gantry.prompts import _executor_system_prompt
 
         text = _executor_system_prompt(_exec_cfg(tmp_path)).lower()
         for word in ("rails", "rspec", "rubocop", "ruby", "python", ".rb", "app/"):
@@ -1670,8 +1670,8 @@ class TestTheReadListIsDescribedAsAHintNotAFence:
     """
 
     def test_it_does_not_claim_to_be_the_limit_of_what_may_be_read(self, tmp_path):
-        from orchestrator.config import Stage
-        from orchestrator.prompts import build_executor_prompt
+        from code_gantry.config import Stage
+        from code_gantry.prompts import build_executor_prompt
 
         stage = Stage(
             id="s", instruction="do", edit_files=["a.py"], read_files=["b.py"]
@@ -1683,8 +1683,8 @@ class TestTheReadListIsDescribedAsAHintNotAFence:
     def test_it_still_says_the_write_list_is_enforced(self, tmp_path):
         # The asymmetry is the point: reading a file the planner did not
         # anticipate cannot damage the repository, writing one can.
-        from orchestrator.config import Stage
-        from orchestrator.prompts import build_executor_prompt
+        from code_gantry.config import Stage
+        from code_gantry.prompts import build_executor_prompt
 
         stage = Stage(
             id="s", instruction="do", edit_files=["a.py"], read_files=["b.py"]
@@ -1693,8 +1693,8 @@ class TestTheReadListIsDescribedAsAHintNotAFence:
         assert "that one is enforced" in text
 
     def test_a_stage_with_no_read_files_says_nothing(self, tmp_path):
-        from orchestrator.config import Stage
-        from orchestrator.prompts import build_executor_prompt
+        from code_gantry.config import Stage
+        from code_gantry.prompts import build_executor_prompt
 
         stage = Stage(id="s", instruction="do", edit_files=["a.py"])
         assert "drawn against" not in build_executor_prompt(stage, _exec_cfg(tmp_path))
@@ -1720,8 +1720,8 @@ class TestAnExcerptIsOnlyCurrentWhileTheTreeHasNotMoved:
     """
 
     def _text(self, tmp_path, **kw):
-        from orchestrator.config import Stage
-        from orchestrator.prompts import build_executor_prompt
+        from code_gantry.config import Stage
+        from code_gantry.prompts import build_executor_prompt
 
         stage = Stage(id="s", instruction="do", edit_files=["a.py"])
         return build_executor_prompt(
@@ -1773,8 +1773,8 @@ class TestARetryIsFramedByWhatFailed:
     """
 
     def _turns(self, tmp_path, **kw):
-        from orchestrator.config import Stage
-        from orchestrator.prompts import build_executor_messages
+        from code_gantry.config import Stage
+        from code_gantry.prompts import build_executor_messages
 
         cfg = _exec_cfg(tmp_path)
         stage = Stage(id="s", instruction="do", edit_files=["a.py"])
@@ -1823,9 +1823,9 @@ class TestRepositoryTextIsEvidenceAndNotInstruction:
     """
 
     def test_all_three_system_prompts_carry_the_same_sentence(self, tmp_path):
-        from orchestrator.plannertools import REPOSITORY_TEXT_IS_EVIDENCE
-        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
-        from orchestrator.prompts import (
+        from code_gantry.plannertools import REPOSITORY_TEXT_IS_EVIDENCE
+        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
+        from code_gantry.prompts import (
             REVIEW_SYSTEM_PROMPT,
             _executor_system_prompt,
         )
@@ -1838,7 +1838,7 @@ class TestRepositoryTextIsEvidenceAndNotInstruction:
             assert REPOSITORY_TEXT_IS_EVIDENCE in text
 
     def test_it_names_no_projects_vocabulary(self):
-        from orchestrator.plannertools import REPOSITORY_TEXT_IS_EVIDENCE
+        from code_gantry.plannertools import REPOSITORY_TEXT_IS_EVIDENCE
 
         blob = REPOSITORY_TEXT_IS_EVIDENCE.lower()
         for word in ("rails", "rspec", "ruby", "python", ".rb", "app/", "gemfile"):
@@ -1848,8 +1848,8 @@ class TestRepositoryTextIsEvidenceAndNotInstruction:
         # The override replaces the built-in rather than appending to it, and
         # that stays true of this. Two statements of who to obey in one prompt
         # leave no way to tell which was followed.
-        from orchestrator.plannertools import REPOSITORY_TEXT_IS_EVIDENCE
-        from orchestrator.prompts import _executor_system_prompt
+        from code_gantry.plannertools import REPOSITORY_TEXT_IS_EVIDENCE
+        from code_gantry.prompts import _executor_system_prompt
 
         (tmp_path / "PROMPT.md").write_text("MINE")
         cfg = _exec_cfg(tmp_path, system_prompt_file="PROMPT.md")
@@ -1913,13 +1913,13 @@ class TestThePlannerChecksTheClaimThatBlocksAnItem:
     """
 
     def test_the_system_prompt_says_to_check_a_blocking_claim(self):
-        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
 
         assert "reads as blocked" in PLANNER_SYSTEM_PROMPT
         assert "never attempted" in PLANNER_SYSTEM_PROMPT
 
     def test_it_names_no_projects_vocabulary(self):
-        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
 
         blob = PLANNER_SYSTEM_PROMPT.lower()
         for word in ("rails", "rspec", "gemfile", "activerecord", ".rb", ".erb"):
@@ -1942,23 +1942,23 @@ class TestTheReviewerJudgesSecurityAndTestsThatCannotFail:
     """
 
     def test_security_is_named_as_in_scope_without_being_asked_for(self):
-        from orchestrator.prompts import REVIEW_SYSTEM_PROMPT
+        from code_gantry.prompts import REVIEW_SYSTEM_PROMPT
 
         assert "introduces or exposes" in REVIEW_SYSTEM_PROMPT
         assert "even where the stage said nothing about it" in REVIEW_SYSTEM_PROMPT
 
     def test_a_test_that_cannot_fail_is_named(self):
-        from orchestrator.prompts import REVIEW_SYSTEM_PROMPT
+        from code_gantry.prompts import REVIEW_SYSTEM_PROMPT
 
         assert "could not fail" in REVIEW_SYSTEM_PROMPT
 
     def test_rework_asks_for_the_smallest_correction_not_a_design(self):
-        from orchestrator.prompts import REVIEW_SYSTEM_PROMPT
+        from code_gantry.prompts import REVIEW_SYSTEM_PROMPT
 
         assert "smallest change that fixes it" in REVIEW_SYSTEM_PROMPT
 
     def test_none_of_it_names_a_projects_vocabulary(self):
-        from orchestrator.prompts import REVIEW_SYSTEM_PROMPT
+        from code_gantry.prompts import REVIEW_SYSTEM_PROMPT
 
         blob = REVIEW_SYSTEM_PROMPT.lower()
         for word in (
@@ -1992,7 +1992,7 @@ class TestAVerifiedFindingGoesWhereItSurvives:
     """
 
     def test_the_blocking_claim_section_routes_to_a_plan_note(self):
-        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
 
         section = PLANNER_SYSTEM_PROMPT[
             PLANNER_SYSTEM_PROMPT.index("## Check the claim that stops you"):
@@ -2010,7 +2010,7 @@ class TestAVerifiedFindingGoesWhereItSurvives:
     def test_the_field_that_forgets_is_named_as_such(self):
         # Not a bare redirection: the planner has to know why, or the next
         # edit to either passage puts it back.
-        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
 
         assert "survives to the next call" in PLANNER_SYSTEM_PROMPT
 
@@ -2049,8 +2049,8 @@ class TestTheScopeListSaysWhichFilesDoNotExist:
     """
 
     def _prompt(self, tmp_path, edit_files):
-        from orchestrator.config import Stage
-        from orchestrator.prompts import build_executor_prompt
+        from code_gantry.config import Stage
+        from code_gantry.prompts import build_executor_prompt
 
         return build_executor_prompt(
             Stage(id="s", instruction="do", edit_files=edit_files),
@@ -2107,13 +2107,13 @@ class TestNoPromptDescribesTheExecutorThatWasDeleted:
         # `RepoReader` never consults `stage.read_files`, and the executor's own
         # prompt says so — "not a permission list: you may read anything in the
         # repository". The planner was told the opposite.
-        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
 
         assert "reads the files you name" not in PLANNER_SYSTEM_PROMPT
 
     def test_the_planner_is_not_told_the_executor_cannot_search(self):
         # It has `search`, which is grep over the repository.
-        from orchestrator.planner import _system_blocks
+        from code_gantry.planner import _system_blocks
 
         text = _system_blocks()[0]["text"]
         assert "cannot run `grep`" not in text
@@ -2122,15 +2122,15 @@ class TestNoPromptDescribesTheExecutorThatWasDeleted:
     def test_the_planner_is_not_told_the_executor_never_sees_a_test_result(self):
         # The loop runs the gates after every batch and appends the failure to
         # the same conversation. The executor's own prompt describes this.
-        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
 
         assert "cannot see the result of one" not in PLANNER_SYSTEM_PROMPT
 
     def test_no_prompt_calls_the_executor_a_local_model(self):
         # Measured against a hosted model since the cutover; the economics note
         # in the project instructions exists because that changed.
-        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
-        from orchestrator.prompts import REVIEW_SYSTEM_PROMPT
+        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
+        from code_gantry.prompts import REVIEW_SYSTEM_PROMPT
 
         for text in (PLANNER_SYSTEM_PROMPT, REVIEW_SYSTEM_PROMPT):
             assert "local model" not in text
@@ -2138,13 +2138,13 @@ class TestNoPromptDescribesTheExecutorThatWasDeleted:
     def test_the_instruction_field_does_not_ask_for_what_validation_rejects(self):
         # `validate_stage` rejects a fenced block in `instruction` outright, and
         # this field told the planner to use them.
-        from orchestrator.planner import PlannedStage
+        from code_gantry.planner import PlannedStage
 
         d = PlannedStage.model_fields["instruction"].description
         assert "fenced blocks" not in d
 
     def test_read_files_is_not_described_as_a_permission_list(self):
-        from orchestrator.planner import PlannedStage
+        from code_gantry.planner import PlannedStage
 
         d = PlannedStage.model_fields["read_files"].description
         assert "may read" not in d
@@ -2154,7 +2154,7 @@ class TestNoPromptDescribesTheExecutorThatWasDeleted:
         # when it bites — and its remedy named the wrong tool besides.
         import inspect
 
-        from orchestrator import gates
+        from code_gantry import gates
 
         src = inspect.getsource(gates)
         assert "creates a file named in your scope" not in src
@@ -2166,7 +2166,7 @@ class TestNoPromptDescribesTheExecutorThatWasDeleted:
         method and its argument, in a string shipped to every project's planner
         and which no project can correct. Project knowledge belongs in config.
         """
-        from orchestrator.planner import PlannedStage, PlannerResponse
+        from code_gantry.planner import PlannedStage, PlannerResponse
 
         blob = " ".join(
             (f.description or "")
@@ -2205,8 +2205,8 @@ class TestAnExcerptHeadingDoesNotSwallowItsNote:
     """
 
     def _headings(self, tmp_path, excerpts):
-        from orchestrator.config import Stage
-        from orchestrator.prompts import build_executor_prompt
+        from code_gantry.config import Stage
+        from code_gantry.prompts import build_executor_prompt
 
         text = build_executor_prompt(
             Stage(id="s", instruction="do", edit_files=["a"]),
@@ -2320,7 +2320,7 @@ class TestThePlannerPromptIsRecordedBeforeItIsSent:
     """
 
     def test_every_block_is_listed_with_its_size(self):
-        from orchestrator.nodes import _render_sent_prompt
+        from code_gantry.nodes import _render_sent_prompt
 
         out = _render_sent_prompt([
             {"role": "user", "content": [
@@ -2336,7 +2336,7 @@ class TestThePlannerPromptIsRecordedBeforeItIsSent:
     def test_a_cache_breakpoint_is_marked(self):
         # Where the breakpoints fall is most of why a prompt costs what it
         # does, and it is invisible in the text itself.
-        from orchestrator.nodes import _render_sent_prompt
+        from code_gantry.nodes import _render_sent_prompt
 
         out = _render_sent_prompt([
             {"role": "user", "content": [
@@ -2347,7 +2347,7 @@ class TestThePlannerPromptIsRecordedBeforeItIsSent:
         assert out.count("[cache breakpoint]") == 2  # summary line and section
 
     def test_the_text_itself_is_kept(self):
-        from orchestrator.nodes import _render_sent_prompt
+        from code_gantry.nodes import _render_sent_prompt
 
         out = _render_sent_prompt([{"role": "user", "content": "the actual bytes"}])
         assert "the actual bytes" in out
@@ -2371,7 +2371,7 @@ class TestHowLargeOneStageShouldBe:
     """
 
     def _text(self):
-        from orchestrator.prompts import _stage_size_block
+        from code_gantry.prompts import _stage_size_block
 
         return _stage_size_block()
 
@@ -2439,7 +2439,7 @@ class TestTheCostsBlockTellsThePlannerHowToUseIt:
     """
 
     def _block(self):
-        from orchestrator.prompts import _costs_block
+        from code_gantry.prompts import _costs_block
 
         return _costs_block([
             {"merge_sha": "b52851a90c6398", "stage_id": "some-stage",
@@ -2474,7 +2474,7 @@ class TestTheCostsBlockTellsThePlannerHowToUseIt:
         assert "`b52851a90c63`" in self._block()
 
     def test_no_costs_is_no_block(self):
-        from orchestrator.prompts import _costs_block
+        from code_gantry.prompts import _costs_block
 
         assert _costs_block([]) == ""
 
@@ -2493,7 +2493,7 @@ class TestTheCostLineCarriesWhatChanged:
     """
 
     def _block(self, entry):
-        from orchestrator.prompts import _costs_block
+        from code_gantry.prompts import _costs_block
 
         return _costs_block([{
             "merge_sha": "b52851a90c6398", "stage_id": "some-stage",
@@ -2535,7 +2535,7 @@ class TestTheCostsAreReadComparatively:
     """
 
     def _text(self):
-        from orchestrator.prompts import _costs_block
+        from code_gantry.prompts import _costs_block
 
         return _costs_block([{
             "merge_sha": "b52851a90c6398", "stage_id": "s",
@@ -2582,7 +2582,7 @@ class TestARedrawIsAskedWhatItLearned:
     """
 
     def _revision_prompt(self, **over):
-        from orchestrator.config import Stage
+        from code_gantry.config import Stage
 
         kwargs = dict(
             cfg=_cfg(),

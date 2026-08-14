@@ -41,15 +41,15 @@ import os
 import time
 from pathlib import Path
 
-from orchestrator import gates
-from orchestrator.config import ProjectConfig, Stage
-from orchestrator.edittools import FileEditor
-from orchestrator.executor import ExecutionResult
-from orchestrator.gitops import Git, GitError
+from code_gantry import gates
+from code_gantry.config import ProjectConfig, Stage
+from code_gantry.edittools import FileEditor
+from code_gantry.executor import ExecutionResult
+from code_gantry.gitops import Git, GitError
 
 
 def _digest(git: Git, since_sha: str) -> str:
-    from orchestrator.verify import diff_digest
+    from code_gantry.verify import diff_digest
 
     return diff_digest(git, since_sha)
 
@@ -180,8 +180,8 @@ _PRICES: dict | None = None
 def _prices() -> dict:
     global _PRICES
     if _PRICES is None:
-        from orchestrator.pricing import load_price_map
-        from orchestrator.report import PRICE_MAP_FILENAME
+        from code_gantry.pricing import load_price_map
+        from code_gantry.report import PRICE_MAP_FILENAME
 
         _PRICES = load_price_map(
             os.environ.get("ORCHESTRATOR_PRICE_MAP") or PRICE_MAP_FILENAME
@@ -206,7 +206,7 @@ def _price(usage, model: str | None) -> float | None:
     """
     if usage is None:
         return None
-    from orchestrator.pricing import entry_for, price_usage
+    from code_gantry.pricing import entry_for, price_usage
 
     prices = _prices()
     return price_usage(
@@ -245,7 +245,7 @@ def _with_lint_rewrite(failure, diff: str):
     """
     if not diff.strip():
         return failure
-    from orchestrator.commands import clip_for_model
+    from code_gantry.commands import clip_for_model
 
     failure.feedback = (
         f"{failure.feedback}\n\n"
@@ -387,7 +387,7 @@ def _commit_if_dirty(
 
 
 def _merge(left, right):
-    from orchestrator.openaiclient import TokenUsage, merge_usage
+    from code_gantry.openaiclient import TokenUsage, merge_usage
 
     if left is None:
         return right
@@ -409,8 +409,8 @@ def build_loop_parts(stage: Stage, cfg: ProjectConfig, repo: Path):
     executor is simply the caller that most often has such files, having just
     written them.
     """
-    from orchestrator.repotools import ReadBudget, RepoReader
-    from orchestrator.semantic import SemanticSearch, SemanticSearchConfig
+    from code_gantry.repotools import ReadBudget, RepoReader
+    from code_gantry.semantic import SemanticSearch, SemanticSearchConfig
 
     reader = RepoReader(
         Git(repo),

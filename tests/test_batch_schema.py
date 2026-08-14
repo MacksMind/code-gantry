@@ -37,7 +37,7 @@ def _fields(sid="s", **over):
 
 class TestTheFieldItself:
     def test_it_defaults_to_empty(self):
-        from orchestrator.planner import PlannerResponse
+        from code_gantry.planner import PlannerResponse
 
         r = PlannerResponse(
             verdict="next_stage", reasoning="r", status_entry="e", stage=_fields()
@@ -45,7 +45,7 @@ class TestTheFieldItself:
         assert r.additional_stages == []
 
     def test_it_accepts_a_batch(self):
-        from orchestrator.planner import PlannerResponse
+        from code_gantry.planner import PlannerResponse
 
         r = PlannerResponse(
             verdict="next_stage", reasoning="r", status_entry="e",
@@ -76,7 +76,7 @@ class TestTheFieldItself:
         So the number moves to the prompt, where the cap is known and can be
         stated as one, and this field points at it instead of pre-empting it.
         """
-        from orchestrator.planner import PlannerResponse
+        from code_gantry.planner import PlannerResponse
 
         d = PlannerResponse.model_fields["additional_stages"].description.lower()
         assert "stated in the prompt" in d
@@ -97,7 +97,7 @@ class TestTheFieldItself:
         # purpose.
         from types import SimpleNamespace
 
-        from orchestrator.prompts import _batch_block
+        from code_gantry.prompts import _batch_block
 
         text = _batch_block(
             SimpleNamespace(planner=SimpleNamespace(max_batch_stages=5))
@@ -110,8 +110,8 @@ class TestEveryBatchedStageIsChecked:
     """A batched stage is not a lesser stage."""
 
     def _planner(self, validate):
-        from orchestrator.config import PlannerConfig
-        from orchestrator.planner import AnthropicPlanner
+        from code_gantry.config import PlannerConfig
+        from code_gantry.planner import AnthropicPlanner
 
         p = AnthropicPlanner.__new__(AnthropicPlanner)
         p.cfg = PlannerConfig(model="claude-opus-5")
@@ -119,7 +119,7 @@ class TestEveryBatchedStageIsChecked:
         return p
 
     def test_a_problem_in_a_batched_stage_is_reported(self):
-        from orchestrator.planner import AnthropicPlanner, PlannerResponse
+        from code_gantry.planner import AnthropicPlanner, PlannerResponse
 
         def validate(fields):
             return ["fenced code block"] if fields["id"] == "three" else []
@@ -133,7 +133,7 @@ class TestEveryBatchedStageIsChecked:
         assert problem and "three" in problem, problem
 
     def test_a_clean_batch_reports_nothing(self):
-        from orchestrator.planner import AnthropicPlanner, PlannerResponse
+        from code_gantry.planner import AnthropicPlanner, PlannerResponse
 
         parsed = PlannerResponse(
             verdict="next_stage", reasoning="r", status_entry="e",
@@ -142,7 +142,7 @@ class TestEveryBatchedStageIsChecked:
         assert AnthropicPlanner._unusable(self._planner(lambda f: []), parsed) is None
 
     def test_the_first_stage_is_still_checked(self):
-        from orchestrator.planner import AnthropicPlanner, PlannerResponse
+        from code_gantry.planner import AnthropicPlanner, PlannerResponse
 
         parsed = PlannerResponse(
             verdict="next_stage", reasoning="r", status_entry="e",
@@ -162,7 +162,7 @@ class TestTheAllowlistAppliesToEveryStage:
         batched stage that skipped it would let the planner author a command
         by putting it second in the list.
         """
-        from orchestrator.config import parse_config
+        from code_gantry.config import parse_config
 
         cfg = parse_config({
             "target_repo": ".", "base_ref": "main", "project_branch": "p",

@@ -28,13 +28,13 @@ import subprocess
 import pytest
 from click.testing import CliRunner
 
-from orchestrator import cli
-from orchestrator.cli import _startup_banner
-from orchestrator.runtime import ProjectPaths
+from code_gantry import cli
+from code_gantry.cli import _startup_banner
+from code_gantry.runtime import ProjectPaths
 
 
 def _cfg(tmp_path):
-    from orchestrator.config import parse_config
+    from code_gantry.config import parse_config
 
     return parse_config({
         "target_repo": str(tmp_path),
@@ -87,7 +87,7 @@ class TestItIsAnAnchorForAMonitor:
         # A monitor has to be able to find the last one without knowing the
         # slug, the branch or the time it started.
         text = _startup_banner("run", "demo", _cfg(tmp_path), pid=4242)
-        assert text.splitlines()[0].startswith("=== orchestrator ")
+        assert text.splitlines()[0].startswith("=== code-gantry ")
 
     def test_two_invocations_in_one_second_are_still_distinct(self, tmp_path):
         a = _startup_banner("run", "demo", _cfg(tmp_path), pid=1, now="2026-01-01T00:00:00Z")
@@ -150,12 +150,12 @@ reviewer:
     def test_run_banners_before_preflight(self, demo, monkeypatch):
         self._preflight_explodes(monkeypatch)
         result = CliRunner().invoke(cli.main, ["run", "projects/demo/config.yaml"], catch_exceptions=True)
-        assert "=== orchestrator run " in result.output
+        assert "=== code-gantry run " in result.output
         assert isinstance(result.exception, RuntimeError)
 
     def test_resume_banners_before_preflight(self, demo, monkeypatch):
         self._preflight_explodes(monkeypatch)
-        from orchestrator.config import parse_config
+        from code_gantry.config import parse_config
 
         cfg = parse_config(
             {
@@ -176,5 +176,5 @@ reviewer:
             ["resume", "projects/demo/config.yaml", "20260807-x"],
             catch_exceptions=True,
         )
-        assert "=== orchestrator resume 20260807-x" in result.output
+        assert "=== code-gantry resume 20260807-x" in result.output
         assert isinstance(result.exception, RuntimeError)

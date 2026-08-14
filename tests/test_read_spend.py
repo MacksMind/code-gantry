@@ -23,11 +23,11 @@ raising. It reaches through the reader now.
 
 import pytest
 
-from orchestrator.repotools import ReadBudget, RepoReader, Spend, ToolCall
+from code_gantry.repotools import ReadBudget, RepoReader, Spend, ToolCall
 
 
 def _reader(tmp_path, **over):
-    from orchestrator.gitops import Git
+    from code_gantry.gitops import Git
 
     budget = dict(
         max_lines_per_call=100, max_total_lines=1000,
@@ -71,7 +71,7 @@ class TestTheSharedLedgerSurvivesReplacement:
     """The hazard the container introduced, and the reason for reaching through."""
 
     def test_semantic_search_sees_the_current_ledger(self, tmp_path):
-        from orchestrator.semantic import SemanticSearch, SemanticSearchConfig
+        from code_gantry.semantic import SemanticSearch, SemanticSearchConfig
 
         r = _reader(tmp_path)
         s = SemanticSearch(
@@ -82,7 +82,7 @@ class TestTheSharedLedgerSurvivesReplacement:
         assert len(r.spend.calls) == 1, "the semantic call must land in the reader"
 
     def test_the_two_are_the_same_list_not_a_copy(self, tmp_path):
-        from orchestrator.semantic import SemanticSearch, SemanticSearchConfig
+        from code_gantry.semantic import SemanticSearch, SemanticSearchConfig
 
         r = _reader(tmp_path)
         s = SemanticSearch(
@@ -95,7 +95,7 @@ class TestTheSharedLedgerSurvivesReplacement:
     def test_semantic_search_still_works_with_no_reader(self, tmp_path):
         # Every existing test constructs it bare, and the executor's semantic
         # tool is built the same way.
-        from orchestrator.semantic import SemanticSearch, SemanticSearchConfig
+        from code_gantry.semantic import SemanticSearch, SemanticSearchConfig
 
         s = SemanticSearch(SemanticSearchConfig(api_base="http://x", qdrant_url="http://q", embedding_model="m", collection="c"))
         s.calls.append(ToolCall(tool="semantic_search", detail="q", lines=1))
@@ -120,20 +120,20 @@ class TestTheSpendIsVisibleFromOutside:
         return SimpleNamespace(reader=r)
 
     def test_it_reports_used_and_limit(self, tmp_path):
-        from orchestrator.nodes import _spent
+        from code_gantry.nodes import _spent
 
         assert _spent(self._role(tmp_path, 120_000)) == " (120k/800k chars)"
 
     def test_a_fresh_step_reports_zero(self, tmp_path):
         # What the fix looks like from outside: this number returns to zero
         # every step. If it climbs across steps, the reset is not happening.
-        from orchestrator.nodes import _spent
+        from code_gantry.nodes import _spent
 
         assert _spent(self._role(tmp_path, 0)) == " (0k/800k chars)"
 
     def test_a_role_without_repo_access_prints_nothing(self, tmp_path):
         from types import SimpleNamespace
 
-        from orchestrator.nodes import _spent
+        from code_gantry.nodes import _spent
 
         assert _spent(SimpleNamespace(reader=None)) == ""

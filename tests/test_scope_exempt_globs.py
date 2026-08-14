@@ -29,7 +29,7 @@ import pytest
 def _ctx(tmp_path, edit_files, exempt=()):
     from types import SimpleNamespace
 
-    from orchestrator.config import Stage, parse_config
+    from code_gantry.config import Stage, parse_config
 
     cfg = parse_config({
         "target_repo": str(tmp_path), "base_ref": "main", "project_branch": "p",
@@ -48,7 +48,7 @@ def _ctx(tmp_path, edit_files, exempt=()):
 
 class TestAnExemptPathIsNotAScopeViolation:
     def test_without_an_exemption_it_fails(self, tmp_path):
-        from orchestrator.verify import out_of_scope_paths
+        from code_gantry.verify import out_of_scope_paths
 
         ctx = _ctx(tmp_path, ["app/**"])
         assert out_of_scope_paths(
@@ -56,7 +56,7 @@ class TestAnExemptPathIsNotAScopeViolation:
         ) == ["spec/vcr/Thing/example.yml"]
 
     def test_with_an_exemption_it_does_not(self, tmp_path):
-        from orchestrator.verify import out_of_scope_paths
+        from code_gantry.verify import out_of_scope_paths
 
         ctx = _ctx(tmp_path, ["app/**"], ["spec/vcr/**"])
         assert out_of_scope_paths(
@@ -65,7 +65,7 @@ class TestAnExemptPathIsNotAScopeViolation:
 
     def test_it_does_not_excuse_anything_else(self, tmp_path):
         # An exemption is a named allowance, not a general softening.
-        from orchestrator.verify import out_of_scope_paths
+        from code_gantry.verify import out_of_scope_paths
 
         ctx = _ctx(tmp_path, ["app/**"], ["spec/vcr/**"])
         assert out_of_scope_paths(
@@ -73,7 +73,7 @@ class TestAnExemptPathIsNotAScopeViolation:
         ) == ["config/routes.rb"]
 
     def test_declaring_nothing_behaves_as_before(self, tmp_path):
-        from orchestrator.verify import out_of_scope_paths
+        from code_gantry.verify import out_of_scope_paths
 
         ctx = _ctx(tmp_path, ["app/**"])
         assert out_of_scope_paths(["lib/x.rb"], ctx) == ["lib/x.rb"]
@@ -83,6 +83,6 @@ class TestItIsProjectKnowledge:
     def test_there_is_no_default(self):
         # A default naming `spec/vcr` would ship one project's VCR
         # configuration to every other project's scope gate.
-        from orchestrator.config import ProjectConfig
+        from code_gantry.config import ProjectConfig
 
         assert ProjectConfig.model_fields["scope_exempt_globs"].default_factory() == []

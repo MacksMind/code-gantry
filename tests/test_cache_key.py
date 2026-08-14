@@ -13,7 +13,7 @@ this file is really about: one fix, two places, and the second one found by a
 live run.
 """
 
-from orchestrator.cachekey import MAX_CACHE_KEY, cache_key
+from code_gantry.cachekey import MAX_CACHE_KEY, cache_key
 
 
 class TestItFits:
@@ -23,11 +23,11 @@ class TestItFits:
             "/Users/someone/projects/company/product/docs/"
             "a_long_migration_project_name/.code_gantry"
         )
-        assert len(f"orchestrator:{identity}") > MAX_CACHE_KEY
-        assert len(cache_key("orchestrator", identity)) <= MAX_CACHE_KEY
+        assert len(f"code_gantry:{identity}") > MAX_CACHE_KEY
+        assert len(cache_key("code_gantry", identity)) <= MAX_CACHE_KEY
 
     def test_any_identity_at_all_fits(self):
-        assert len(cache_key("orchestrator", "x" * 5_000)) <= MAX_CACHE_KEY
+        assert len(cache_key("code_gantry", "x" * 5_000)) <= MAX_CACHE_KEY
 
 
 class TestItStaysTheSameKey:
@@ -55,10 +55,10 @@ class TestItDoesNotCollide:
         the normal case, not a contrived one.
         """
         base = "/Users/someone/projects/company/a_rather_long_parent_directory/"
-        one = cache_key("orchestrator", base + "project-one/.code_gantry")
-        two = cache_key("orchestrator", base + "project-two/.code_gantry")
+        one = cache_key("code_gantry", base + "project-one/.code_gantry")
+        two = cache_key("code_gantry", base + "project-two/.code_gantry")
         assert one != two
 
     def test_the_role_still_separates_two_roles_on_one_project(self):
         identity = "/a/long/identity/" + "z" * 80
-        assert cache_key("exec", identity) != cache_key("orchestrator", identity)
+        assert cache_key("exec", identity) != cache_key("code_gantry", identity)

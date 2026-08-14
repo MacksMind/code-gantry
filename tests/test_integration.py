@@ -14,16 +14,16 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from orchestrator.config import parse_config
-from orchestrator.gitops import Git
-from orchestrator.driver import default_max_steps, open_checkpointer
-from orchestrator.driver import drive as drive_graph
-from orchestrator.plandoc import PlanDocument, PlanTree
-from orchestrator.planner import PlannerOutcome, PlannerUsage
-from orchestrator.report import build_report
-from orchestrator.reviewer import ReviewOutcome, TokenUsage
-from orchestrator.runtime import ProjectPaths, RunPaths, Runtime
-from orchestrator.state import new_state
+from code_gantry.config import parse_config
+from code_gantry.gitops import Git
+from code_gantry.driver import default_max_steps, open_checkpointer
+from code_gantry.driver import drive as drive_graph
+from code_gantry.plandoc import PlanDocument, PlanTree
+from code_gantry.planner import PlannerOutcome, PlannerUsage
+from code_gantry.report import build_report
+from code_gantry.reviewer import ReviewOutcome, TokenUsage
+from code_gantry.runtime import ProjectPaths, RunPaths, Runtime
+from code_gantry.state import new_state
 
 
 @dataclass
@@ -81,9 +81,9 @@ def scripted_edits(tmp_path, monkeypatch):
     breaks on, and the refusal path — three things this suite exists to cover
     end to end.
     """
-    from orchestrator import executorclient
-    from orchestrator.executorclient import ExecutorTurn
-    from orchestrator.repotools import ToolError
+    from code_gantry import executorclient
+    from code_gantry.executorclient import ExecutorTurn
+    from code_gantry.repotools import ToolError
 
     queue = tmp_path / "edits.json"
     queue.write_text("[]")
@@ -140,8 +140,8 @@ def drive(repo, tmp_path, planner=None, reviewer=None, state=None, run_id="r1", 
     paths = RunPaths(project, run_id)
     paths.ensure()
 
-    from orchestrator.commands import CommandRunner
-    from orchestrator.executor import Executor
+    from code_gantry.commands import CommandRunner
+    from code_gantry.executor import Executor
 
     runner = CommandRunner(cwd=repo, timeout=60)
     checkpoint, conn = open_checkpointer(paths.state_db)
@@ -534,8 +534,8 @@ class TestResume:
 
         checkpoint, conn = open_checkpointer(paths.state_db)
         try:
-            from orchestrator.commands import CommandRunner
-            from orchestrator.executor import Executor
+            from code_gantry.commands import CommandRunner
+            from code_gantry.executor import Executor
 
             runner = CommandRunner(cwd=repo, timeout=60)
             rt = Runtime(
@@ -545,7 +545,7 @@ class TestResume:
             # Read back from the checkpoint table rather than through a
             # compiled graph: state is a row now, and reading it needs no
             # runtime at all.
-            from orchestrator.driver import load_state
+            from code_gantry.driver import load_state
 
             assert load_state(paths.state_db, "r1")["status"] == "complete"
         finally:
@@ -637,7 +637,7 @@ class TestReportOnRealRun:
         cfg, project, paths, final = drive(repo, tmp_path, planner=planner)
         report = build_report(final, cfg)
         assert "Why it stopped" in report
-        assert "orchestrator resume" in report
+        assert "code-gantry resume" in report
 
 
 class TestACrashReachesTheRunLog:
@@ -657,7 +657,7 @@ class TestACrashReachesTheRunLog:
     """
 
     def test_the_exception_is_written_to_the_run_log(self, tmp_path):
-        from orchestrator.runlog import RunLog
+        from code_gantry.runlog import RunLog
 
         path = tmp_path / "run.log"
         log = RunLog(path)
@@ -681,7 +681,7 @@ class TestACrashReachesTheRunLog:
         # The defect was structural: try/finally with nothing catching. Pin it,
         # because it reads as complete and is not.
         import inspect
-        from orchestrator import cli
+        from code_gantry import cli
 
         source = inspect.getsource(cli._drive)
         assert "except Exception" in source

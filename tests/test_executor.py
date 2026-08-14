@@ -13,15 +13,15 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator.commands import CommandRunner
-from orchestrator.config import Stage, parse_config
-from orchestrator.executor import (
+from code_gantry.commands import CommandRunner
+from code_gantry.config import Stage, parse_config
+from code_gantry.executor import (
     Executor,
     ExcerptError,
     resolve_excerpts,
 )
-from orchestrator.gitops import Git
-from orchestrator.repotools import SEPARATOR
+from code_gantry.gitops import Git
+from code_gantry.repotools import SEPARATOR
 
 
 BASE_STAGE ={"id": "s1", "instruction": "do it", "edit_files": ["app/**", "src/*.py"]}
@@ -80,7 +80,7 @@ class TestReadContextBudget:
             target_repo=str(tmp_path),
             stage_overrides={"read_files": ["a.rb", "b.rb"]},
         )
-        from orchestrator.executor import _within_read_budget
+        from code_gantry.executor import _within_read_budget
 
         assert _within_read_budget(stage.read_files, cfg) == ["a.rb", "b.rb"]
 
@@ -94,7 +94,7 @@ class TestReadContextBudget:
             stage_overrides={"read_files": ["small.rb", "mid.rb", "huge.rb"]},
             executor={"model": "m", "max_read_lines": 400},
         )
-        from orchestrator.executor import _within_read_budget
+        from code_gantry.executor import _within_read_budget
 
         assert _within_read_budget(stage.read_files, cfg) == ["small.rb", "mid.rb"]
 
@@ -113,7 +113,7 @@ class TestReadContextBudget:
             },
             executor={"model": "m", "max_read_lines": 400},
         )
-        from orchestrator.executor import _within_read_budget
+        from code_gantry.executor import _within_read_budget
 
         assert _within_read_budget(stage.read_files, cfg) == []  # still too big
         got = resolve_excerpts(stage, cfg)
@@ -184,7 +184,7 @@ class TestReadContextBudget:
             stage_overrides={"read_files": ["a.rb", "b.rb"]},
             executor={"model": "m", "max_read_lines": 10},
         )
-        from orchestrator.executor import _within_read_budget
+        from code_gantry.executor import _within_read_budget
 
         assert _within_read_budget(stage.read_files, cfg) == []
 
@@ -196,7 +196,7 @@ class TestReadContextBudget:
             stage_overrides={"edit_files": ["target.rb"], "read_files": ["ref.rb"]},
             executor={"model": "m", "max_read_lines": 10},
         )
-        from orchestrator.executor import _within_read_budget
+        from code_gantry.executor import _within_read_budget
 
         # `edit_files` never enters the budget at all; only `read_files` does.
         assert _within_read_budget(stage.read_files, cfg) == []
@@ -211,7 +211,7 @@ class TestReadContextBudget:
             stage_overrides={"read_files": ["app/**/*.rb"]},
             executor={"model": "m", "max_read_lines": 10},
         )
-        from orchestrator.executor import _within_read_budget
+        from code_gantry.executor import _within_read_budget
 
         assert _within_read_budget(stage.read_files, cfg) == ["app/**/*.rb"]
 

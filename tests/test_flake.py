@@ -26,9 +26,9 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator.commands import CommandRunner
-from orchestrator.config import ConfigError, parse_config
-from orchestrator.flake import (
+from code_gantry.commands import CommandRunner
+from code_gantry.config import ConfigError, parse_config
+from code_gantry.flake import (
     FLAKES_FILENAME,
     FlakeRecord,
     adjudicate,
@@ -552,7 +552,7 @@ class TestTheExactExampleThatFailed:
     """
 
     def test_it_keeps_the_bracket_locator_whole(self):
-        from orchestrator.flake import failing_examples
+        from code_gantry.flake import failing_examples
 
         found = failing_examples(RSPEC_OUTPUT, RSPEC_PATTERN)
         assert found == {
@@ -562,7 +562,7 @@ class TestTheExactExampleThatFailed:
         }
 
     def test_it_keeps_the_line_number_form_too(self):
-        from orchestrator.flake import failing_examples
+        from code_gantry.flake import failing_examples
 
         output = (
             "Failed examples:\n\n"
@@ -573,7 +573,7 @@ class TestTheExactExampleThatFailed:
         }
 
     def test_several_examples_in_one_file_are_all_kept(self):
-        from orchestrator.flake import failing_examples
+        from code_gantry.flake import failing_examples
 
         output = (
             "rspec ./spec/a_spec.rb:1 # one\n"
@@ -587,7 +587,7 @@ class TestTheExactExampleThatFailed:
     def test_a_parallel_runners_repeated_block_is_deduplicated(self):
         # Each worker prints its own summary, so the same locator arrives more
         # than once — the same reason `failed_files` deduplicates.
-        from orchestrator.flake import failing_examples
+        from code_gantry.flake import failing_examples
 
         output = "rspec ./spec/a_spec.rb:1 # one\n" * 3
         assert failing_examples(output, RSPEC_PATTERN)["spec/a_spec.rb"] == [
@@ -597,7 +597,7 @@ class TestTheExactExampleThatFailed:
     def test_it_survives_a_description_containing_a_hash(self):
         # Split on the first ` # `, which is the runner's separator; a `#`
         # inside the description belongs to the description.
-        from orchestrator.flake import failing_examples
+        from code_gantry.flake import failing_examples
 
         output = "rspec ./spec/a_spec.rb:1 # renders #show for the user\n"
         assert failing_examples(output, RSPEC_PATTERN)["spec/a_spec.rb"] == [
@@ -605,7 +605,7 @@ class TestTheExactExampleThatFailed:
         ]
 
     def test_no_pattern_means_no_answer_rather_than_a_guess(self):
-        from orchestrator.flake import failing_examples
+        from code_gantry.flake import failing_examples
 
         assert failing_examples(RSPEC_OUTPUT, None) == {}
 
@@ -691,10 +691,10 @@ class TestTheLocatorSurvivesTheJourney:
     def test_it_reaches_the_ledger_from_a_real_command(self, repo, tmp_path):
         from types import SimpleNamespace
 
-        from orchestrator import gates
-        from orchestrator.config import Stage
-        from orchestrator.gitops import Git
-        from orchestrator.nodes import _record_flakes
+        from code_gantry import gates
+        from code_gantry.config import Stage
+        from code_gantry.gitops import Git
+        from code_gantry.nodes import _record_flakes
 
         cfg = config(
             repo,

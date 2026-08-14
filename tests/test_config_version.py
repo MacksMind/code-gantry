@@ -1,6 +1,6 @@
 """A run reads one config, and reads it for its whole life.
 
-This replaces `orchestrator approve`. Approval was a sha256 of the bytes an
+This replaces `code-gantry approve`. Approval was a sha256 of the bytes an
 operator confirmed they had read, kept beside the config and invalidated by any
 edit — and its module was explicit about why there was no `approved: true`
 field: "such a field could be set by anything."
@@ -20,7 +20,7 @@ import subprocess
 
 import pytest
 
-from orchestrator.configversion import (
+from code_gantry.configversion import (
     ConfigVersionError,
     blob_sha,
     problem_resuming,

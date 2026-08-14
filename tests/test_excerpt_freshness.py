@@ -50,7 +50,7 @@ def _commit(repo, path, text):
 
 
 def _stage(sid, excerpts=(), base=""):
-    from orchestrator.config import Excerpt, Stage
+    from code_gantry.config import Excerpt, Stage
 
     return Stage(
         id=sid,
@@ -62,8 +62,8 @@ def _stage(sid, excerpts=(), base=""):
 
 class TestStaleExcerptsAreDetected:
     def test_an_unchanged_file_is_fresh(self, repo):
-        from orchestrator.gitops import Git
-        from orchestrator.nodes import stale_excerpts
+        from code_gantry.gitops import Git
+        from code_gantry.nodes import stale_excerpts
 
         git = Git(repo)
         base = git.rev_parse("HEAD")
@@ -71,8 +71,8 @@ class TestStaleExcerptsAreDetected:
         assert stale_excerpts(git, _stage("s", ["app/a.rb"], base)) == []
 
     def test_a_changed_file_is_named(self, repo):
-        from orchestrator.gitops import Git
-        from orchestrator.nodes import stale_excerpts
+        from code_gantry.gitops import Git
+        from code_gantry.nodes import stale_excerpts
 
         git = Git(repo)
         base = git.rev_parse("HEAD")
@@ -80,8 +80,8 @@ class TestStaleExcerptsAreDetected:
         assert stale_excerpts(git, _stage("s", ["app/a.rb"], base)) == ["app/a.rb"]
 
     def test_a_deleted_file_is_stale_not_an_error(self, repo):
-        from orchestrator.gitops import Git
-        from orchestrator.nodes import stale_excerpts
+        from code_gantry.gitops import Git
+        from code_gantry.nodes import stale_excerpts
 
         git = Git(repo)
         base = git.rev_parse("HEAD")
@@ -95,15 +95,15 @@ class TestStaleExcerptsAreDetected:
     def test_no_base_sha_means_nothing_to_compare(self, repo):
         # The stage being started now was derived against the tree as it
         # stands, so there is no window in which anything could have moved.
-        from orchestrator.gitops import Git
-        from orchestrator.nodes import stale_excerpts
+        from code_gantry.gitops import Git
+        from code_gantry.nodes import stale_excerpts
 
         _commit(repo, "app/a.rb", "changed\n")
         assert stale_excerpts(Git(repo), _stage("s", ["app/a.rb"], "")) == []
 
     def test_a_stage_with_no_excerpts_is_never_stale(self, repo):
-        from orchestrator.gitops import Git
-        from orchestrator.nodes import stale_excerpts
+        from code_gantry.gitops import Git
+        from code_gantry.nodes import stale_excerpts
 
         git = Git(repo)
         base = git.rev_parse("HEAD")
@@ -117,8 +117,8 @@ class TestStaleExcerptsAreDetected:
         the old rule merely *declaring* it editable was enough to drop the
         later stage. Only the bytes decide.
         """
-        from orchestrator.gitops import Git
-        from orchestrator.nodes import stale_excerpts
+        from code_gantry.gitops import Git
+        from code_gantry.nodes import stale_excerpts
 
         git = Git(repo)
         base = git.rev_parse("HEAD")
@@ -146,7 +146,7 @@ class TestARejectedStageTakesTheQueueWithIt:
     """
 
     def test_the_queue_is_discarded(self, repo, monkeypatch):
-        from orchestrator import nodes
+        from code_gantry import nodes
 
         monkeypatch.setattr(nodes, "stale_excerpts", lambda *_: ["app/a.rb"])
         update = nodes._stale_excerpt_failure(
@@ -157,7 +157,7 @@ class TestARejectedStageTakesTheQueueWithIt:
         assert update["stage_queue"] == []
 
     def test_the_planner_is_told_the_tail_went_with_it(self):
-        from orchestrator.nodes import _stale_excerpt_failure
+        from code_gantry.nodes import _stale_excerpt_failure
 
         update = _stale_excerpt_failure(
             {"stage_queue": [{"id": "two"}, {"id": "three"}]},
@@ -169,7 +169,7 @@ class TestARejectedStageTakesTheQueueWithIt:
         assert "your own doing" in detail
 
     def test_an_empty_queue_says_nothing_about_one(self):
-        from orchestrator.nodes import _stale_excerpt_failure
+        from code_gantry.nodes import _stale_excerpt_failure
 
         update = _stale_excerpt_failure(
             {"stage_queue": []}, _stage("one", ["app/a.rb"], "abc123"), ["app/a.rb"]

@@ -12,7 +12,7 @@ import subprocess
 
 import pytest
 
-from orchestrator.gitops import Git, GitError
+from code_gantry.gitops import Git, GitError
 
 
 class TestOutputThatIsNotUtf8:

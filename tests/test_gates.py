@@ -8,9 +8,9 @@ and where possible in the same test, so that changing one and not the other
 fails here rather than in a run.
 """
 
-from orchestrator.config import Stage, parse_config
-from orchestrator.gates import resolve_test_command, resolve_test_paths
-from orchestrator.gitops import Git
+from code_gantry.config import Stage, parse_config
+from code_gantry.gates import resolve_test_command, resolve_test_paths
+from code_gantry.gitops import Git
 
 
 def build(repo, stage_overrides=None, **cfg_overrides):
@@ -175,8 +175,8 @@ class TestTheMovedLayersAgreeWithTheGate:
     """
 
     def _verify(self, repo, cfg, stage, sha):
-        from orchestrator.commands import CommandRunner
-        from orchestrator.verify import run_verify
+        from code_gantry.commands import CommandRunner
+        from code_gantry.verify import run_verify
 
         return run_verify(
             stage=stage,
@@ -187,8 +187,8 @@ class TestTheMovedLayersAgreeWithTheGate:
         )
 
     def test_patterns_agrees(self, repo):
-        from orchestrator.gates import check_patterns
-        from orchestrator.verify import Layer
+        from code_gantry.gates import check_patterns
+        from code_gantry.verify import Layer
 
         sha = Git(repo).head_sha()
         (repo / "app.py").write_text("import pdb; pdb.set_trace()\n")
@@ -203,8 +203,8 @@ class TestTheMovedLayersAgreeWithTheGate:
         assert outcome.summary == found.summary
 
     def test_residue_agrees(self, repo):
-        from orchestrator.gates import check_residue
-        from orchestrator.verify import Layer
+        from code_gantry.gates import check_residue
+        from code_gantry.verify import Layer
 
         sha = Git(repo).head_sha()
         (repo / "app.py").write_text("before_filter :x\nchanged\n")
@@ -219,8 +219,8 @@ class TestTheMovedLayersAgreeWithTheGate:
         assert outcome.summary == found.summary
 
     def test_new_tests_agrees(self, repo):
-        from orchestrator.gates import check_new_tests
-        from orchestrator.verify import Layer
+        from code_gantry.gates import check_new_tests
+        from code_gantry.verify import Layer
 
         sha = Git(repo).head_sha()
         (repo / "app.py").write_text("changed\n")
@@ -235,9 +235,9 @@ class TestTheMovedLayersAgreeWithTheGate:
         assert outcome.summary == found.summary
 
     def test_checks_agrees(self, repo):
-        from orchestrator.commands import CommandRunner
-        from orchestrator.gates import run_checks
-        from orchestrator.verify import Layer
+        from code_gantry.commands import CommandRunner
+        from code_gantry.gates import run_checks
+        from code_gantry.verify import Layer
 
         sha = Git(repo).head_sha()
         (repo / "app.py").write_text("changed\n")
@@ -254,9 +254,9 @@ class TestTheMovedLayersAgreeWithTheGate:
     def test_tests_agrees_and_carries_the_failing_paths(self, repo):
         # `failing_paths` is what the planner reads at an intervention, and it
         # is produced by a regex that was nearly rewritten during this move.
-        from orchestrator.commands import CommandRunner
-        from orchestrator.gates import run_tests
-        from orchestrator.verify import Layer
+        from code_gantry.commands import CommandRunner
+        from code_gantry.gates import run_tests
+        from code_gantry.verify import Layer
 
         sha = Git(repo).head_sha()
         (repo / "app.py").write_text("changed\n")
@@ -293,7 +293,7 @@ class TestPathHintsCannotStallTheGate:
     def test_a_long_progress_run_is_answered_promptly(self):
         import time
 
-        from orchestrator.gates import path_hints
+        from code_gantry.gates import path_hints
 
         started = time.time()
         hints = path_hints("." * 200_000 + "\nfailed at app/models/order.rb:12")
@@ -309,7 +309,7 @@ class TestPathHintsCannotStallTheGate:
         # Collapsing must not eat the finding. A progress reporter puts its
         # dots first and what it found afterwards, which is the whole reason
         # `clip_for_model` collapses before it truncates.
-        from orchestrator.gates import path_hints
+        from code_gantry.gates import path_hints
 
         assert path_hints("." * 500 + "\nspec/a_spec.rb:4 failed") == [
             "spec/a_spec.rb"
@@ -330,8 +330,8 @@ class TestTheLoopDoesNotDoubleTheSuite:
     """
 
     def test_the_loop_runs_the_command_once(self, repo):
-        from orchestrator.commands import CommandRunner
-        from orchestrator.gates import run_tests
+        from code_gantry.commands import CommandRunner
+        from code_gantry.gates import run_tests
 
         counter = repo / "runs.txt"
         cfg, stage = build(
@@ -349,8 +349,8 @@ class TestTheLoopDoesNotDoubleTheSuite:
         assert counter.read_text() == "x", "the loop re-ran a failing command"
 
     def test_the_gate_still_re_runs_once(self, repo):
-        from orchestrator.commands import CommandRunner
-        from orchestrator.gates import run_tests
+        from code_gantry.commands import CommandRunner
+        from code_gantry.gates import run_tests
 
         counter = repo / "runs.txt"
         cfg, stage = build(

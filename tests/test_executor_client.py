@@ -13,11 +13,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from orchestrator.config import ExecutorConfig
-from orchestrator.edittools import FileEditor
-from orchestrator.executorclient import OpenAIExecutorModel
-from orchestrator.gitops import Git
-from orchestrator.repotools import ReadBudget, RepoReader
+from code_gantry.config import ExecutorConfig
+from code_gantry.edittools import FileEditor
+from code_gantry.executorclient import OpenAIExecutorModel
+from code_gantry.gitops import Git
+from code_gantry.repotools import ReadBudget, RepoReader
 
 
 def call(name, args_json, call_id="c1"):

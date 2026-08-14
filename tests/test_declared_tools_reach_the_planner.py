@@ -25,7 +25,7 @@ construction — the same reason the reviewer is told about the editor's newline
 normalisation rather than being left to rediscover it.
 """
 
-from orchestrator.config import ProjectTool, ToolArgument
+from code_gantry.config import ProjectTool, ToolArgument
 
 
 def a_tool(**over):
@@ -39,7 +39,7 @@ def a_tool(**over):
 
 
 def _text(tools):
-    from orchestrator.planner import executor_capability_block
+    from code_gantry.planner import executor_capability_block
 
     return executor_capability_block(tools)
 
@@ -88,14 +88,14 @@ class TestItReachesTheRealPrompt:
     """Held is not sent. This seam has broken twice on other fields."""
 
     def test_a_declared_tool_appears_in_the_system_prompt(self):
-        from orchestrator.planner import _system_blocks
+        from code_gantry.planner import _system_blocks
 
         text = _system_blocks(project_tools=[a_tool()])[0]["text"]
         assert "bundle_install" in text
 
     def test_a_project_with_no_tools_reads_as_it_always_did(self):
         # The constant is a template now, so it is no longer the final text.
-        from orchestrator.planner import _system_blocks
+        from code_gantry.planner import _system_blocks
 
         text = _system_blocks()[0]["text"]
         assert "no tool for is running anything" in text
@@ -103,7 +103,7 @@ class TestItReachesTheRealPrompt:
     def test_the_placeholder_never_survives_into_a_prompt(self):
         # A template marker reaching a model is worse than a stale sentence:
         # it is unreadable and says nothing about what the executor can do.
-        from orchestrator.planner import _system_blocks
+        from code_gantry.planner import _system_blocks
 
         for tools in ([], [a_tool()]):
             assert "%%" not in _system_blocks(project_tools=tools)[0]["text"]
@@ -111,7 +111,7 @@ class TestItReachesTheRealPrompt:
     def test_the_capability_text_is_inside_the_cached_block(self):
         # Fixed for a run, so it belongs in the prefix rather than beside the
         # per-call material.
-        from orchestrator.planner import _system_blocks
+        from code_gantry.planner import _system_blocks
 
         block = _system_blocks(project_tools=[a_tool()])[0]
         assert block.get("cache_control")

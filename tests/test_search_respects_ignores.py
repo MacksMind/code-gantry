@@ -38,8 +38,8 @@ import subprocess
 
 import pytest
 
-from orchestrator.gitops import Git
-from orchestrator.repotools import ReadBudget, RepoReader, ToolError
+from code_gantry.gitops import Git
+from code_gantry.repotools import ReadBudget, RepoReader, ToolError
 
 
 @pytest.fixture

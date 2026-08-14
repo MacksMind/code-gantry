@@ -17,8 +17,8 @@ import json
 
 import pytest
 
-from orchestrator.config import parse_config
-from orchestrator.report import build_report
+from code_gantry.config import parse_config
+from code_gantry.report import build_report
 
 
 PRICES = {
@@ -147,7 +147,7 @@ class TestTheExecutorsCacheRateIsReported:
     """
 
     def test_it_appears_with_a_hit_rate_when_the_executor_reported_usage(self):
-        from orchestrator.report import _cost_section
+        from code_gantry.report import _cost_section
 
         state = state_with(
             executor_prompt_tokens=100_000,
@@ -160,7 +160,7 @@ class TestTheExecutorsCacheRateIsReported:
         assert "Uncached prompt tokens: 10,000" in text
 
     def test_it_is_absent_when_nothing_was_reported(self):
-        from orchestrator.report import _cost_section
+        from code_gantry.report import _cost_section
 
         text = "\n".join(_cost_section(state_with(), cfg_with()))
         assert "**Executor**" not in text
@@ -182,8 +182,8 @@ class TestTheBudgetProjectionDoesNotDemandAChange:
     """
 
     def _report(self, tmp_path, per_stage_hours, budget, max_stages):
-        from orchestrator.config import parse_config
-        from orchestrator.report import build_report
+        from code_gantry.config import parse_config
+        from code_gantry.report import build_report
 
         cfg = parse_config({
             "target_repo": str(tmp_path), "base_ref": "main",

@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from orchestrator.plannertools import call_detail
+from code_gantry.plannertools import call_detail
 
 
 @dataclass

@@ -12,9 +12,9 @@ import subprocess
 
 import pytest
 
-from orchestrator.gitops import Git
-from orchestrator.plannertools import dispatch
-from orchestrator.repotools import ReadBudget, RepoReader
+from code_gantry.gitops import Git
+from code_gantry.plannertools import dispatch
+from code_gantry.repotools import ReadBudget, RepoReader
 
 
 @pytest.fixture
@@ -89,30 +89,30 @@ class TestCallDetailNamesTheRangeToo:
     """
 
     def test_a_ranged_read_carries_the_range(self):
-        from orchestrator.plannertools import call_detail
+        from code_gantry.plannertools import call_detail
 
         assert call_detail({"path": "a.rb", "start": 5, "end": 9}) == "a.rb:5-9"
 
     def test_an_open_ended_range_says_so(self):
-        from orchestrator.plannertools import call_detail
+        from code_gantry.plannertools import call_detail
 
         assert call_detail({"path": "a.rb", "start": 5}) == "a.rb:5-"
         assert call_detail({"path": "a.rb", "end": 9}) == "a.rb:-9"
 
     def test_a_whole_file_stays_the_bare_path(self):
-        from orchestrator.plannertools import call_detail
+        from code_gantry.plannertools import call_detail
 
         assert call_detail({"path": "a.rb"}) == "a.rb"
 
     def test_a_null_range_is_a_whole_file(self):
         # Strict mode makes every property required and optional ones
         # nullable, so an omitted range arrives as an explicit null.
-        from orchestrator.plannertools import call_detail
+        from code_gantry.plannertools import call_detail
 
         assert call_detail({"path": "a.rb", "start": None, "end": None}) == "a.rb"
 
     def test_other_tools_are_untouched(self):
-        from orchestrator.plannertools import call_detail
+        from code_gantry.plannertools import call_detail
 
         assert call_detail({"pattern": "render", "glob": "app/**"}) == "render"
         assert call_detail({"glob": "app/**"}) == "app/**"
@@ -137,7 +137,7 @@ class TestSemanticNamesBothQuestionsItAnswers:
     """
 
     def _text(self):
-        from orchestrator.plannertools import SEMANTIC_TOOL
+        from code_gantry.plannertools import SEMANTIC_TOOL
 
         return SEMANTIC_TOOL["description"].lower()
 

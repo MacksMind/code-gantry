@@ -7,7 +7,7 @@ implementation pass hit with gated stages.
 
 import pytest
 
-from orchestrator.state import (
+from code_gantry.state import (
     PLANNING_FAILURES,
     REPO_STATE_FAILURES,
     accumulate_usage,
@@ -142,7 +142,7 @@ class TestUsageAccumulation:
     def test_a_fresh_usage_record_declares_every_key(self):
         # A key absent from the zero record is a key `accumulate_usage` will
         # create on first use and the report will read as missing until then.
-        from orchestrator.state import zero_usage
+        from code_gantry.state import zero_usage
 
         assert set(zero_usage()) == {
             "prompt_tokens", "cached_tokens", "cache_write_tokens",
@@ -259,14 +259,14 @@ class TestResumingAnInterruptedStage:
     """
 
     def test_an_interrupted_stage_with_work_goes_to_verify(self):
-        from orchestrator.state import resume_entry_point
+        from code_gantry.state import resume_entry_point
 
         assert resume_entry_point(
             {"resuming": True, "current": {"id": "s"}, "stage_has_work": True}
         ) == "verify"
 
     def test_an_interrupted_stage_without_work_still_goes_to_precheck(self):
-        from orchestrator.state import resume_entry_point
+        from code_gantry.state import resume_entry_point
 
         assert resume_entry_point(
             {"resuming": True, "current": {"id": "s"}, "stage_has_work": False}
@@ -275,7 +275,7 @@ class TestResumingAnInterruptedStage:
     def test_a_recorded_failure_still_wins(self):
         # An escalation says where to re-enter; that is more specific than
         # "there are commits on the branch".
-        from orchestrator.state import resume_entry_point
+        from code_gantry.state import resume_entry_point
 
         assert resume_entry_point(
             {
@@ -287,7 +287,7 @@ class TestResumingAnInterruptedStage:
         ) == "plan"
 
     def test_no_stage_in_flight_goes_to_the_planner(self):
-        from orchestrator.state import resume_entry_point
+        from code_gantry.state import resume_entry_point
 
         assert resume_entry_point({"resuming": True, "stage_has_work": False}) == "plan"
 
@@ -297,7 +297,7 @@ class TestResumingClearsTheStopItIsUndoing:
 
     Found by reading a live checkpoint: the run was at revision 2, landing work,
     and `status` still said `escalated` with the reason from an escalation an
-    hour earlier. `orchestrator status` is the operator's primary question and
+    hour earlier. `code-gantry status` is the operator's primary question and
     it was answering with the stop that had already been fixed.
 
     The merge was inline in `cli.py`, which is why nothing caught it — there was
@@ -305,7 +305,7 @@ class TestResumingClearsTheStopItIsUndoing:
     """
 
     def _fields(self, **over):
-        from orchestrator.state import resume_fields
+        from code_gantry.state import resume_fields
 
         args = {"stage_has_work": False, "reset_progress_budget": False}
         args.update(over)
@@ -375,7 +375,7 @@ class TestAResumeStartsFromTheCheckpoint:
         return base
 
     def _input(self, **over):
-        from orchestrator.state import resume_input
+        from code_gantry.state import resume_input
 
         return resume_input(
             self._saved(**over), stage_has_work=False, reset_progress_budget=False
@@ -420,21 +420,21 @@ class TestAPeakIsNotATotal:
     """
 
     def test_totals_still_add(self):
-        from orchestrator.state import accumulate_usage
+        from code_gantry.state import accumulate_usage
 
         out = accumulate_usage(None, planner_prompt_tokens=100)
         out = accumulate_usage(out, planner_prompt_tokens=250)
         assert out["planner_prompt_tokens"] == 350
 
     def test_a_peak_takes_the_maximum(self):
-        from orchestrator.state import accumulate_usage
+        from code_gantry.state import accumulate_usage
 
         out = accumulate_usage(None, planner_peak_prompt_tokens=480_000)
         out = accumulate_usage(out, planner_peak_prompt_tokens=190_000)
         assert out["planner_peak_prompt_tokens"] == 480_000
 
     def test_a_later_larger_call_raises_it(self):
-        from orchestrator.state import accumulate_usage
+        from code_gantry.state import accumulate_usage
 
         out = accumulate_usage(None, planner_peak_prompt_tokens=190_000)
         out = accumulate_usage(out, planner_peak_prompt_tokens=480_000)
@@ -443,6 +443,6 @@ class TestAPeakIsNotATotal:
     def test_the_key_is_declared_so_the_schema_does_not_drop_it(self):
         # Four defects here have been values computed correctly and lost
         # crossing a schema that had no key for them.
-        from orchestrator.state import zero_usage
+        from code_gantry.state import zero_usage
 
         assert "planner_peak_prompt_tokens" in zero_usage()

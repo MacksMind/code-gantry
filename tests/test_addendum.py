@@ -14,7 +14,7 @@ and does not belong in the middle of doing it.
 
 from pathlib import Path
 
-from orchestrator.addendum import append_notes, append_outcome
+from code_gantry.addendum import append_notes, append_outcome
 
 
 def note(observation="8 of 9 controllers are clean", **over):

@@ -26,9 +26,9 @@ import pytest
 
 class TestTheLoopNoticesTheCeiling:
     def _run(self, stopped, edits):
-        from orchestrator.config import parse_config, Stage
-        from orchestrator.executorclient import ExecutorTurn
-        from orchestrator.executorloop import run_loop
+        from code_gantry.config import parse_config, Stage
+        from code_gantry.executorclient import ExecutorTurn
+        from code_gantry.executorloop import run_loop
 
         class Model:
             def run(self, conversation, reader, editor, semantic=None, cache_key=None):
@@ -81,7 +81,7 @@ class TestTheLoopNoticesTheCeiling:
 
 class TestThePlannerIsToldWhichProblemItIs:
     def test_the_ceiling_produces_its_own_advice(self):
-        from orchestrator.nodes import _no_change_reason
+        from code_gantry.nodes import _no_change_reason
 
         text = _no_change_reason(turns_exhausted=True, turns=20)
         assert "20" in text
@@ -90,12 +90,12 @@ class TestThePlannerIsToldWhichProblemItIs:
         assert "smaller" in text.lower() or "narrower" in text.lower()
 
     def test_a_model_that_simply_stopped_says_so_instead(self):
-        from orchestrator.nodes import _no_change_reason
+        from code_gantry.nodes import _no_change_reason
 
         text = _no_change_reason(turns_exhausted=False, turns=3)
         assert "turn" not in text.lower()
 
     def test_the_two_are_not_the_same_sentence(self):
-        from orchestrator.nodes import _no_change_reason
+        from code_gantry.nodes import _no_change_reason
 
         assert _no_change_reason(True, 20) != _no_change_reason(False, 20)

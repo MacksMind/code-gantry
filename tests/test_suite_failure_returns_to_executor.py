@@ -29,7 +29,7 @@ import subprocess
 
 import pytest
 
-from orchestrator.config import Stage
+from code_gantry.config import Stage
 
 
 @pytest.fixture
@@ -50,7 +50,7 @@ def repo(tmp_path):
 
 
 def _cfg(repo):
-    from orchestrator.config import parse_config
+    from code_gantry.config import parse_config
 
     return parse_config({
         "target_repo": str(repo), "base_ref": "main", "project_branch": "p",
@@ -65,7 +65,7 @@ def _cfg(repo):
 
 class TestTheFailingSpecReachesTheInnerLoop:
     def test_it_is_added_to_the_loop_command(self, repo):
-        from orchestrator.gates import resolve_test_paths
+        from code_gantry.gates import resolve_test_paths
 
         stage = Stage(
             id="s", instruction="do it", edit_files=["app/a.rb"],
@@ -103,8 +103,8 @@ class TestTheFailingSpecReachesTheInnerLoop:
         the gate would judge, here the gate is blind to what the loop already
         proved, and both end with an attempt believing it succeeded.
         """
-        from orchestrator.gitops import Git
-        from orchestrator.gates import resolve_test_paths
+        from code_gantry.gitops import Git
+        from code_gantry.gates import resolve_test_paths
 
         stage = Stage(
             id="s", instruction="do it", edit_files=["app/a.rb"],
@@ -120,8 +120,8 @@ class TestTheFailingSpecReachesTheInnerLoop:
         # holds identically here: naming a file the stage removed makes the
         # command unable to pass, and the gate has no more room to survive
         # that than the loop does.
-        from orchestrator.gitops import Git
-        from orchestrator.gates import resolve_test_paths
+        from code_gantry.gitops import Git
+        from code_gantry.gates import resolve_test_paths
 
         stage = Stage(
             id="s", instruction="do it", edit_files=["app/a.rb"],
@@ -133,7 +133,7 @@ class TestTheFailingSpecReachesTheInnerLoop:
         assert "spec/gone_spec.rb" not in paths
 
     def test_a_path_that_no_longer_exists_is_dropped(self, repo):
-        from orchestrator.gates import resolve_test_paths
+        from code_gantry.gates import resolve_test_paths
 
         stage = Stage(
             id="s", instruction="do it", edit_files=["app/a.rb"],
@@ -146,7 +146,7 @@ class TestTheFailingSpecReachesTheInnerLoop:
         # what they were has to survive with them or the gate that is supposed
         # to catch them has nothing to run. Driven through `nodes.plan` in
         # `test_nodes.TestRevision` — this pins the seam.
-        from orchestrator.state import evidence_surviving_a_revision
+        from code_gantry.state import evidence_surviving_a_revision
 
         previous = {"id": "s", "suite_failing_paths": ["spec/b_spec.rb"]}
         assert evidence_surviving_a_revision(previous, keep_branch=True) == {
@@ -157,13 +157,13 @@ class TestTheFailingSpecReachesTheInnerLoop:
         # The branch is discarded and re-cut from the project tip, so the diff
         # that caused those failures is gone. Naming them would send the next
         # attempt after a problem that is no longer there.
-        from orchestrator.state import evidence_surviving_a_revision
+        from code_gantry.state import evidence_surviving_a_revision
 
         previous = {"id": "s", "suite_failing_paths": ["spec/b_spec.rb"]}
         assert evidence_surviving_a_revision(previous, keep_branch=False) == {}
 
     def test_nothing_recorded_stays_nothing(self):
-        from orchestrator.state import evidence_surviving_a_revision
+        from code_gantry.state import evidence_surviving_a_revision
 
         assert evidence_surviving_a_revision({"id": "s"}, keep_branch=True) == {}
         assert evidence_surviving_a_revision(None, keep_branch=True) == {}
@@ -171,14 +171,14 @@ class TestTheFailingSpecReachesTheInnerLoop:
     def test_the_planner_cannot_author_it(self):
         # Machinery-recorded, like `excerpt_base_sha`. A model naming the spec
         # it wants run is a claim; the suite already said which one failed.
-        from orchestrator.config import PLANNER_WRITABLE_FIELDS
+        from code_gantry.config import PLANNER_WRITABLE_FIELDS
 
         assert "suite_failing_paths" not in PLANNER_WRITABLE_FIELDS
 
 
 class TestApprovalResetsTheReworkBudget:
     def test_the_counter_is_cleared_on_approval(self):
-        from orchestrator.state import clear_rework_after_approval
+        from code_gantry.state import clear_rework_after_approval
 
         state = {"rework_attempt": 2}
         merged = {**state, **clear_rework_after_approval(state)}
@@ -192,7 +192,7 @@ class TestApprovalResetsTheReworkBudget:
         # Asserted on the merged state rather than the update, because an
         # empty update is how this says "no change" — the same convention every
         # node here returns.
-        from orchestrator.state import clear_rework_after_approval
+        from code_gantry.state import clear_rework_after_approval
 
         state = {"rework_attempt": 2}
         state = {**state, **clear_rework_after_approval(state)}
@@ -201,7 +201,7 @@ class TestApprovalResetsTheReworkBudget:
         assert merged["rework_attempt"] == 2
 
     def test_a_revision_makes_it_available_again(self):
-        from orchestrator.state import clear_rework_after_approval, fresh_stage_fields
+        from code_gantry.state import clear_rework_after_approval, fresh_stage_fields
 
         state = {"rework_attempt": 2}
         state = {**state, **clear_rework_after_approval(state)}

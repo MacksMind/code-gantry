@@ -23,13 +23,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
 
-from orchestrator.apistatus import classify
-from orchestrator.configversion import committed_sha, problem_starting
-from orchestrator.commands import CommandResult, CommandRunner, truncate_middle
-from orchestrator.config import ProjectConfig
-from orchestrator.flake import FlakeVerdict, adjudicate, append_flakes
-from orchestrator.gitops import Git, GitError
-from orchestrator.plandoc import resolve_plan_tree
+from code_gantry.apistatus import classify
+from code_gantry.configversion import committed_sha, problem_starting
+from code_gantry.commands import CommandResult, CommandRunner, truncate_middle
+from code_gantry.config import ProjectConfig
+from code_gantry.flake import FlakeVerdict, adjudicate, append_flakes
+from code_gantry.gitops import Git, GitError
+from code_gantry.plandoc import resolve_plan_tree
 
 
 # Both ends, not just the tail. A test runner prints its verdict and then keeps
@@ -348,7 +348,7 @@ def _unfolded_progress_check(cfg: ProjectConfig) -> Check:
     if not cfg.plan_addendum_path:
         return Check("progress log", True, "no addendum configured")
 
-    from orchestrator.addendum import _target
+    from code_gantry.addendum import _target
 
     try:
         target = _target(cfg.target_repo, cfg.plan_addendum_path)
@@ -901,13 +901,13 @@ def _ping(client) -> None:
 
 
 def _build_planner(cfg: ProjectConfig):
-    from orchestrator.planner import make_planner
+    from code_gantry.planner import make_planner
 
     return make_planner(cfg.planner)
 
 
 def _build_reviewer(cfg: ProjectConfig):
-    from orchestrator.reviewer import make_reviewer
+    from code_gantry.reviewer import make_reviewer
 
     return make_reviewer(cfg.reviewer)
 
@@ -918,7 +918,7 @@ def _project_root(project_dir):
     Imported here rather than at module scope: `runtime` imports this module, so
     a top-level import would close the cycle.
     """
-    from orchestrator.runtime import ProjectPaths
+    from code_gantry.runtime import ProjectPaths
 
     return (
         project_dir.project_dir
@@ -942,7 +942,7 @@ def _baseline_still_reachable(cfg: ProjectConfig, recorded: str) -> Check:
     they belong. Two questions with different lifetimes, asked in one place,
     and the cheap one was paying the expensive one's price.
     """
-    from orchestrator.gitops import Git
+    from code_gantry.gitops import Git
 
     name = "the run's baseline is still in " + cfg.base_ref
     git = Git(cfg.target_repo)
@@ -1044,7 +1044,7 @@ def _plan_unmoved(cfg: ProjectConfig, git, recorded: str) -> Check:
 def _approval_check(cfg: ProjectConfig, config_path) -> Check:
     """The config must be committed, and the working copy must match it.
 
-    What replaced `orchestrator approve`. A run is identified by the git sha of
+    What replaced `code-gantry approve`. A run is identified by the git sha of
     the config it read, which is the same bytes an approval hashed plus an
     author, a message and whatever review the repository requires — so the
     check is that the sha exists and is current, not that someone ran a

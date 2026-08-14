@@ -21,7 +21,7 @@ touched tests at all. Only the first kind may reach a command line.
 
 from __future__ import annotations
 
-from orchestrator.gates import prune_contained, runnable_test_patterns
+from code_gantry.gates import prune_contained, runnable_test_patterns
 
 PATTERNS = [
     "**/test_*.py",
@@ -44,14 +44,14 @@ class TestRunnableTestPatterns:
         ]
 
     def test_a_spec_still_matches(self):
-        from orchestrator.globs import matches_any
+        from code_gantry.globs import matches_any
 
         kept = runnable_test_patterns(PATTERNS)
         assert matches_any("spec/models/user_spec.rb", kept)
 
     def test_a_factory_under_spec_does_not(self):
         """The incident. It matches `spec/**` and nothing else."""
-        from orchestrator.globs import matches_any
+        from code_gantry.globs import matches_any
 
         assert matches_any("spec/factories/user_factory.rb", PATTERNS)
         assert not matches_any(
@@ -126,7 +126,7 @@ class TestNoFileShapedPatternsAtAll:
     """
 
     def test_the_fallback_is_the_whole_list(self):
-        from orchestrator.gates import _diff_test_patterns
+        from code_gantry.gates import _diff_test_patterns
 
         assert _diff_test_patterns(["spec/**", "test/**"]) == [
             "spec/**",
@@ -134,6 +134,6 @@ class TestNoFileShapedPatternsAtAll:
         ]
 
     def test_a_mixed_list_still_narrows(self):
-        from orchestrator.gates import _diff_test_patterns
+        from code_gantry.gates import _diff_test_patterns
 
         assert _diff_test_patterns(["spec/**", "**/*_spec.rb"]) == ["**/*_spec.rb"]

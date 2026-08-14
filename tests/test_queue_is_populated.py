@@ -41,8 +41,8 @@ def _spec(sid, edit, read=(), excerpts=()):
 
 class TestTheQueueIsBuiltFromTheBatch:
     def _queued(self, repo, first, extras):
-        from orchestrator.config import parse_config
-        from orchestrator.nodes import _queue_from_batch
+        from code_gantry.config import parse_config
+        from code_gantry.nodes import _queue_from_batch
 
         cfg = parse_config({
             "target_repo": str(repo), "base_ref": "main", "project_branch": "p",
@@ -53,7 +53,7 @@ class TestTheQueueIsBuiltFromTheBatch:
             "planner": {"model": "claude-opus-5", "max_batch_stages": 5},
             "reviewer": {"model": "gpt-5.6-sol"},
         })
-        from orchestrator.gitops import Git
+        from code_gantry.gitops import Git
 
         return _queue_from_batch(
             cfg, Git(repo), cfg.stage_from_planner(first), extras
@@ -93,7 +93,7 @@ class TestTheQueueIsBuiltFromTheBatch:
     def test_every_queued_stage_carries_the_sha_it_was_drawn_against(self, repo):
         # Recorded by the machinery. The planner is never asked for it: a sha a
         # model supplies is a claim, and this one is a fact the run already has.
-        from orchestrator.gitops import Git
+        from code_gantry.gitops import Git
 
         queue, _ = self._queued(
             repo, _spec("one", ["app/a.rb"]), [_spec("two", ["app/b.rb"])]
@@ -146,9 +146,9 @@ class TestARevisionRechecksTheQueue:
     """
 
     def _rechecked(self, repo, revised, queue):
-        from orchestrator.config import parse_config
-        from orchestrator.gitops import Git
-        from orchestrator.nodes import _requeue_after_revision
+        from code_gantry.config import parse_config
+        from code_gantry.gitops import Git
+        from code_gantry.nodes import _requeue_after_revision
 
         cfg = parse_config({
             "target_repo": str(repo), "base_ref": "main", "project_branch": "p",
@@ -197,9 +197,9 @@ class TestTheBatchIsCapped:
     """
 
     def _queued(self, repo, first, extras, cap):
-        from orchestrator.config import parse_config
-        from orchestrator.gitops import Git
-        from orchestrator.nodes import _queue_from_batch
+        from code_gantry.config import parse_config
+        from code_gantry.gitops import Git
+        from code_gantry.nodes import _queue_from_batch
 
         cfg = parse_config({
             "target_repo": str(repo), "base_ref": "main", "project_branch": "p",
@@ -211,7 +211,7 @@ class TestTheBatchIsCapped:
         return _queue_from_batch(cfg, Git(repo), cfg.stage_from_planner(first), extras)
 
     def test_the_default_is_one_stage(self):
-        from orchestrator.config import parse_config
+        from code_gantry.config import parse_config
 
         cfg = parse_config({
             "target_repo": ".", "base_ref": "main", "project_branch": "p",

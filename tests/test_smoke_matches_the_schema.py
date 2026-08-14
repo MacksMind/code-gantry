@@ -29,7 +29,7 @@ def _stub_verdicts():
 
 class TestTheStandInSatisfiesTheRealSchema:
     def test_the_review_verdict_has_every_required_field(self):
-        from orchestrator.reviewer import ReviewVerdict
+        from code_gantry.reviewer import ReviewVerdict
 
         required = {
             n for n, f in ReviewVerdict.model_fields.items() if f.is_required()

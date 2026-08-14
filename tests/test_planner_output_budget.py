@@ -35,7 +35,7 @@ import pytest
 
 class TestTheBudgetIsBigEnoughForABatch:
     def test_the_default_leaves_room_beyond_one_stage(self):
-        from orchestrator.config import PlannerConfig
+        from code_gantry.config import PlannerConfig
 
         cfg = PlannerConfig(model="claude-opus-5")
         assert cfg.max_tokens >= 64_000
@@ -43,7 +43,7 @@ class TestTheBudgetIsBigEnoughForABatch:
     def test_it_stays_within_what_the_model_accepts(self):
         # 128,000 measured as the ceiling for claude-opus-5; above it the API
         # rejects the request outright rather than truncating.
-        from orchestrator.config import PlannerConfig
+        from code_gantry.config import PlannerConfig
 
         assert PlannerConfig(model="claude-opus-5").max_tokens <= 128_000
 
@@ -52,7 +52,7 @@ class TestTheTimeoutIsWhatMakesTheBudgetLegal:
     def test_a_timeout_is_always_configured(self):
         # Without it the SDK's non-streaming guard caps max_tokens at 21,333
         # and every call raises before it is sent.
-        from orchestrator.config import PlannerConfig
+        from code_gantry.config import PlannerConfig
 
         assert PlannerConfig(model="claude-opus-5").request_timeout_seconds > 0
 
@@ -71,7 +71,7 @@ class TestTheTimeoutIsWhatMakesTheBudgetLegal:
         assert "128_000" in src or "128000" in src
         assert "60 * 10" in src or "600" in src
 
-        from orchestrator.config import PlannerConfig
+        from code_gantry.config import PlannerConfig
 
         cfg = PlannerConfig(model="claude-opus-5")
         non_streaming_cap = 600 * 128_000 / 3600

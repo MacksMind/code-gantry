@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator.repotools import ToolCall
+from code_gantry.repotools import ToolCall
 
 
 class Reader:
@@ -32,7 +32,7 @@ class TestTheSinkItself:
     def test_it_appends_across_openings(self, tmp_path):
         # A resumed run continues one file, for the same reason `run.log` does:
         # truncating discards the history of why it paused.
-        from orchestrator.runlog import RunLog
+        from code_gantry.runlog import RunLog
 
         for message in ("first", "second"):
             log = RunLog(tmp_path / "tools.log", echo=None)
@@ -42,7 +42,7 @@ class TestTheSinkItself:
         assert "first" in body and "second" in body
 
     def test_it_does_not_echo_to_the_terminal(self, tmp_path, capsys):
-        from orchestrator.runlog import RunLog
+        from code_gantry.runlog import RunLog
 
         log = RunLog(tmp_path / "tools.log", echo=None)
         log("[plan] quiet")
@@ -54,10 +54,10 @@ class TestTheSinkItself:
 class TestEachRoleWritesThere:
     def _bound(self, tmp_path):
         """A planner and a reviewer with a tool log bound, as `build_runtime` does."""
-        from orchestrator.config import PlannerConfig, ReviewerConfig
-        from orchestrator.planner import AnthropicPlanner
-        from orchestrator.reviewer import OpenAIReviewer
-        from orchestrator.runlog import RunLog
+        from code_gantry.config import PlannerConfig, ReviewerConfig
+        from code_gantry.planner import AnthropicPlanner
+        from code_gantry.reviewer import OpenAIReviewer
+        from code_gantry.runlog import RunLog
 
         sink = RunLog(tmp_path / "tools.log", echo=None)
         timeline = []
@@ -72,7 +72,7 @@ class TestEachRoleWritesThere:
         return p, r, sink, timeline
 
     def test_the_planners_reads_go_to_the_sink_not_the_timeline(self, tmp_path):
-        from orchestrator.planner import AnthropicPlanner
+        from code_gantry.planner import AnthropicPlanner
 
         p, _r, sink, timeline = self._bound(tmp_path)
         p.reader.calls.append(ToolCall(tool="search", detail="X in .", lines=3))
@@ -83,7 +83,7 @@ class TestEachRoleWritesThere:
         assert timeline == [], "the timeline must stay a timeline"
 
     def test_the_reviewers_reads_go_there_too(self, tmp_path):
-        from orchestrator.reviewer import OpenAIReviewer
+        from code_gantry.reviewer import OpenAIReviewer
 
         _p, r, sink, timeline = self._bound(tmp_path)
         r.reader.calls.append(ToolCall(tool="read_file", detail="a.rb:1-9", lines=9))
@@ -95,8 +95,8 @@ class TestEachRoleWritesThere:
 
     def test_both_roles_are_distinguishable_in_one_file(self, tmp_path):
         # One file for three roles is only useful if you can tell them apart.
-        from orchestrator.planner import AnthropicPlanner
-        from orchestrator.reviewer import OpenAIReviewer
+        from code_gantry.planner import AnthropicPlanner
+        from code_gantry.reviewer import OpenAIReviewer
 
         p, r, sink, _t = self._bound(tmp_path)
         p.reader.calls.append(ToolCall(tool="search", detail="P", lines=1))
@@ -112,7 +112,7 @@ class TestEachRoleWritesThere:
     def test_without_a_sink_it_falls_back_to_the_run_log(self, tmp_path):
         # A planner built outside `build_runtime` — the tests do this — must
         # not lose its reporting because nothing bound the second log.
-        from orchestrator.planner import AnthropicPlanner
+        from code_gantry.planner import AnthropicPlanner
 
         timeline = []
         p = AnthropicPlanner.__new__(AnthropicPlanner)
@@ -140,8 +140,8 @@ class TestTheExecutorsTwoLedgers:
     """
 
     def _client(self, sink):
-        from orchestrator.config import ExecutorConfig
-        from orchestrator.executorclient import OpenAIExecutorModel
+        from code_gantry.config import ExecutorConfig
+        from code_gantry.executorclient import OpenAIExecutorModel
 
         c = OpenAIExecutorModel.__new__(OpenAIExecutorModel)
         c.cfg = ExecutorConfig(model="gpt-5.6-luna")
@@ -150,7 +150,7 @@ class TestTheExecutorsTwoLedgers:
 
     def _turns(self, tmp_path, turns):
         """Drive `_log_new_calls` once per turn, as `run` does."""
-        from orchestrator.runlog import RunLog
+        from code_gantry.runlog import RunLog
 
         sink = RunLog(tmp_path / "tools.log", echo=None)
         client = self._client(sink)
@@ -200,7 +200,7 @@ class TestTheExecutorsTwoLedgers:
 class TestTheTimelineIsOutputNotDiagnostics:
     """The run log echoes to stdout; errors keep stderr.
 
-    It echoed to stderr, so `orchestrator run <project> > out.txt` captured the
+    It echoed to stderr, so `code-gantry run <project> > out.txt` captured the
     final report and lost the entire timeline — the timeline being the only
     thing the command actually produces while it works. stderr is for what went
     wrong, and `cli.py` already uses `click.echo(..., err=True)` for that in
@@ -219,7 +219,7 @@ class TestTheTimelineIsOutputNotDiagnostics:
     """
 
     def test_the_timeline_goes_to_stdout(self, tmp_path, capsys):
-        from orchestrator.runlog import RunLog
+        from code_gantry.runlog import RunLog
 
         log = RunLog(tmp_path / "run.log")
         log("[plan] deriving next stage")
@@ -231,7 +231,7 @@ class TestTheTimelineIsOutputNotDiagnostics:
     def test_a_file_only_write_does_not_echo(self, tmp_path, capsys):
         # So the report can reach `run.log` without appearing twice on the
         # terminal, now that the timeline shares stdout with it.
-        from orchestrator.runlog import RunLog
+        from code_gantry.runlog import RunLog
 
         log = RunLog(tmp_path / "run.log")
         log.record("## Report\n\nlanded 3 stages")
@@ -242,7 +242,7 @@ class TestTheTimelineIsOutputNotDiagnostics:
 
     def test_a_file_only_write_is_not_timestamped(self, tmp_path):
         # A markdown report prefixed line by line with a clock is not a report.
-        from orchestrator.runlog import RunLog
+        from code_gantry.runlog import RunLog
 
         log = RunLog(tmp_path / "run.log")
         log.record("## Report")

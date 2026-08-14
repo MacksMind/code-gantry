@@ -27,9 +27,9 @@ from __future__ import annotations
 
 import os
 
-from orchestrator.config import ExecutorConfig
-from orchestrator.executortools import dispatch, openai_tool_schemas
-from orchestrator.openaiclient import (
+from code_gantry.config import ExecutorConfig
+from code_gantry.executortools import dispatch, openai_tool_schemas
+from code_gantry.openaiclient import (
     TokenUsage,
     describe_call,
     extract_usage,
@@ -38,7 +38,7 @@ from orchestrator.openaiclient import (
     tool_request,
     transport_errors,
 )
-from orchestrator.retry import Backoff, with_provider_retry
+from code_gantry.retry import Backoff, with_provider_retry
 
 
 class ExecutorTurn:
@@ -142,7 +142,7 @@ class OpenAIExecutorModel:
         """
         reads, edits = seen
         if self.tool_log:
-            from orchestrator.planner import _render_call
+            from code_gantry.planner import _render_call
 
             new = list((getattr(reader, "calls", []) or [])[reads:]) + list(
                 (getattr(editor, "calls", []) or [])[edits:]

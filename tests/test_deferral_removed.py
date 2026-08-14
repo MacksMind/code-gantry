@@ -28,52 +28,52 @@ import pytest
 
 class TestTheChannelIsGone:
     def test_the_planner_cannot_return_a_deferral(self):
-        from orchestrator.planner import PlannerResponse
+        from code_gantry.planner import PlannerResponse
 
         assert "deferred" not in PlannerResponse.model_fields
 
     def test_there_is_no_deferral_model(self):
-        import orchestrator.planner as planner
+        import code_gantry.planner as planner
 
         assert not hasattr(planner, "Deferral")
 
     def test_the_outcome_carries_none(self):
-        from orchestrator.planner import PlannerOutcome
+        from code_gantry.planner import PlannerOutcome
 
         assert "deferred" not in {f.name for f in PlannerOutcome.__dataclass_fields__.values()}
 
     def test_run_state_declares_none(self):
-        from orchestrator.state import RunState
+        from code_gantry.state import RunState
 
         assert "deferred" not in RunState.__annotations__
 
     def test_the_state_helpers_are_gone(self):
-        import orchestrator.state as state
+        import code_gantry.state as state
 
         assert not hasattr(state, "merge_deferrals")
         assert not hasattr(state, "outstanding_deferrals")
 
     def test_no_prompt_block_renders_them(self):
-        import orchestrator.prompts as prompts
+        import code_gantry.prompts as prompts
 
         assert not hasattr(prompts, "_deferred_block")
 
     def test_build_planner_messages_takes_no_deferred_argument(self):
         import inspect
 
-        from orchestrator.prompts import build_planner_messages
+        from code_gantry.prompts import build_planner_messages
 
         assert "deferred" not in inspect.signature(build_planner_messages).parameters
 
 
 class TestNothingStillReferencesIt:
     def test_the_exit_code_has_no_producer_left(self):
-        import orchestrator.cli as cli
+        import code_gantry.cli as cli
 
         assert not hasattr(cli, "EXIT_DEFERRED")
 
     def test_the_report_has_no_deferred_section(self):
-        import orchestrator.report as report
+        import code_gantry.report as report
 
         assert not hasattr(report, "_deferred_section")
 
@@ -83,7 +83,7 @@ class TestNothingStillReferencesIt:
         A planner that meets a step this pipeline cannot execute still needs an
         answer, and now it is a note: say so, name who can, and move on.
         """
-        from orchestrator.planner import PLANNER_SYSTEM_PROMPT
+        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
 
         text = PLANNER_SYSTEM_PROMPT.lower()
         assert "cannot" in text
@@ -103,18 +103,18 @@ class TestStatusTail:
     def test_build_planner_messages_takes_no_status_tail(self):
         import inspect
 
-        from orchestrator.prompts import build_planner_messages
+        from code_gantry.prompts import build_planner_messages
 
         assert "status_tail" not in inspect.signature(build_planner_messages).parameters
 
     def test_nodes_no_longer_reads_the_tail(self):
-        import orchestrator.nodes as nodes
+        import code_gantry.nodes as nodes
 
         assert not hasattr(nodes, "_status_tail")
         assert not hasattr(nodes, "STATUS_TAIL_CHARS")
 
     def test_status_is_still_written_for_the_operator(self, tmp_path):
-        from orchestrator.planner import append_status
+        from code_gantry.planner import append_status
 
         path = append_status(
             tmp_path,

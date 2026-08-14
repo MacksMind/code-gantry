@@ -23,7 +23,7 @@ import textwrap
 import time
 from datetime import datetime
 
-from orchestrator.addendum import (
+from code_gantry.addendum import (
     append_findings,
     append_notes,
     append_observations,
@@ -32,32 +32,32 @@ from orchestrator.addendum import (
     in_scope,
     out_of_scope,
 )
-from orchestrator.commands import clip_for_model
-from orchestrator.cachekey import cache_key
-from orchestrator.config import ProjectConfig, Stage, validate_stage
-from orchestrator.executor import (
+from code_gantry.commands import clip_for_model
+from code_gantry.cachekey import cache_key
+from code_gantry.config import ProjectConfig, Stage, validate_stage
+from code_gantry.executor import (
     TRANSCRIPT_FILENAME,
     ExcerptError,
     resolve_excerpts,
 )
-from orchestrator.flake import adjudicate, append_flakes, predates_stage
-from orchestrator.gitops import GitError
+from code_gantry.flake import adjudicate, append_flakes, predates_stage
+from code_gantry.gitops import GitError
 # The gate's clip, under the name thirteen call sites here already use.
 # Imported rather than redefined: the budget and the helper are one
 # decision, and `gates` is where the other half of it lives. Safe at
 # module level — `gates` imports nothing that reaches back here.
-from orchestrator.gates import clip as _clip
-from orchestrator.repotools import render_counts
-from orchestrator.globs import matches_any
-from orchestrator.planner import append_stage_cost, append_status, recent_stage_costs
-from orchestrator.prompts import (
+from code_gantry.gates import clip as _clip
+from code_gantry.repotools import render_counts
+from code_gantry.globs import matches_any
+from code_gantry.planner import append_stage_cost, append_status, recent_stage_costs
+from code_gantry.prompts import (
     build_executor_prompt,
     build_planner_messages,
     build_review_messages,
 )
-from orchestrator.reviewer import issues_as_feedback
-from orchestrator.runtime import Runtime
-from orchestrator.state import (
+from code_gantry.reviewer import issues_as_feedback
+from code_gantry.runtime import Runtime
+from code_gantry.state import (
     clear_rework_after_approval,
     RunState,
     zero_usage,
@@ -66,7 +66,7 @@ from orchestrator.state import (
     fresh_revision_fields,
     fresh_stage_fields,
 )
-from orchestrator.verify import Layer, Route, diff_digest, run_verify
+from code_gantry.verify import Layer, Route, diff_digest, run_verify
 
 
 # Command output bound where it reaches a model or a log, rather than where it
@@ -1367,7 +1367,7 @@ def review(state: RunState, rt: Runtime) -> dict:
     outcome = rt.reviewer.review(
         messages,
         cache_key=cache_key(
-            "orchestrator", state.get("project_slug") or "project"
+            "code_gantry", state.get("project_slug") or "project"
         ),
     )
 
@@ -2565,8 +2565,8 @@ def _stage_spend(cfg, usage: dict, executor_cost: float | None = None) -> list[d
     """
     import os
 
-    from orchestrator.pricing import entry_for, load_price_map, price_usage
-    from orchestrator.report import PRICE_MAP_FILENAME
+    from code_gantry.pricing import entry_for, load_price_map, price_usage
+    from code_gantry.report import PRICE_MAP_FILENAME
 
     prices = load_price_map(
         os.environ.get("ORCHESTRATOR_PRICE_MAP") or PRICE_MAP_FILENAME

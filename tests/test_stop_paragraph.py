@@ -15,7 +15,7 @@ on, and it costs nothing to say what is actually true.
 
 from __future__ import annotations
 
-from orchestrator.prompts import _executor_system_prompt
+from code_gantry.prompts import _executor_system_prompt
 
 
 def _stop_section(cfg=None) -> str:

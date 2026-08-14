@@ -22,7 +22,7 @@ Bounded by construction: `max_results` chunks of `snippet_lines` each, at
 around one call in a hundred.
 """
 
-from orchestrator.repotools import ToolCall
+from code_gantry.repotools import ToolCall
 
 
 class TestTheLedgerCanCarryAResult:
@@ -40,8 +40,8 @@ class TestOnlySemanticFillsIt:
     def test_a_read_records_no_content(self, tmp_path):
         import subprocess
 
-        from orchestrator.gitops import Git
-        from orchestrator.repotools import ReadBudget, RepoReader
+        from code_gantry.gitops import Git
+        from code_gantry.repotools import ReadBudget, RepoReader
 
         (tmp_path / "a.rb").write_text("class Foo\nend\n")
         run = lambda *a: subprocess.run(
@@ -58,7 +58,7 @@ class TestOnlySemanticFillsIt:
         assert reader.calls[0].result == "", "a reproducible read must not be copied"
 
     def test_the_helper_returns_only_semantic_entries(self):
-        from orchestrator.repotools import semantic_results
+        from code_gantry.repotools import semantic_results
 
         ledger = [
             ToolCall(tool="read_file", detail="a.rb", lines=3, result="should be ignored"),
@@ -71,7 +71,7 @@ class TestOnlySemanticFillsIt:
 
 class TestTheSearchRecordsWhatItReturned:
     def _search(self, hits):
-        from orchestrator.semantic import SemanticSearch, SemanticSearchConfig
+        from code_gantry.semantic import SemanticSearch, SemanticSearchConfig
 
         cfg = SemanticSearchConfig(
             api_base="http://x", qdrant_url="http://q",
@@ -93,7 +93,7 @@ class TestTheSearchRecordsWhatItReturned:
         def boom(*a, **k):
             raise OSError("index down")
 
-        from orchestrator.semantic import SemanticSearch, SemanticSearchConfig
+        from code_gantry.semantic import SemanticSearch, SemanticSearchConfig
 
         s = SemanticSearch(
             SemanticSearchConfig(api_base="http://x", qdrant_url="http://q",
@@ -107,7 +107,7 @@ class TestTheSearchRecordsWhatItReturned:
 
 class TestItReachesTheArtifacts:
     def test_review_json_carries_it(self):
-        from orchestrator.reviewer import ReviewOutcome
+        from code_gantry.reviewer import ReviewOutcome
 
         out = ReviewOutcome(
             verdict="approved", summary="s",
@@ -120,7 +120,7 @@ class TestItReachesTheArtifacts:
     def test_an_outcome_with_none_still_has_the_key(self):
         # An absent field and an empty one are indistinguishable to a reader,
         # and this project has already answered a question wrongly that way.
-        from orchestrator.reviewer import ReviewOutcome
+        from code_gantry.reviewer import ReviewOutcome
 
         assert ReviewOutcome(verdict="approved", summary="s").as_dict()[
             "semantic_results"
@@ -131,7 +131,7 @@ class TestThePlannerArtifactToo:
     def test_planner_json_carries_the_key(self, repo, tmp_path):
         import json
 
-        from orchestrator import nodes
+        from code_gantry import nodes
         from test_nodes import StubPlanner, make, PlannerOutcome
 
         planner = StubPlanner(
@@ -155,7 +155,7 @@ class TestThePlannerArtifactToo:
     def test_the_key_is_present_when_nothing_was_asked(self, repo, tmp_path):
         import json
 
-        from orchestrator import nodes
+        from code_gantry import nodes
         from test_nodes import StubPlanner, make, PlannerOutcome
 
         cfg, rt, state = make(

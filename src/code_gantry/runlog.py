@@ -7,7 +7,7 @@ reconstructing why a run stopped.
 **Echoed to stdout, not stderr.** The timeline is what this command produces
 while it works; stderr is for what went wrong, and `cli.py` uses
 `click.echo(..., err=True)` for that in fourteen places. Echoing here to stderr
-meant `orchestrator run <project> > out.txt` captured the closing report and
+meant `code-gantry run <project> > out.txt` captured the closing report and
 lost everything before it.
 """
 

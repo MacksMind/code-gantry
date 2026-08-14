@@ -13,16 +13,16 @@ import time
 import pytest
 from dataclasses import dataclass, field
 
-from orchestrator import nodes
-from orchestrator.commands import CommandRunner
-from orchestrator.config import Stage, parse_config
-from orchestrator.executor import ExecutionResult
-from orchestrator.gitops import Git, GitError
-from orchestrator.plandoc import PlanDocument, PlanTree
-from orchestrator.planner import PlannerOutcome, PlannerUsage
-from orchestrator.reviewer import Issue, ReviewOutcome, TokenUsage
-from orchestrator.runtime import ProjectPaths, RunPaths, Runtime
-from orchestrator.state import RunState, fresh_stage_fields, new_state
+from code_gantry import nodes
+from code_gantry.commands import CommandRunner
+from code_gantry.config import Stage, parse_config
+from code_gantry.executor import ExecutionResult
+from code_gantry.gitops import Git, GitError
+from code_gantry.plandoc import PlanDocument, PlanTree
+from code_gantry.planner import PlannerOutcome, PlannerUsage
+from code_gantry.reviewer import Issue, ReviewOutcome, TokenUsage
+from code_gantry.runtime import ProjectPaths, RunPaths, Runtime
+from code_gantry.state import RunState, fresh_stage_fields, new_state
 
 # The operator's pattern, as a real project would configure it.
 RSPEC_PATTERN = r"^\s*rspec\s+'?\.?/?([^'\s\[:]+_spec\.rb)"
@@ -195,7 +195,7 @@ def _text_of(messages):
 
 def _digest(rt, state):
     """The fingerprint verify records when the full suite passes."""
-    from orchestrator.verify import diff_digest
+    from code_gantry.verify import diff_digest
 
     return diff_digest(rt.git, state["stage_start_sha"])
 
@@ -1152,7 +1152,7 @@ class TestReviewGate:
         assert out["full_suite_digest"], (
             "verify ran the full suite and must fingerprint the tree it passed on"
         )
-        from orchestrator.state import RunState
+        from code_gantry.state import RunState
 
         assert "full_suite_digest" in RunState.__annotations__, (
             "the key must be declared in the state schema or the graph drops it"
@@ -1191,7 +1191,7 @@ class TestPlanDocumentsFollowTheProjectBranch:
         out = nodes.verify(state, rt)
         assert out["failure_layer"] == "scope"
 
-        from orchestrator.state import RunState
+        from code_gantry.state import RunState
 
         assert "plan_sha" in RunState.__annotations__, (
             "the key must be declared in the state schema or the graph drops it"
@@ -2082,7 +2082,7 @@ class TestAStageCostsItsPlanningToo:
         recorded none. The test passed the whole time, because it pinned the
         location instead of the behaviour.
         """
-        from orchestrator.state import fresh_stage_fields
+        from code_gantry.state import fresh_stage_fields
 
         assert "plan_seconds" not in fresh_stage_fields()
 
@@ -2104,7 +2104,7 @@ class TestStageCostOutlivesTheRun:
     """
 
     def test_a_landed_stage_records_what_it_cost(self, repo, tmp_path):
-        from orchestrator.planner import recent_stage_costs
+        from code_gantry.planner import recent_stage_costs
 
         cfg, rt, state = make(repo, tmp_path)
         state = with_stage(state, rt)
@@ -2121,7 +2121,7 @@ class TestStageCostOutlivesTheRun:
         assert costs[0]["merge_sha"]
 
     def test_a_stage_with_no_measurement_records_nothing(self, repo, tmp_path):
-        from orchestrator.planner import recent_stage_costs
+        from code_gantry.planner import recent_stage_costs
 
         cfg, rt, state = make(repo, tmp_path)
         state = with_stage(state, rt)
@@ -2478,7 +2478,7 @@ class TestTheOpeningFailureOutlivesItsConsequences:
     def test_a_revision_clears_it(self, repo, tmp_path):
         # A redrawn stage is a different instruction; the old diagnosis is
         # about work that no longer exists.
-        from orchestrator.state import fresh_revision_fields
+        from code_gantry.state import fresh_revision_fields
 
         assert fresh_revision_fields()["opening_failure"] is None
 
@@ -2488,7 +2488,7 @@ class TestTheOpeningFailureOutlivesItsConsequences:
     def test_the_state_schema_declares_it(self):
         # Four defects have been values written correctly and dropped by a
         # schema that did not know the key.
-        from orchestrator.state import RunState as Schema
+        from code_gantry.state import RunState as Schema
 
         assert "opening_failure" in Schema.__annotations__
 
@@ -2594,7 +2594,7 @@ class TestPrecheckRefusesToBuildOnSomebodyElsesChanges:
     def test_the_resume_re_enters_at_precheck(self):
         # Not verify: the check runs before a branch is cut, so there is no
         # stage branch to diff against. Back to precheck, which re-checks.
-        from orchestrator.state import resume_entry_point
+        from code_gantry.state import resume_entry_point
 
         assert (
             resume_entry_point(
@@ -2926,7 +2926,7 @@ class TestReviewerObservationsReachTheLog:
     """
 
     def _reviewer(self, observations):
-        from orchestrator.reviewer import Observation, ReviewOutcome
+        from code_gantry.reviewer import Observation, ReviewOutcome
 
         class Once:
             def review(self, messages, cache_key=None):
@@ -3183,7 +3183,7 @@ class TestTheSquashCommitIsAProperCommitMessage:
     """
 
     def _stage(self, instruction):
-        from orchestrator.config import Stage
+        from code_gantry.config import Stage
 
         return Stage(id="a-fairly-long-stage-id-like-real-ones", instruction=instruction)
 
@@ -3349,7 +3349,7 @@ class TestTheNativeExecutorsMeasurementsSurviveTheTrip:
         return Measured(repo=repo, edits=[("app.py", "stage work\n")])
 
     def test_the_peak_context_and_the_cost_both_land(self, repo, tmp_path):
-        from orchestrator.planner import recent_stage_costs
+        from code_gantry.planner import recent_stage_costs
 
         ex = self._measured(repo, context_tokens=21_000, cost_usd=0.0092)
         cfg, rt, state = make(repo, tmp_path, executor=ex)
@@ -3378,7 +3378,7 @@ class TestTheNativeExecutorsMeasurementsSurviveTheTrip:
         zeroed the one that was written. Both are invisible to a test that
         calls the formatter with a dict it made up.
         """
-        from orchestrator.planner import recent_stage_costs
+        from code_gantry.planner import recent_stage_costs
 
         planner = StubPlanner([
             PlannerOutcome(
@@ -3412,7 +3412,7 @@ class TestTheNativeExecutorsMeasurementsSurviveTheTrip:
         # pricing module exists to keep. The line must still be written, on the
         # strength of the context figure alone, or an unpriced executor silently
         # empties the planner's calibration data.
-        from orchestrator.planner import recent_stage_costs
+        from code_gantry.planner import recent_stage_costs
 
         ex = self._measured(repo, context_tokens=13_000, cost_usd=None)
         cfg, rt, state = make(repo, tmp_path, executor=ex)
@@ -3448,7 +3448,7 @@ class TestTheExecuteLineReportsWhatItPaid:
     """
 
     def _with_usage(self, repo, **usage):
-        from orchestrator.openaiclient import TokenUsage
+        from code_gantry.openaiclient import TokenUsage
 
         class Counted(StubExecutor):
             def run_agent_stage(
@@ -3521,7 +3521,7 @@ class TestThePlannersPeakReachesTheCostLine:
     """
 
     def test_the_peak_survives_plan_execute_and_advance(self, repo, tmp_path):
-        from orchestrator.planner import recent_stage_costs
+        from code_gantry.planner import recent_stage_costs
 
         planner = StubPlanner([
             PlannerOutcome(
@@ -3609,7 +3609,7 @@ class TestContextIsSummedAcrossAttempts:
         # Accumulating across attempts is only safe because the per-stage
         # reset clears it; without that a long run would report one
         # monotonically rising number keyed by unrelated merge shas.
-        from orchestrator.state import fresh_stage_fields
+        from code_gantry.state import fresh_stage_fields
 
         assert fresh_stage_fields()["executor_context_tokens"] == 0
 
@@ -3622,8 +3622,8 @@ class TestContextIsSummedAcrossAttempts:
         """
         import json
 
-        from orchestrator.executor import _write_loop_record
-        from orchestrator.executor import ExecutionResult as ER
+        from code_gantry.executor import _write_loop_record
+        from code_gantry.executor import ExecutionResult as ER
 
         out = ER(ok=True, log="")
         out.context_tokens = 47_000

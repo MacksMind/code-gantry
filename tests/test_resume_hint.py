@@ -1,13 +1,13 @@
 """Every message that tells an operator what to run next names a config.
 
 The CLI took a slug, then a run id, and now takes a **config path** on every
-command. Four messages were left behind saying `orchestrator resume <run_id>`,
+command. Four messages were left behind saying `code-gantry resume <run_id>`,
 and one went further and told the operator to "approve the config" — a command
 deleted with `approval.py` when the config's git blob sha replaced it.
 
 None of it was catchable. They are console strings, so nothing fails when they
 go stale; the test that touched one asserted only that the substring
-`orchestrator resume` appeared, which stayed true through every change to what
+`code-gantry resume` appeared, which stayed true through every change to what
 follows it. What an operator got was a usage error at whatever hour their run
 stopped, or a command that no longer exists.
 
@@ -21,7 +21,7 @@ import subprocess
 
 import pytest
 
-from orchestrator.config import parse_config
+from code_gantry.config import parse_config
 
 
 def git(path, *args):
@@ -50,7 +50,7 @@ def cfg(tmp_path):
 class TestTheHintItself:
     def test_it_names_the_config_the_run_was_read_from(self, cfg):
         assert cfg.resume_command().endswith("docs/code_gantry.yaml")
-        assert cfg.resume_command().startswith("orchestrator resume ")
+        assert cfg.resume_command().startswith("code-gantry resume ")
 
     def test_the_run_id_is_optional_because_the_cli_defaults_it(self, cfg):
         # It resolves to the newest run in the work dir, which is nearly always
@@ -73,7 +73,7 @@ class TestTheHintItself:
             "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.6-sol"},
         })
-        assert cfg.resume_command() == "orchestrator resume <config>"
+        assert cfg.resume_command() == "code-gantry resume <config>"
 
 
 class TestNoCallerSpellsItItself:
@@ -86,13 +86,13 @@ class TestNoCallerSpellsItItself:
         """
         import pathlib
 
-        src = pathlib.Path(__file__).resolve().parents[1] / "src" / "orchestrator"
+        src = pathlib.Path(__file__).resolve().parents[1] / "src" / "code_gantry"
         offenders = []
         for path in src.rglob("*.py"):
             for n, line in enumerate(path.read_text().splitlines(), 1):
-                if "orchestrator resume" not in line:
+                if "code-gantry resume" not in line:
                     continue
-                after = line.split("orchestrator resume", 1)[1].lstrip()
+                after = line.split("code-gantry resume", 1)[1].lstrip()
                 # The stale shape exactly: a run id interpolated where the
                 # config path now goes. Written as the shape rather than as
                 # the words, so the CLI's usage banner — which documents
@@ -106,7 +106,7 @@ class TestNoCallerSpellsItItself:
     def test_nothing_still_tells_an_operator_to_approve_a_config(self):
         """The instruction, not the word.
 
-        `preflight` names `orchestrator approve` in a docstring, to say what
+        `preflight` names `code-gantry approve` in a docstring, to say what
         the config-sha check replaced, and that is the good kind: a maintainer
         reading `_approval_check` needs to know why it is called that. What
         must not survive is an operator being told to *run* it — which is what
@@ -115,7 +115,7 @@ class TestNoCallerSpellsItItself:
         """
         import pathlib
 
-        src = pathlib.Path(__file__).resolve().parents[1] / "src" / "orchestrator"
+        src = pathlib.Path(__file__).resolve().parents[1] / "src" / "code_gantry"
         hits = [
             f"{p.name}:{n}"
             for p in src.rglob("*.py")

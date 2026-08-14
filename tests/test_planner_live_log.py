@@ -20,7 +20,7 @@ is how the two drift, and there is a rule about that in this codebase already.
 
 import pytest
 
-from orchestrator.repotools import ToolCall
+from code_gantry.repotools import ToolCall
 
 
 class Reader:
@@ -32,8 +32,8 @@ class Reader:
 
 def _planner(monkeypatch, turns, log):
     """A planner whose client returns `turns` in order."""
-    from orchestrator.config import PlannerConfig
-    from orchestrator.planner import AnthropicPlanner as Planner
+    from code_gantry.config import PlannerConfig
+    from code_gantry.planner import AnthropicPlanner as Planner
 
     cfg = PlannerConfig(model="claude-opus-5")
     p = Planner.__new__(Planner)
@@ -54,7 +54,7 @@ class TestEachCallIsLoggedWhenItHappens:
         because what is being pinned is that nothing accumulates — a client
         stub would prove the loop runs, not that it reports as it goes.
         """
-        from orchestrator.planner import AnthropicPlanner as Planner
+        from code_gantry.planner import AnthropicPlanner as Planner
 
         lines = []
         p = _planner(monkeypatch, [], lines.append)
@@ -73,7 +73,7 @@ class TestEachCallIsLoggedWhenItHappens:
         assert seen == 2
 
     def test_nothing_new_logs_nothing(self, monkeypatch):
-        from orchestrator.planner import AnthropicPlanner as Planner
+        from code_gantry.planner import AnthropicPlanner as Planner
 
         lines = []
         p = _planner(monkeypatch, [], lines.append)
@@ -83,7 +83,7 @@ class TestEachCallIsLoggedWhenItHappens:
         assert len(lines) == 1
 
     def test_a_refusal_streams_as_a_refusal(self, monkeypatch):
-        from orchestrator.planner import AnthropicPlanner as Planner
+        from code_gantry.planner import AnthropicPlanner as Planner
 
         lines = []
         p = _planner(monkeypatch, [], lines.append)
@@ -96,7 +96,7 @@ class TestEachCallIsLoggedWhenItHappens:
     def test_a_planner_with_no_reader_is_silent(self, monkeypatch):
         # No repository access configured: the single-call planner it has
         # always been, and there is no ledger to drain.
-        from orchestrator.planner import AnthropicPlanner as Planner
+        from code_gantry.planner import AnthropicPlanner as Planner
 
         lines = []
         p = _planner(monkeypatch, [], lines.append)
@@ -105,7 +105,7 @@ class TestEachCallIsLoggedWhenItHappens:
         assert lines == []
 
     def test_no_log_is_not_an_error(self, monkeypatch):
-        from orchestrator.planner import AnthropicPlanner as Planner
+        from code_gantry.planner import AnthropicPlanner as Planner
 
         p = _planner(monkeypatch, [], None)
         p.reader.calls.append(ToolCall(tool="search", detail="X", lines=1))
@@ -121,7 +121,7 @@ class TestOneRenderingOfACall:
     """
 
     def test_the_streamed_line_matches_the_recorded_one(self, monkeypatch):
-        from orchestrator.planner import AnthropicPlanner as Planner
+        from code_gantry.planner import AnthropicPlanner as Planner
 
         lines = []
         p = _planner(monkeypatch, [], lines.append)

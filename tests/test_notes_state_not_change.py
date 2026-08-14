@@ -31,7 +31,7 @@ import pytest
 
 
 def _planner_note_text() -> str:
-    from orchestrator.planner import PlannerResponse
+    from code_gantry.planner import PlannerResponse
 
     return PlannerResponse.model_fields["plan_notes"].description
 
@@ -46,7 +46,7 @@ def _reviewer_text() -> str:
     """
     from types import SimpleNamespace
 
-    from orchestrator.prompts import _review_system_prompt
+    from code_gantry.prompts import _review_system_prompt
 
     cfg = SimpleNamespace(reviewer=SimpleNamespace(repo_access=True))
     return _review_system_prompt(cfg)
@@ -72,7 +72,7 @@ class TestBothRolesGetTheSameSentence:
         "text", [_planner_note_text, _reviewer_text], ids=["planner", "reviewer"]
     )
     def test_the_shared_constant_reaches_the_prompt(self, text):
-        from orchestrator.plannertools import STATE_NOT_CHANGE
+        from code_gantry.plannertools import STATE_NOT_CHANGE
 
         assert STATE_NOT_CHANGE in text()
 
@@ -86,7 +86,7 @@ class TestBothRolesGetTheSameSentence:
         # The rule has to say what the bad shape *is*. "Be concise" would not
         # have stopped any of the fifty-one, every one of which is a short,
         # well-written sentence about what a document used to say.
-        from orchestrator.plannertools import STATE_NOT_CHANGE
+        from code_gantry.plannertools import STATE_NOT_CHANGE
 
         body = STATE_NOT_CHANGE.lower()
         assert "used to" in body or "previously" in body
@@ -95,7 +95,7 @@ class TestBothRolesGetTheSameSentence:
         # Deleting a channel without naming its replacement is how a fact that
         # had a home ends up with none. History is answerable from the commit
         # log, which cannot go stale and costs nothing to carry.
-        from orchestrator.plannertools import STATE_NOT_CHANGE
+        from code_gantry.plannertools import STATE_NOT_CHANGE
 
         assert "commit log" in STATE_NOT_CHANGE.lower()
 

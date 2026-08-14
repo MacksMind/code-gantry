@@ -9,8 +9,8 @@ against a file neither party has seen, which is worse than no edit.
 
 import pytest
 
-from orchestrator.edittools import Edit, FileEditor, apply_edits, normalise
-from orchestrator.repotools import ToolError
+from code_gantry.edittools import Edit, FileEditor, apply_edits, normalise
+from code_gantry.repotools import ToolError
 
 
 @pytest.fixture
@@ -207,7 +207,7 @@ class TestNearestTextFoldsTheReadIntoTheRefusal:
         the failure mode where a mechanism can be reported as *available*
         forever and never shown to have *fired*.
         """
-        from orchestrator.edittools import nearest_text
+        from code_gantry.edittools import nearest_text
 
         text = "class A\n  def go\n    work\n  end\nend\n"
 
@@ -241,7 +241,7 @@ class TestNearestTextFoldsTheReadIntoTheRefusal:
         # Both refuse without a window and they mean opposite things: one
         # found too many places, the other none. Told apart, "the anchor is
         # ambiguous" is a threshold to tune; blended, it is noise.
-        from orchestrator.edittools import nearest_text
+        from code_gantry.edittools import nearest_text
 
         ambiguous = nearest_text("  end\nx\n  end\ny\n  end\n", "  end")
         assert ambiguous is not None and ambiguous.text == ""
@@ -252,7 +252,7 @@ class TestNearestTextFoldsTheReadIntoTheRefusal:
         assert nothing.route == "none"
 
     def test_it_finds_the_block_when_the_indent_is_wrong(self):
-        from orchestrator.edittools import nearest_text
+        from code_gantry.edittools import nearest_text
 
         text = "class A\n  def go\n    work\n  end\nend\n"
         near = nearest_text(text, "      def go\n        work\n      end")
@@ -261,7 +261,7 @@ class TestNearestTextFoldsTheReadIntoTheRefusal:
 
     def test_it_finds_it_when_a_line_was_left_out(self):
         # The real failure: the model omitted a line the block contains.
-        from orchestrator.edittools import nearest_text
+        from code_gantry.edittools import nearest_text
 
         text = "a\n  scope 'x' do\n    get '/'\n    post 'y'\n  end\nb\n"
         near = nearest_text(text, "    scope 'x' do\n      post 'y'\n    end")
@@ -271,19 +271,19 @@ class TestNearestTextFoldsTheReadIntoTheRefusal:
         # Several places look alike, so a single window would be a guess about
         # which — and a confident wrong location invites an edit somewhere the
         # model never meant.
-        from orchestrator.edittools import nearest_text
+        from code_gantry.edittools import nearest_text
 
         text = "  end\nx\n  end\ny\n  end\n"
         assert nearest_text(text, "  end").text == ""
 
     def test_it_declines_when_nothing_is_close(self):
-        from orchestrator.edittools import nearest_text
+        from code_gantry.edittools import nearest_text
 
         text = "completely\nunrelated\ncontent\nhere\n"
         assert nearest_text(text, "def some_method\n  raise\nend").text == ""
 
     def test_the_refusal_carries_it_and_still_refuses(self, editor):
-        from orchestrator.edittools import Edit
+        from code_gantry.edittools import Edit
 
         (editor.repo / "app" / "order.rb").write_text(
             "class Order\n  def total\n    sum\n  end\nend\n"
@@ -301,7 +301,7 @@ class TestNearestTextFoldsTheReadIntoTheRefusal:
         assert (editor.repo / "app" / "order.rb").read_bytes() == before
 
     def test_a_hopeless_miss_still_says_read_it_again(self, editor):
-        from orchestrator.edittools import Edit
+        from code_gantry.edittools import Edit
 
         with pytest.raises(ToolError) as e:
             editor.edit("app/order.rb", [Edit("nothing like this at all", "x")])
@@ -318,7 +318,7 @@ class TestALocatorAnchorsOnTextKnownToHaveBeenReal:
     """
 
     def test_a_chunks_own_line_places_the_window(self):
-        from orchestrator.edittools import nearest_text
+        from code_gantry.edittools import nearest_text
 
         lines = (
             ["filler line here"] * 20
@@ -345,7 +345,7 @@ class TestALocatorAnchorsOnTextKnownToHaveBeenReal:
 
     def test_a_locator_pointing_at_nothing_relevant_returns_nothing(self):
         # Corroboration lowers the bar; it does not remove it.
-        from orchestrator.edittools import nearest_text
+        from code_gantry.edittools import nearest_text
 
         text = "\n".join(["unrelated"] * 200)
         assert nearest_text(
@@ -353,7 +353,7 @@ class TestALocatorAnchorsOnTextKnownToHaveBeenReal:
         ).text == ""
 
     def test_no_locator_leaves_the_old_behaviour_exactly(self):
-        from orchestrator.edittools import nearest_text
+        from code_gantry.edittools import nearest_text
 
         text = "a\n  scope 'x' do\n    get '/'\n  end\nb\n"
         want = "    scope 'x' do\n      get '/'\n    end"
@@ -363,7 +363,7 @@ class TestALocatorAnchorsOnTextKnownToHaveBeenReal:
         # The cheap, exact path first: a locator is a last resort, and calling
         # one when the anchor already placed the text would be a network round
         # trip for an answer we have.
-        from orchestrator.edittools import nearest_text
+        from code_gantry.edittools import nearest_text
 
         called = []
         text = "a\n  def go\n    work\n  end\nb\n"
@@ -383,7 +383,7 @@ class TestSeveralChunksComeBackForOneFile:
         highest-ranked chunk anchors on `alpha`, and the matcher still lands on
         `beta`, which is what the wanted text actually resembles.
         """
-        from orchestrator.edittools import nearest_text
+        from code_gantry.edittools import nearest_text
 
         lines = [
             "def alpha_method_here", "  a", "end",
@@ -407,7 +407,7 @@ class TestSeveralChunksComeBackForOneFile:
 
     def test_a_line_appearing_twice_is_never_the_anchor(self):
         # It names no single place, and a wrong place is worse than none.
-        from orchestrator.edittools import nearest_text
+        from code_gantry.edittools import nearest_text
 
         text = "\n".join(["  duplicated_line_here"] * 2 + ["unique_line_over_here", "x"])
         near = nearest_text(

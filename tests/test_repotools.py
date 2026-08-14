@@ -27,8 +27,8 @@ import subprocess
 
 import pytest
 
-from orchestrator.gitops import Git
-from orchestrator.repotools import (
+from code_gantry.gitops import Git
+from code_gantry.repotools import (
     SEPARATOR,
     ReadBudget,
     RepoReader,
@@ -158,7 +158,7 @@ class TestTheLineNumberSeparator:
         # three copies of one format string, which is how a format drifts while
         # every test stays green. They are one function now and this is what
         # says so.
-        from orchestrator import edittools, executor
+        from code_gantry import edittools, executor
 
         assert edittools.number_lines is number_lines
         assert executor.number_lines is number_lines
@@ -481,7 +481,7 @@ class TestPinnedToACommit:
     """
 
     def _repo(self, tmp_path):
-        from orchestrator.gitops import Git
+        from code_gantry.gitops import Git
 
         repo = tmp_path / "r"
         repo.mkdir()
@@ -676,8 +676,8 @@ class TestTheLedgerRecordsWhichLinesWereRead:
     def test_a_budget_clip_is_visible_in_the_ledger(self, repo):
         # A whole-file read that the budget cut short is no longer a
         # whole-file read, and recording it as the bare path would say it was.
-        from orchestrator.repotools import ReadBudget, RepoReader
-        from orchestrator.gitops import Git
+        from code_gantry.repotools import ReadBudget, RepoReader
+        from code_gantry.gitops import Git
 
         body = "".join(f"line{i}\n" for i in range(1, 41))
         (repo / "docs" / "plan.md").write_text(body)
@@ -815,7 +815,7 @@ class TestShortstat:
     def test_it_counts_files_and_lines(self, repo):
         import subprocess
 
-        from orchestrator.gitops import Git
+        from code_gantry.gitops import Git
 
         (repo / "docs" / "plan.md").write_text("# Plan\n\nStep one.\nStep two.\n")
         (repo / "docs" / "extra.md").write_text("new\n")
@@ -828,6 +828,6 @@ class TestShortstat:
     def test_an_unreachable_sha_is_none_rather_than_zeroes(self, repo):
         # A stage that changed nothing and a stage nobody could measure are
         # different facts, and a cost line must not claim the first.
-        from orchestrator.gitops import Git
+        from code_gantry.gitops import Git
 
         assert Git(repo).shortstat("no-such-ref") is None

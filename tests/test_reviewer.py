@@ -10,8 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from orchestrator.config import parse_config
-from orchestrator.reviewer import (
+from code_gantry.config import parse_config
+from code_gantry.reviewer import (
     Issue,
     OpenAIReviewer,
     ReviewVerdict,
@@ -158,7 +158,7 @@ class StubReader:
         self.calls.clear()
 
     def read_file(self, path, start=None, end=None):
-        from orchestrator.repotools import ToolCall
+        from code_gantry.repotools import ToolCall
 
         self.asked.append(path)
         detail = path if start is None and end is None else f"{path}:{start}-{end}"
@@ -389,7 +389,7 @@ class TestCacheWriteAccounting:
     """
 
     def test_the_write_count_is_read_from_the_details(self):
-        from orchestrator.reviewer import _extract_usage
+        from code_gantry.reviewer import _extract_usage
 
         class Details:
             cached_tokens = 0
@@ -405,7 +405,7 @@ class TestCacheWriteAccounting:
         assert usage.cached_tokens == 0
 
     def test_a_provider_that_omits_it_is_zero(self):
-        from orchestrator.reviewer import _extract_usage
+        from code_gantry.reviewer import _extract_usage
 
         class Details:
             cached_tokens = 100
@@ -439,8 +439,8 @@ class TestExplicitCacheMode:
 
     def test_the_cache_key_is_still_sent(self):
         # GPT-5.6 needs it for reliable matching, not merely as a hint.
-        sent = self.call(cache_key="orchestrator:proj")
-        assert sent["prompt_cache_key"] == "orchestrator:proj"
+        sent = self.call(cache_key="code_gantry:proj")
+        assert sent["prompt_cache_key"] == "code_gantry:proj"
 
     def test_retention_is_not_sent_by_default(self):
         # Deprecated on GPT-5.6 in favour of prompt_cache_options.ttl, and

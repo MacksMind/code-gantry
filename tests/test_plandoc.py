@@ -7,8 +7,8 @@ pasted verbatim into every paid model call.
 
 from pathlib import Path
 
-from orchestrator.gitops import Git
-from orchestrator.plandoc import (
+from code_gantry.gitops import Git
+from code_gantry.plandoc import (
     PlanDocument,
     PlanTree,
     extract_links,

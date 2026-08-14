@@ -43,8 +43,8 @@ import subprocess
 
 import pytest
 
-from orchestrator.config import Stage, parse_config
-from orchestrator.gitops import Git
+from code_gantry.config import Stage, parse_config
+from code_gantry.gitops import Git
 
 
 def git(path, *args):
@@ -108,7 +108,7 @@ class TestItReachesTheModel:
         })
 
     def test_the_rewrite_is_appended_to_the_failure(self, repo):
-        from orchestrator.executorloop import _with_lint_rewrite
+        from code_gantry.executorloop import _with_lint_rewrite
 
         failure = type("F", (), {"feedback": "the patterns gate failed"})()
         out = _with_lint_rewrite(
@@ -121,7 +121,7 @@ class TestItReachesTheModel:
         assert "checks" in out.feedback.lower()
 
     def test_nothing_is_appended_when_nothing_was_rewritten(self, repo):
-        from orchestrator.executorloop import _with_lint_rewrite
+        from code_gantry.executorloop import _with_lint_rewrite
 
         failure = type("F", (), {"feedback": "the tests failed"})()
         assert _with_lint_rewrite(failure, "").feedback == "the tests failed"
@@ -129,7 +129,7 @@ class TestItReachesTheModel:
     def test_a_huge_rewrite_is_clipped(self, repo):
         # A formatter that reflows a whole file must not evict the failure it
         # is attached to. `clip_for_model` collapses before it truncates.
-        from orchestrator.executorloop import _with_lint_rewrite
+        from code_gantry.executorloop import _with_lint_rewrite
 
         failure = type("F", (), {"feedback": "the patterns gate failed"})()
         out = _with_lint_rewrite(failure, "+line\n" * 20_000)

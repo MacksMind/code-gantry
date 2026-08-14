@@ -587,7 +587,7 @@ def git_config(repo: Path, key: str) -> str | None:
 def cli(work: Path, env: dict, *args: str, expect: int = 0) -> str:
     """Invoke the installed console script and return its combined output."""
     done = subprocess.run(
-        [sys.executable, "-m", "orchestrator.cli", *args],
+        [sys.executable, "-m", "code_gantry.cli", *args],
         cwd=work,
         env=env,
         capture_output=True,
@@ -596,7 +596,7 @@ def cli(work: Path, env: dict, *args: str, expect: int = 0) -> str:
     output = done.stdout + done.stderr
     if done.returncode != expect:
         fail(
-            f"`orchestrator {' '.join(args)}` exited {done.returncode}, "
+            f"`code-gantry {' '.join(args)}` exited {done.returncode}, "
             f"expected {expect}:\n{output}"
         )
     return output
@@ -825,7 +825,7 @@ def main() -> int:
         if missing:
             fail("live mode needs these exported: " + ", ".join(missing))
 
-    root = Path(tempfile.mkdtemp(prefix="orchestrator-smoke-"))
+    root = Path(tempfile.mkdtemp(prefix="code-gantry-smoke-"))
     print(f"sandbox: {root}\n")
 
     try:
@@ -867,7 +867,7 @@ def main() -> int:
         # Commit it. The config now lives in the target repo, so an uncommitted
         # one leaves the tree dirty — and a run must begin from a known state
         # or its diffs mean nothing. This is also what gives the run a config
-        # sha to record, which is what replaced `orchestrator approve`.
+        # sha to record, which is what replaced `code-gantry approve`.
         for argv in (["add", "-A"], ["commit", "-qm", "code_gantry config"]):
             subprocess.run(["git", "-C", str(repo), *argv], check=True,
                            capture_output=True)

@@ -11,7 +11,7 @@ import textwrap
 import pytest
 from pathlib import Path
 
-from orchestrator.config import (
+from code_gantry.config import (
     PLANNER_WRITABLE_FIELDS,
     ConfigError,
     Stage,
@@ -691,7 +691,7 @@ class TestThePlannerOutputBudgetIsASetting:
     """
 
     def _cfg(self, **planner):
-        from orchestrator.config import parse_config
+        from code_gantry.config import parse_config
 
         base = {"model": "claude-opus-5"}
         base.update(planner)
@@ -719,7 +719,7 @@ class TestThePlannerOutputBudgetIsASetting:
         and this codebase has shipped that shape before — a field read by
         nothing, and a guard that never fired.
         """
-        from orchestrator.planner import AnthropicPlanner
+        from code_gantry.planner import AnthropicPlanner
 
         sent = {}
 

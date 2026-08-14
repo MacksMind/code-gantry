@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator.addendum import append_findings, append_notes
+from code_gantry.addendum import append_findings, append_notes
 
 
 def note(kind="progress", **over):
@@ -47,7 +47,7 @@ class TestSchema:
     def test_kind_is_required(self):
         from pydantic import ValidationError
 
-        from orchestrator.planner import PlanNote
+        from code_gantry.planner import PlanNote
 
         with pytest.raises(ValidationError):
             PlanNote(
@@ -59,7 +59,7 @@ class TestSchema:
     def test_kind_rejects_anything_unlisted(self):
         from pydantic import ValidationError
 
-        from orchestrator.planner import PlanNote
+        from code_gantry.planner import PlanNote
 
         with pytest.raises(ValidationError):
             PlanNote(
@@ -70,7 +70,7 @@ class TestSchema:
             )
 
     def test_the_three_kinds_are_accepted(self):
-        from orchestrator.planner import PlanNote
+        from code_gantry.planner import PlanNote
 
         for kind in ("progress", "correction", "out_of_scope"):
             assert PlanNote(
@@ -147,7 +147,7 @@ class TestFindingsFile:
 
         The point of the split is that a planner prompt cannot contain these.
         """
-        from orchestrator.config import parse_config
+        from code_gantry.config import parse_config
 
         cfg = parse_config(
             {
@@ -186,7 +186,7 @@ class TestCorrectionNamesADependencyError:
     """
 
     def _correction_text(self) -> str:
-        from orchestrator.planner import PlanNote
+        from code_gantry.planner import PlanNote
 
         return PlanNote.model_fields["kind"].description.lower()
 

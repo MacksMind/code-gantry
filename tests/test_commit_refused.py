@@ -26,8 +26,8 @@ import time
 
 import pytest
 
-from orchestrator import nodes
-from orchestrator.gitops import GitError
+from code_gantry import nodes
+from code_gantry.gitops import GitError
 
 from test_nodes import make, with_stage
 
@@ -177,10 +177,10 @@ class TestTheAttemptDoesNotReportSuccess:
     """
 
     def test_the_result_carries_the_refusal(self, repo, tmp_path):
-        from orchestrator.executor import ExecutionResult
-        from orchestrator.executorloop import _commit_if_dirty
-        from orchestrator.gitops import Git
-        from orchestrator.config import Stage
+        from code_gantry.executor import ExecutionResult
+        from code_gantry.executorloop import _commit_if_dirty
+        from code_gantry.gitops import Git
+        from code_gantry.config import Stage
 
         (repo / "app.py").write_text("work\n")
         refuse_commits(repo, "app.py:1: trailing whitespace.")
@@ -195,10 +195,10 @@ class TestTheAttemptDoesNotReportSuccess:
 
     def test_a_successful_commit_leaves_it_unset(self, repo, tmp_path):
         # The control: without it, a bug setting this always would pass above.
-        from orchestrator.executor import ExecutionResult
-        from orchestrator.executorloop import _commit_if_dirty
-        from orchestrator.gitops import Git
-        from orchestrator.config import Stage
+        from code_gantry.executor import ExecutionResult
+        from code_gantry.executorloop import _commit_if_dirty
+        from code_gantry.gitops import Git
+        from code_gantry.config import Stage
 
         (repo / "app.py").write_text("work\n")
         out = ExecutionResult(ok=True)
@@ -250,10 +250,10 @@ class TestTheAttemptDoesNotReportSuccess:
 class TestExecutorLoop:
     def test_a_refused_commit_is_logged_rather_than_swallowed(self, repo, tmp_path):
         """The comment claimed the log carried this and there was no log."""
-        from orchestrator.executor import ExecutionResult
-        from orchestrator.executorloop import _commit_if_dirty
-        from orchestrator.gitops import Git
-        from orchestrator.config import Stage
+        from code_gantry.executor import ExecutionResult
+        from code_gantry.executorloop import _commit_if_dirty
+        from code_gantry.gitops import Git
+        from code_gantry.config import Stage
 
         (repo / "app.py").write_text("work\n")
         refuse_commits(repo)
@@ -269,10 +269,10 @@ class TestExecutorLoop:
         assert "refused" in lines[0]
 
     def test_it_still_returns_none_rather_than_raising(self, repo, tmp_path):
-        from orchestrator.executor import ExecutionResult
-        from orchestrator.executorloop import _commit_if_dirty
-        from orchestrator.gitops import Git
-        from orchestrator.config import Stage
+        from code_gantry.executor import ExecutionResult
+        from code_gantry.executorloop import _commit_if_dirty
+        from code_gantry.gitops import Git
+        from code_gantry.config import Stage
 
         (repo / "app.py").write_text("work\n")
         refuse_commits(repo)

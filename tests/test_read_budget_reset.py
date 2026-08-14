@@ -28,11 +28,11 @@ written without one.
 
 import pytest
 
-from orchestrator.repotools import ReadBudget, RepoReader, Spend, ToolError
+from code_gantry.repotools import ReadBudget, RepoReader, Spend, ToolError
 
 
 def _reader(tmp_path, **budget):
-    from orchestrator.gitops import Git
+    from code_gantry.gitops import Git
 
     defaults = dict(
         max_lines_per_call=100,
@@ -60,7 +60,7 @@ class TestResetClearsEveryCounter:
         assert r.spend.lines == 0
 
     def test_it_clears_the_ledger(self, tmp_path):
-        from orchestrator.repotools import ToolCall
+        from code_gantry.repotools import ToolCall
 
         r = _reader(tmp_path)
         r.calls.append(ToolCall(tool="read_file", detail="a", lines=1))
@@ -80,7 +80,7 @@ class TestResetClearsEveryCounter:
         Pinned because in-place clearing would still pass every other test here
         while quietly reintroducing the shape.
         """
-        from orchestrator.repotools import ToolCall
+        from code_gantry.repotools import ToolCall
 
         r = _reader(tmp_path)
         before = r.calls
@@ -103,7 +103,7 @@ class TestBothRolesReset:
     """Pinned at the call sites, because that is where it went wrong twice."""
 
     def test_the_planner_resets_before_each_decision(self, tmp_path):
-        from orchestrator.planner import AnthropicPlanner
+        from code_gantry.planner import AnthropicPlanner
 
         planner = AnthropicPlanner.__new__(AnthropicPlanner)
         planner.reader = _reader(tmp_path)
@@ -116,7 +116,7 @@ class TestBothRolesReset:
         assert planner.reader.spend.lines == 0
 
     def test_the_reviewer_resets_before_each_review(self, tmp_path):
-        from orchestrator.reviewer import OpenAIReviewer
+        from code_gantry.reviewer import OpenAIReviewer
 
         reviewer = OpenAIReviewer.__new__(OpenAIReviewer)
         reviewer.reader = _reader(tmp_path)
@@ -128,8 +128,8 @@ class TestBothRolesReset:
 
     def test_a_role_without_repo_access_does_not_raise(self, tmp_path):
         # `repo_access` off leaves `reader` as None on both roles.
-        from orchestrator.planner import AnthropicPlanner
-        from orchestrator.reviewer import OpenAIReviewer
+        from code_gantry.planner import AnthropicPlanner
+        from code_gantry.reviewer import OpenAIReviewer
 
         for cls in (AnthropicPlanner, OpenAIReviewer):
             role = cls.__new__(cls)

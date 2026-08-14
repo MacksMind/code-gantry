@@ -10,8 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from orchestrator.config import PLANNER_WRITABLE_FIELDS, parse_config
-from orchestrator.planner import (
+from code_gantry.config import PLANNER_WRITABLE_FIELDS, parse_config
+from code_gantry.planner import (
     AnthropicPlanner,
     PlannedStage,
     PlannerResponse,
@@ -566,7 +566,7 @@ class TestUsageNormalisation:
     """
 
     def test_total_input_includes_the_cached_read(self):
-        from orchestrator.planner import _extract_usage
+        from code_gantry.planner import _extract_usage
 
         class U:
             input_tokens = 1613
@@ -579,7 +579,7 @@ class TestUsageNormalisation:
         assert usage.cached_tokens == 4051
 
     def test_uncached_is_never_negative(self):
-        from orchestrator.planner import _extract_usage
+        from code_gantry.planner import _extract_usage
 
         class U:
             input_tokens = 1613
@@ -594,7 +594,7 @@ class TestUsageNormalisation:
         # Anthropic bills a cache write above base rate, so a run that writes
         # the prefix and never reads it is worse than not caching at all. That
         # has to be visible rather than absent.
-        from orchestrator.planner import _extract_usage
+        from code_gantry.planner import _extract_usage
 
         class U:
             input_tokens = 1632
@@ -608,7 +608,7 @@ class TestUsageNormalisation:
         assert usage.cached_tokens == 0
 
     def test_a_missing_field_is_zero_not_an_error(self):
-        from orchestrator.planner import _extract_usage
+        from code_gantry.planner import _extract_usage
 
         class U:
             input_tokens = 100
@@ -643,8 +643,8 @@ class TestRepositoryToolLoop:
     def _reader(self, tmp_path):
         import subprocess
 
-        from orchestrator.gitops import Git
-        from orchestrator.repotools import ReadBudget, RepoReader
+        from code_gantry.gitops import Git
+        from code_gantry.repotools import ReadBudget, RepoReader
 
         (tmp_path / "app").mkdir()
         (tmp_path / "app" / "a.rb").write_text("render text: 'x'\n")
@@ -763,9 +763,9 @@ class TestTheReadLogIsChronological:
     def test_reads_and_searches_interleave_in_real_order(self, tmp_path):
         import subprocess
 
-        from orchestrator.gitops import Git
-        from orchestrator.repotools import ReadBudget, RepoReader
-        from orchestrator.semantic import SemanticSearch, SemanticSearchConfig
+        from code_gantry.gitops import Git
+        from code_gantry.repotools import ReadBudget, RepoReader
+        from code_gantry.semantic import SemanticSearch, SemanticSearchConfig
 
         (tmp_path / "a.rb").write_text("x\n")
         for args in (
@@ -821,7 +821,7 @@ class TestStageCostsSurviveTheRun:
     """
 
     def test_the_line_is_keyed_by_the_merge_sha(self, tmp_path):
-        from orchestrator.planner import append_stage_cost
+        from code_gantry.planner import append_stage_cost
 
         append_stage_cost(tmp_path, "batch-1", "0285803b159a", 10, 13_000)
         text = (tmp_path / "stage-costs.md").read_text()
@@ -829,7 +829,7 @@ class TestStageCostsSurviveTheRun:
         assert "10" in text and "13,000" in text
 
     def test_a_priced_executor_adds_its_cost_to_the_line(self, tmp_path):
-        from orchestrator.planner import append_stage_cost
+        from code_gantry.planner import append_stage_cost
 
         append_stage_cost(
             tmp_path, "s", "0285803b159a", 3, 13_000,
@@ -846,7 +846,7 @@ class TestStageCostsSurviveTheRun:
         # A local endpoint costs nothing, and "$0.00" on every line of a file
         # the planner reads on every call says the same thing as its absence
         # while taking tokens to do it.
-        from orchestrator.planner import append_stage_cost
+        from code_gantry.planner import append_stage_cost
 
         append_stage_cost(tmp_path, "s", "0285803b159a", 3, 13_000)
         assert "$" not in (tmp_path / "stage-costs.md").read_text()
@@ -854,7 +854,7 @@ class TestStageCostsSurviveTheRun:
     def test_sub_cent_costs_are_not_rounded_to_nothing(self, tmp_path):
         # A cheap model on a small stage lands well under a cent, and a
         # two-place format would record a run's whole executor spend as zero.
-        from orchestrator.planner import append_stage_cost
+        from code_gantry.planner import append_stage_cost
 
         append_stage_cost(
             tmp_path, "s", "0285803b159a", 1, 900,
@@ -869,7 +869,7 @@ class TestStageCostsSurviveTheRun:
         # in one session and nothing in the record says which stages ran under
         # which. Correlating them afterwards is the only reason to keep a
         # per-stage cost at all.
-        from orchestrator.planner import append_stage_cost
+        from code_gantry.planner import append_stage_cost
 
         append_stage_cost(
             tmp_path,
@@ -894,7 +894,7 @@ class TestStageCostsSurviveTheRun:
         # The suffix must not break the reader: `recent_stage_costs` is what
         # feeds the planner's batch sizing, and a line it cannot match is a
         # stage that silently stops counting.
-        from orchestrator.planner import append_stage_cost, recent_stage_costs
+        from code_gantry.planner import append_stage_cost, recent_stage_costs
 
         append_stage_cost(
             tmp_path, "s", "0285803b159a", 3, 13_000,
@@ -915,7 +915,7 @@ class TestStageCostsSurviveTheRun:
         path.write_text(
             "- cost `aaaaaaaaaaaa` `old` — 2 file(s), 9,000 executor tokens\n"
         )
-        from orchestrator.planner import recent_stage_costs
+        from code_gantry.planner import recent_stage_costs
 
         got = recent_stage_costs(tmp_path)
         assert len(got) == 1 and got[0]["context_tokens"] == 9_000
@@ -923,7 +923,7 @@ class TestStageCostsSurviveTheRun:
     def test_no_roles_adds_nothing(self, tmp_path):
         # Same reasoning as the "$0.00" rule above: this file is read by the
         # planner on every call, so a field with nothing to say stays absent.
-        from orchestrator.planner import append_stage_cost
+        from code_gantry.planner import append_stage_cost
 
         append_stage_cost(tmp_path, "s", "0285803b159a", 3, 13_000)
         assert "[" not in (tmp_path / "stage-costs.md").read_text()
@@ -931,7 +931,7 @@ class TestStageCostsSurviveTheRun:
     def test_a_role_with_no_effort_records_just_the_model(self, tmp_path):
         # Not every provider takes an effort, and "model/" with nothing after
         # it reads as a missing value rather than an inapplicable one.
-        from orchestrator.planner import append_stage_cost
+        from code_gantry.planner import append_stage_cost
 
         append_stage_cost(
             tmp_path, "s", "0285803b159a", 3, 13_000,
@@ -946,7 +946,7 @@ class TestStageCostsSurviveTheRun:
         # hundreds-of-kilobytes narrative the planner sees only the tail of.
         # Here every line is a cost line, so the whole file stays readable
         # however long the project runs.
-        from orchestrator.planner import append_stage_cost, recent_stage_costs
+        from code_gantry.planner import append_stage_cost, recent_stage_costs
 
         append_stage_cost(tmp_path, "old", "aaaaaaaaaaaa", 1, 14_000)
         append_stage_cost(tmp_path, "new", "bbbbbbbbbbbb", 10, 13_000)
@@ -958,7 +958,7 @@ class TestStageCostsSurviveTheRun:
         assert costs[-1]["context_tokens"] == 13_000
 
     def test_only_the_most_recent_are_kept(self, tmp_path):
-        from orchestrator.planner import append_stage_cost, recent_stage_costs
+        from code_gantry.planner import append_stage_cost, recent_stage_costs
 
         for i in range(30):
             append_stage_cost(tmp_path, f"s{i}", f"{i:012d}", 1, 1_000 + i)
@@ -967,7 +967,7 @@ class TestStageCostsSurviveTheRun:
         assert costs[-1]["context_tokens"] == 1_029
 
     def test_a_project_with_no_status_file_reads_empty(self, tmp_path):
-        from orchestrator.planner import recent_stage_costs
+        from code_gantry.planner import recent_stage_costs
 
         assert recent_stage_costs(tmp_path) == []
 
@@ -987,7 +987,7 @@ class TestInstructionsQuoteCodeInFencedBlocks:
     """
 
     def test_the_field_says_fenced_not_indented(self):
-        from orchestrator.planner import PlannedStage
+        from code_gantry.planner import PlannedStage
 
         described = PlannedStage.model_fields["instruction"].description.lower()
         assert "fenced" in described
@@ -998,7 +998,7 @@ class TestInstructionsQuoteCodeInFencedBlocks:
         # helpful. This one has to survive an instruction that is otherwise
         # begging to be indented for readability.
         described = __import__(
-            "orchestrator.planner", fromlist=["PlannedStage"]
+            "code_gantry.planner", fromlist=["PlannedStage"]
         ).PlannedStage.model_fields["instruction"].description.lower()
         assert "raw text" in described
 
@@ -1366,7 +1366,7 @@ class TestATruncatedAnswerIsLegible:
     """
 
     def test_a_truncated_json_payload_is_named_as_truncation(self):
-        from orchestrator.planner import _call_failure
+        from code_gantry.planner import _call_failure
 
         message = (
             "1 validation error for PlannerResponse\n  Invalid JSON: EOF while "
@@ -1377,7 +1377,7 @@ class TestATruncatedAnswerIsLegible:
         assert "max_tokens" in text
 
     def test_an_ordinary_failure_is_left_alone(self):
-        from orchestrator.planner import _call_failure
+        from code_gantry.planner import _call_failure
 
         text = _call_failure(RuntimeError("connection reset by peer"))
         assert "connection reset by peer" in text
@@ -1401,13 +1401,13 @@ class TestReasoningEffortIsOperatorControlled:
     """
 
     def test_the_planner_default_is_unchanged_behaviour(self):
-        from orchestrator.config import PlannerConfig
+        from code_gantry.config import PlannerConfig
 
         assert PlannerConfig(model="m").effort == "high"
 
     def test_the_planner_effort_reaches_the_call(self):
-        from orchestrator.config import PlannerConfig
-        from orchestrator.planner import _output_config
+        from code_gantry.config import PlannerConfig
+        from code_gantry.planner import _output_config
 
         assert _output_config(PlannerConfig(model="m", effort="xhigh")) == {
             "effort": "xhigh"
@@ -1416,14 +1416,14 @@ class TestReasoningEffortIsOperatorControlled:
     def test_the_reviewer_sends_nothing_unless_asked(self):
         # It has always run at the provider default. Inventing one here would
         # change the gate's behaviour on every project that never chose.
-        from orchestrator.config import ReviewerConfig
-        from orchestrator.reviewer import _reasoning_param
+        from code_gantry.config import ReviewerConfig
+        from code_gantry.reviewer import _reasoning_param
 
         assert _reasoning_param(ReviewerConfig(model="m")) == {}
 
     def test_the_reviewer_effort_reaches_the_call(self):
-        from orchestrator.config import ReviewerConfig
-        from orchestrator.reviewer import _reasoning_param
+        from code_gantry.config import ReviewerConfig
+        from code_gantry.reviewer import _reasoning_param
 
         assert _reasoning_param(ReviewerConfig(model="m", effort="max")) == {
             "reasoning": {"effort": "max"}
@@ -1440,13 +1440,13 @@ class TestTheToolLogSaysWhatWasDenied:
     """
 
     def _planner(self, calls):
-        from orchestrator.planner import AnthropicPlanner
+        from code_gantry.planner import AnthropicPlanner
 
         reader = SimpleNamespace(calls=calls)
         return AnthropicPlanner(cfg(), client=object(), reader=reader)
 
     def test_an_answered_call_reads_as_before(self):
-        from orchestrator.repotools import ToolCall
+        from code_gantry.repotools import ToolCall
 
         p = self._planner([ToolCall("read_file", "app/order.rb", 12)])
         assert p._tool_log() == ["read_file(app/order.rb) -> 12 line(s)"]
@@ -1454,7 +1454,7 @@ class TestTheToolLogSaysWhatWasDenied:
     def test_a_refusal_says_so_instead_of_reporting_zero_lines(self):
         # "-> 0 line(s)" already means "the search found nothing", which is a
         # different fact and one the planner acts on differently.
-        from orchestrator.repotools import ToolCall
+        from code_gantry.repotools import ToolCall
 
         p = self._planner(
             [ToolCall("read_file", "app/ghost.rb", 0, refusal="does not exist")]
@@ -1462,7 +1462,7 @@ class TestTheToolLogSaysWhatWasDenied:
         assert p._tool_log() == ["read_file(app/ghost.rb) -> refused: does not exist"]
 
     def test_a_fruitless_search_is_not_a_refusal(self):
-        from orchestrator.repotools import ToolCall
+        from code_gantry.repotools import ToolCall
 
         p = self._planner([ToolCall("search", "widget in app", 0)])
         assert p._tool_log() == ["search(widget in app) -> 0 line(s)"]
@@ -1476,7 +1476,7 @@ class TestTheToolLogSaysWhatWasDenied:
         describing nothing seen — so the count crosses the boundary as its own
         value rather than being re-derived from rendered strings at the far end.
         """
-        from orchestrator.repotools import ToolCall
+        from code_gantry.repotools import ToolCall
 
         p = self._planner(
             [
@@ -1487,7 +1487,7 @@ class TestTheToolLogSaysWhatWasDenied:
         assert p._reads_answered() == 1
 
     def test_a_log_of_nothing_but_refusals_answers_zero(self):
-        from orchestrator.repotools import ToolCall
+        from code_gantry.repotools import ToolCall
 
         p = self._planner(
             [ToolCall("read_file", "app/ghost.rb", 0, refusal="does not exist")]
@@ -1506,7 +1506,7 @@ class TestTheStatOnTheCostLine:
     """
 
     def test_the_stat_is_written_when_it_was_measured(self, tmp_path):
-        from orchestrator.planner import append_stage_cost
+        from code_gantry.planner import append_stage_cost
 
         append_stage_cost(
             tmp_path, "s", "0285803b159a", 4, 13_000, changed=(2, 131, 0),
@@ -1517,13 +1517,13 @@ class TestTheStatOnTheCostLine:
         # `shortstat` returns None when git cannot answer. A stage that
         # changed nothing and a stage nobody could measure are different, and
         # "0 changed" would claim the first.
-        from orchestrator.planner import append_stage_cost
+        from code_gantry.planner import append_stage_cost
 
         append_stage_cost(tmp_path, "s", "0285803b159a", 4, 13_000)
         assert "changed" not in (tmp_path / "stage-costs.md").read_text()
 
     def test_it_parses_back(self, tmp_path):
-        from orchestrator.planner import append_stage_cost, recent_stage_costs
+        from code_gantry.planner import append_stage_cost, recent_stage_costs
 
         append_stage_cost(
             tmp_path, "s", "0285803b159a", 4, 13_000, changed=(2, 131, 7),
@@ -1533,7 +1533,7 @@ class TestTheStatOnTheCostLine:
         assert got["files"] == 4, "the declared scope survives beside it"
 
     def test_a_line_written_before_the_stat_existed_still_parses(self, tmp_path):
-        from orchestrator.planner import recent_stage_costs
+        from code_gantry.planner import recent_stage_costs
 
         (tmp_path / "stage-costs.md").write_text(
             "- cost `aaaaaaaaaaaa` `old` — 2 file(s), 9,000 executor tokens\n"
@@ -1546,7 +1546,7 @@ class TestTheStatOnTheCostLine:
     def test_the_stat_survives_a_spend_suffix(self, tmp_path):
         # Order on the line matters: the stat sits before the per-role spend,
         # and the regex must not stop at the first semicolon.
-        from orchestrator.planner import append_stage_cost, recent_stage_costs
+        from code_gantry.planner import append_stage_cost, recent_stage_costs
 
         append_stage_cost(
             tmp_path, "s", "0285803b159a", 4, 13_000, changed=(2, 131, 0),

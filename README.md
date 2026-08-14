@@ -93,12 +93,12 @@ reworks, or planner interventions — so no loop in the diagram can run forever.
 ## Lifecycle
 
 ```bash
-orchestrator init docs/my_plan.md      # draft a config from a plan document
-orchestrator validate <slug>           # prove it works on this host
+code-gantry init docs/my_plan.md      # draft a config from a plan document
+code-gantry validate <slug>           # prove it works on this host
 orchestrator approve <slug>            # record that you read it
-orchestrator run <slug>                # go
-orchestrator resume <run_id>           # continue after an interruption or escalation
-orchestrator status <run_id>           # where it stopped and why
+code-gantry run <slug>                # go
+code-gantry resume <run_id>           # continue after an interruption or escalation
+code-gantry status <run_id>           # where it stopped and why
 ```
 
 `init` may prompt — it's one-time human setup. `run` and `resume` execute
@@ -359,7 +359,7 @@ repository-state failure, so your fix is checked rather than discarded; at the
 planner for a planning failure. The clean-tree requirement is start-only, since
 your fix is normally uncommitted.
 
-`orchestrator pause` is the exception, and it is not a step in the plan — it is
+`code-gantry pause` is the exception, and it is not a step in the plan — it is
 how you stop a healthy run to change something. It writes a flag that is read
 before each planner call and again before `precheck`, so the run finishes
 whatever stage is in flight, lands it or fails it normally, and stops with a

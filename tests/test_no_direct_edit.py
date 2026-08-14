@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import pytest
 
-from orchestrator.edittools import Edit, FileEditor
-from orchestrator.repotools import ToolError
+from code_gantry.edittools import Edit, FileEditor
+from code_gantry.repotools import ToolError
 
 
 def _editor(tmp_path, **kwargs) -> FileEditor:
@@ -120,7 +120,7 @@ class TestItReachesTheEditor:
     """
 
     def test_a_declaration_in_config_refuses_a_write(self, repo):
-        from orchestrator.executorloop import build_loop_parts
+        from code_gantry.executorloop import build_loop_parts
         from test_executor_loop import build
 
         cfg, stage = build(
@@ -139,7 +139,7 @@ class TestItReachesTheEditor:
         assert "run the installer" in str(raised.value)
 
     def test_a_project_declaring_none_still_writes(self, repo):
-        from orchestrator.executorloop import build_loop_parts
+        from code_gantry.executorloop import build_loop_parts
         from test_executor_loop import build
 
         cfg, stage = build(repo)
@@ -157,14 +157,14 @@ class TestTheExecutorIsToldUpFront:
     """
 
     def test_a_project_declaring_none_gets_no_paragraph(self, repo):
-        from orchestrator.prompts import _executor_system_prompt
+        from code_gantry.prompts import _executor_system_prompt
         from test_executor_loop import build
 
         cfg, _stage = build(repo)
         assert "not yours to author" not in _executor_system_prompt(cfg)
 
     def test_the_declaration_and_its_reason_both_appear(self, repo):
-        from orchestrator.prompts import _executor_system_prompt
+        from code_gantry.prompts import _executor_system_prompt
         from test_executor_loop import build
 
         cfg, _stage = build(
@@ -189,7 +189,7 @@ class TestTheExecutorIsToldUpFront:
         """
         import inspect
 
-        from orchestrator import prompts
+        from code_gantry import prompts
 
         source = inspect.getsource(prompts._no_direct_edit_block)
         for word in ("Gemfile", "bundle", "lockfile", "gem", "npm", "yarn"):

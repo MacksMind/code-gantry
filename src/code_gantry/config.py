@@ -27,7 +27,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator, ValidationError
 
-from orchestrator.globs import matches_any
+from code_gantry.globs import matches_any
 
 
 # Stage ids name directories and git branches, so they must not contain
@@ -1125,7 +1125,7 @@ class ProjectConfig(_Strict):
     def _command(self, verb: str, run_id: str = "", flags: str = "") -> str:
         where = str(self.config_path) if self.config_path else "<config>"
         return " ".join(
-            part for part in (f"orchestrator {verb}", where, run_id, flags) if part
+            part for part in (f"code-gantry {verb}", where, run_id, flags) if part
         )
 
     @property
@@ -1353,7 +1353,7 @@ def _glob_could_match_a_test(glob: str, test_patterns: list[str]) -> bool:
     correct form. The question is whether there is *anywhere* to put one, not
     whether the planner predicted its name.
     """
-    from orchestrator.globs import glob_to_regex, matches_any
+    from code_gantry.globs import glob_to_regex, matches_any
 
     if matches_any(glob, test_patterns):
         return True
@@ -1555,7 +1555,7 @@ def _tool_name_problems(tools: list[ProjectTool]) -> list[str]:
     happens to pick, and the model cannot tell it got the wrong one. Checked
     here rather than on `ProjectTool` because it is a property of the set.
     """
-    from orchestrator.projecttools import BUILTIN_TOOL_NAMES
+    from code_gantry.projecttools import BUILTIN_TOOL_NAMES
 
     problems: list[str] = []
     seen: set[str] = set()

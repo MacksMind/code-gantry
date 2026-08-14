@@ -24,7 +24,7 @@ use, because two renderings of one ledger is how the two drift — and they had.
 
 import pytest
 
-from orchestrator.repotools import ToolCall
+from code_gantry.repotools import ToolCall
 
 
 class Reader:
@@ -33,8 +33,8 @@ class Reader:
 
 
 def _reviewer(log=None):
-    from orchestrator.config import ReviewerConfig
-    from orchestrator.reviewer import OpenAIReviewer
+    from code_gantry.config import ReviewerConfig
+    from code_gantry.reviewer import OpenAIReviewer
 
     r = OpenAIReviewer.__new__(OpenAIReviewer)
     r.cfg = ReviewerConfig(model="gpt-5.6-sol")
@@ -47,7 +47,7 @@ def _reviewer(log=None):
 
 class TestTheArtifactCarriesTheOutcome:
     def test_a_read_records_what_came_back(self):
-        from orchestrator.reviewer import OpenAIReviewer
+        from code_gantry.reviewer import OpenAIReviewer
 
         r = _reviewer()
         r.reader.calls.append(ToolCall(tool="read_file", detail="a.rb:1-40", lines=40))
@@ -56,7 +56,7 @@ class TestTheArtifactCarriesTheOutcome:
     def test_a_refusal_is_visible_as_one(self):
         # The whole point. Without this a reviewer that ran out of budget and
         # one that was satisfied leave the same record.
-        from orchestrator.reviewer import OpenAIReviewer
+        from code_gantry.reviewer import OpenAIReviewer
 
         r = _reviewer()
         r.reader.calls.append(
@@ -70,7 +70,7 @@ class TestTheArtifactCarriesTheOutcome:
         ]
 
     def test_a_reviewer_with_no_reader_records_nothing(self):
-        from orchestrator.reviewer import OpenAIReviewer
+        from code_gantry.reviewer import OpenAIReviewer
 
         r = _reviewer()
         r.reader = None
@@ -81,8 +81,8 @@ class TestOneRendererForBothRoles:
     """The planner and the reviewer describe the same ledger the same way."""
 
     def test_the_two_roles_render_a_call_identically(self):
-        from orchestrator.planner import AnthropicPlanner, _render_call
-        from orchestrator.reviewer import OpenAIReviewer
+        from code_gantry.planner import AnthropicPlanner, _render_call
+        from code_gantry.reviewer import OpenAIReviewer
 
         call = ToolCall(tool="search", detail="X in .", lines=7)
 
@@ -109,7 +109,7 @@ class TestTheReviewerReportsAsItReads:
     """
 
     def test_only_the_new_calls_are_reported(self):
-        from orchestrator.reviewer import OpenAIReviewer
+        from code_gantry.reviewer import OpenAIReviewer
 
         lines = []
         r = _reviewer(log=lines.append)
@@ -122,7 +122,7 @@ class TestTheReviewerReportsAsItReads:
         assert len(lines) == 2 and seen == 2
 
     def test_it_is_the_same_text_as_the_artifact(self):
-        from orchestrator.reviewer import OpenAIReviewer
+        from code_gantry.reviewer import OpenAIReviewer
 
         lines = []
         r = _reviewer(log=lines.append)
@@ -131,7 +131,7 @@ class TestTheReviewerReportsAsItReads:
         assert [x.removeprefix("[review] ") for x in lines] == OpenAIReviewer._looked_at(r)
 
     def test_no_log_is_not_an_error(self):
-        from orchestrator.reviewer import OpenAIReviewer
+        from code_gantry.reviewer import OpenAIReviewer
 
         r = _reviewer(log=None)
         r.reader.calls.append(ToolCall(tool="search", detail="X", lines=1))
@@ -151,7 +151,7 @@ class TestTheCountsComeFromTheLedger:
     """
 
     def test_calls_are_counted_by_tool(self):
-        from orchestrator.reviewer import OpenAIReviewer
+        from code_gantry.reviewer import OpenAIReviewer
 
         r = _reviewer()
         for i in range(3):
@@ -162,14 +162,14 @@ class TestTheCountsComeFromTheLedger:
         assert OpenAIReviewer._tool_counts(r) == {"read_file": 3, "search": 1}
 
     def test_a_reviewer_that_read_nothing_counts_nothing(self):
-        from orchestrator.reviewer import OpenAIReviewer
+        from code_gantry.reviewer import OpenAIReviewer
 
         assert OpenAIReviewer._tool_counts(_reviewer()) == {}
 
     def test_a_refused_call_still_counts_as_a_call(self):
         # It is a thing the reviewer asked for, and a review that spent its
         # budget being refused must not look like one that read nothing.
-        from orchestrator.reviewer import OpenAIReviewer
+        from code_gantry.reviewer import OpenAIReviewer
 
         r = _reviewer()
         r.reader.calls.append(
@@ -180,7 +180,7 @@ class TestTheCountsComeFromTheLedger:
     def test_the_counts_and_the_record_agree_on_the_total(self):
         # Two derivations of one ledger is how they drift, which is the reason
         # `_render_call` is shared rather than restated.
-        from orchestrator.reviewer import OpenAIReviewer
+        from code_gantry.reviewer import OpenAIReviewer
 
         r = _reviewer()
         for i in range(5):

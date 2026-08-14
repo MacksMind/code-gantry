@@ -42,7 +42,7 @@ def _rt(max_rework_retries=2, rework_reset=False):
 
 class TestTheSummaryDoesNotOverstateHowBadlyItWent:
     def test_reworks_are_not_counted_as_rejections(self):
-        from orchestrator.nodes import _rework_or_plan
+        from code_gantry.nodes import _rework_or_plan
 
         out = _rework_or_plan(
             {"rework_attempt": 2},
@@ -59,7 +59,7 @@ class TestTheSummaryDoesNotOverstateHowBadlyItWent:
     def test_the_summary_still_says_the_budget_is_gone(self):
         # The planner has to know rework is not an option, or it may revise in
         # a way that expects another executor pass.
-        from orchestrator.nodes import _rework_or_plan
+        from code_gantry.nodes import _rework_or_plan
 
         out = _rework_or_plan(
             {"rework_attempt": 2}, _rt(), ["a", "b"], "summary", layer="review"
@@ -69,7 +69,7 @@ class TestTheSummaryDoesNotOverstateHowBadlyItWent:
 
 class TestTheDetailLeadsWithWhatEndedTheStage:
     def test_the_latest_feedback_comes_first(self):
-        from orchestrator.nodes import _rework_or_plan
+        from code_gantry.nodes import _rework_or_plan
 
         out = _rework_or_plan(
             {"rework_attempt": 2},
@@ -84,7 +84,7 @@ class TestTheDetailLeadsWithWhatEndedTheStage:
     def test_earlier_feedback_is_still_carried(self):
         # It is context, not noise — a stage reworked twice for the same thing
         # is a different situation from one reworked for two different things.
-        from orchestrator.nodes import _rework_or_plan
+        from code_gantry.nodes import _rework_or_plan
 
         out = _rework_or_plan(
             {"rework_attempt": 2},
@@ -96,7 +96,7 @@ class TestTheDetailLeadsWithWhatEndedTheStage:
         assert "STALE" in out["last_failure"]["detail"]
 
     def test_a_single_item_needs_no_ordering(self):
-        from orchestrator.nodes import _rework_or_plan
+        from code_gantry.nodes import _rework_or_plan
 
         out = _rework_or_plan(
             {"rework_attempt": 2}, _rt(), ["only one"], "s", layer="review"

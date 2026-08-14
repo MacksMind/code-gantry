@@ -32,7 +32,7 @@ import os
 
 import pytest
 
-from orchestrator.config import ConfigError, parse_config
+from code_gantry.config import ConfigError, parse_config
 
 
 def _data(**over):
@@ -49,7 +49,7 @@ def _data(**over):
 
 
 def _ctx(cfg):
-    from orchestrator.verify import _Context
+    from code_gantry.verify import _Context
 
     return _Context(
         stage=None, cfg=cfg, git=None, runner=None, stage_start_sha="",
@@ -142,14 +142,14 @@ class TestTheExecutorCannotEditIt:
         commands that run unattended. Before the move they sat in a repository
         no stage could reach; after it they are one `edit_files` glob away.
         """
-        from orchestrator.verify import _is_plan_document
+        from code_gantry.verify import _is_plan_document
 
         cfg = parse_config(_data(), source=repo / ".code_gantry" / "config.yaml")
         ctx = _ctx(cfg)
         assert _is_plan_document(".code_gantry/config.yaml", ctx)
 
     def test_an_ordinary_file_still_is_not(self, repo):
-        from orchestrator.verify import _is_plan_document
+        from code_gantry.verify import _is_plan_document
 
         cfg = parse_config(_data(), source=repo / ".code_gantry" / "config.yaml")
         ctx = _ctx(cfg)
@@ -178,13 +178,13 @@ class TestTheCharBudgetTracksTheLineBudget:
     """
 
     def test_it_follows_a_raised_line_budget(self):
-        from orchestrator.config import ReviewerConfig
+        from code_gantry.config import ReviewerConfig
 
         cfg = ReviewerConfig(model="m", max_read_lines_total=30_000)
         assert cfg.max_read_chars_total == 30_000 * 80
 
     def test_an_explicit_value_still_wins(self):
-        from orchestrator.config import ReviewerConfig
+        from code_gantry.config import ReviewerConfig
 
         cfg = ReviewerConfig(
             model="m", max_read_lines_total=30_000, max_read_chars_total=1_000
@@ -192,7 +192,7 @@ class TestTheCharBudgetTracksTheLineBudget:
         assert cfg.max_read_chars_total == 1_000
 
     def test_every_role_derives_it(self):
-        from orchestrator.config import (
+        from code_gantry.config import (
             ExecutorConfig,
             PlannerConfig,
             ReviewerConfig,

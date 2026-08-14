@@ -9,16 +9,16 @@ to every other project's executor.
 
 import pytest
 
-from orchestrator.edittools import FileEditor
-from orchestrator.executortools import (
+from code_gantry.edittools import FileEditor
+from code_gantry.executortools import (
     EDIT_TOOLS,
     dispatch,
     openai_tool_schemas,
     tool_schemas,
 )
-from orchestrator.gitops import Git
-from orchestrator.plannertools import READ_TOOLS
-from orchestrator.repotools import ReadBudget, RepoReader
+from code_gantry.gitops import Git
+from code_gantry.plannertools import READ_TOOLS
+from code_gantry.repotools import ReadBudget, RepoReader
 
 
 @pytest.fixture
@@ -129,7 +129,7 @@ class TestInvariants:
         # "e.g. app/controllers" — a framework hint that had sat one level
         # below where this test was looking for its whole life. A rule pinned
         # over half its surface is pinned over the half that was easy to reach.
-        from orchestrator.plannertools import READ_TOOLS
+        from code_gantry.plannertools import READ_TOOLS
 
         strings = []
         for table in (EDIT_TOOLS, READ_TOOLS):
@@ -229,7 +229,7 @@ class TestTheSemanticToolWarnsThatItLags:
         assert "read_file" in text
 
     def test_it_is_not_the_planners_description(self):
-        from orchestrator.plannertools import SEMANTIC_TOOL
+        from code_gantry.plannertools import SEMANTIC_TOOL
 
         assert self._tool()["description"] != SEMANTIC_TOOL["description"]
         # Same tool to the model either way, so name and schema must not fork.
@@ -266,12 +266,12 @@ class TestTheExecutorGetsTheSameUnderstanding:
     """
 
     def _text(self):
-        from orchestrator.executortools import SEMANTIC_TOOL_FOR_EDITING
+        from code_gantry.executortools import SEMANTIC_TOOL_FOR_EDITING
 
         return SEMANTIC_TOOL_FOR_EDITING["description"]
 
     def test_it_carries_the_shared_substance(self):
-        from orchestrator.plannertools import SEMANTIC_TOOL
+        from code_gantry.plannertools import SEMANTIC_TOOL
 
         shared = SEMANTIC_TOOL["description"]
         assert shared in self._text(), (
@@ -294,8 +294,8 @@ class TestTheExecutorGetsTheSameUnderstanding:
         assert text.index("how does this work") < text.index("this session")
 
     def test_it_is_still_one_tool(self):
-        from orchestrator.executortools import SEMANTIC_TOOL_FOR_EDITING
-        from orchestrator.plannertools import SEMANTIC_TOOL
+        from code_gantry.executortools import SEMANTIC_TOOL_FOR_EDITING
+        from code_gantry.plannertools import SEMANTIC_TOOL
 
         assert SEMANTIC_TOOL_FOR_EDITING["name"] == SEMANTIC_TOOL["name"]
         assert (

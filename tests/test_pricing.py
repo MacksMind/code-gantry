@@ -23,7 +23,7 @@ import json
 
 import pytest
 
-from orchestrator.pricing import (
+from code_gantry.pricing import (
     PRICE_MAP_URL,
     load_price_map,
     price_usage,
@@ -125,7 +125,7 @@ class TestLoadingTheMap:
         # model we already had a price for as unpriced.
         cache = tmp_path / "model-prices.json"
         m = load_price_map(cache, fetch=self._fetch({"gpt-5.6-luna": ENTRY}))
-        from orchestrator.pricing import entry_for
+        from code_gantry.pricing import entry_for
 
         assert entry_for(m, "openai/gpt-5.6-luna") == ENTRY
         assert entry_for(m, "gpt-5.6-luna") == ENTRY

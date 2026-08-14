@@ -12,10 +12,10 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator.config import parse_config
-from orchestrator.planner import AnthropicPlanner
-from orchestrator.reviewer import OpenAIReviewer
-from orchestrator.runtime import ProjectPaths, RunPaths, build_runtime
+from code_gantry.config import parse_config
+from code_gantry.planner import AnthropicPlanner
+from code_gantry.reviewer import OpenAIReviewer
+from code_gantry.runtime import ProjectPaths, RunPaths, build_runtime
 
 
 def a_config(repo):
@@ -259,11 +259,11 @@ class TestARunHoldsEveryModuleItCanReach:
 
         probe = (
             "import pathlib, sys\n"
-            "from orchestrator.runtime import pin_modules\n"
+            "from code_gantry.runtime import pin_modules\n"
             "pin_modules()\n"
             "loaded = {m.split('.')[-1] for m in sys.modules"
-            " if m.startswith('orchestrator.')}\n"
-            "on_disk = {p.stem for p in pathlib.Path('src/orchestrator').glob('*.py')"
+            " if m.startswith('code_gantry.')}\n"
+            "on_disk = {p.stem for p in pathlib.Path('src/code_gantry').glob('*.py')"
             " if p.stem != '__init__'}\n"
             "print(','.join(sorted(on_disk - loaded)))\n"
         )
@@ -278,7 +278,7 @@ class TestARunHoldsEveryModuleItCanReach:
         # the last moment before it can be affected by an edit.
         import inspect
 
-        from orchestrator.runtime import build_runtime
+        from code_gantry.runtime import build_runtime
 
         body = inspect.getsource(build_runtime)
         assert "pin_modules()" in body.split("logger = log")[0]
@@ -343,7 +343,7 @@ class TestEveryRoleGetsBothLogs:
     def test_the_executors_model_is_handed_both(self, repo, tmp_path, monkeypatch):
         # One step further out: the executor holding them is not the same as
         # the provider client receiving them, and that is the join that broke.
-        from orchestrator import executorclient
+        from code_gantry import executorclient
 
         seen = {}
 
@@ -356,7 +356,7 @@ class TestEveryRoleGetsBothLogs:
 
         monkeypatch.setattr(executorclient, "OpenAIExecutorModel", Spy)
         rt, timeline, tools = self._built(a_config(repo), tmp_path)
-        from orchestrator.config import Stage
+        from code_gantry.config import Stage
 
         try:
             rt.executor.run_agent_stage(

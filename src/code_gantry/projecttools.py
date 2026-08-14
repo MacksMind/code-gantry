@@ -27,8 +27,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from orchestrator.config import ProjectTool
-from orchestrator.repotools import ToolError
+from code_gantry.config import ProjectTool
+from code_gantry.repotools import ToolError
 
 # What a declared tool may not be called. Imported lazily by `config` to keep
 # the module cycle one-directional.
@@ -165,7 +165,7 @@ def build_argv(tool: ProjectTool, args: dict) -> list[str]:
                 )
             values[argument.name] = supplied
 
-    from orchestrator.config import _PLACEHOLDER
+    from code_gantry.config import _PLACEHOLDER
 
     argv: list[str] = []
     for element in tool.command:
@@ -203,7 +203,7 @@ def render(result) -> str:
     errors on stderr, and an empty answer reads to a model as "nothing
     happened" — the same wrong belief an empty search result produces.
     """
-    from orchestrator.commands import collapse_progress_runs
+    from code_gantry.commands import collapse_progress_runs
 
     head = f"$ {result.command}\nexit {result.exit_code}"
     if getattr(result, "timed_out", False):

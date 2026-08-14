@@ -55,7 +55,7 @@ def draft_config(repo: Path, plan_rel: str) -> tuple[str, list[str]]:
     notes: list[str] = []
     lines: list[str] = []
 
-    lines.append("# Drafted by `orchestrator init`. Read every line before approving —")
+    lines.append("# Drafted by `code-gantry init`. Read every line before approving —")
     lines.append("# each command here runs unattended, and the denylist is a backstop,")
     lines.append("# not a substitute for reading.")
     lines.append("")

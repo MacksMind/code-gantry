@@ -13,12 +13,12 @@ import subprocess
 
 import pytest
 
-from orchestrator.commands import CommandRunner
-from orchestrator.config import parse_config
-from orchestrator.edittools import FileEditor
-from orchestrator.executorloop import run_loop
-from orchestrator.gitops import Git
-from orchestrator.repotools import ReadBudget, RepoReader
+from code_gantry.commands import CommandRunner
+from code_gantry.config import parse_config
+from code_gantry.edittools import FileEditor
+from code_gantry.executorloop import run_loop
+from code_gantry.gitops import Git
+from code_gantry.repotools import ReadBudget, RepoReader
 
 
 @pytest.fixture
@@ -39,7 +39,7 @@ def repo(tmp_path):
 
 
 def build(repo, stage_overrides=None, executor=None, **cfg_overrides):
-    from orchestrator.config import Stage
+    from code_gantry.config import Stage
 
     data = {
         "target_repo": str(repo),
@@ -71,7 +71,7 @@ class ScriptedModel:
         self.calls = 0
 
     def run(self, conversation, reader, editor, semantic=None, cache_key=None):
-        from orchestrator.executorclient import ExecutorTurn
+        from code_gantry.executorclient import ExecutorTurn
 
         out = ExecutorTurn()
         out.turns = 1
@@ -84,7 +84,7 @@ class ScriptedModel:
 
 
 def edit_file(rel, old, new):
-    from orchestrator.edittools import Edit
+    from code_gantry.edittools import Edit
 
     return lambda editor: editor.edit(rel, [Edit(old, new)])
 
@@ -214,7 +214,7 @@ class TestFailures:
     def test_a_client_failure_is_the_one_thing_that_reports_not_ok(self, repo):
         class Broken:
             def run(self, conversation, reader, editor, semantic=None, cache_key=None):
-                from orchestrator.executorclient import ExecutorTurn
+                from code_gantry.executorclient import ExecutorTurn
 
                 out = ExecutorTurn()
                 out.failure = "the executor call failed: connection reset"
@@ -230,8 +230,8 @@ class TestFailures:
         # The instrument for the claim this design rests on and has not yet
         # earned: that exact matching plus a read tool beats fuzzy matching.
         def refuse(editor):
-            from orchestrator.edittools import Edit
-            from orchestrator.repotools import ToolError
+            from code_gantry.edittools import Edit
+            from code_gantry.repotools import ToolError
 
             try:
                 editor.edit("app/a.rb", [Edit("nope", "x")])
@@ -315,7 +315,7 @@ class TestTheRecordOfAnAttempt:
     def test_the_transcript_records_every_item_in_order(self, tmp_path):
         from types import SimpleNamespace
 
-        from orchestrator.executor import Transcript
+        from code_gantry.executor import Transcript
 
         t = Transcript(
             [{"role": "system", "content": [{"type": "input_text", "text": "SYS"}]}],
@@ -337,14 +337,14 @@ class TestTheRecordOfAnAttempt:
     def test_a_directory_that_cannot_be_written_does_not_fail_the_attempt(self, tmp_path):
         # Best effort, like every other artifact here: an attempt that worked
         # must not be failed by a record of it that could not be kept.
-        from orchestrator.executor import Transcript
+        from code_gantry.executor import Transcript
 
         t = Transcript([{"role": "user", "content": "x"}], tmp_path / "nope" / "deeper")
         t.append({"role": "user", "content": "y"})
         assert len(t) == 2
 
     def test_an_item_that_will_not_serialise_is_still_recorded(self, tmp_path):
-        from orchestrator.executor import Transcript
+        from code_gantry.executor import Transcript
 
         class Odd:
             type = "reasoning"
@@ -359,7 +359,7 @@ class TestTheRecordOfAnAttempt:
         # `prompt.md` carries the stage half only on this path, so it stopped
         # explaining why an attempt existed. A reader opening the directory
         # after a rework saw a prompt identical to the previous attempt's.
-        from orchestrator.executor import _write_sent_prompt
+        from code_gantry.executor import _write_sent_prompt
 
         conversation = [
             {"role": "system", "content": [{"type": "input_text", "text": "SYS"}]},
@@ -377,7 +377,7 @@ class TestTheRecordOfAnAttempt:
         # was asked.
         from types import SimpleNamespace
 
-        from orchestrator.executor import _write_sent_prompt
+        from code_gantry.executor import _write_sent_prompt
 
         conversation = [
             {"role": "user", "content": [{"type": "input_text", "text": "ASKED"}]},
@@ -407,10 +407,10 @@ class TestTheTranscriptIsReadableWhileTheAttemptRuns:
     """
 
     def _drive(self, repo, tmp_path, monkeypatch, inspect, cycles=1):
-        from orchestrator import executorclient
-        from orchestrator.edittools import Edit
-        from orchestrator.executor import Executor
-        from orchestrator.executorclient import ExecutorTurn
+        from code_gantry import executorclient
+        from code_gantry.edittools import Edit
+        from code_gantry.executor import Executor
+        from code_gantry.executorclient import ExecutorTurn
 
         history = tmp_path / "attempt"
         history.mkdir()
@@ -495,9 +495,9 @@ class TestWhatTheExecutorAskedFor:
     """
 
     def test_both_ledgers_are_merged(self, repo):
-        from orchestrator.edittools import Edit
-        from orchestrator.executor import _count_tool_use, ExecutionResult
-        from orchestrator.repotools import ToolCall
+        from code_gantry.edittools import Edit
+        from code_gantry.executor import _count_tool_use, ExecutionResult
+        from code_gantry.repotools import ToolCall
 
         cfg, stage = build(repo)
         reader, editor = parts(repo, stage)
@@ -513,7 +513,7 @@ class TestWhatTheExecutorAskedFor:
         # Not by which function raised. "budget" means stop asking, "not
         # found" means read the file, "not unique" means widen the anchor —
         # a count of ToolError would say nothing an operator could act on.
-        from orchestrator.executor import _count_tool_use, ExecutionResult
+        from code_gantry.executor import _count_tool_use, ExecutionResult
 
         cfg, stage = build(repo)
         reader, editor = parts(repo, stage)
@@ -541,9 +541,9 @@ class TestWhatTheExecutorAskedFor:
         refusals, the windows make them recoverable. A blended count cannot say
         which one moved.
         """
-        from orchestrator.edittools import Edit
-        from orchestrator.executor import ExecutionResult, _count_tool_use
-        from orchestrator.executortools import dispatch
+        from code_gantry.edittools import Edit
+        from code_gantry.executor import ExecutionResult, _count_tool_use
+        from code_gantry.executortools import dispatch
 
         cfg, stage = build(repo)
         reader, editor = parts(repo, stage)
@@ -570,7 +570,7 @@ class TestWhatTheExecutorAskedFor:
         assert out.refusal_counts == {"edit not found (anchor)": 1}
 
     def test_a_loop_that_asked_for_nothing_reports_nothing(self, repo):
-        from orchestrator.executor import _count_tool_use, ExecutionResult
+        from code_gantry.executor import _count_tool_use, ExecutionResult
 
         cfg, stage = build(repo)
         reader, editor = parts(repo, stage)
@@ -589,13 +589,13 @@ class TestTheLocatorIsWiredButIsNotATool:
     """
 
     def test_no_semantic_tool_is_offered_even_when_configured(self):
-        from orchestrator.executortools import tool_schemas
+        from code_gantry.executortools import tool_schemas
 
         names = {t["name"] for t in tool_schemas(None)}
         assert "semantic_search" not in names
 
     def test_an_unconfigured_project_gets_no_locator(self, repo):
-        from orchestrator.executorloop import build_loop_parts
+        from code_gantry.executorloop import build_loop_parts
 
         cfg, stage = build(repo)
         _, editor, _sem = build_loop_parts(stage, cfg, repo)
@@ -605,7 +605,7 @@ class TestTheLocatorIsWiredButIsNotATool:
         # Endpoints arrive by environment variable name, never as literals: a
         # tailnet host is an identifiable infrastructure value and the config
         # file is tracked and hashed for approval.
-        from orchestrator.executorloop import build_loop_parts
+        from code_gantry.executorloop import build_loop_parts
 
         monkeypatch.setenv("TEST_EMBED_BASE", "http://embed")
         monkeypatch.setenv("TEST_QDRANT", "http://qdrant")
@@ -626,7 +626,7 @@ class TestTheLocatorIsWiredButIsNotATool:
     def test_the_lookup_lands_in_the_ledger_under_its_own_name(self):
         # It costs an embedding and a query, so it belongs in the attempt's
         # record — but under a name that does not imply the model asked.
-        from orchestrator.semantic import SemanticSearch, SemanticSearchConfig
+        from code_gantry.semantic import SemanticSearch, SemanticSearchConfig
 
         calls = []
         s = SemanticSearch(
@@ -677,8 +677,8 @@ class TestTheContextHighWaterMarkAndCostReachTheResult:
                 self.left = list(peaks)
 
             def run(self, conversation, reader, editor, semantic=None, cache_key=None):
-                from orchestrator.executorclient import ExecutorTurn
-                from orchestrator.openaiclient import TokenUsage
+                from code_gantry.executorclient import ExecutorTurn
+                from code_gantry.openaiclient import TokenUsage
 
                 out = ExecutorTurn()
                 out.turns = 1
@@ -725,8 +725,8 @@ class TestTheContextHighWaterMarkAndCostReachTheResult:
         # blocking the fetch this reads the live table and the pinned
         # one is never consulted. And the loop memoises, so the cache
         # has to be cleared between tests.
-        import orchestrator.pricing as pricing
-        from orchestrator import executorloop
+        import code_gantry.pricing as pricing
+        from code_gantry import executorloop
         monkeypatch.setattr(pricing, "_fetch", lambda url: (_ for _ in ()).throw(OSError()))
         monkeypatch.setattr(executorloop, "_PRICES", None)
         # `price_usage` returns None for "no rate", and the distinction is the
@@ -744,8 +744,8 @@ class TestTheContextHighWaterMarkAndCostReachTheResult:
         # blocking the fetch this reads the live table and the pinned
         # one is never consulted. And the loop memoises, so the cache
         # has to be cleared between tests.
-        import orchestrator.pricing as pricing
-        from orchestrator import executorloop
+        import code_gantry.pricing as pricing
+        from code_gantry import executorloop
         monkeypatch.setattr(pricing, "_fetch", lambda url: (_ for _ in ()).throw(OSError()))
         monkeypatch.setattr(executorloop, "_PRICES", None)
         table = tmp_path / "prices.json"
@@ -777,8 +777,8 @@ class TestTheContextHighWaterMarkAndCostReachTheResult:
         and `cost_usd == 0`, together 17,943,722 prompt tokens against
         77,402,051 billed, the largest single unbilled attempt 2,319,957.
         """
-        import orchestrator.pricing as pricing
-        from orchestrator import executorloop
+        import code_gantry.pricing as pricing
+        from code_gantry import executorloop
         monkeypatch.setattr(pricing, "_fetch", lambda url: (_ for _ in ()).throw(OSError()))
         monkeypatch.setattr(executorloop, "_PRICES", None)
         table = tmp_path / "prices.json"
@@ -832,7 +832,7 @@ class TestSetupRunsInsideTheLoop:
         # Without this the model reads an environment failure as something to
         # wait out or report, which is what the gate's wording means and is
         # the wrong reading from inside the loop.
-        from orchestrator.gates import run_setup
+        from code_gantry.gates import run_setup
 
         cfg, stage = build(repo, {"setup_command": "echo 'Could not find gem' && exit 1"})
         found = run_setup(stage, cfg, CommandRunner(cwd=repo, timeout=60))
@@ -841,8 +841,8 @@ class TestSetupRunsInsideTheLoop:
         assert "Could not find gem" in found.feedback
 
     def test_no_setup_command_is_not_a_gate(self, repo):
-        from orchestrator.commands import CommandRunner
-        from orchestrator.gates import run_setup
+        from code_gantry.commands import CommandRunner
+        from code_gantry.gates import run_setup
 
         cfg, stage = build(repo)
         assert run_setup(stage, cfg, CommandRunner(cwd=repo, timeout=60)).ok

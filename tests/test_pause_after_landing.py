@@ -32,7 +32,7 @@ def _cfg(source=None):
     command takes any more. `source=None` gives the `<config>` placeholder,
     which is what a config built in memory honestly is.
     """
-    from orchestrator.config import parse_config
+    from code_gantry.config import parse_config
 
     return parse_config(
         {
@@ -47,7 +47,7 @@ def _cfg(source=None):
 
 class TestItStopsAfterTheSquash:
     def test_a_pause_set_during_a_stage_stops_at_the_landing(self, tmp_path):
-        from orchestrator.nodes import _pause_escalation
+        from code_gantry.nodes import _pause_escalation
 
         flag = tmp_path / "paused"
         flag.write_text("")
@@ -57,12 +57,12 @@ class TestItStopsAfterTheSquash:
         assert paused["failure_layer"] == "paused"
 
     def test_no_flag_is_no_escalation(self, tmp_path):
-        from orchestrator.nodes import _pause_escalation
+        from code_gantry.nodes import _pause_escalation
 
         assert _pause_escalation(tmp_path / "absent", {"run_id": "r"}, _cfg()) is None
 
     def test_the_note_is_carried_through(self, tmp_path):
-        from orchestrator.nodes import _pause_escalation
+        from code_gantry.nodes import _pause_escalation
 
         flag = tmp_path / "paused"
         flag.write_text("picking up the new prompts")
@@ -78,7 +78,7 @@ class TestItStopsAfterTheSquash:
         and the test that covered it asserted the run id was present — which
         is exactly the part that had to go.
         """
-        from orchestrator.nodes import _pause_escalation
+        from code_gantry.nodes import _pause_escalation
 
         source = tmp_path / "code_gantry.yaml"
         source.write_text("x: 1\n")
@@ -118,7 +118,7 @@ class TestTheLandingIsNotLost:
 
 class TestTheEdgeTableAllowsIt:
     def test_advance_may_reach_escalate(self):
-        from orchestrator.driver import EDGES
+        from code_gantry.driver import EDGES
 
         assert "escalate" in EDGES["advance"], (
             "advance stops the run now, so the table has to say so — a node "
@@ -126,7 +126,7 @@ class TestTheEdgeTableAllowsIt:
         )
 
     def test_advance_still_reaches_plan(self):
-        from orchestrator.driver import EDGES
+        from code_gantry.driver import EDGES
 
         assert "plan" in EDGES["advance"]
 
@@ -141,7 +141,7 @@ class TestOneMessageForBothCheckpoints:
         """
         import inspect
 
-        from orchestrator import nodes
+        from code_gantry import nodes
 
         src = inspect.getsource(nodes)
         assert src.count("Paused at your request") == 1
@@ -168,7 +168,7 @@ class TestAPauseCaughtAfterDeriving:
     """
 
     def test_the_hop_the_run_was_about_to_take_is_recorded(self, tmp_path):
-        from orchestrator.nodes import _pause_escalation
+        from code_gantry.nodes import _pause_escalation
 
         flag = tmp_path / "paused"
         flag.write_text("")
@@ -177,14 +177,14 @@ class TestAPauseCaughtAfterDeriving:
     def test_the_other_checkpoints_record_nothing_to_resume_into(self, tmp_path):
         # Written every time rather than left absent, so a pause caught before
         # the planner ran cannot inherit a value from an earlier one.
-        from orchestrator.nodes import _pause_escalation
+        from code_gantry.nodes import _pause_escalation
 
         flag = tmp_path / "paused"
         flag.write_text("")
         assert _pause_escalation(flag, {"run_id": "r"}, _cfg())["paused_before"] == ""
 
     def test_the_message_says_a_stage_is_waiting(self, tmp_path):
-        from orchestrator.nodes import _pause_escalation
+        from code_gantry.nodes import _pause_escalation
 
         flag = tmp_path / "paused"
         flag.write_text("")
@@ -215,7 +215,7 @@ class TestTheLandingSiteRecordsWhatItWasAboutToDo:
     """
 
     def _paused_update(self, tmp_path, next_hop):
-        from orchestrator.nodes import _pause_escalation
+        from code_gantry.nodes import _pause_escalation
 
         flag = tmp_path / "paused"
         flag.write_text("")
@@ -247,14 +247,14 @@ class TestTheLandingSiteRecordsWhatItWasAboutToDo:
 
 
 def _held_hop(landed):
-    from orchestrator.nodes import held_hop
+    from code_gantry.nodes import held_hop
 
     return held_hop(landed)
 
 
 class TestResumingIntoAHeldStage:
     def test_a_held_stage_runs_rather_than_being_re_derived(self):
-        from orchestrator.state import resume_entry_point
+        from code_gantry.state import resume_entry_point
 
         assert resume_entry_point({
             "resuming": True, "failure_layer": "paused",
@@ -269,7 +269,7 @@ class TestResumingIntoAHeldStage:
         exactly the case where nothing was derived, so `paused_before` is empty
         and the planner still decides.
         """
-        from orchestrator.state import resume_entry_point
+        from code_gantry.state import resume_entry_point
 
         assert resume_entry_point({
             "resuming": True, "failure_layer": "paused",
@@ -278,7 +278,7 @@ class TestResumingIntoAHeldStage:
         }) == "plan"
 
     def test_a_budget_stop_is_unchanged(self):
-        from orchestrator.state import resume_entry_point
+        from code_gantry.state import resume_entry_point
 
         assert resume_entry_point({
             "resuming": True, "failure_layer": "budget", "current": {"id": "s"},
@@ -287,6 +287,6 @@ class TestResumingIntoAHeldStage:
     def test_the_key_is_declared_so_the_driver_keeps_it(self):
         # The merge filters against the schema; an undeclared key is dropped,
         # which is how `full_suite_digest` shipped broken.
-        from orchestrator.state import RunState
+        from code_gantry.state import RunState
 
         assert "paused_before" in RunState.__annotations__

@@ -1,11 +1,11 @@
 """Command line interface.
 
-    orchestrator init <plan-doc> [config]   draft a config from a plan document
-    orchestrator validate <config>          prove the config works on this host
-    orchestrator run <config>               start a run
-    orchestrator pause <config> [run_id]    stop cleanly at the next boundary
-    orchestrator resume <config> [run_id]   continue after an interruption
-    orchestrator status <config> [run_id]   where a run stopped and why
+    code-gantry init <plan-doc> [config]   draft a config from a plan document
+    code-gantry validate <config>          prove the config works on this host
+    code-gantry run <config>               start a run
+    code-gantry pause <config> [run_id]    stop cleanly at the next boundary
+    code-gantry resume <config> [run_id]   continue after an interruption
+    code-gantry status <config> [run_id]   where a run stopped and why
 
 Every command takes the path to a project's config, because a config decides
 what runs unattended and guessing which one was meant is the class of mistake
@@ -36,12 +36,12 @@ from pathlib import Path
 
 import click
 
-from orchestrator.addendum import append_notes
-from orchestrator.configversion import blob_sha, problem_resuming
-from orchestrator.config import ConfigError, ProjectConfig, load_config
-from orchestrator.discover import derive_target_repo, draft_config
-from orchestrator.gitops import Git, GitError
-from orchestrator.driver import (
+from code_gantry.addendum import append_notes
+from code_gantry.configversion import blob_sha, problem_resuming
+from code_gantry.config import ConfigError, ProjectConfig, load_config
+from code_gantry.discover import derive_target_repo, draft_config
+from code_gantry.gitops import Git, GitError
+from code_gantry.driver import (
     UnreadableCheckpoint,
     default_max_steps,
     drive,
@@ -49,14 +49,14 @@ from orchestrator.driver import (
     load_state,
     open_checkpointer,
 )
-from orchestrator.plandoc import resolve_plan_tree, snapshot_tree
-from orchestrator.planner import make_planner
-from orchestrator.preflight import format_checks, run_preflight
-from orchestrator.report import build_report
-from orchestrator.reviewer import make_reviewer
-from orchestrator.runlog import RunLog
-from orchestrator.runtime import ProjectPaths, RunPaths, build_runtime
-from orchestrator.state import new_state, resume_input
+from code_gantry.plandoc import resolve_plan_tree, snapshot_tree
+from code_gantry.planner import make_planner
+from code_gantry.preflight import format_checks, run_preflight
+from code_gantry.report import build_report
+from code_gantry.reviewer import make_reviewer
+from code_gantry.runlog import RunLog
+from code_gantry.runtime import ProjectPaths, RunPaths, build_runtime
+from code_gantry.state import new_state, resume_input
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -64,7 +64,7 @@ EXIT_FAILED = 1
 
 @click.group()
 def main() -> None:
-    """Drive a long refactor with a local executor, a planner, and a reviewer."""
+    """Drive a long refactor with an executor, a planner, and a reviewer."""
 
 
 
@@ -180,8 +180,8 @@ def init(plan_doc: Path, config_path: Path | None) -> None:
     click.echo(
         "\nEvery discovered field carries a provenance comment, so reviewing it "
         "is a check of reasoning rather than of values. Read it, fix what is "
-        f"wrong, commit it, then:\n\n  orchestrator validate {shown}\n"
-        f"  orchestrator run {shown}" + ignore_hint
+        f"wrong, commit it, then:\n\n  code-gantry validate {shown}\n"
+        f"  code-gantry run {shown}" + ignore_hint
     )
 
 
@@ -205,7 +205,7 @@ def validate(config_path: Path | None, skip_tests: bool) -> None:
         sys.exit(EXIT_FAILED)
     click.echo(
         f"config works on this host ({len(warnings)} warning(s)). "
-        f"Commit it, then: orchestrator run {config_path}"
+        f"Commit it, then: code-gantry run {config_path}"
     )
 
 
@@ -485,7 +485,7 @@ def pause(config_path: Path | None, run_id: str | None, note: str) -> None:
     paths.pause_flag.write_text(note)
     click.echo(
         f"{run_id} will stop after the stage in flight finishes.\n"
-        "A stage can take a while — watch the run log, or `orchestrator status "
+        "A stage can take a while — watch the run log, or `code-gantry status "
         f"{run_id}` once it stops.\n"
         f"Continue with: {cfg.resume_command(run_id)}"
     )
@@ -777,7 +777,7 @@ def _startup_banner(
         else "test suites skipped"
     )
     return (
-        f"=== orchestrator {command} {subject} — {stamp} pid {pid or os.getpid()} ===\n"
+        f"=== code-gantry {command} {subject} — {stamp} pid {pid or os.getpid()} ===\n"
         f"target: {cfg.target_repo} on {cfg.project_branch}\n"
         f"preflight: starting ({suites})"
     )

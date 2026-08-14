@@ -25,7 +25,7 @@ import subprocess
 
 import pytest
 
-from orchestrator.config import parse_config
+from code_gantry.config import parse_config
 
 
 def _cfg(repo, addendum="docs/progress_log.md"):
@@ -67,7 +67,7 @@ REVIEWED = (
 
 class TestWhenThereIsNothingToFold:
     def test_no_addendum_configured_is_not_a_warning(self, repo):
-        from orchestrator.preflight import _unfolded_progress_check
+        from code_gantry.preflight import _unfolded_progress_check
 
         cfg = parse_config({
             "target_repo": str(repo), "base_ref": "main", "project_branch": "p",
@@ -79,7 +79,7 @@ class TestWhenThereIsNothingToFold:
         assert check.ok
 
     def test_a_log_that_does_not_exist_yet_is_not_a_warning(self, repo):
-        from orchestrator.preflight import _unfolded_progress_check
+        from code_gantry.preflight import _unfolded_progress_check
 
         assert _unfolded_progress_check(_cfg(repo)).ok
 
@@ -87,7 +87,7 @@ class TestWhenThereIsNothingToFold:
         # The header survives a fold; the entries do not. An empty log is the
         # state the warning exists to get the operator back to, so it must be
         # silent there or the warning means nothing.
-        from orchestrator.preflight import _unfolded_progress_check
+        from code_gantry.preflight import _unfolded_progress_check
 
         _log(repo, [])
         check = _unfolded_progress_check(_cfg(repo))
@@ -97,7 +97,7 @@ class TestWhenThereIsNothingToFold:
 
 class TestTheAccounting:
     def _check(self, repo, entries):
-        from orchestrator.preflight import _unfolded_progress_check
+        from code_gantry.preflight import _unfolded_progress_check
 
         _log(repo, entries)
         return _unfolded_progress_check(_cfg(repo))
@@ -189,7 +189,7 @@ class TestItRunsWhereItCanBeActedOn:
         """
         import inspect
 
-        from orchestrator import preflight
+        from code_gantry import preflight
 
         src = inspect.getsource(preflight.run_preflight)
         assert "_unfolded_progress_check" in src

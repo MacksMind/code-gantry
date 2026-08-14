@@ -2,7 +2,7 @@
 
 import pytest
 
-from orchestrator.driver import (
+from code_gantry.driver import (
     EDGES,
     ENTRY_POINTS,
     NODES,
@@ -136,14 +136,14 @@ class TestTheExecutorCanBeRetriedDirectly:
     """
 
     def test_execute_may_reach_itself(self):
-        from orchestrator.driver import EDGES
+        from code_gantry.driver import EDGES
 
         assert "execute" in EDGES["execute"]
 
     def test_it_is_still_the_only_node_besides_plan_that_does(self):
         # The self-loop is a licence for one case, not a general one. Every
         # other node still has to hand control somewhere else.
-        from orchestrator.driver import EDGES
+        from code_gantry.driver import EDGES
 
         looping = {name for name, hops in EDGES.items() if name in hops}
         assert looping == {"plan", "execute"}
