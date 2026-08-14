@@ -245,23 +245,33 @@ class TestARunHoldsEveryModuleItCanReach:
     """
 
     def test_no_module_is_left_to_load_later(self):
-        import pathlib
+        """Measured in a fresh process, because this one has imported things.
+
+        Run inside the suite, `sys.modules` already holds whatever other tests
+        imported, so the assertion passed while two modules — `configversion`
+        and `projecttools` — were absent from the pin list for as long as they
+        had existed. It failed only when xdist happened to give this test a
+        worker that had not imported them. A guard whose verdict depends on
+        what ran before it is not a guard.
+        """
+        import subprocess
         import sys
 
-        from orchestrator.runtime import pin_modules
-
-        pin_modules()
-        loaded = {m.split(".")[-1] for m in sys.modules if m.startswith("orchestrator.")}
-        on_disk = {
-            p.stem
-            for p in pathlib.Path("src/orchestrator").glob("*.py")
-            if p.stem != "__init__"
-        }
-        # `cli`, `discover`, `approval` and `preflight` run before a run does
-        # and are already loaded by the entry point; everything a *run* reaches
-        # must be in memory by the time one is assembled.
-        entry_points = {"cli", "discover", "approval", "preflight"}
-        assert not (on_disk - loaded - entry_points)
+        probe = (
+            "import pathlib, sys\n"
+            "from orchestrator.runtime import pin_modules\n"
+            "pin_modules()\n"
+            "loaded = {m.split('.')[-1] for m in sys.modules"
+            " if m.startswith('orchestrator.')}\n"
+            "on_disk = {p.stem for p in pathlib.Path('src/orchestrator').glob('*.py')"
+            " if p.stem != '__init__'}\n"
+            "print(','.join(sorted(on_disk - loaded)))\n"
+        )
+        out = subprocess.run(
+            [sys.executable, "-c", probe], capture_output=True, text=True, check=True
+        )
+        missing = [m for m in out.stdout.strip().split(",") if m]
+        assert not missing, f"not pinned: {missing}"
 
     def test_pinning_happens_when_the_runtime_is_assembled(self):
         # Not at import time and not on first use: the point a run is built is

@@ -386,27 +386,27 @@ def pin_modules() -> None:
     included precisely because they load last — a run lasting hours would
     otherwise read them fresh at the end.
 
-    Deliberately the whole set rather than the modules known to be reached
-    lazily. Which those are is a property of every import in the package and
-    changes whenever someone breaks a cycle, so a curated list would be right
-    on the day it was written; the test beside this asserts nothing is left,
-    which is a question with one answer.
+    The whole set, and **derived from the package rather than written out**.
+    Which modules are reached lazily is a property of every import here and
+    changes whenever someone breaks a cycle, so a list is right on the day it
+    is written and silently wrong afterwards — `configversion` and
+    `projecttools` were both added after this existed and neither reached it,
+    leaving a run free to load either fresh, mid-flight, from a file edited
+    since it started. Walking the package is the one answer that cannot go
+    stale, and it makes adding a module require nothing.
+
+    The test beside this measures in a subprocess. Asked inside the suite it
+    reads a `sys.modules` already populated by whatever else ran, which is how
+    those two stayed missing: it only failed when a worker happened not to have
+    imported them.
     """
-    from orchestrator import (  # noqa: F401
-        addendum,
-        cachekey,
-        driver,
-        edittools,
-        executorclient,
-        executorloop,
-        executortools,
-        nodes,
-        pricing,
-        prompts,
-        report,
-        runlog,
-        verify,
-    )
+    import importlib
+    import pkgutil
+
+    import orchestrator
+
+    for module in pkgutil.iter_modules(orchestrator.__path__):
+        importlib.import_module(f"orchestrator.{module.name}")
 
 
 def build_runtime(
