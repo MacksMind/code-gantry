@@ -9,7 +9,7 @@
 
 Every command takes the path to a project's config, because a config decides
 what runs unattended and guessing which one was meant is the class of mistake
-this design is arranged against. `ORCHESTRATOR_CONFIG` supplies it once per
+this design is arranged against. `CODE_GANTRY_CONFIG` supplies it once per
 shell. `init` is the exception, and only because it produces a config rather
 than consuming one — its config path is optional and defaults beside the plan.
 
@@ -68,7 +68,7 @@ def main() -> None:
 
 
 
-CONFIG_ENV = "ORCHESTRATOR_CONFIG"
+CONFIG_ENV = "CODE_GANTRY_CONFIG"
 
 
 def _config_argument(value: Path | None) -> Path:
@@ -80,7 +80,7 @@ def _config_argument(value: Path | None) -> Path:
     path is an error, not a lookup. `init` is the one exception, because it is
     the command that produces a config rather than consuming one.
 
-    `ORCHESTRATOR_CONFIG` exists so the path is typed once per shell rather
+    `CODE_GANTRY_CONFIG` exists so the path is typed once per shell rather
     than once per command. It is still explicit: something named it.
     """
     if value is not None:

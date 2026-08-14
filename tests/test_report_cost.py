@@ -65,7 +65,7 @@ def state_with(**usage):
 def prices(tmp_path, monkeypatch):
     path = tmp_path / "model-prices.json"
     path.write_text(json.dumps(PRICES))
-    monkeypatch.setenv("ORCHESTRATOR_PRICE_MAP", str(path))
+    monkeypatch.setenv("CODE_GANTRY_PRICE_MAP", str(path))
     return path
 
 
@@ -130,7 +130,7 @@ class TestTheCostSectionRecordsWhatProducedIt:
     def test_a_missing_price_file_does_not_break_the_report(self, tmp_path, monkeypatch):
         # The report is written at the end of every run, including runs that
         # failed. It must not be the thing that raises.
-        monkeypatch.setenv("ORCHESTRATOR_PRICE_MAP", str(tmp_path / "absent.json"))
+        monkeypatch.setenv("CODE_GANTRY_PRICE_MAP", str(tmp_path / "absent.json"))
         monkeypatch.setenv("LITELLM_MODEL_COST_MAP_URL", "http://127.0.0.1:9/none")
         out = build_report(state_with(planner_prompt_tokens=10), cfg_with())
         assert "## Cost" in out

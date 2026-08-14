@@ -2569,7 +2569,7 @@ def _stage_spend(cfg, usage: dict, executor_cost: float | None = None) -> list[d
     from code_gantry.report import PRICE_MAP_FILENAME
 
     prices = load_price_map(
-        os.environ.get("ORCHESTRATOR_PRICE_MAP") or PRICE_MAP_FILENAME
+        os.environ.get("CODE_GANTRY_PRICE_MAP") or PRICE_MAP_FILENAME
     )
     out: list[dict] = []
     # The reviewer's keys are unprefixed: it was the first role to write here

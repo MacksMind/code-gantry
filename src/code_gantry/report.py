@@ -260,12 +260,12 @@ def _wall_clock_lines(state: RunState, cfg: ProjectConfig) -> list[str]:
 def _price_map() -> dict:
     """The public rate table, cached beside the run's own artifacts.
 
-    `ORCHESTRATOR_PRICE_MAP` names the cache so a test can pin it and an
+    `CODE_GANTRY_PRICE_MAP` names the cache so a test can pin it and an
     air-gapped operator can supply one; unset, it lands in the working
     directory. Failure here is never fatal — see `load_price_map`.
     """
     return load_price_map(
-        os.environ.get("ORCHESTRATOR_PRICE_MAP") or PRICE_MAP_FILENAME
+        os.environ.get("CODE_GANTRY_PRICE_MAP") or PRICE_MAP_FILENAME
     )
 
 

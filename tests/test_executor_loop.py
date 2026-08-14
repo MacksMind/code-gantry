@@ -734,7 +734,7 @@ class TestTheContextHighWaterMarkAndCostReachTheResult:
         # "not priced" as often as "free".
         empty = tmp_path / "prices.json"
         empty.write_text("{}")
-        monkeypatch.setenv("ORCHESTRATOR_PRICE_MAP", str(empty))
+        monkeypatch.setenv("CODE_GANTRY_PRICE_MAP", str(empty))
         cfg, stage = build(repo)
         out = drive(repo, cfg, stage, self._model([9000]))
         assert out.cost_usd is None
@@ -752,7 +752,7 @@ class TestTheContextHighWaterMarkAndCostReachTheResult:
         table.write_text(json.dumps({
             "m": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}
         }))
-        monkeypatch.setenv("ORCHESTRATOR_PRICE_MAP", str(table))
+        monkeypatch.setenv("CODE_GANTRY_PRICE_MAP", str(table))
         cfg, stage = build(repo)
         out = drive(repo, cfg, stage, self._model([9000]))
         # 9000 prompt @ 1e-6 + 100 completion @ 2e-6
@@ -785,7 +785,7 @@ class TestTheContextHighWaterMarkAndCostReachTheResult:
         table.write_text(json.dumps({
             "m": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}
         }))
-        monkeypatch.setenv("ORCHESTRATOR_PRICE_MAP", str(table))
+        monkeypatch.setenv("CODE_GANTRY_PRICE_MAP", str(table))
         cfg, stage = build(repo)
         out = drive(
             repo, cfg, stage,

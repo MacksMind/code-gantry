@@ -55,7 +55,7 @@ SLUG = "plan"
 # The variable `init` drafts for the executor's endpoint. A hostname is an
 # infrastructure fact, so the drafted config names a variable rather than
 # carrying an address.
-EXECUTOR_API_BASE_VAR = "ORCHESTRATOR_EXECUTOR_API_BASE"
+EXECUTOR_API_BASE_VAR = "CODE_GANTRY_EXECUTOR_API_BASE"
 
 # The models `init` drafts. Kept here so a change to the draft fails loudly in
 # patch_config rather than silently pointing a live run at nothing.

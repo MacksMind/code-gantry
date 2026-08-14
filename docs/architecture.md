@@ -1199,7 +1199,7 @@ executor:
   # The endpoint address lives in the environment, not in this file. A hostname
   # is an infrastructure fact rather than a project decision, and this file is
   # tracked and hashed. `api_base` remains available for a literal.
-  api_base_env: "ORCHESTRATOR_EXECUTOR_API_BASE"
+  api_base_env: "CODE_GANTRY_EXECUTOR_API_BASE"
   # Omit for an endpoint that serves without auth. Set one only for an
   # authenticating gateway in front of it.
   api_key_env: "OPENAI_API_KEY"

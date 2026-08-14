@@ -124,7 +124,7 @@ def draft_config(repo: Path, plan_rel: str) -> tuple[str, list[str]]:
     lines.append("  # omit api_key_env only for an endpoint that serves without")
     lines.append("  # auth. A hostname is an infrastructure fact and this file is")
     lines.append("  # tracked, so the values live in the environment.")
-    lines.append('  # api_base_env: "ORCHESTRATOR_EXECUTOR_API_BASE"')
+    lines.append('  # api_base_env: "CODE_GANTRY_EXECUTOR_API_BASE"')
     lines.append('  api_key_env: "OPENAI_API_KEY"')
     lines.append("")
     lines.append("planner:")

@@ -184,7 +184,7 @@ def _prices() -> dict:
         from code_gantry.report import PRICE_MAP_FILENAME
 
         _PRICES = load_price_map(
-            os.environ.get("ORCHESTRATOR_PRICE_MAP") or PRICE_MAP_FILENAME
+            os.environ.get("CODE_GANTRY_PRICE_MAP") or PRICE_MAP_FILENAME
         )
     return _PRICES
 
