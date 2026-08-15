@@ -92,6 +92,13 @@ class TestInvariants:
         # command itself stayed operator config. Lint, commit and tests are
         # loop steps precisely so the executor cannot finish without being
         # shown what its edits did.
+        #
+        # `request_replan` is the one entry here that is neither a read nor a
+        # write, and it holds the invariant for the same reason the rest do: it
+        # runs nothing. It ends the attempt and carries a reason to the planner,
+        # which lands nothing, approves nothing and skips no gate. The frozen
+        # set is the point — an executor tool has to be added deliberately, and
+        # this test is where that decision gets made.
         names = {t["name"] for t in tool_schemas(None)}
         assert names == {
             "read_file",
@@ -102,6 +109,7 @@ class TestInvariants:
             "edit",
             "create_file",
             "delete_file",
+            "request_replan",
         }
         blob = " ".join(t["description"].lower() for t in tool_schemas(None))
         for word in ("run the tests", "shell", "execute a command", "bash"):

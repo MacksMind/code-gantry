@@ -28,7 +28,7 @@ from __future__ import annotations
 import os
 
 from code_gantry.config import ExecutorConfig
-from code_gantry.executortools import dispatch, openai_tool_schemas
+from code_gantry.executortools import REPLAN_TOOL, dispatch, openai_tool_schemas
 from code_gantry.openaiclient import (
     TokenUsage,
     describe_call,
@@ -54,6 +54,18 @@ class ExecutorTurn:
         self.calls: list[str] = []
         self.turns: int = 0
         self.stopped: bool = False
+        # Set by `request_replan`, and the one thing here the model asserts
+        # rather than the gates measure. That looks like a contradiction of the
+        # note above — "I am done" and "I have stopped" being one signal, with
+        # the gates deciding which — and it is not, because this claims nothing
+        # about the work. It says the *stage* is wrong or too small; every gate
+        # still runs, nothing lands, nothing is approved. What the gates cannot
+        # supply is why: measured on one run, an executor that correctly found
+        # nothing left to do reached the planner as "the attempt reproduced the
+        # previous diff", and one whose change broke files outside its scope
+        # reached the executor again as "tests failed".
+        self.replan_kind: str = ""
+        self.replan_reason: str = ""
         self.text: str = ""
         self.failure: str = ""
         self.peak_prompt_tokens: int = 0
@@ -266,6 +278,17 @@ class OpenAIExecutorModel:
             for item in requests:
                 name, args = tool_request(item)
                 out.calls.append(describe_call(name, args))
+                # Answered here rather than in `dispatch`, which is text in and
+                # text out for every other tool. A control signal returned as a
+                # string would have to be recognised by matching that string —
+                # a classifier over rendered text, which is how three different
+                # refusal causes became indistinguishable once they rendered
+                # the same sentence. The reply is still appended, because a
+                # tool call with no result leaves the conversation malformed
+                # for the provider.
+                if name == REPLAN_TOOL["name"]:
+                    out.replan_kind = str(args.get("kind") or "")
+                    out.replan_reason = str(args.get("reason") or "")
                 conversation.append(
                     {
                         "type": "function_call_output",
@@ -291,6 +314,14 @@ class OpenAIExecutorModel:
                     }
                 )
             logged = self._log_new_calls(reader, editor, logged)
+
+            # The model has handed the stage back, so there is nothing further
+            # to ask it. `stopped` is true in the sense the loop reads it —
+            # finished asking for things — and the reason it stopped travels
+            # beside it rather than being inferred from the absence of calls.
+            if out.replan_kind:
+                out.stopped = True
+                return out
 
         # Ran out of turns with the model still asking for things. Not a
         # failure of the work — whatever it committed stands and the gates will

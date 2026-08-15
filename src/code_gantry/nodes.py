@@ -1027,6 +1027,35 @@ def execute(state: RunState, rt: Runtime) -> dict:
             ),
         }
 
+    if result.replan_kind:
+        # The model handed the stage back. Below `commit_refused`, which is a
+        # human escalation and outranks it, and above everything else: the
+        # branches that follow all diagnose an attempt from what it left in the
+        # tree, and this attempt has said what it found. Whatever it committed
+        # stays on the branch for the planner to build on; nothing lands, and
+        # the redrawn stage still faces every gate and a review.
+        kinds = {
+            "unsatisfiable": (
+                "The executor reports that this stage cannot be completed as "
+                "written. Rewrite what it requires — do not re-issue it."
+            ),
+            "incomplete": (
+                "The executor made the change and reports that doing so "
+                "revealed work the plan did not anticipate. Widen this stage "
+                "or draw the sequence that covers what it found."
+            ),
+        }
+        return {
+            **measured,
+            **_planner_failure(
+                state,
+                "replan",
+                f"the executor asked for a replan ({result.replan_kind})",
+                f"{kinds.get(result.replan_kind, '')}\n\n"
+                f"{_clip(result.replan_reason)}",
+            ),
+        }
+
     if result.ok:
         # A rework that edited nothing has usually just said why, and until now
         # nobody read it. `result.log` is the model's closing text; on the

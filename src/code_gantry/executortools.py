@@ -28,6 +28,57 @@ from code_gantry.plannertools import READ_TOOLS, SEMANTIC_TOOL, call_detail
 from code_gantry.repotools import RepoReader, ToolError
 from code_gantry.semantic import SemanticSearch
 
+REPLAN_TOOL: dict[str, Any] = {
+    "name": "request_replan",
+    "description": (
+        "Hand this stage back to the planner, ending your attempt now.\n\n"
+        "Two uses, and the second is ordinary rather than exceptional:\n\n"
+        "**`unsatisfiable`** — the stage as written cannot be completed. Its "
+        "requirements contradict each other, or contradict something the "
+        "project's own checks enforce, or ask for a change in a file you may "
+        "not touch. Say which, and name the file or the two requirements. "
+        "Working around it inside the files you are allowed to touch is the "
+        "one outcome that must not happen.\n\n"
+        "**`incomplete`** — you made the change you were asked for, and doing "
+        "it revealed work the plan did not anticipate. A version bump whose "
+        "consequences only appear once it is applied is the ordinary case: "
+        "nobody could have listed them in advance, and the planner needs the "
+        "list you now have. Report what the change revealed.\n\n"
+        "Neither is a failure of nerve and neither wastes the attempt. What "
+        "you have already committed stays on the branch for the planner to "
+        "build on. It does not land: nothing here approves anything, skips a "
+        "gate, or ends a stage successfully — a redrawn stage still has to "
+        "pass every check and a review.\n\n"
+        "Do not use this because the work is hard, only because the *stage* "
+        "is wrong or too small. If you can finish it, finish it."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "kind": {
+                "type": "string",
+                "enum": ["unsatisfiable", "incomplete"],
+                "description": (
+                    "Which of the two above. The planner does different things "
+                    "with them: it rewrites the stage's requirements for the "
+                    "first and widens or splits its scope for the second."
+                ),
+            },
+            "reason": {
+                "type": "string",
+                "description": (
+                    "What you found, in enough detail to act on: the "
+                    "requirements that conflict, the file that is out of "
+                    "scope, or what the change broke. This is the whole of "
+                    "what the planner gets."
+                ),
+            },
+        },
+        "required": ["kind", "reason"],
+        "additionalProperties": False,
+    },
+}
+
 EDIT_TOOLS: list[dict[str, Any]] = [
     {
         "name": "edit",
@@ -177,7 +228,7 @@ def tool_schemas(
 
     read = [*READ_TOOLS, SEMANTIC_TOOL_FOR_EDITING] if semantic else list(READ_TOOLS)
     declared = [tool_schema(t) for t in for_role("executor", project_tools)]
-    return [*read, *EDIT_TOOLS, *declared]
+    return [*read, *EDIT_TOOLS, REPLAN_TOOL, *declared]
 
 
 def openai_tool_schemas(
@@ -225,6 +276,16 @@ def dispatch(
     """
     from code_gantry import plannertools
     from code_gantry.projecttools import for_role
+
+    # The client reads the arguments off the call itself and ends the attempt;
+    # this only supplies the reply that keeps the conversation well formed. A
+    # tool call the provider sees no result for is a malformed exchange, and
+    # the next request fails for a reason that has nothing to do with replans.
+    if name == REPLAN_TOOL["name"]:
+        return (
+            "Recorded. This attempt ends here and the stage goes back to the "
+            "planner with your reason. What you committed stays on the branch."
+        )
 
     # Scoped here as well as where the schema is built, and for the reason the
     # planner's dispatch is: a model can name a tool it was never offered, so

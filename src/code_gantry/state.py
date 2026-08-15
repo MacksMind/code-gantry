@@ -47,7 +47,11 @@ REPO_STATE_FAILURES = frozenset(
     {"setup", "branch", "scope", "patterns", "tests", "checks", "new_tests",
      "progress", "review", "full_suite"}
 )
-PLANNING_FAILURES = frozenset({"precondition", "planner"})
+PLANNING_FAILURES = frozenset({"precondition", "planner", "replan"})
+# `replan` belongs here by definition rather than by observation: the executor
+# raised it to say the stage is wrong or too small, so a resume that re-entered
+# at `verify` would ask the gates a question nobody was waiting on an answer
+# to, and re-running the executor would put it back where it stopped.
 # `workspace` is deliberately in neither set. It is not a planning defect — the
 # planner cannot commit somebody's files — and routing it to verify would diff
 # against a stage branch that was never cut, because the check runs before

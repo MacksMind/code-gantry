@@ -112,6 +112,13 @@ class ExecutionResult:
     # set in three places and read in none, so an attempt cut off mid-survey
     # arrived at the gate as "the attempt produced no changes".
     turns_exhausted: bool = False
+    # Set when the model called `request_replan`: "unsatisfiable" or
+    # "incomplete", and what it said. Read by `execute`, which routes to the
+    # planner instead of the gates. Recorded in `executor-loop.json` without
+    # anything being taught to write it, because that artifact walks
+    # `dataclasses.fields` rather than a list somebody maintains.
+    replan_kind: str = ""
+    replan_reason: str = ""
     # What it asked for, by tool, and what was refused, by reason. Counts
     # rather than the rendered calls the other two loops log: the planner's
     # 40-call line is already hard to read, and this one makes sixty a cycle.

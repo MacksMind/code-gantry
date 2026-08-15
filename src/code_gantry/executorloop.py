@@ -121,6 +121,16 @@ def run_loop(
         # finished, and the loop did exactly that because nothing consulted it.
         out.turns_exhausted = not turn.stopped
 
+        if turn.replan_kind:
+            # Before the no-changes check below, because the two shapes overlap
+            # exactly where it matters: an executor that finds the stage
+            # unsatisfiable often has nothing to commit, and letting that fall
+            # through would report the useful reason as "produced no changes"
+            # — which is the misdiagnosis this tool exists to end.
+            out.replan_kind = turn.replan_kind
+            out.replan_reason = turn.replan_reason
+            break
+
         if not editor.touched:
             # The model stopped without changing anything. Not adjudicated
             # here: the scope gate already owns the sentence "the attempt
