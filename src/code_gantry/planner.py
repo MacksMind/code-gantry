@@ -191,7 +191,12 @@ class PlannedStage(BaseModel):
             "Free, deterministic, and it runs before the tests — so an "
             "incomplete conversion costs nothing to find instead of a review "
             "turn. Scoped to edit_files, so declare the ground you mean to "
-            "leave clean. Leave empty when the stage is not removing anything."
+            "leave clean. Leave empty when the stage is not removing anything.\n\n"
+            "Beware a pattern that can match inside a derived artifact — a "
+            "lockfile, a schema dump, a generated header — even where that "
+            "file sits in edit_files. A tool writes those, not the executor, "
+            "so requiring their absence asks it to fight the generator, or "
+            "cannot be satisfied at all."
         ),
     )
     test_paths: list[str] = Field(
