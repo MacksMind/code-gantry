@@ -1050,6 +1050,7 @@ def build_planner_messages(
     current_stage: Stage | None = None,
     failure: FailureDetail | None = None,
     opening_failure: FailureDetail | None = None,
+    gate_history: list[dict] | None = None,
     revision: int = 0,
     interventions_used: int = 0,
     interventions_max: int = 0,
@@ -1284,6 +1285,21 @@ def build_planner_messages(
                 )
             )
 
+        # Both failures above are single points. This is the line between them,
+        # and it is the only thing here that can show a stage having been
+        # finished already: a revision that reaches "all gates passed" and then
+        # "review rejected" was turned down on complete work, which is a fact
+        # about this stage's own criteria and not about the executor. Measured
+        # on the run this was added for, the planner saw `residue` and
+        # `progress` — the first and last of a nine-step sequence whose middle
+        # said the work was done.
+        history = format_gate_history(gate_history or [])
+        if history:
+            current.append(
+                "### Every gate verdict this stage has drawn\n\n"
+                "Oldest first, grouped by revision.\n\n" + history
+            )
+
         # After the diagnosis, because it is evidence for the choice rather
         # than the choice itself, and a diff placed ahead of the failure pushes
         # the failure down behind material the planner reads second.
@@ -1374,6 +1390,37 @@ def build_planner_messages(
     # breakpoints in the wrong place anyway.
     blocks.append({"type": "text", "text": "\n\n".join(current)})
     return [{"role": "user", "content": blocks}]
+
+
+def format_gate_history(entries: list[dict]) -> str:
+    """Every gate verdict a stage has drawn, one line per revision.
+
+    `passed` and `review` are spelled out rather than printed as the bare
+    words, because a list reading "residue, passed, review" invites taking the
+    middle for a layer of that name. Those two are also the entries that carry
+    the signal: a revision reaching *all gates passed* and then *review
+    rejected* had complete work turned down, which is a fact about the stage's
+    own criteria rather than about the executor's thoroughness.
+
+    Empty renders empty. A first attempt has no history, and a heading with
+    nothing under it is prompt weight that says nothing.
+    """
+    if not entries:
+        return ""
+    spelled = {"passed": "all gates passed", "review": "review rejected"}
+    by_revision: dict[int, list[str]] = {}
+    order: list[int] = []
+    for entry in entries:
+        revision = entry["revision"]
+        if revision not in by_revision:
+            by_revision[revision] = []
+            order.append(revision)
+        layer = entry["layer"]
+        by_revision[revision].append(spelled.get(layer, layer))
+    return "\n".join(
+        f"  revision {revision}: {', '.join(by_revision[revision])}"
+        for revision in order
+    )
 
 
 def _failure_block(

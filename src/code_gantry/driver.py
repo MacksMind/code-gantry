@@ -131,6 +131,60 @@ def open_checkpointer(db_path: Path | str) -> tuple[Callable, sqlite3.Connection
     return write, conn
 
 
+def gate_history(db_path: Path | str, run_id: str, stage_id: str) -> list[dict]:
+    """Every gate verdict this stage has drawn, oldest first.
+
+    Derived rather than accumulated. The checkpoint has recorded
+    `failure_layer` on every step since it existed and nothing has ever read
+    the sequence back — `load_state` takes the last row only — so this needs no
+    new field, and therefore no entry in the reset helpers that a later field
+    is forgotten by. Two incidents in `state.py` are that omission.
+
+    What it is for: a planner asked to revise a stage is given the failure that
+    opened the sequence and the one that ended it. On the run this was written
+    for those were `residue` and `progress`, and between them sat the two
+    entries that mattered — the stage passing every gate, then the reviewer
+    rejecting it. That pair says the stage's own criterion is wrong rather than
+    the executor's work being incomplete, and it was on disk the whole time.
+
+    Only `verify` and `review` produce a verdict. State is merged rather than
+    replaced, so `execute` checkpoints with the previous failure still sitting
+    in `failure_layer`; counting every row would report each failure twice and
+    manufacture an oscillation out of one.
+    """
+    path = Path(db_path)
+    if not path.exists():
+        return []
+    conn = sqlite3.connect(str(path))
+    try:
+        tables = {
+            name for (name,) in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        if "steps" not in tables:
+            return []
+        rows = conn.execute(
+            "SELECT json_extract(state, '$.revision'),"
+            "       json_extract(state, '$.failure_layer')"
+            "  FROM steps"
+            " WHERE run_id = ?"
+            "   AND node IN ('verify', 'review')"
+            "   AND json_extract(state, '$.current.id') = ?"
+            " ORDER BY rowid",
+            (run_id, stage_id),
+        ).fetchall()
+    finally:
+        conn.close()
+    # An empty layer on a gate row is the stage passing, which is the entry a
+    # reader most needs; dropping it for being falsy would erase the difference
+    # between incomplete work and finished work something else rejected.
+    return [
+        {"revision": revision or 0, "layer": layer or "passed"}
+        for revision, layer in rows
+    ]
+
+
 def last_step(db_path: Path | str, run_id: str) -> int:
     """How far this run's checkpoint sequence has already got.
 

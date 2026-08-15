@@ -160,6 +160,28 @@ def _render_sent_prompt(messages: list[dict]) -> str:
     return "\n".join(lines) + "".join(parts) + "\n"
 
 
+def _gate_history(state: RunState, rt: Runtime) -> list[dict]:
+    """This stage's gate verdicts, read back out of the checkpoint.
+
+    Read rather than carried, so there is no field for a reset helper to
+    forget. Returns nothing before a stage exists, and nothing if the read
+    fails: the planner call is worth making without this, and a checkpoint
+    that cannot be opened is not a reason to stop a run that is otherwise
+    fine.
+    """
+    # Imported here because `driver` imports this module; `pin_modules` loads
+    # the package up front so a live run never resolves this from disk.
+    from code_gantry.driver import gate_history
+
+    stage = state.get("current")
+    if not stage or not stage.get("id"):
+        return []
+    try:
+        return gate_history(rt.paths.state_db, rt.paths.run_id, stage["id"])
+    except Exception:  # pragma: no cover - a read that fails costs one block
+        return []
+
+
 def _planner_context(state: RunState, rt: Runtime) -> str:
     """Conventions plus operations — the planner is the only one that gets both.
 
@@ -273,6 +295,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
         current_stage=stage,
         failure=state.get("last_failure"),
         opening_failure=state.get("opening_failure"),
+        gate_history=_gate_history(state, rt),
         revision=state.get("revision", 0),
         interventions_used=state.get("planner_interventions", 0),
         interventions_max=limits.max_planner_interventions,

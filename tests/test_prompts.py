@@ -2613,3 +2613,71 @@ class TestARedrawIsAskedWhatItLearned:
             build_planner_messages(cfg=_cfg(), plan=a_plan(), completed=[])
         ).lower()
         assert "the previous draft" not in text
+
+
+class TestGateHistoryBlock:
+    def test_it_groups_by_revision_and_names_the_two_verdicts_that_are_not_layers(self):
+        """`passed` and `review` are not layer failures and must not read as any.
+
+        A bare "residue, passed, review" invites reading the middle as a layer
+        called passed. The two entries that carry the whole signal — the stage
+        clearing every gate, and the reviewer turning it down afterwards — are
+        the ones worth spelling out.
+        """
+        from code_gantry.prompts import format_gate_history
+
+        text = format_gate_history(
+            [
+                {"revision": 3, "layer": "residue"},
+                {"revision": 3, "layer": "passed"},
+                {"revision": 3, "layer": "review"},
+                {"revision": 3, "layer": "tests"},
+                {"revision": 4, "layer": "residue"},
+            ]
+        )
+        assert "revision 3: residue, all gates passed, review rejected, tests" in text
+        assert "revision 4: residue" in text
+
+    def test_nothing_renders_for_a_stage_with_no_history(self):
+        """A first attempt has none, and an empty heading is noise in a prompt."""
+        from code_gantry.prompts import format_gate_history
+
+        assert format_gate_history([]) == ""
+
+    def test_it_reaches_the_planner(self):
+        """The journey, not the endpoints.
+
+        Four defects here have been values computed correctly and lost in
+        transit, so the formatter passing its own unit test proves nothing
+        about whether a planner ever sees this.
+        """
+        from code_gantry.config import Stage
+        from code_gantry.prompts import build_planner_messages
+
+        text = all_text(
+            build_planner_messages(
+                cfg=_cfg(),
+                plan=a_plan(),
+                completed=[],
+                current_stage=Stage(id="s", instruction="do it", edit_files=["a.py"]),
+                gate_history=[
+                    {"revision": 0, "layer": "passed"},
+                    {"revision": 0, "layer": "review"},
+                ],
+            )
+        )
+        assert "all gates passed, review rejected" in text
+
+    def test_it_renders_only_where_there_is_a_stage_to_have_a_history(self):
+        """A history with no stage in flight is a heading about nothing."""
+        from code_gantry.prompts import build_planner_messages
+
+        text = all_text(
+            build_planner_messages(
+                cfg=_cfg(),
+                plan=a_plan(),
+                completed=[],
+                gate_history=[{"revision": 0, "layer": "residue"}],
+            )
+        )
+        assert "gate verdict" not in text

@@ -414,3 +414,107 @@ class TestTheCheckpointSequenceSurvivesAResume:
         )
         assert seen == [1], "the guard fired on a run that had taken one step"
         assert out["next_hop"] == "end"
+
+
+class TestGateHistory:
+    """What the checkpoint has always recorded and nothing has ever read.
+
+    A planner asked to revise a stage was given two facts: the failure that
+    opened the sequence and the one that ended it. Measured on the run that
+    produced this: those were `residue` and `progress`, and between them the
+    stage had passed every gate once and been rejected by the reviewer — which
+    is the pair that says the stage's own criterion is the problem rather than
+    the executor's work. Both were on disk the whole time.
+    """
+
+    def _write(self, write, step, node, revision, layer, stage="bump"):
+        write(
+            "r",
+            step,
+            node,
+            {
+                "current": {"id": stage},
+                "revision": revision,
+                "failure_layer": layer,
+            },
+        )
+
+    def test_one_verdict_per_gate_and_nothing_from_the_nodes_between(self, tmp_path):
+        """`execute` carries the previous layer forward, so it must not count.
+
+        State is merged rather than replaced, so a failure recorded by `verify`
+        is still sitting in `failure_layer` when `execute` checkpoints after
+        it. Counting every row would report each failure twice and invent an
+        oscillation out of a single one.
+        """
+        from code_gantry.driver import gate_history, open_checkpointer
+
+        db = tmp_path / "state.db"
+        write, conn = open_checkpointer(db)
+
+        self._write(write, 1, "verify", 3, "residue")
+        self._write(write, 2, "execute", 3, "residue")
+        self._write(write, 3, "verify", 3, "")
+        self._write(write, 4, "review", 3, "review")
+        self._write(write, 5, "execute", 3, "review")
+        self._write(write, 6, "verify", 3, "tests")
+        self._write(write, 7, "plan", 3, "planner")
+        self._write(write, 8, "verify", 4, "residue")
+        conn.close()
+
+        assert gate_history(db, "r", "bump") == [
+            {"revision": 3, "layer": "residue"},
+            {"revision": 3, "layer": "passed"},
+            {"revision": 3, "layer": "review"},
+            {"revision": 3, "layer": "tests"},
+            {"revision": 4, "layer": "residue"},
+        ]
+
+    def test_a_gate_that_passed_is_recorded_rather_than_skipped(self, tmp_path):
+        """The one entry the planner most needs is an absence of a failure.
+
+        A verify row with no `failure_layer` is the stage passing every gate.
+        Dropping it because it is falsy would remove exactly the fact that
+        distinguishes "the work is incomplete" from "the work was finished and
+        something downstream rejected it".
+        """
+        from code_gantry.driver import gate_history, open_checkpointer
+
+        db = tmp_path / "state.db"
+        write, conn = open_checkpointer(db)
+        self._write(write, 1, "verify", 0, "")
+        conn.close()
+
+        assert gate_history(db, "r", "bump") == [{"revision": 0, "layer": "passed"}]
+
+    def test_it_is_scoped_to_the_stage_asked_about(self, tmp_path):
+        from code_gantry.driver import gate_history, open_checkpointer
+
+        db = tmp_path / "state.db"
+        write, conn = open_checkpointer(db)
+        self._write(write, 1, "verify", 0, "scope", stage="earlier")
+        self._write(write, 2, "verify", 0, "residue", stage="bump")
+        conn.close()
+
+        assert gate_history(db, "r", "bump") == [{"revision": 0, "layer": "residue"}]
+
+    def test_an_unknown_run_or_stage_is_empty_rather_than_an_error(self, tmp_path):
+        from code_gantry.driver import gate_history, open_checkpointer
+
+        db = tmp_path / "state.db"
+        _write, conn = open_checkpointer(db)
+        conn.close()
+
+        assert gate_history(db, "r", "bump") == []
+        assert gate_history(tmp_path / "absent.db", "r", "bump") == []
+
+    def test_a_step_with_no_stage_is_ignored(self, tmp_path):
+        """`plan` checkpoints before a stage exists, and `current` is null."""
+        from code_gantry.driver import gate_history, open_checkpointer
+
+        db = tmp_path / "state.db"
+        write, conn = open_checkpointer(db)
+        write("r", 1, "verify", {"current": None, "revision": 0, "failure_layer": "x"})
+        conn.close()
+
+        assert gate_history(db, "r", "bump") == []
