@@ -21,7 +21,7 @@ import pytest
 from code_gantry import nodes
 from code_gantry.executortools import REPLAN_TOOL, dispatch, tool_schemas
 
-from test_nodes import StubExecutor, make, with_stage
+from test_nodes import StubExecutor, StubPlanner, make, planned_stage, with_stage
 
 
 @dataclass
@@ -32,7 +32,21 @@ class ReplanningExecutor(StubExecutor):
     reason: str = "config/routes.rb is outside my scope"
 
     def run_agent_stage(self, *a, **k):
+        had = list(self.edits)
         out = super().run_agent_stage(*a, **k)
+        # The real loop commits its own work before the attempt ends, and
+        # `committed_work` is measured from the sha either side. A stub that
+        # wrote without committing would report every exploratory replan as
+        # having found nothing, which is the answer the test is checking for.
+        if had and self.repo is not None:
+            import subprocess
+
+            for args in (["add", "-A"], ["commit", "-qm", "executor cycle"]):
+                subprocess.run(
+                    ["git", "-C", str(self.repo), *args],
+                    check=True,
+                    capture_output=True,
+                )
         out.replan_kind = self.kind
         out.replan_reason = self.reason
         return out
@@ -136,6 +150,18 @@ class TestItChangesWhereTheGraphGoes:
         assert expected in out["last_failure"]["detail"]
 
 
+def _revises():
+    """A planner that revises the stage in place, which is the budget's path."""
+    from code_gantry.planner import PlannerOutcome
+
+    return StubPlanner([
+        PlannerOutcome(
+            "revise", "r", "e",
+            stage_fields=planned_stage(), revision_mode="extend",
+        )
+    ])
+
+
 class TestItLandsNothingAndSkipsNothing:
     def test_it_is_a_planning_failure_so_a_resume_re_enters_at_the_planner(self):
         """Not `verify`: the gates were never waiting on an answer.
@@ -152,6 +178,49 @@ class TestItLandsNothingAndSkipsNothing:
         assert "replan" in PLANNING_FAILURES
         assert "replan" not in REPO_STATE_FAILURES
         assert resume_entry_point({"resuming": True, "failure_layer": "replan"}) == "plan"
+
+    def test_exploring_does_not_spend_the_without_landing_budget(
+        self, repo, tmp_path
+    ):
+        """Capping exploration at three contradicts asking for it.
+
+        The budget detects a run that has stopped making progress. An attempt
+        that made a change to find out what the change does is the opposite,
+        and `max_planner_interventions` is the absolute backstop underneath —
+        global across the run, so nothing here is unbounded.
+        """
+        ex = ReplanningExecutor(
+            repo=repo, kind="incomplete", edits=[("app.py", "changed\n")]
+        )
+        cfg, rt, state = make(repo, tmp_path, executor=ex, planner=_revises())
+        state["interventions_since_landing"] = 2
+        with_stage(state, rt)
+
+        failure = nodes.execute(state, rt)
+        assert failure["last_failure"]["committed_work"] is True
+
+        state.update(failure)
+        assert nodes.plan(state, rt)["interventions_since_landing"] == 2
+
+    def test_claiming_exploration_without_committing_still_spends_it(
+        self, repo, tmp_path
+    ):
+        """Otherwise the label is the budget's off switch.
+
+        An attempt that says `incomplete` and moved nothing explored nothing —
+        it is a stuck attempt wearing the other word. The sha either side of it
+        decides, which is a fact rather than a claim.
+        """
+        ex = ReplanningExecutor(repo=repo, kind="incomplete", edits=[])
+        cfg, rt, state = make(repo, tmp_path, executor=ex, planner=_revises())
+        state["interventions_since_landing"] = 1
+        with_stage(state, rt)
+
+        failure = nodes.execute(state, rt)
+        assert failure["last_failure"]["committed_work"] is False
+
+        state.update(failure)
+        assert nodes.plan(state, rt)["interventions_since_landing"] == 2
 
     def test_it_does_not_clear_the_without_landing_budget(self, repo, tmp_path):
         """The only thing bounding replan then redraw then replan.

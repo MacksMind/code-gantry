@@ -220,6 +220,19 @@ def plan(state: RunState, rt: Runtime) -> dict:
     limits = rt.cfg.limits
 
     stuck = state.get("interventions_since_landing", 0)
+    # An exploratory replan is not a run that has stopped making progress —
+    # it is one that made a change precisely to find out what the change does,
+    # and the budget below exists to detect the opposite. Counting it would
+    # cap exploration at three, which contradicts asking for it.
+    #
+    # Read off the fact rather than the declared kind: an attempt that says
+    # "incomplete" and committed nothing explored nothing, and is a stuck
+    # attempt wearing the other label. The sha either side of it decides.
+    _failed = state.get("last_failure") or {}
+    exploratory = bool(
+        _failed.get("layer") == "replan" and _failed.get("committed_work")
+    )
+    charge = 0 if exploratory else 1
     # Not conditioned on a stage being in flight any more. It was, and that made
     # it unreachable for the one way the planner can fail without leaving a
     # stage behind: a spec rejected by validation, which now redraws rather than
@@ -508,7 +521,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
         return {
             **base,
             "planner_interventions": state.get("planner_interventions", 0) + 1,
-            "interventions_since_landing": stuck + 1,
+            "interventions_since_landing": stuck + charge,
             "last_failure": _failure_detail(
                 "validation",
                 "the stage spec it produced did not pass validation",
@@ -543,7 +556,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
             },
             "revision": state.get("revision", 0) + 1,
             "planner_interventions": interventions,
-            "interventions_since_landing": stuck + 1,
+            "interventions_since_landing": stuck + charge,
             "stage_queue": requeued,
             "batch_notes": dropped_by_revision,
         }
@@ -874,6 +887,10 @@ def execute(state: RunState, rt: Runtime) -> dict:
         f"[execute] {stage.id}: attempt {attempt} — "
         f"{history_dir / TRANSCRIPT_FILENAME}"
     )
+    # Either side of the attempt, because "did this one commit anything" is the
+    # only honest reading of whether it made progress — `stage_start_sha` is
+    # the stage's, so an earlier attempt's work would answer for this one.
+    before_sha = rt.git.head_sha()
     result = rt.executor.run_agent_stage(
         stage,
         prompt,
@@ -1053,6 +1070,7 @@ def execute(state: RunState, rt: Runtime) -> dict:
                 f"the executor asked for a replan ({result.replan_kind})",
                 f"{kinds.get(result.replan_kind, '')}\n\n"
                 f"{_clip(result.replan_reason)}",
+                committed_work=rt.git.head_sha() != before_sha,
             ),
         }
 
@@ -2357,6 +2375,7 @@ def _failure_detail(
     detail: str,
     out_of_scope_paths: list[str] | None = None,
     failing_paths: list[str] | None = None,
+    committed_work: bool = False,
 ) -> dict:
     return {
         "layer": layer,
@@ -2364,6 +2383,7 @@ def _failure_detail(
         "detail": detail,
         "out_of_scope_paths": out_of_scope_paths or [],
         "failing_paths": failing_paths or [],
+        "committed_work": committed_work,
     }
 
 
@@ -2414,11 +2434,12 @@ def _planner_failure(
     detail: str,
     out_of_scope_paths: list[str] | None = None,
     failing_paths: list[str] | None = None,
+    committed_work: bool = False,
 ) -> dict:
     """Hand the failure to the planner with what it needs to act on."""
     detail, cleared = _consume_executor_note(state, detail)
     latest = _failure_detail(
-        layer, summary, detail, out_of_scope_paths, failing_paths
+        layer, summary, detail, out_of_scope_paths, failing_paths, committed_work
     )
     return {
         "failure_layer": layer,

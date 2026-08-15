@@ -115,6 +115,12 @@ class FailureDetail(TypedDict, total=False):
     detail: str
     out_of_scope_paths: list[str]
     failing_paths: list[str]
+    # Did the attempt that failed move the branch? A fact, measured from the
+    # sha either side of it, and separate from what anything decides with it —
+    # `plan` uses it to tell an exploratory replan from a stuck one. Here
+    # rather than in `RunState` because a failure detail is replaced whole on
+    # every failure, so it cannot go stale and no reset helper has to learn it.
+    committed_work: bool
 
 
 class RunState(TypedDict, total=False):
