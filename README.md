@@ -28,10 +28,10 @@ provider's own SDK, so there is no agent binary to install.
 
 | Term | What it is | Maps to |
 |---|---|---|
-| **project** | A body of work defined by a plan document | `projects/<slug>/` and a long-lived project branch |
+| **project** | A body of work defined by a plan document | A config in the repository it describes, and a long-lived project branch |
 | **stage** | One unit of work — the shippable unit | A child branch, squash-merged to the project branch |
 | **attempt** | One executor invocation within a stage | A counter |
-| **run** | One resumable execution session | `projects/<slug>/runs/<id>/`; no branch |
+| **run** | One resumable execution session | `<work_dir>/runs/<id>/`; no branch |
 
 There is **no static stage list**. The planner derives each stage from the plan
 document as the run proceeds.
@@ -95,21 +95,132 @@ reworks, or planner interventions — so no loop in the diagram can run forever.
 ## Lifecycle
 
 ```bash
-code-gantry init docs/my_plan.md      # draft a config from a plan document
-code-gantry validate <slug>           # prove it works on this host
-code-gantry run <slug>                # go
-code-gantry resume <run_id>           # continue after an interruption or escalation
-code-gantry status <run_id>           # where it stopped and why
+code-gantry init docs/my_plan.md       # draft a config from a plan document
+code-gantry validate [config]          # prove it works on this host
+code-gantry run [config]               # go
+code-gantry resume [config] [run_id]   # continue after an interruption or escalation
+code-gantry status [config] [run_id]   # where it stopped and why
 ```
 
 `init` may prompt — it's one-time human setup. `run` and `resume` execute
 unattended and never block on input.
 
-`validate` proves the config works *on this host* before you're asked to approve
-it, so approval is a review of policy rather than of whether `bin/test` exists.
-`approve` records a hash of the exact bytes you read; editing the config
-invalidates it. There is no `approved: true` field, because such a field could be
-set by anything.
+There is no approve step. A config is identified by its **git blob sha**,
+recorded when a run starts and checked again on every resume, so editing it
+ends the run it was read for rather than needing a command run against it.
+There is no `approved: true` field, because such a field could be set by
+anything, and nothing has to remember to re-approve.
+
+## Commands
+
+Seven commands. Every one but `init` takes the config path as its first
+argument, and every one of those makes it optional: set `CODE_GANTRY_CONFIG`
+and the path is typed once per shell instead of once per command. `pause`,
+`resume` and `status` take an optional run id after it, defaulting to the
+latest run for that project.
+
+### `init <plan-doc> [config]`
+
+Drafts a config by inspecting the repository — the manifest and lockfile for
+framework versions, a language-version file for the runtime, `bin/` and CI
+workflows for the canonical test invocation, the compose file for services.
+The config path defaults beside the plan document, because the plan and the
+machinery that acts on it are one project.
+
+Executable fields come from that inspection and never from a model. The draft
+is headed *read every line before approving* and is meant to be edited: it
+guesses, and a guess in a file full of shell commands about to run unattended
+is the operator's to check.
+
+### `validate [config]`
+
+Proves the config works **on this host**, before a run: it runs
+`setup_command`, the suite and the `checks`, and calls the model endpoints
+with the credentials the config names. So reading the config is a review of
+policy rather than of whether `bin/test` exists.
+
+- `--skip-tests` — do the rest without running the suites. Useful when you are
+  iterating on endpoints or paths and already know the suite's state, and
+  wrong as a habit: the suites are most of what makes this command a proof.
+
+### `run [config]`
+
+Starts a run. Preflight repeats everything `validate` does and then some, so a
+broken environment stops at the door rather than on stage thirty.
+
+- `--run-id TEXT` — override the generated id. For scripting and for replaying
+  a scenario under a name you choose; ordinarily let it generate one.
+- `--skip-preflight-tests` — skip the suites during preflight. Faster to start,
+  and it gives up the one check that tells a red repository from a red stage.
+  A run that starts against an already-failing suite will blame the first
+  stage for it.
+
+### `pause [config] [run_id]`
+
+Asks a running run to stop at the next boundary. **Not a kill.** The flag is
+read before each planner call and again before `precheck`, so the stage in
+flight lands or fails normally and the run stops with a clean tree.
+
+Interrupting the process instead can leave a half-applied edit and a stage
+branch nobody owns — and, if the interrupt lands mid-suite, test processes
+holding database connections that the next run's setup cannot drop.
+
+- `--note TEXT` — why, recorded for whoever comes back to it, which is usually
+  you several hours later.
+
+There is no `unpause`. `resume` clears the flag on its way in.
+
+### `resume [config] [run_id]`
+
+Continues after an interruption, or after a human has fixed what an escalation
+asked for. It does **not** restart the stage: it re-enters the graph at the
+node that matches how the run stopped — `verify` for a repository-state
+failure, so your fix is checked rather than discarded; `plan` for a planning
+failure; `precheck` for a stage that was derived but never started. Anything
+else would re-run the stage from the top and throw the fix away.
+
+- `--reset-progress-budget` — clear the without-landing intervention counter.
+
+  `max_interventions_without_landing` is otherwise terminal. It is checked
+  *before* the planner is called and only clears when a stage lands, so a run
+  that hits it re-escalates on every resume without running anything. That is
+  deliberate: a budget an operator can clear by re-running is not a budget,
+  and the failure it guards against is precisely resume-in-a-loop.
+
+  So the reset is asserted by a person and inferred from nothing. Editing the
+  config does not clear it; neither does fixing the code. Use it when you have
+  changed something that makes the earlier failures no longer apply — and know
+  that you are the one claiming that, because the run cannot tell.
+
+### `status [config] [run_id]`
+
+Where a run stopped and why, read from the checkpoint without building
+anything or running a model. Safe against a live run.
+
+### `reconcile [config]`
+
+Checks the plan against what the branch actually did and records the drift.
+Plan documents are written before the work and go stale during it — after
+thirteen landed stages on one project the checklist still claimed twenty-four
+sites across nine files when seven remained in one.
+
+A run's own plan notes catch drift as it happens; this is for drift that
+already happened, by hand or by someone else or before the mechanism existed.
+Deliberately separate from `run`, because reconciling is a judgement about what
+the work has become and doing it mid-run would let a run rewrite its own
+premises. It edits no plan document: it appends observations for a later fold.
+
+- `--dry-run` — print the observations without writing them.
+
+### Environment
+
+- `CODE_GANTRY_CONFIG` — the config path, so it is typed once per shell.
+- `CODE_GANTRY_PRICE_MAP` — path to a rate table, used instead of the default
+  `model-prices.json` that the report and `stage-costs.md` price tokens from.
+
+Credentials and endpoints are **not** named here. Each role's config declares
+which variables hold them — `api_key_env`, `api_base_env` — so the names are
+the project's to choose and no secret is ever written into a tracked file.
 
 ## The capability partition
 
@@ -143,13 +254,13 @@ role *looked at*, not only what it decided.
 **The planner may never author a command.** It is enforced twice: its
 structured-output schema has no field for one, and its response is filtered
 against an allowlist regardless. CodeGantry never runs a shell command that
-originated from model output — every command it executes is declared by you in an
-approved config.
+originated from model output — every command it executes is declared by you in a
+config you wrote.
 
 Where the planner needs to influence a command, it supplies *arguments*:
 
 ```yaml
-scoped_test_command: "docker compose run --rm test bundle exec rspec {paths}"
+scoped_test_command: "docker compose run --rm test <your runner> {paths}"
 ```
 
 `{paths}` is filled from the stage diff, optionally widened by planner-declared
@@ -168,26 +279,26 @@ every declaration written before the field existed meant:
 
 ```yaml
 project_tools:
-  - name: bundle_install
+  - name: install_dependencies
     description: Install what the manifest names, in the app container.
-    command: ["docker", "compose", "exec", "-T", "app", "bundle", "install"]
+    command: ["docker", "compose", "exec", "-T", "app", "<your installer>"]
     # roles: ["executor"] — the default
 
-  - name: gem_search
+  - name: dependency_search
     description: >
       Search one dependency's installed source. Its own directory is the root.
     command: ["docker", "compose", "exec", "-T", "app", "sh", "-c", "…",
-              "_", "{gem}", "{pattern}"]
+              "_", "{dependency}", "{pattern}"]
     roles: ["planner", "reviewer"]
     arguments:
-      - name: gem
+      - name: dependency
         description: The dependency, named as the manifest names it.
       - name: pattern
         description: A regular expression.
 ```
 
 Scope by what a tool *does*, not by who asked for it. The menu's original
-entries write — `bundle install` rewrites a lockfile, a framework's own
+entries write — a dependency installer rewrites a lockfile, a framework's own
 generator overwrites templated config — and the executor is the only role that
 runs inside the quarantine a stage branch provides, where the scope gate
 measures from the tree what was touched. A planner that dirtied the work tree
@@ -264,9 +375,16 @@ Ordered cheapest-first, short-circuiting. Routing is three-way:
 | 3 | Progress — this diff is not byte-identical to the last one | **Planner** — feedback changed nothing, so another attempt buys nothing |
 | 4 | `forbidden_patterns` against **added lines only** | Executor retry |
 | 5 | `must_not_remain` against **file contents** | Executor retry |
-| 6 | `test_command` (re-run once before consuming a retry) | Executor retry |
-| 7 | `checks` — each must exit zero | Executor retry |
+| 6 | `checks` — each must exit zero | Executor retry |
+| 7 | `test_command` (re-run once before consuming a retry) | Executor retry |
 | 8 | `require_new_tests` — a test file was touched, and what it touched is not empty | Executor retry |
+
+**Checks run before tests, because a check may write.** Autocorrecting linters
+exit zero *after* rewriting files, and `checks_commit_changes` commits what
+they rewrote — so running the suite first makes its green describe bytes that
+are not the ones landing. The executor's loop always had this order; the gate
+had the older one, from when nothing between the suite and the merge could
+change a file.
 
 Layers 4 and 5 read almost identically in prose and are opposites in a diff.
 `forbidden_patterns` asks what the stage **introduced**; `must_not_remain` asks
@@ -385,9 +503,10 @@ Three documents, three audiences, and the split is by what a reader can act on.
 Conventions — how code here has to look — bind anything that writes or judges
 code. Operations — build, test, deploy — belong to the planner alone: it is the
 role that decides what is *possible*, and the one that read five plan items as
-blocked because nobody had told it the container reinstalls the bundle on a
-Gemfile edit. The executor runs no commands, so a page of them invites it to
-narrate one it never ran.
+blocked because nobody had told it the container reinstalls dependencies when
+the manifest changes. The executor runs only the tools you declare to it, so a
+page of commands it has no way to invoke invites it to narrate one it never
+ran.
 
 The executor receives its copy inside the cached prefix, ahead of the plan and
 inside the same breakpoint. Both are fixed for the life of a run, so that
@@ -409,15 +528,22 @@ live documents and show up as divergence in `status.md`.
 ## Output
 
 ```
-projects/<slug>/
-  config.yaml          approval.json       # hash of the bytes you read
-  plan-snapshot/       status.md           # append-only expected-vs-actual log
-  runs/<run_id>/
-    report.md          run.log   state.db  run.json
-    stages/<n>-<id>-rev-<r>-attempt-<m>/
-      prompt.md  executor.log  verify.log  review.json  planner.json
-      sent-prompt.md  executor-conversation.jsonl  executor-loop.json
+<target-repo>/docs/<project>/
+  code_gantry.yaml                         # the config, tracked and reviewed
+  .code_gantry/                            # everything written; gitignored
+    plan-snapshot/     status.md           # append-only expected-vs-actual log
+    flakes.jsonl       stage-costs.md      findings.md
+    runs/<run_id>/
+      report.md        run.log   state.db  run.json   tool.log
+      stages/<n>-<id>-rev-<r>-attempt-<m>/
+        prompt.md  executor.log  verify.log  review.json  planner.json
+        sent-prompt.md  executor-conversation.jsonl  executor-loop.json
 ```
+
+The config lives in the repository it describes, beside the plan, so the two
+land in one commit and are reviewed together. `target_repo` and `work_dir` are
+derived from where the config was read rather than declared, because a tracked
+file must not carry one machine's paths.
 
 The executor's two artifacts are written **while the attempt is running**, not
 when it returns, which is what makes a stage that is taking too long something
@@ -457,10 +583,11 @@ saying which effort produced it.
 
 ## Safety
 
-- Refuses to start unless the config hash matches an approved one.
+- Refuses to continue a run whose config has changed, by the file's git blob
+  sha.
 - A **denylist** refuses `git push`, `git checkout`/`switch`, `git merge`,
   `git reset`, deploy tools, `sudo`, and recursive `rm` in any configured
-  command — *regardless of approval*. A human skims a sixty-line YAML once,
+  command — *regardless of what the config says*. A human skims a sixty-line YAML once,
   motivated to start a run; this is the backstop for that moment.
 - Commits only to the project branch and its children. **No push method
   exists.**
@@ -472,11 +599,13 @@ saying which effort produced it.
 ## Tests
 
 ```bash
-uv run pytest
+uv run pytest -n auto
 ```
 
 The suite drives the real graph, checkpointer, verify layers, git operations and
 branch topology against fixture repos. Only the three model calls are stubbed.
+`-n auto` is the difference between about 25 seconds and several minutes; it is
+not in `addopts` because a single-test run would pay worker startup for nothing.
 
 ```bash
 uv run python scripts/smoke.py          # ~15s, no network, no API keys
@@ -485,9 +614,9 @@ uv run python scripts/smoke.py --keep   # leave the sandbox for inspection
 
 The smoke test covers the one thing `pytest` cannot: that the CLI, run from a
 shell against a real git repository, completes a whole project unattended.
-`init → run (refused) → validate → approve → run`, then it asserts the promises
-— child branches deleted, `main` untouched, one squashed commit per stage,
-`gc.auto` restored, artifacts written.
+`init → validate → run`, then it asserts the promises — child branches deleted,
+`main` untouched, one squashed commit per stage, `gc.auto` restored, artifacts
+written.
 
 One HTTP server stands in for all three models, answering `/v1/messages` in
 Anthropic's wire format for the planner, `/v1/chat/completions` in OpenAI's for
