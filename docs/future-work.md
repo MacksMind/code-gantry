@@ -8,6 +8,55 @@ An item earns a place here by being a decision someone has to make, not a
 task someone has to do. Where the reasoning is already written down beside the
 code, this points at it rather than restating it.
 
+## A resume routes on where the run stopped, not on what went wrong
+
+`resume_entry_point` reads `failure_layer` and sends a resumed run to `plan` or
+`verify` from it. That field is written unconditionally — `_escalate`,
+`_planner_failure` and `_retry_or_plan` all set it — so it holds the *last*
+failure of a sequence. Next to it sits `opening_failure`, which `_opening` claims
+write-once per stage or revision, under a docstring saying exactly why: "whichever
+failure got here first is the diagnosis; everything after it is what that failure
+caused, and overwriting is precisely the defect this exists to fix."
+
+Two fields, one of them deliberately protected against being overwritten, and the
+routing decision consults the other one.
+
+**Measured, twice.** A run's full suite went red because the Chromium containers
+had exhausted their sessions, which fails every example type through the global
+reset hook. `failure_layer` became `full_suite`, a repository-state failure that
+re-enters at `verify`. The planner then diagnosed it correctly and blocked,
+because the remedy needs a shell it does not have — and blocking wrote `planner`
+over the top, which is a *planning* failure and re-enters at `plan`. So after the
+containers were restarted, the resume would have gone back to the planner to
+re-derive against a world that was already fixed, rather than to the gates to
+re-judge it. It took a surgical edit of the checkpoint to send it to the right
+node, and the same shape cost time again later the same day.
+
+**Why this is a decision and not a patch.** Routing on `opening_failure` is not
+obviously right either. `failure_layer` answers "where did this run stop", which
+is what the escalation text describes and therefore what a human reads; and after
+a planner block the stage spec may genuinely be stale, so re-entering at `verify`
+would judge an unrevised stage against a diff the planner has already rejected.
+The honest description of the bug is narrower than "it reads the wrong field": it
+is that **a repository-state failure escalated *through* the planner loses the
+fact that the repository was the problem**, and that is the case a human is most
+likely to fix by hand before resuming.
+
+Candidate answers, in increasing order of how much they change:
+
+- Route on `opening_failure` when it is a repository-state failure and the last
+  layer is `planner`, on the grounds that the planner blocking on a repo problem
+  does not make it a plan problem.
+- Ask the escalation what the human is expected to fix, and record *that* rather
+  than deriving it from either field.
+- Leave the routing alone and make `code-gantry resume` take an explicit entry
+  point, so the operator asserts it the way `--reset-progress-budget` is asserted.
+
+The third is the cheapest and the most honest about who knows the answer; the
+first is the one that would have saved both incidents unattended. What decides it
+is whether an unattended run should ever re-enter at `verify` after the planner
+has spoken, and that is a question about trust rather than about code.
+
 ## `discover` should be pluggable
 
 `init` drafts a config by inspecting a repository. The knowledge of how each

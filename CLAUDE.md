@@ -812,6 +812,22 @@ a component runs work on your behalf, its output is not in yours, and the
 failure you can see is a description of the corpse. Ask where the thing that
 knows would have written it.
 
+**And a model's account of why it stopped is evidence about what it tried, not
+about what is possible.** One level out from the rule above, because here the
+report is accurate and still not the answer. `request_replan` returned "every
+bundle_install fails while Bundler fetches the forked git source: its cache's
+`.git/FETCH_HEAD` is not writable" — true, reproduced by hand, and the directory
+really is root-owned. I reported the permission error as the blocker twice, and
+both times the actual blocker was elsewhere: the released gem the first stage
+wanted declares `rails (>= 5.1)` against a pinned 5.0.7.2, so it could never
+have resolved however the cache was owned; and the installer that builds the
+environment for real is the entrypoint's, running as root, which that
+permission cannot touch. The executor was describing the wall in front of *it*.
+Nothing it said was wrong and nothing it said established a cause. The tell is
+that a fix gets proposed before a measurement exists — this file already says
+that about mechanisms named from their shape, and an error message is the most
+persuasive shape there is, because it arrives sounding like a finding.
+
 **Liveness can be read without a race, if you can name why.** Waiting for a
 container is the obvious place to introduce one: "not running" means "not yet"
 as often as it means "dead". It is answerable here for two reasons that had to
@@ -1017,6 +1033,45 @@ blob the planner read against the blob at the stage's start answers the only
 question that matters and answers it from the tree. Whenever a check reads a
 declaration to predict an outcome, ask what it would cost to measure the
 outcome instead — usually less, and it is right about causes nobody enumerated.
+
+**"There is no shell" is a claim about the tool schema, and the pipeline runs
+shell scripts.** The executor is given no command tool, and that is the whole
+safety story — but `setup_command`, the four test commands and every `checks`
+entry are operator-declared argv, and on a real project they name scripts *in
+the repository being edited*. A stage that may edit one of those has arbitrary
+execution by a slower route, and the edit reads as ordinary in-scope work: no
+gate is looking for it, because from `verify`'s side a script is a file like any
+other. `no_direct_edit` is the only thing standing there. Measured on one
+project's config: five files were reachable that way — the bring-up script, the
+parallel runner, the plain runner, the linter wrapper, and the linter's own
+`Gemfile`, which is the sharp one because `bin/rubocop` is a single line
+resolving through it, so the loophole never needed the script at all.
+
+Two corollaries, both learned by nearly getting them wrong. **The ban belongs on
+the files, not on the directory** — the same `bin/` held two exclusion lists that
+stages had legitimately edited 94 times between them, and a blanket glob would
+have blocked real work to close a hole five files opened. And **adding a tool
+adds a script**: a declared command may not start with `sh`, because argv without
+a shell is what makes a model-supplied argument inert, so any tool whose body is
+more than one program becomes a file in the repository — which is then reachable
+and needs its own entry. Three of the eight entries on that project exist because
+of tools added the same afternoon as the ban.
+
+**A replan lands nothing and leaves everything.** `request_replan` skips the
+gates and routes to the planner, so no diff is judged and no stage lands — and
+the executor's edits stay committed on the stage branch and checked out in the
+tree, which is deliberate, because throwing away the work is what the tool
+exists to avoid. The consequence is not obvious from either half. On its first
+production firing the attempt had rewritten the `Gemfile` to something the
+container could not install; the branch was abandoned, nothing landed, and the
+*next* stage's `precheck` ran `setup_command` against that tree — `precheck`
+returns HEAD to the project branch only when it cuts a branch, which happens
+after setup — so the bring-up hashed the broken manifest, stopped the app
+container to install it, failed, and escalated as a broken environment against a
+stage that had nothing wrong with it. 29 stages had landed; the run ended there.
+Ask of any tool that hands work back what the attempt has already changed
+outside its own diff, because "nothing landed" is a statement about the project
+branch and says nothing about the tree the next stage will find.
 
 **A channel that keeps restating the same fact is a fact with no durable
 home.** `deferred` carried a plan step taken out of order between planner
