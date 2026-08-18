@@ -1743,6 +1743,88 @@ project's pattern is written by someone else, and correctness that depends on
 it not beginning with `\s*` is a defect waiting on a config nobody will think
 to check.
 
+**A check that loads part of a thing has certified part of it.** The declared
+`bundle_install` and `bundle_update` tools resolved and then proved the
+application boots, with `RAILS_ENV=test bundle exec rails runner "exit"`. That
+loads what `Bundler.require(*Rails.groups)` loads, which in test is `:default`
+and `:test` — so a resolve that moved a `:development`-only gem was certified
+by a check that never opened it. It reported exit 0 on a bundle the app
+container could not boot, and the run died at the next bring-up against a stage
+that had nothing to do with it.
+
+Nothing in the dependency graph could have caught it either: the gem declared
+`required_ruby_version >= 2.4.0` and its source used syntax from 2.6, so the
+metadata was wrong about the gem and **loading the file is the only instrument
+that separates them**. That is what a boot check is for and this one was not
+doing it. It evaluates `Bundler.require(*Bundler.definition.groups)` now —
+group list from bundler rather than hand-written, because the Gemfile already
+had a `group :staging, :production` a hand-written list would have skipped in
+silence. Measured in the container: the constant was `nil` before the call and
+present after, which is the blind spot and its closure in one reading.
+
+**A state predicate is not a completion signal.** The same family, one level
+down, and the more general half. A bring-up waited for its container by polling
+`bundle check` — the same question the container's own entrypoint asks — on the
+reasoning that this is waiting on the entrypoint's own predicate. The question
+is the same and the moment is not: the entrypoint asks it *once, before*
+installing, while the poll asks it *repeatedly, during*. Nothing makes it a
+completion signal — bundler wraps `Installer#run` in `ProcessLock` and `bundle
+check` takes no lock at all, so the check reads a tree the installer is still
+writing and its answer flips partway through.
+
+Measured: the wait returned in under a second while the container log was still
+printing `Fetching savon 2.12.1`. The boot check after it then failed
+correctly, and **the remedy stacked on top of it — a restart — killed the
+install it had misjudged**, leaving the volume more partially populated each
+attempt. A loop written to recover from a bad container was manufacturing one.
+What replaced it is the entrypoint's own handoff: under `bash -e` it runs the
+install and only then `exec`s the real command, so PID 1 is the entrypoint
+script until the install has returned *successfully*. A property of the process
+rather than of the tree the process is writing to, and it cannot be true early
+by construction. Ask of any readiness check whether the thing it reads is
+finished when the work is finished, or merely *becomes* true somewhere in the
+middle.
+
+**A rule is checked against new work; nothing re-reads what predates it.** This
+file already says a guard belongs where its question can first be answered,
+written about a startup question asked from inside `verify`. `run_preflight`
+then spent 5m30s running both suites before reaching the check whose first act
+is `env_var not in os.environ` — an answer available before the function did
+anything. The rule was right, was written down, and did not fire, because the
+code was older than the rule and nothing goes back over it. That is the
+complement of the entry above about a written failure mode being rebuilt in the
+next feature: one asks that new work be checked against the rules, this asks
+that the rules be checked against old code, and only the first ever happens by
+itself. Worth a deliberate pass when a rule is added, aimed at the code that
+already existed.
+
+**A fixture can make a whole file's tests laxer than production.** The shared
+repo fixture has no plan root, so `plan root resolves` was blocking in twelve
+preflight tests — and the suites ran anyway, because nothing yet stopped them.
+Those tests were driving the environment checks through a preflight that had
+already failed, which is a state no caller can reach: all three exit on a
+blocking check. Every one was green and had been for months.
+
+Only moving the gate revealed it, which is the uncomfortable part — the tests
+could not have told you, because they were passing. It is the "helper laxer
+than the node" defect arriving through a fixture instead of a helper, and the
+tell is available in advance: ask what the fixture *omits*, then ask whether
+production could ever run with that omission. The new test had the same fault
+on its first draft, passing on the plan-root failure without exercising the
+ordering it was written for, so it now asserts the blocking list by name.
+
+**A stop the operator asked for must not render as a failure.** `pause` is the
+most deliberate stop there is, and it exits **1** and logs under `[escalate]`,
+beside a message that says in its own prose that nothing is wrong. A watch
+keyed on the tag announced an escalation; the harness reported the run as
+failed. Both were reading the only two channels a monitor can read
+unattended, and both were wrong. This is the classifier problem at the level of
+a run's exit surface — a requested pause and a broken environment are different
+events that a machine cannot tell apart, and the distinguishing information
+exists only in prose meant for a human. An intentional stop wants its own exit
+code and its own tag.
+
+
 ## Where things live
 
 `nodes.py` holds the loop's decisions — which failures route to the executor,
