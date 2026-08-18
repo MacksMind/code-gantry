@@ -12,6 +12,7 @@ an `id`.
 
 import json
 import socket
+import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -251,6 +252,7 @@ class TestFailureOutputKeepsTheVerdict:
     """
 
     def test_the_head_of_the_output_is_kept(self, repo):
+        _commit_a_plan(repo)
         cfg = parse_config(
             {
                 "target_repo": str(repo),
@@ -295,6 +297,7 @@ class TestPreflightExcusesAFlakeTheRunWouldExcuse:
     """
 
     def _cfg(self, repo, scoped_ok: bool):
+        _commit_a_plan(repo)
         return parse_config(
             {
                 "target_repo": str(repo),
@@ -395,6 +398,123 @@ class TestPreflightExcusesAFlakeTheRunWouldExcuse:
         assert check.blocking
 
 
+def _commit_a_plan(repo):
+    """The shared `repo` fixture has no plan root, and preflight blocks on that.
+
+    Any test meaning to reach `_environment_checks` has to supply one. Before
+    the suites moved behind the blocking check they were reached regardless, so
+    a dozen tests here were exercising a preflight that had already failed — a
+    path no caller takes, since all three exit on a blocking check. That is the
+    shape `CLAUDE.md` records about test helpers standing in for nodes: the
+    stand-in was laxer than the thing.
+
+    Idempotent, and takes no fixture, so a `_cfg` builder can call it and a test
+    may call that builder more than once.
+    """
+    if (repo / "PLAN.md").exists():
+        return
+    (repo / "PLAN.md").write_text("# Plan\n")
+    subprocess.run(["git", "add", "PLAN.md"], cwd=repo, check=True,
+                   capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "plan"], cwd=repo, check=True,
+                   capture_output=True)
+
+
+class TestTheSuitesGoLast:
+    """A cheap check must not be answered after an expensive one.
+
+    Measured 2026-08-18: a run was launched without credentials in the shell,
+    and preflight ran `setup_command`, `test_command` and `full_test_command` —
+    5m30s of green RSpec — before reaching `_model_checks`, whose first act is
+    `env_var not in os.environ`. The answer was available before the function
+    did anything.
+
+    `CLAUDE.md` already carries the rule, written about a startup question asked
+    from inside `verify`. It did not catch this because a rule is checked
+    against new work and nothing re-reads the code that predates it. So this
+    asserts the behaviour rather than the order: whatever the sequence, a
+    blocking failure must not cost a suite.
+    """
+
+    def _cfg(self, repo, marker):
+        return parse_config(
+            {
+                "target_repo": str(repo),
+                "base_ref": "main",
+                "project_branch": "proj",
+                "plan_root": "PLAN.md",
+                "test_command": f"echo ran >> {marker}",
+                "full_test_command": f"echo ran >> {marker}",
+                "executor": {"model": "m"},
+                "planner": {"model": "claude-opus-5"},
+                "reviewer": {"model": "gpt-5.6-sol"},
+            }
+        )
+
+    def test_a_missing_credential_costs_no_suite(self, repo, monkeypatch):
+        # Both cleared deliberately. A test that asks whether a variable is set
+        # and does not clear it is asking about the developer's shell, which is
+        # how a preflight test once failed for everyone who had configured the
+        # tool.
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        _commit_a_plan(repo)
+        marker = repo / "runs.txt"
+
+        checks = run_preflight(
+            self._cfg(repo, marker),
+            check_models=True,
+            check_approval=False,
+            check_endpoint=False,
+        )
+
+        # The credential has to be the *only* blocker, or this passes on
+        # whatever else was already failing and says nothing about ordering.
+        blocking = [c for c in checks if c.blocking]
+        assert [c.name for c in blocking] == [
+            "ANTHROPIC_API_KEY is set",
+            "OPENAI_API_KEY is set",
+        ]
+        assert not marker.exists(), "no suite may run once something blocks"
+
+    def test_the_skip_is_reported_rather_than_silent(self, repo, monkeypatch):
+        # A check that renders as nothing reads the same as one that passed.
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        _commit_a_plan(repo)
+        marker = repo / "runs.txt"
+
+        checks = run_preflight(
+            self._cfg(repo, marker),
+            check_models=True,
+            check_approval=False,
+            check_endpoint=False,
+        )
+
+        skipped = [c for c in checks if c.name == "setup and the test suites"]
+        assert len(skipped) == 1
+        assert not skipped[0].ok, "not a pass"
+        assert not skipped[0].blocking, "and not a second failure to chase"
+        assert "not run" in skipped[0].detail
+
+    def test_a_clean_preflight_still_runs_them(self, repo, monkeypatch):
+        # The other half: the skip must be reachable only by blocking, or this
+        # would have quietly retired preflight's most valuable check.
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+        monkeypatch.setenv("OPENAI_API_KEY", "x")
+        _commit_a_plan(repo)
+        marker = repo / "runs.txt"
+
+        run_preflight(
+            self._cfg(repo, marker),
+            check_models=False,
+            check_approval=False,
+            check_endpoint=False,
+        )
+
+        assert marker.exists(), "a green preflight runs the suites"
+
+
 class TestSuitesAreNotRunTwice:
     """`validate` runs test_command and full_test_command.
 
@@ -418,6 +538,7 @@ class TestSuitesAreNotRunTwice:
                 "reviewer": {"model": "gpt-5.6-sol"},
             }
         )
+        _commit_a_plan(repo)
         run_preflight(
             cfg, check_models=False,
             check_approval=False, check_endpoint=False,
@@ -439,6 +560,7 @@ class TestSuitesAreNotRunTwice:
                 "reviewer": {"model": "gpt-5.6-sol"},
             }
         )
+        _commit_a_plan(repo)
         run_preflight(
             cfg, check_models=False,
             check_approval=False, check_endpoint=False,
@@ -468,6 +590,7 @@ class TestSuitesAreNotRunTwice:
                 "reviewer": {"model": "gpt-5.6-sol"},
             }
         )
+        _commit_a_plan(repo)
         checks = run_preflight(
             cfg, check_models=False,
             check_approval=False, check_endpoint=False,

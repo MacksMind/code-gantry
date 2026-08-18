@@ -100,11 +100,6 @@ def run_preflight(
     checks.extend(_endpoint_checks(cfg))
     if check_endpoint:
         checks.extend(check_executor_endpoint(cfg))
-    checks.extend(
-        _environment_checks(
-            cfg, runner, run_tests=run_tests, project_dir=project_dir
-        )
-    )
 
     if check_models:
         checks.extend(_model_checks(cfg))
@@ -116,6 +111,46 @@ def run_preflight(
     # run reads the plan as it stands and has nothing to have moved away from.
     if recorded_plan_sha:
         checks.append(_plan_unmoved(cfg, git, recorded_plan_sha))
+
+    # The suites go last, and not at all once something already blocks.
+    #
+    # Everything above is a git read, an environment lookup or a single HTTP
+    # call. `_environment_checks` runs `setup_command` and both test commands,
+    # which on a real project is minutes. It used to sit *ahead* of
+    # `_model_checks`, whose first act is `env_var not in os.environ` — so a run
+    # launched without credentials in the shell paid for a full green suite to
+    # be told a variable was unset. Measured 2026-08-18: 5m30s for an answer
+    # that was available before this function did anything.
+    #
+    # `CLAUDE.md` already states the rule, written about `branch_identity_
+    # problems` asking a startup question from inside `verify` — a guard belongs
+    # where its question can first be answered, not where its answer is
+    # convenient. It did not catch this one because a rule is checked against
+    # new work and nothing re-reads the code that predates it.
+    #
+    # Skipped rather than run-and-reported, because all three callers exit on a
+    # blocking check: the suites would be paid for and then thrown away. And
+    # said out loud rather than quietly omitted — a check that renders as
+    # nothing is indistinguishable from one that passed.
+    blocking = [c for c in checks if c.blocking]
+    if blocking:
+        checks.append(
+            Check(
+                "setup and the test suites",
+                False,
+                f"not run: {len(blocking)} blocking problem(s) above already stop "
+                "this command, so minutes of suite would only delay the same "
+                "exit. Fix those and run again.",
+                fatal=False,
+            )
+        )
+        return checks
+
+    checks.extend(
+        _environment_checks(
+            cfg, runner, run_tests=run_tests, project_dir=project_dir
+        )
+    )
 
     return checks
 
