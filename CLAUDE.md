@@ -497,6 +497,21 @@ finds nothing left to do. Measured cost of not doing this: two consecutive
 stages, one cop each with no autocorrection, three or four attempts apiece and
 one planner intervention, to communicate a one-line change.
 
+**And "spelled the same way" includes the identity it runs as, which is not in
+the spelling at all.** One project's container entrypoint ran `bundle check ||
+bundle install` as root on every start, while the executor's declared
+`bundle_install` and `bundle_update` ran the same operations as `hostuser`
+against the same root-owned `/bundle` volume. Two installers with different
+capabilities, and which one a stage got depended on whether the container had
+been restarted since — a difference that appears nowhere in the command text, so
+nothing reading the config could notice it. The asymmetry mattered most where
+there was no fallback: `bundle check || bundle install` can satisfy a lockfile
+and can never change one, so moving a locked version is reachable *only*
+through the tool, and that was the half running with the weaker identity.
+Whenever two things run what looks like the same command, compare the user, the
+cwd, the environment and the stdin as well as the argv — this file has already
+paid for stdin separately.
+
 **And when you find one, sweep for the rest rather than waiting to trip over
 them.** Two of these turned up in a day by accident, so the third was found by
 looking: a deliberate pass over every model-facing string, checking each claim
@@ -1148,6 +1163,21 @@ after derivation and before `precheck` is what makes stopping safe here: it
 holds the derived stage and never touches the tree. "I killed it" is a claim
 to verify with `ps`, not a state to assume, and the run directory rather than
 `last-run.out` is what tells you which run a line belongs to.
+
+**And killing a run does not kill what the run started somewhere else.**
+`setup_command`, the test commands and the `checks` all reach the work through
+`docker compose exec`, and killing that client kills the client. The process on
+the other side keeps running: a suite stopped mid-flight left fourteen
+`parallel_rspec` workers alive in the container, still holding connections, and
+the *next* run's `db:test:prepare` died on "There are 4 other sessions using the
+database" — an error naming postgres, several minutes and one restart away from
+the kill that caused it. `ps` on the host says the run is gone and is telling
+the truth about the wrong process. The general form is the rule about a
+component running work on your behalf, pointed at teardown instead of at
+diagnosis: wherever a command crosses into another process space, ending it here
+is not ending it there, and the cleanup has to be aimed at the far side. Aim it
+narrowly — a pattern broad enough to catch the workers is broad enough to catch
+the entrypoint that owns the container.
 
 **A tool can read the wrong stream, and the layer was right.** `search` passed
 ripgrep no path argument. Given none, ripgrep searches **stdin** whenever stdin
