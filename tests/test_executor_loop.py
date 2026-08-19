@@ -334,6 +334,68 @@ class TestTheRecordOfAnAttempt:
         assert rows[1]["name"] == "read_file"
         assert len(t) == 3
 
+    def test_a_call_carries_the_id_that_pairs_it_with_its_output(self, tmp_path):
+        """The transcript must be pairable by the field that exists for it.
+
+        `_plain` built each line from a hand-written list of `type`, `name` and
+        `arguments`, so `call_id` reached the record on the *output* items —
+        which are dicts and pass through whole — and never on the calls. The
+        two halves could then only be matched positionally.
+
+        That is not a theoretical loss. The executor emits batched parallel
+        calls (five `read_file`s, then five outputs), so on 2026-08-19 a
+        positional reading of one attempt paired the last call of each batch
+        with the first output of that batch and dropped the rest. It produced a
+        confident, wrong account of which `bundle` call corrupted a lockfile,
+        and the reconstruction had to be thrown away and redone.
+        """
+        from types import SimpleNamespace
+
+        from code_gantry.executor import Transcript
+
+        t = Transcript([], tmp_path)
+        t.extend(
+            [
+                SimpleNamespace(type="function_call", name="read_file",
+                                arguments='{"path":"a"}', call_id="call_A"),
+                SimpleNamespace(type="function_call", name="edit",
+                                arguments='{"path":"b"}', call_id="call_B"),
+            ]
+        )
+        t.extend(
+            [
+                {"type": "function_call_output", "call_id": "call_B", "output": []},
+                {"type": "function_call_output", "call_id": "call_A", "output": []},
+            ]
+        )
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "executor-conversation.jsonl").read_text().splitlines()
+        ]
+        calls = {r["call_id"]: r["name"] for r in rows if r["type"] == "function_call"}
+        assert calls == {"call_A": "read_file", "call_B": "edit"}
+        # Answered out of order on purpose: every output must find its call by
+        # id, which is the whole point and is what positional pairing cannot do.
+        for r in rows:
+            if r["type"] == "function_call_output":
+                assert r["call_id"] in calls
+
+    def test_a_reasoning_payload_is_still_not_written(self, tmp_path):
+        # The subset existed for a reason worth keeping: a reasoning item's
+        # encrypted payload is bytes nobody reads, and it is large.
+        from types import SimpleNamespace
+
+        from code_gantry.executor import Transcript
+
+        t = Transcript([], tmp_path)
+        t.append(
+            SimpleNamespace(type="reasoning", encrypted_content="x" * 5000, summary=[])
+        )
+        line = (tmp_path / "executor-conversation.jsonl").read_text()
+        assert json.loads(line)["type"] == "reasoning"
+        assert "xxxx" not in line
+
     def test_a_directory_that_cannot_be_written_does_not_fail_the_attempt(self, tmp_path):
         # Best effort, like every other artifact here: an attempt that worked
         # must not be failed by a record of it that could not be kept.

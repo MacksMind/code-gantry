@@ -492,20 +492,52 @@ def _within_read_budget(read_files: list[str], cfg: ProjectConfig) -> list[str]:
 TRANSCRIPT_FILENAME = "executor-conversation.jsonl"
 
 
+# A reasoning item's encrypted payload is bytes nobody reads, and it is large.
+# This is a *denylist* rather than the allowlist that used to be here, because
+# the allowlist is what lost `call_id`: a field nobody thought to add is
+# invisible, while a field nobody thought to exclude merely costs space.
+_UNRECORDED = frozenset({"encrypted_content"})
+
+
 def _plain(item) -> dict:
     """One conversation item as a mapping the record can hold.
 
-    The SDK's own output objects are not dicts and carry more than this, but
-    what an operator opens the file for is which tool was asked for and with
-    what — and a reasoning item's encrypted payload is bytes nobody reads.
+    Built from the item's own fields, not from a list of key names. The list
+    was `type`, `name`, `arguments` — so `call_id` reached the file on the
+    output items, which are plain dicts and pass through whole, and never on
+    the calls that declare it. The transcript could then only be paired by
+    position.
+
+    That cost a diagnosis. The executor emits batched parallel calls — five
+    `read_file`s, then five outputs — so on 2026-08-19 a positional reading of
+    one attempt matched the last call of each batch with the first output of
+    that batch and silently dropped the rest. It produced a confident and
+    wrong account of which `bundle` call had corrupted a lockfile, and the
+    whole reconstruction had to be redone once the pairing was fixed.
+
+    This is the rule `CLAUDE.md` already states about `executor-loop.json`,
+    arriving in the module next door: wherever a subset is written out by hand,
+    the hand is the defect.
     """
     if isinstance(item, dict):
         return item
-    return {
-        "type": getattr(item, "type", "?"),
-        "name": getattr(item, "name", ""),
-        "arguments": getattr(item, "arguments", ""),
-    }
+    fields: dict = {}
+    dump = getattr(item, "model_dump", None)
+    if callable(dump):
+        try:
+            fields = dump(exclude_none=True)
+        except Exception:  # noqa: BLE001 - a record is never worth an attempt
+            fields = {}
+    if not fields:
+        try:
+            fields = dict(vars(item))
+        except TypeError:
+            fields = {}
+    fields = {k: v for k, v in fields.items() if k not in _UNRECORDED}
+    # Always answerable, even for an object that carries nothing else: the
+    # reader's first question of any line is what kind of item it is.
+    fields.setdefault("type", getattr(item, "type", "?"))
+    return fields
 
 
 class Transcript(list):
