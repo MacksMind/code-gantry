@@ -23,6 +23,8 @@ reintroduce fuzzy matching but that the refusal text is not actionable enough.
 
 from __future__ import annotations
 
+import os
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,6 +40,52 @@ class Edit:
     old_string: str
     new_string: str
     replace_all: bool = False
+
+
+def atomic_write(path: Path, text: str) -> None:
+    """Put a *new* inode at `path` rather than rewriting the one already there.
+
+    `Path.write_text` is `open(path, "w")`: truncate and rewrite in place, same
+    inode, so nothing invalidates a stat cached elsewhere. Docker's file
+    sharing keeps such a cache. Measured 2026-08-19 against a bind-mounted
+    Rails repository: the editor changed one comment, the file grew 87 bytes,
+    and the container went on reporting the *old* size while serving the *new*
+    bytes — the host's `head -c 9007` and the container's whole-file digest
+    were byte-identical. So every reader inside the container saw the file
+    clipped back to its previous length, which cost it the last two `gem`
+    declarations. Bundler announced "79 Gemfile dependencies" instead of 81,
+    resolved without `redis` and `connection_pool`, and wrote that lockfile
+    back to the host. Two runs died of it hours apart, and what armed it was a
+    *comment*: the only thing that mattered was that the edit made the file
+    longer.
+
+    A sibling temp file plus `os.replace` cannot be answered from a stale
+    stat, because the path comes to resolve to an inode that did not exist
+    when the cache was filled. The temp file is a sibling so the rename stays
+    on one filesystem, where `os.replace` is atomic; and the mode is carried
+    over deliberately, because `mkstemp` creates 0600 and the file being
+    replaced is usually not — a silent permission change on `bin/` scripts the
+    pipeline itself executes is the way this fix would go wrong.
+    """
+    fd, tmp = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+            fh.write(text)
+            fh.flush()
+            # The rename is what fixes the stale stat; the fsync is so the
+            # bytes are on disk before the name points at them.
+            os.fsync(fh.fileno())
+        try:
+            mode = path.stat().st_mode & 0o777
+        except FileNotFoundError:
+            mode = 0o644
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def normalise(text: str) -> str:
@@ -444,7 +492,7 @@ class FileEditor:
             (lambda want: self.locator(rel, want)) if self.locator else None
         )
         after = normalise(apply_edits(before, edits, locate=locate))
-        full.write_text(after, encoding="utf-8")
+        atomic_write(full, after)
         self.touched.add(rel)
         self._record("edit", rel, len(edits))
         return f"applied {len(edits)} edit(s) to {rel}"
@@ -456,7 +504,7 @@ class FileEditor:
                 f"{rel!r} already exists and is not empty. Use edit to change it."
             )
         full.parent.mkdir(parents=True, exist_ok=True)
-        full.write_text(normalise(content), encoding="utf-8")
+        atomic_write(full, normalise(content))
         self.touched.add(rel)
         self._record("create_file", rel, content.count("\n") + 1)
         return f"created {rel}"

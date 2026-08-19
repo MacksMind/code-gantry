@@ -418,3 +418,53 @@ class TestSeveralChunksComeBackForOneFile:
         # The duplicated line is skipped; the unique one anchors, but nothing
         # nearby resembles the wanted text, so it still declines.
         assert near.text == ""
+
+
+class TestTheWriteIsAtomic:
+    """A write that grows a file in place is clipped by Docker's file sharing.
+
+    Measured on 2026-08-19 against a bind-mounted Rails repository: the editor
+    changed one comment, which made `Gemfile` 87 bytes longer, and the
+    container went on reporting the *old* size while serving the *new* bytes.
+    `head -c 9007` on the host and the container's whole-file digest were
+    identical — so bundler read the file clipped to its previous length, lost
+    the last two declarations (`redis`, `connection_pool`), announced "79
+    Gemfile dependencies" instead of 81, and wrote a lockfile missing them.
+    Two runs died of it, several hours apart, and the edit that caused it was
+    a comment: the *length* was what mattered, not the content.
+
+    `Path.write_text` is `open(path, "w")` — truncate and rewrite the same
+    inode, so nothing invalidates a cached stat. Writing a sibling temp file
+    and `os.replace`-ing it puts a *new* inode at the path, which no cache can
+    answer for. That is what these tests pin, and the inode is the pin because
+    it is the property the sharing layer keys on; asserting the content only
+    would pass just as well against the write that caused the incident.
+    """
+
+    def test_editing_replaces_the_inode_rather_than_rewriting_it(self, editor):
+        target = editor.repo / "app" / "order.rb"
+        before = target.stat().st_ino
+        editor.edit("app/order.rb", [Edit("def total", "def grand_total")])
+        assert target.read_text() == "class Order\n  def grand_total\n  end\nend\n"
+        assert target.stat().st_ino != before
+
+    def test_creating_a_file_also_lands_by_replace(self, editor):
+        editor.create_file("app/new.rb", "puts 1\n")
+        target = editor.repo / "app" / "new.rb"
+        assert target.read_text() == "puts 1\n"
+        # Nothing half-written left beside it: a temp file the model can see is
+        # a temp file a later `search` will return.
+        assert [p.name for p in (editor.repo / "app").iterdir()] == ["order.rb", "new.rb"] or sorted(
+            p.name for p in (editor.repo / "app").iterdir()
+        ) == ["new.rb", "order.rb"]
+
+    def test_the_file_mode_survives_the_replace(self, editor):
+        target = editor.repo / "app" / "order.rb"
+        target.chmod(0o755)
+        editor.edit("app/order.rb", [Edit("def total", "def grand_total")])
+        assert target.stat().st_mode & 0o777 == 0o755
+
+    def test_a_failed_edit_leaves_no_temp_file_behind(self, editor):
+        with pytest.raises(ToolError):
+            editor.edit("app/order.rb", [Edit("no such text", "x")])
+        assert sorted(p.name for p in (editor.repo / "app").iterdir()) == ["order.rb"]
