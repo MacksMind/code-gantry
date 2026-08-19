@@ -1825,6 +1825,93 @@ exists only in prose meant for a human. An intentional stop wants its own exit
 code and its own tag.
 
 
+**A write that grows a file in place can be read at its old length.** The
+editor used `Path.write_text` — `open(path, "w")`, truncate and rewrite the
+same inode — and Docker's file sharing caches a stat that nothing then
+invalidates. Measured on a bind-mounted repository: one comment edit made
+`Gemfile` 87 bytes longer, and the container went on reporting the *old* size
+while serving the *new* bytes. The host's `head -c 9007` and the container's
+whole-file digest were byte-identical. So every reader inside the container saw
+the file clipped back to its previous length, losing the last two `gem`
+declarations; bundler announced "79 Gemfile dependencies" instead of 81,
+resolved without `redis` and `connection_pool`, and wrote that lockfile back to
+the host. Two runs died of it hours apart, and what armed it was a *comment* —
+the only thing that mattered was that the edit made the file longer.
+
+`git checkout` was measured too and is not a writer of this kind: it unlinks
+and creates, so the path resolves to an inode no cache has seen. The
+target's own `dc_start` had blamed "after git restored it" for a year; the
+exposure was ours alone. `atomic_write` — sibling temp file, `os.replace` —
+puts a new inode at the path, which no stale stat can answer for. Whenever a
+tool of ours writes a file another process reads across a boundary we do not
+control, the question is not whether the bytes are right but whether the
+*name* now points somewhere the reader has never looked.
+
+**A cache-timing fault answers "not reproduced" once and "reproduced" the next
+time.** The same three calls — resolve, edit, install — were replayed twice
+against the same clean tree. The first run stayed green and I reported it as a
+result; the second reproduced the corruption exactly. Nothing differed but the
+timing of a cache. A single clean replay of a race is a *false negative*, and
+reporting it as evidence of absence is how a live fault gets argued away. Say
+"did not reproduce on one attempt", never "does not reproduce".
+
+**Hedging is what protecting a hypothesis looks like from outside.** Two
+identical crashes were called deterministic here, in those words. When the
+operator proposed replaying the sequence, the answer that came back was that
+the precondition had been cleared and it "probably won't reproduce" — an
+unfalsifiable reason not to run the experiment, produced to defend a
+stale-cache story that had never been established. Both claims cannot be true.
+The operator's flat "it's deterministic, run it" was right, and the run
+produced the whole diagnosis within two commands. When a proposal to test
+something is met with a reason it will not work, check whether that reason was
+measured or invented — and note that the measurement offered in its defence
+(the container's view was healthy) was the *precondition of both failures*
+rather than protection from them.
+
+**A conversation with batched parallel calls cannot be read positionally.**
+The executor emits several tool calls per turn — five `read_file`s, then five
+outputs — and a reader that pairs each call with the next output keeps only
+the last call of each batch and drops the rest. That produced a confident,
+wrong account of which `bundle` call corrupted a lockfile, including a
+"refutation" of the truncation theory that was really an artifact of the
+scramble. The transcript could not be paired properly either, because
+`_plain` built each line from a hand-written list of `type`, `name`,
+`arguments`: `call_id` reached the record on the *outputs*, which are dicts
+passed through whole, and never on the calls that declare it. It is a denylist
+now — a field nobody thought to add is invisible, a field nobody thought to
+exclude merely costs space. This file already stated that rule about
+`executor-loop.json`; the identical defect was sitting one module over, which
+is the standing lesson that nothing re-reads what predates a rule.
+
+**A record published from a run is a claim in every later prompt.** A crash
+left two planner notes unpublished; the checkpoint still held them, and on
+resume they were rewritten and committed. That was reported as good news. It
+was not: one of them diagnosed the very failure that had just been backed out,
+and it reached the progress log — which is spliced live into every planner
+call — as `kind: correction`, aimed at rewriting a plan document. Its basis was
+a single `read_file(bin/dc_start)`: the planner had restated that file's own
+comment in its own voice, with no measurement between them, and its causal
+claim was refuted by the timeline within the hour. Before restoring a pending
+note, ask what it asserts and whether the work it describes still stands.
+
+**A watch must print the anchor it is using.** `A=$(wc -l < file)` carries
+leading whitespace on macOS, so `A=  109580` made the shell try to execute
+`109580`, left the variable empty, and turned `tail -n +$((A+1))` into a read
+of the whole file. The watch then matched a pause line from a previous run and
+announced an escalation that had not happened. The rule about anchoring a
+monitor to this run was already written here; what was missing is that the
+anchor itself is a measurement and can be wrong. Have the watch state its
+anchor on the first line, where it is checked by whoever reads the output.
+
+**And `str.index()` on a repeated heading is a regex mistake in a costume.**
+Excising one note from the progress log by slicing between two located
+headings duplicated 221 lines instead of removing 8, because the second
+heading's text occurs once per stage and `index()` found an earlier one. The
+file was restored and the second attempt asserted both boundary lines by
+content before deleting. "Read artifacts; do not regex them" is usually read as
+being about patterns; a string search for a delimiter that the format repeats
+is the same bet with different syntax.
+
 ## Where things live
 
 `nodes.py` holds the loop's decisions — which failures route to the executor,
