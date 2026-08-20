@@ -2046,6 +2046,43 @@ read the clock or the network. A gate is a check, not a guarantee, and removing
 the backstop because the check now usually catches it is how the unusual case
 becomes a stack trace.
 
+**A rule fixed in one role's type does not reach the role that uses the other
+type.** This file already says a total from a tool loop is not a context
+figure, and `PlannerUsage` grew `peak_prompt_tokens` because of it. The
+reviewer uses `TokenUsage`, which did not, so eleven records on one run carried
+totals from 473,595 to 2,211,906 and **no context figure at all** — and the log
+line renders the total as `(N prompt, M cached)`, which reads exactly like one.
+I reported the reviewer as close to its ceiling twice on the strength of it.
+
+The totals track the *call count*, because a tool loop re-sends the
+conversation every turn: 8 calls → 473k, 32 → 1,505k, 30 → 2,212k, about 45-70k
+of real context each. Against `gpt-5.6-sol`'s **1,050,000**-token window that is
+6%, not the 143% the largest total appears to say.
+
+Three things worth separating. The fix belongs in `extract_usage`, where one
+reading is its own peak, so no call site can forget it and any caller that
+merges gets it free — the transcript-as-`list`-subclass argument again. The
+reviewer's record dropped it because `as_dict` listed four field names by hand,
+which is the `executor-loop.json` defect a third time and the reason the writer
+now walks `dataclasses.fields`. And the field goes **last** on the dataclass,
+because `cache_write_tokens` carries a comment saying it went last for the same
+reason and this type is built positionally — a new field in the middle silently
+reassigns every positional caller.
+
+The measurement that closed it is also the one nobody could have made: with no
+peak recorded, "how close is the reviewer to its window" was unanswerable from
+the artifacts. That is precisely the state the planner was in before it was
+rejected at 1,103,000 tokens against a 1,000,000 ceiling with nothing recorded
+that would have seen it coming. Two roles, one blind spot, and the second was
+only found because a total looked alarming enough to check.
+
+Worth knowing while reading those numbers: the reviewer's `max_total_chars`
+resolves to 2,400,000 on this project — derived from a configured
+`max_read_lines_total` of 30,000 — which is roughly 600,000 tokens, more than
+half the window, reachable by reads alone. Measured consumption peaked at 71k
+of 2,400k, so nothing is near it; but the budget permits getting near it, and
+until now nothing recorded the figure that would say so.
+
 ## Where things live
 
 `nodes.py` holds the loop's decisions — which failures route to the executor,

@@ -28,6 +28,7 @@ means guess, and it never means crash four stages into a run.
 from __future__ import annotations
 
 import os
+import dataclasses
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
@@ -149,12 +150,14 @@ class ReviewOutcome:
             # one read the same to anyone measuring later, and this
             # project has already answered a question wrongly that way.
             "semantic_results": list(self.semantic_results),
-            "usage": {
-                "prompt_tokens": self.usage.prompt_tokens,
-                "cached_tokens": self.usage.cached_tokens,
-                "cache_write_tokens": self.usage.cache_write_tokens,
-                "completion_tokens": self.usage.completion_tokens,
-            },
+            # Every field, walked off the dataclass. The hand-written list
+            # this replaces named four of five and dropped
+            # `peak_prompt_tokens`, so eleven records on one run carried a
+            # tool-loop *total* and no context figure — and the total was
+            # twice read as one. Same defect as `executor-loop.json`'s ten
+            # fields of twenty: wherever a subset is written out by hand, the
+            # hand is the defect, and the next field added goes missing too.
+            "usage": dataclasses.asdict(self.usage),
             "client_failure": self.failed,
         }
 

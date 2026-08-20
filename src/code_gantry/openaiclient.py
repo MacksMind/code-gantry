@@ -38,6 +38,20 @@ class TokenUsage:
     # reads on none is paying a premium for nothing — which is exactly what
     # gpt-5.6-sol was measured doing, six calls, ~55k written each, zero read.
     cache_write_tokens: int = 0
+    # The largest single call of a tool loop, and the only field here that is
+    # not a sum. `merge_usage` maxes it while everything else adds, because the
+    # totals say what a call *cost* and this says how close it came to the
+    # window it has to fit inside. `PlannerUsage` grew the same field, for the
+    # same reason, after the planner was rejected at 1,103,000 tokens against a
+    # 1,000,000 ceiling with nothing recorded that would have seen it coming —
+    # and the reviewer, which uses this type rather than that one, did not get
+    # it. Eleven reviewer records then carried totals up to 2,211,906 and no
+    # context figure at all, and the totals were twice read as one. They track
+    # the *call count*: a loop re-sends the conversation every turn.
+    #
+    # Last, like `cache_write_tokens` and for the same reason: this type is
+    # constructed positionally.
+    peak_prompt_tokens: int = 0
 
     @property
     def uncached_prompt_tokens(self) -> int:
@@ -117,6 +131,11 @@ def merge_usage(left: TokenUsage, right: TokenUsage) -> TokenUsage:
         completion_tokens=left.completion_tokens + right.completion_tokens,
         cached_tokens=left.cached_tokens + right.cached_tokens,
         cache_write_tokens=left.cache_write_tokens + right.cache_write_tokens,
+        # Not summed. Two turns do not make a larger context than either of
+        # them, and keeping the *last* turn instead would be wrong in the
+        # common shape: a loop ends with a short call, because the model has
+        # stopped asking and is answering.
+        peak_prompt_tokens=max(left.peak_prompt_tokens, right.peak_prompt_tokens),
     )
 
 
@@ -150,4 +169,9 @@ def extract_usage(usage) -> TokenUsage:
         cache_write_tokens=(
             (getattr(details, "cache_write_tokens", 0) or 0) if details else 0
         ),
+        # One reading is its own peak. Set here rather than at each call site,
+        # so a caller cannot forget it and a caller that merges gets the right
+        # answer for free — the same reasoning that made the transcript a
+        # `list` subclass.
+        peak_prompt_tokens=prompt or 0,
     )

@@ -1478,6 +1478,7 @@ def review(state: RunState, rt: Runtime) -> dict:
         cached_tokens=outcome.usage.cached_tokens,
         cache_write_tokens=outcome.usage.cache_write_tokens,
         completion_tokens=outcome.usage.completion_tokens,
+        peak_prompt_tokens=outcome.usage.peak_prompt_tokens,
     )
     stage_usage = accumulate_usage(
         state.get("stage_usage"),
@@ -1485,10 +1486,18 @@ def review(state: RunState, rt: Runtime) -> dict:
         cached_tokens=outcome.usage.cached_tokens,
         cache_write_tokens=outcome.usage.cache_write_tokens,
         completion_tokens=outcome.usage.completion_tokens,
+        peak_prompt_tokens=outcome.usage.peak_prompt_tokens,
     )
+    # The peak beside the total, because they answer different questions and
+    # the total was twice mistaken for the answer to the second. A tool loop
+    # bills per turn: `prompt` is what the review *cost*, `peak` is how close
+    # its largest single call came to the window it has to fit inside. A budget
+    # whose consumption is never printed cannot be seen to leak, and neither
+    # can a ceiling's headroom.
     rt.log(
         f"[review] {stage.id}: {outcome.verdict} — {outcome.summary} "
-        f"({outcome.usage.prompt_tokens} prompt, {outcome.usage.cached_tokens} cached)"
+        f"({outcome.usage.prompt_tokens} prompt, {outcome.usage.cached_tokens} cached, "
+        f"{outcome.usage.peak_prompt_tokens} peak)"
     )
 
     for note in outcome.observations:
