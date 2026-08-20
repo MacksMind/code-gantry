@@ -1,8 +1,15 @@
-"""The in-process edit cycle: model, then lint, then commit, then gates.
+"""The in-process edit cycle: model, then the hook, then lint, then commit, then gates.
 
-One cycle is *edit until the model stops asking for things*, then lint, then
-commit, then the gates it can act on. Ordering is load-bearing at every step:
+One cycle is *edit until the model stops asking for things*, then ask the
+commit hook, then lint, then commit, then the gates it can act on. Ordering is
+load-bearing at every step:
 
+- **The hook first, because it is the only question that expires.** A
+  pre-commit hook reads the index and refuses; once the commit has been
+  attempted and refused there is nothing left to do but escalate, which is what
+  used to happen. Asked before the commit, the same refusal is feedback the
+  model acts on in session. It cannot go later and it cannot be an operator's
+  `checks` entry, because those run after the commit it would be repairing.
 - **Gates run when the model stops, not after each edit.** A test run per edit
   is unaffordable, and the natural division is that the model decides when it
   has finished editing and the loop decides whether that is true.
@@ -267,6 +274,17 @@ def _gate_cycle(stage, cfg, git, runner, out: ExecutionResult, since_sha, log=No
     linter change here" afterwards, because the two halves had been folded into
     one commit and nothing else had written the split down.
     """
+    # Above the commit, because it is the only gate whose answer stops being
+    # obtainable once the commit has been attempted. A hook refusing here used
+    # to set `commit_refused` and escalate to a human — right, given that by
+    # then the loop had nowhere to route it, and unnecessary, because the hook
+    # names the file and line and that is exactly what feedback is for. It also
+    # cannot be delegated to `checks`: those run *below* this line, so an
+    # autocorrecting entry is downstream of the commit being refused.
+    hook = gates.check_commit_hook(git)
+    if not hook.ok:
+        return hook
+
     _commit_if_dirty(git, stage, out, log=log)
     lint = gates.run_checks(stage, runner)
     rewritten = git.diff_unstaged()

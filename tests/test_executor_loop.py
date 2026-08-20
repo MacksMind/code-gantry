@@ -938,3 +938,98 @@ class TestTheGatesAreEvaluatedLazily:
             [edit_file("app/a.rb", "class A", "class B")],
         ]))
         assert not marker.exists(), "the suite ran behind a failed regex gate"
+
+
+class TestTheHookIsAskedBeforeTheCommit:
+    """A refused commit is a cycle of feedback, not the end of a run.
+
+    Measured: an overnight run landed 16 stages and stopped on three lines of
+    trailing whitespace in an `.erb` file. Nothing declared could have fixed
+    it — `_gate_cycle` commits the model's raw work *before* it runs `checks`,
+    so an autocorrecting entry is downstream of the commit the hook refuses.
+    """
+
+    def _refusing_hook(self, repo, message):
+        import subprocess
+
+        hooks = repo / ".git" / "hooks"
+        hooks.mkdir(parents=True, exist_ok=True)
+        hook = hooks / "pre-commit"
+        # Refuses only while the marker is present, so the model can fix it and
+        # the second cycle can succeed — which is the behaviour under test. A
+        # hook that always refuses could not tell "handed back as feedback"
+        # from "handed back forever".
+        hook.write_text(
+            "#!/bin/sh\n"
+            "if git diff --cached | grep -q 'MARKER'; then\n"
+            f'  echo "{message}" >&2\n'
+            "  exit 1\n"
+            "fi\n"
+            "exit 0\n"
+        )
+        hook.chmod(0o755)
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "core.hooksPath", str(hooks)],
+            check=True, capture_output=True,
+        )
+
+    def test_the_model_is_told_what_the_hook_said_and_gets_another_cycle(
+        self, repo, tmp_path
+    ):
+        self._refusing_hook(repo, "app/a.rb:1: trailing whitespace.")
+        cfg, stage = build(repo)
+        model = ScriptedModel([
+            [edit_file("app/a.rb", "class A", "class MARKER")],
+            [edit_file("app/a.rb", "class MARKER", "class B")],
+        ])
+        out = drive(repo, cfg, stage, model)
+
+        assert model.calls == 2, "the refusal must buy the model another cycle"
+        assert not out.commit_refused, "it was fixed, so nothing escalates"
+        assert out.commits, "the second cycle's work was recorded"
+
+    def test_the_refusal_reaches_the_model_verbatim(self, repo, tmp_path):
+        self._refusing_hook(repo, "app/a.rb:1: trailing whitespace.")
+        cfg, stage = build(repo)
+        seen: list[str] = []
+        model = ScriptedModel([
+            [edit_file("app/a.rb", "class A", "class MARKER")],
+            [edit_file("app/a.rb", "class MARKER", "class B")],
+        ])
+        original = model.run
+
+        def spy(conversation, *a, **kw):
+            seen.extend(
+                block["text"]
+                for turn in conversation
+                if turn.get("role") == "user"
+                for block in turn.get("content", [])
+                if isinstance(block, dict) and "text" in block
+            )
+            return original(conversation, *a, **kw)
+
+        model.run = spy
+        drive(repo, cfg, stage, model)
+        fed = "\n".join(seen)
+        assert "app/a.rb:1: trailing whitespace." in fed
+        assert "hook" in fed.lower(), "unattributed, it reads as its own mistake"
+
+    def test_an_unfixed_refusal_still_reaches_commit_refused(self, repo, tmp_path):
+        # The backstop stays. A hook may refuse for something the model cannot
+        # reach, and the gate passing is not a promise that the commit succeeds.
+        self._refusing_hook(repo, "immovable")
+        cfg, stage = build(repo)
+        model = ScriptedModel([
+            [edit_file("app/a.rb", "class A", "class MARKER")],
+            [edit_file("app/a.rb", "class MARKER", "class MARKER2")],
+            [edit_file("app/a.rb", "class MARKER2", "class MARKER3")],
+        ])
+        out = drive(repo, cfg, stage, model)
+        assert out.commit_refused, "nothing fixed it, so the escalation stands"
+
+    def test_a_repository_with_no_hook_is_unaffected(self, repo, tmp_path):
+        cfg, stage = build(repo)
+        model = ScriptedModel([[edit_file("app/a.rb", "class A", "class B")]])
+        out = drive(repo, cfg, stage, model)
+        assert model.calls == 1
+        assert out.commits and not out.commit_refused

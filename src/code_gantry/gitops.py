@@ -29,6 +29,26 @@ from pathlib import Path, PurePosixPath
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)")
 
 
+def _git_version() -> tuple[int, ...]:
+    """The installed git's version, read once.
+
+    A version comparison is a fact; the alternative was matching git's own
+    "is not a git command" text, which is the classifier-over-rendered-text
+    mistake this codebase keeps relearning.
+    """
+    global _GIT_VERSION
+    if _GIT_VERSION is None:
+        out = subprocess.run(
+            ["git", "--version"], capture_output=True, text=True, errors="replace"
+        ).stdout
+        digits = re.search(r"(\d+)\.(\d+)", out)
+        _GIT_VERSION = tuple(int(g) for g in digits.groups()) if digits else (0, 0)
+    return _GIT_VERSION
+
+
+_GIT_VERSION: tuple[int, ...] | None = None
+
+
 class GitError(Exception):
     pass
 
@@ -84,6 +104,46 @@ class Git:
         return self._run(
             "check-ignore", "--no-index", "-q", "--", path, check=False
         ).returncode == 0
+
+    def run_pre_commit_hook(self) -> tuple[bool, str] | None:
+        """Ask the hook now, staging first, or `None` if there is no hook.
+
+        A pre-commit hook reads the *index*, so this stages before asking —
+        otherwise the gate passes on work the commit is about to be refused
+        for. `commit_all` stages again, which is idempotent.
+
+        Run through `git hook run` rather than by executing the file, so git
+        invokes it exactly as a commit would: same cwd, same environment, same
+        argv. A reimplementation is a second spelling of the same command and
+        this codebase has paid for that distinction more than once.
+
+        The `None` matters. `git hook run` exits **1** with "cannot find a hook
+        named pre-commit" when there is none, which is the same exit code a
+        refusal gives — so reading the status would make every project without
+        a hook fail the gate, and reading the message would be a classifier
+        over rendered text. Answered from the hook file instead, which is a
+        fact; `rev-parse --git-path` resolves `core.hooksPath`, including a
+        global one, which is how the operator who hit this has theirs and is
+        the case a hand-rolled path would get wrong.
+
+        `git hook run` arrived in git 2.36. Older git has no way to ask, so the
+        answer is `None` — the gate does not apply — and `commit_refused`
+        remains the backstop it has always been. A gate that cannot reach its
+        evidence must not return a verdict.
+        """
+        import os
+
+        if _git_version() < (2, 36):
+            return None
+        hook = Path(self._out("rev-parse", "--git-path", "hooks/pre-commit"))
+        if not self.repo.joinpath(hook).is_file() and not hook.is_file():
+            return None
+        hook = hook if hook.is_absolute() else self.repo / hook
+        if not os.access(hook, os.X_OK):
+            return None
+        self._run("add", "-A", ".")
+        proc = self._run("hook", "run", "pre-commit", check=False)
+        return proc.returncode == 0, f"{proc.stdout}{proc.stderr}".strip()
 
     def is_clean(self) -> bool:
         """Ignored files do not count. A target repo legitimately carries env

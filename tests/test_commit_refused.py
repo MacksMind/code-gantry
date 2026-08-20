@@ -284,3 +284,126 @@ class TestExecutorLoop:
             )
             is None
         )
+
+
+class TestAskingTheHookBeforeCommitting:
+    """The refusal is feedback, not an escalation, if you ask in time.
+
+    `commit_refused` was the right answer to "the repository said no" and the
+    wrong place to stop. Measured: an overnight run landed 16 stages and then
+    ended on three lines of trailing whitespace in an `.erb` file — content no
+    declared check could have repaired, because `_gate_cycle` commits the
+    model's raw work *before* it runs `checks`, so the commit the hook rejects
+    happens upstream of every autocorrecting tool the operator has.
+
+    Asking the hook first turns that into an ordinary cycle of feedback. It is
+    also general over whatever the hook checks, which is the reason not to
+    special-case whitespace: a hook is operator policy and the next rule it
+    grows is not ours to predict.
+
+    Run through `git hook run`, so git invokes it exactly as a commit would —
+    the "same command in both places, spelled the same way" property, for free,
+    rather than a reimplementation that can disagree with the thing it stands
+    for.
+    """
+
+    def test_it_reports_what_the_hook_said(self, repo, tmp_path):
+        from code_gantry.gitops import Git
+
+        refuse_commits(repo, message="line 62: trailing whitespace.")
+        (repo / "app.py").write_text("x = 1   \n")
+        got = Git(repo).run_pre_commit_hook()
+        assert got is not None, "a hook is installed, so it must have run"
+        ok, output = got
+        assert not ok
+        assert "line 62: trailing whitespace." in output
+
+    def test_a_clean_tree_passes(self, repo, tmp_path):
+        import subprocess
+
+        from code_gantry.gitops import Git
+
+        hooks = repo / ".git" / "hooks"
+        hooks.mkdir(parents=True, exist_ok=True)
+        (hooks / "pre-commit").write_text("#!/bin/sh\nexit 0\n")
+        (hooks / "pre-commit").chmod(0o755)
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "core.hooksPath", str(hooks)],
+            check=True, capture_output=True,
+        )
+        (repo / "app.py").write_text("x = 1\n")
+        assert Git(repo).run_pre_commit_hook() == (True, "")
+
+    def test_no_hook_is_not_a_failure(self, repo, tmp_path):
+        # `git hook run` exits 1 with "cannot find a hook named pre-commit"
+        # when there is none, which is indistinguishable from a refusal if you
+        # read the exit code. Answered from the hook file's existence instead —
+        # a fact about the repository rather than a label parsed out of an
+        # error message.
+        import subprocess
+
+        from code_gantry.gitops import Git
+
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "core.hooksPath", str(tmp_path / "none")],
+            check=True, capture_output=True,
+        )
+        assert Git(repo).run_pre_commit_hook() is None
+
+    def test_it_finds_the_hook_a_global_hookspath_points_at(self, repo, tmp_path):
+        # The operator who hit this in production has `core.hooksPath` set
+        # globally, so `.git/hooks` is ignored entirely. Resolving the path
+        # ourselves would have to reimplement that; `git rev-parse --git-path`
+        # already knows.
+        import subprocess
+
+        from code_gantry.gitops import Git
+
+        elsewhere = tmp_path / "shared-hooks"
+        elsewhere.mkdir()
+        (elsewhere / "pre-commit").write_text("#!/bin/sh\necho far away >&2\nexit 1\n")
+        (elsewhere / "pre-commit").chmod(0o755)
+        stale = repo / ".git" / "hooks"
+        stale.mkdir(parents=True, exist_ok=True)
+        (stale / "pre-commit").write_text("#!/bin/sh\nexit 0\n")
+        (stale / "pre-commit").chmod(0o755)
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "core.hooksPath", str(elsewhere)],
+            check=True, capture_output=True,
+        )
+        (repo / "app.py").write_text("x = 1\n")
+        ok, output = Git(repo).run_pre_commit_hook()
+        assert not ok and "far away" in output
+
+    def test_the_gate_hands_the_hook_a_staged_tree(self, repo, tmp_path):
+        # A pre-commit hook reads the *index*, so an unstaged edit is invisible
+        # to it and the gate would pass on work the commit then refuses.
+        from code_gantry.gitops import Git
+
+        refuse_commits(repo, message="staged content was seen")
+        (repo / "app.py").write_text("x = 1   \n")
+        ok, output = Git(repo).run_pre_commit_hook()
+        assert not ok and "staged content was seen" in output
+
+
+class TestTheGateLayer:
+    def test_it_passes_when_there_is_no_hook(self, repo, tmp_path):
+        from code_gantry import gates
+        from code_gantry.gitops import Git
+
+        assert gates.check_commit_hook(Git(repo)).ok
+
+    def test_a_refusal_becomes_feedback_that_names_the_hook(self, repo, tmp_path):
+        from code_gantry import gates
+        from code_gantry.gitops import Git
+
+        refuse_commits(repo, message="app.py:1: trailing whitespace.")
+        (repo / "app.py").write_text("x = 1   \n")
+        got = gates.check_commit_hook(Git(repo))
+        assert not got.ok
+        assert "app.py:1: trailing whitespace." in got.feedback
+        # Attribution, in as many words. Handed a complaint with no author, a
+        # model reads it as a test failure or a reviewer note and edits the
+        # wrong thing.
+        assert "hook" in got.feedback.lower()
+        assert "commit" in got.summary.lower()

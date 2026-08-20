@@ -606,6 +606,54 @@ def run_setup(stage: Stage, cfg: ProjectConfig, runner: CommandRunner) -> GateRe
     )
 
 
+def check_commit_hook(git: Git) -> GateResult:
+    """Would the repository accept this work? Asked before committing it.
+
+    The only gate whose subject is the index rather than the tree, and the only
+    one that runs *above* `_commit_if_dirty` — which is the whole point. A
+    pre-commit hook is operator policy and can refuse anything; `commit_refused`
+    caught that and escalated, correctly, because by then the loop had nowhere
+    to route it. Asking first turns the same refusal into an ordinary cycle of
+    feedback the model fixes in session.
+
+    Deliberately not a whitespace check. The hook that prompted this rejects
+    trailing whitespace, and stripping trailing whitespace would have fixed
+    that hook and nothing else — while quietly normalising files behind a model
+    that has stopped, in a format where two trailing spaces are a line break.
+    Running the hook is general over whatever it grows into next, and it needs
+    no normalisation at all.
+
+    Nor is it something the operator could have declared. `_gate_cycle` commits
+    the model's raw work before it runs `checks`, so an autocorrecting entry —
+    `rubocop -A` and its kin — is downstream of the commit the hook refuses and
+    can never reach it. Measured: a run landed 16 stages and ended on three
+    lines of trailing whitespace in an `.erb` file, which the project's linter
+    does not read and its `checks` could not have reached.
+
+    Passing means the hook said yes to exactly these staged bytes. It is not a
+    promise the commit succeeds — a hook may read the clock or the network —
+    which is why `commit_refused` stays where it is.
+    """
+    ran = git.run_pre_commit_hook()
+    if ran is None or ran[0]:
+        return GateResult(ok=True)
+    return GateResult(
+        ok=False,
+        summary="the repository's pre-commit hook refused the staged work",
+        feedback=(
+            "This repository has a **pre-commit hook**, and it refuses to "
+            "record your work as it stands. This is not a test failure and not "
+            "a review: it is the repository's own policy, it will refuse "
+            "identically every time, and nothing else in the pipeline can "
+            "repair it for you. Fix what it names, in the files you edited, "
+            "and the commit will go through.\n\n"
+            # Through `clip`, so the hook's output is held to the same
+            # feedback budget as a failing suite's and spends it once.
+            f"{clip(ran[1])}"
+        ),
+    )
+
+
 def run_checks(stage: Stage, runner: CommandRunner) -> GateResult:
     """The operator's declared checks, in order, stopping at the first failure.
 

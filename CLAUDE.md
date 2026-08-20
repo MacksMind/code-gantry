@@ -1997,6 +1997,55 @@ covered. The architecture document had drifted from both — it was missing
 `execute → execute` as well, which `EDGES` had carried for months. Three
 statements of one fact, each maintained, none compared.
 
+**Ask the question that expires first.** A pre-commit hook refused three
+lines of trailing whitespace in an `.erb` file and ended a run that had landed
+16 stages. `commit_refused` caught it and escalated to a human, which was the
+right answer to "the repository said no" given where it was asked — by then the
+commit had been attempted and there was nothing left to do. But the hook names
+the file and the line, which is exactly what the feedback channel carries, and
+asked *before* the commit the same refusal is a cycle the model fixes in
+session.
+
+Two things made this invisible. The first is that no operator could have fixed
+it in config: `_gate_cycle` commits the model's raw work **before** it runs
+`checks`, deliberately, so the linter's rewrite lands as its own attributable
+commit — which means every autocorrecting entry an operator has is *downstream*
+of the commit a hook refuses. A whitespace-stripping check would have sat there
+unreached. The second is that the hook was `core.hooksPath` set **globally**,
+so it is not the target repository's property at all; it fires on this
+repository's commits too, and nothing in the target's config describes it.
+
+The general form: for each gate, ask whether its subject still exists after the
+step below it. Most gates read the tree and the tree is still there. This one
+reads the *index*, and the commit is what consumes it.
+
+**And the fix is to run the thing, not to model it.** The tempting version was
+to strip trailing whitespace on write, beside the newline and line-ending
+normalisation the editor already does. It would have fixed this hook and no
+other — a hook is operator policy and the next rule it grows is not ours to
+predict — while normalising files behind a model that has stopped, in formats
+where two trailing spaces are a hard line break. `git hook run pre-commit`
+(git ≥ 2.36) has git invoke the hook exactly as a commit would: same cwd,
+environment and argv, so the gate cannot disagree with the commit it stands
+for. That is the "same command in both places, spelled the same way" rule
+bought rather than re-earned.
+
+Two facts had to be established rather than assumed, and both would have been
+wrong by recall. `git hook run` exits **1** with "cannot find a hook named
+pre-commit" when there is none — the same status as a refusal — so a
+no-hook repository would fail the gate on exit code and a message match would
+be the classifier-over-rendered-text mistake again; the answer comes from
+whether an executable file exists at `git rev-parse --git-path
+hooks/pre-commit`, which resolves `core.hooksPath` including a global one. And
+a pre-commit hook reads the **index**, so the gate stages first or it passes on
+work the commit is then refused for.
+
+`commit_refused` stays. Passing the gate means the hook accepted exactly those
+staged bytes; it is not a promise that the commit succeeds, because a hook may
+read the clock or the network. A gate is a check, not a guarantee, and removing
+the backstop because the check now usually catches it is how the unusual case
+becomes a stack trace.
+
 ## Where things live
 
 `nodes.py` holds the loop's decisions — which failures route to the executor,
