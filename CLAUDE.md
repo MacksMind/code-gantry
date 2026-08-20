@@ -2094,6 +2094,52 @@ half the window, reachable by reads alone. Measured consumption peaked at 71k
 of 2,400k, so nothing is near it; but the budget permits getting near it, and
 until now nothing recorded the figure that would say so.
 
+**Attribute bytes by what ran between, not by whoever is nearest.** A commit
+hook refused three lines of trailing whitespace and I reported them as the
+executor's, twice, in the same breath as fixing them. They were `rubocop -A`'s:
+the stage's own commit landed clean at 06:11:22 with the model's edit byte-for-byte
+as its `new_string` recorded it, the linter ran at 06:11:25, and the
+after-checks commit was refused at 06:11:34. `.rubocop.yml` requires
+`rubocop-erb`, so the linter autocorrects templates — it split one correctly
+indented line at every comma, dedented the continuations to column zero, and
+left a trailing space on each. The operator asked whether the offending lines
+were the executor's and that question, not any reasoning of mine, is what
+opened it.
+
+Two costs, and the second is the one that matters. I "left the indentation
+alone as the model's formatting" — also the linter's. And the gate built that
+morning does not cover this case at all: it asks the hook above the *first*
+commit, which succeeded, while the refusal came on the *second*. The reason
+given for not putting the fix in the operator's `checks` — that checks run
+after the commit the hook refuses — is true of the first commit and false of
+the second, and conflating them is what made a correct-looking gate miss the
+only occurrence anyone had seen.
+
+The general form: a stage branch carries several commits per cycle, and "the
+executor's work" names one of them. Before attributing a byte, find the commit
+that last held the file clean and enumerate what ran after it — the actor whose
+name is on the stage is not automatically the author of its tree.
+
+**And it is worth knowing what the linter is doing when nothing refuses it.**
+The collision with the hook is the only reason this surfaced. `rubocop-erb`
+has been reformatting ERB on every stage that touches one, the reviewer
+approves it because a tool's own rewrite is declared machinery rather than the
+stage's diff, and the landed file is now worse formatted than what the model
+wrote. A gate exemption suppresses the complaint while the effect keeps
+accruing — the same finding as the ten CRLF files, arriving through the
+`checks` layer instead of the editor's.
+
+**A watch that exits on the process must re-read the log after it.** The loop
+`while kill -0 $pid; do grep …; sleep 30; done` checks, sleeps, and then leaves
+by its *condition* — so a run that escalates and exits inside one sleep is
+reported as "exited with no escalation", over a log containing the escalation.
+It happened on the night's first watch: `[escalate] the planner blocked the
+run` was sitting in the file while the watch said there was none. The anchor
+was right, the pattern was right, and the control flow discarded the last
+observation. Check once more after the loop, for the same reason a monitor is
+anchored to this run: the instrument's own shape is the thing most likely to be
+lying.
+
 ## Where things live
 
 `nodes.py` holds the loop's decisions — which failures route to the executor,
