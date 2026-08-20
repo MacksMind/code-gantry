@@ -754,11 +754,11 @@ class TestTheContextHighWaterMarkAndCostReachTheResult:
                 if scripted:
                     scripted.pop(0)(editor)
                 peak = self.left.pop(0)
-                out.peak_prompt_tokens = peak
                 out.first_prompt_tokens = peak // 2
                 out.usage = TokenUsage(
                     prompt_tokens=peak, cached_tokens=0,
                     cache_write_tokens=0, completion_tokens=100,
+                    peak_prompt_tokens=peak,
                 )
                 return out
 

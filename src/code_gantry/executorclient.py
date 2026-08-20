@@ -68,7 +68,6 @@ class ExecutorTurn:
         self.replan_reason: str = ""
         self.text: str = ""
         self.failure: str = ""
-        self.peak_prompt_tokens: int = 0
         # The first turn of a cycle, kept apart from the total. Summed
         # usage cannot answer whether the static prefix survived from the
         # previous stage: within one attempt the conversation grows and
@@ -245,12 +244,13 @@ class OpenAIExecutorModel:
 
             out.turns += 1
             turn_usage = extract_usage(getattr(response, "usage", None))
+            # The peak rides on `usage`: `extract_usage` sets it from the one
+            # reading and `merge_usage` maxes it while everything else sums, so
+            # a high-water mark of one context — what the operator needs for
+            # stage sizing — comes out of the same merge as the bill. This used
+            # to be a `max` written out here, from before `TokenUsage` had the
+            # field, and keeping both would be one number in two places.
             out.usage = merge_usage(out.usage, turn_usage)
-            # A high-water mark of one context, not a sum: what the operator
-            # needs for stage sizing is how much the model actually held.
-            out.peak_prompt_tokens = max(
-                out.peak_prompt_tokens, turn_usage.prompt_tokens
-            )
             if out.turns == 1:
                 out.first_prompt_tokens = turn_usage.prompt_tokens
                 out.first_cached_tokens = turn_usage.cached_tokens

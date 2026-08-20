@@ -218,7 +218,26 @@ class TestAccounting:
             response([SimpleNamespace(type="message", content=[])], usage(150)),
         ])
         out = m.run([], reader=reader, editor=editor)
-        assert out.peak_prompt_tokens == 150
+        assert out.usage.peak_prompt_tokens == 150
+
+    def test_the_peak_is_computed_once(self):
+        # `ExecutorTurn` kept its own `peak_prompt_tokens` and maxed it by hand,
+        # because the executor tracked a peak before `TokenUsage` had one. When
+        # the reviewer's missing peak was fixed by adding the field to
+        # `TokenUsage`, that hand-written max became a second copy of the same
+        # number — correct on the day and free to drift afterwards, which is
+        # how this codebase has lost a value more than once.
+        from code_gantry.executorclient import ExecutorTurn
+
+        assert not hasattr(ExecutorTurn(), "peak_prompt_tokens"), (
+            "the peak lives on `usage`; a second copy here is one to keep in step"
+        )
+
+    def test_a_turn_that_never_ran_peaks_at_zero(self, parts):
+        # The failure path returns early, before any usage is merged.
+        from code_gantry.executorclient import ExecutorTurn
+
+        assert ExecutorTurn().usage.peak_prompt_tokens == 0
 
 
 class TestFailures:

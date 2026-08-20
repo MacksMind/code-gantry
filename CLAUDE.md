@@ -2069,6 +2069,17 @@ because `cache_write_tokens` carries a comment saying it went last for the same
 reason and this type is built positionally — a new field in the middle silently
 reassigns every positional caller.
 
+**And fixing it in the shared type created the duplicate it was meant to
+remove.** `ExecutorTurn` had carried its own `peak_prompt_tokens` and maxed it
+by hand, because the executor tracked a peak years before `TokenUsage` had one.
+Putting the field where it belonged left both — correct that day, one number in
+two places afterwards, which is the shape this codebase has already lost a
+value to twice. I noticed it, wrote it up as an observation, and left it in,
+which is the worse half: a duplication reported is a duplication shipped. It is
+one computation now, in `merge_usage`, and a test asserts `ExecutorTurn` has no
+second copy. Whenever a fix moves a value into a shared type, the thing to grep
+for is the private copy the shared one was modelled on.
+
 The measurement that closed it is also the one nobody could have made: with no
 peak recorded, "how close is the reviewer to its window" was unanswerable from
 the artifacts. That is precisely the state the planner was in before it was

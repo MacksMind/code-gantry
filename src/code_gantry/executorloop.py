@@ -104,7 +104,7 @@ def run_loop(
         # lets the series continue across the cutover rather than silently
         # changing instrument. A rework cycle routinely loads more than the
         # first did, so `max` spans them.
-        out.context_tokens = max(out.context_tokens, turn.peak_prompt_tokens)
+        out.context_tokens = max(out.context_tokens, turn.usage.peak_prompt_tokens)
         if turn.usage is not None:
             out.usage = _merge(out.usage, turn.usage)
         out.log = turn.text or out.log
