@@ -11,6 +11,88 @@ from code_gantry.driver import (
 )
 
 
+def _hops_each_node_can_return() -> dict[str, set[str]]:
+    """Every `next_hop` a node function can produce, read off its source.
+
+    The edge table and the nodes are two statements of the same thing, and
+    nothing compared them: `execute` has returned `_escalate(...)` on a refused
+    commit since the day that branch was written, `EDGES` never listed it, and
+    both halves had a green unit test — `test_commit_refused` asserts the node
+    returns `escalate` and `test_edges_match_the_spec` asserts `escalate` is
+    not reachable from `execute`. Two tests contradicting each other, neither
+    driving the driver, for as long as both have existed. It surfaced when a
+    pre-commit hook refused a stage's work 16 landings into an overnight run
+    and the run died with a `RuntimeError` instead of the escalation the node
+    had carefully written.
+
+    Resolved to a fixpoint over module-level calls, so a hop returned by a
+    helper counts against the node that calls it.
+    """
+    import ast
+    import pathlib as _p
+
+    tree = ast.parse((_p.Path(__file__).resolve().parents[1]
+                      / "src" / "code_gantry" / "nodes.py").read_text())
+    funcs = {
+        n.name: n for n in tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    def literals(fn):
+        found = set()
+        for n in ast.walk(fn):
+            if isinstance(n, ast.Dict):
+                for k, v in zip(n.keys, n.values):
+                    if not (isinstance(k, ast.Constant) and k.value == "next_hop"):
+                        continue
+                    if isinstance(v, ast.Constant) and isinstance(v.value, str):
+                        found.add(v.value)
+                    elif isinstance(v, ast.IfExp):
+                        for branch in (v.body, v.orelse):
+                            if isinstance(branch, ast.Constant):
+                                found.add(branch.value)
+            if isinstance(n, ast.Assign):
+                for t in n.targets:
+                    if (
+                        isinstance(t, ast.Subscript)
+                        and isinstance(t.slice, ast.Constant)
+                        and t.slice.value == "next_hop"
+                        and isinstance(n.value, ast.Constant)
+                    ):
+                        found.add(n.value.value)
+        return found
+
+    def callees(fn):
+        return {
+            n.func.id
+            for n in ast.walk(fn)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Name)
+            and n.func.id in funcs
+        }
+
+    hops = {name: literals(fn) for name, fn in funcs.items()}
+    changed = True
+    while changed:
+        changed = False
+        for name, fn in funcs.items():
+            before = len(hops[name])
+            for c in callees(fn):
+                hops[name] |= hops[c]
+            changed = changed or len(hops[name]) != before
+    return hops
+
+
+class TestTheTableMatchesTheNodes:
+    def test_no_node_can_return_a_hop_the_table_forbids(self):
+        hops = _hops_each_node_can_return()
+        illegal = {
+            node: sorted(hops.get(node, set()) - set(targets) - {"end"})
+            for node, targets in EDGES.items()
+        }
+        assert {k: v for k, v in illegal.items() if v} == {}
+
+
 class TestEdgeTable:
     def test_every_node_has_edges(self):
         assert set(NODES) == set(EDGES)
@@ -23,10 +105,11 @@ class TestEdgeTable:
             "plan": ["precheck", "verify", "finalize", "escalate", "plan"],
             "precheck": ["execute", "plan", "escalate"],
             # Reaches itself only when the executor failed to run at all,
-            # so there is nothing for a gate to look at. See EDGES.
-            "execute": ["verify", "plan", "execute"],
+            # so there is nothing for a gate to look at. Escalates when a
+            # commit hook refuses the work. See EDGES.
+            "execute": ["verify", "plan", "execute", "escalate"],
             "verify": ["review", "advance", "execute", "plan", "escalate"],
-            "review": ["advance", "execute", "plan"],
+            "review": ["advance", "execute", "plan", "escalate"],
             "advance": ["plan", "precheck", "escalate"],
             "finalize": ["end", "escalate"],
             "escalate": ["end"],
@@ -37,9 +120,15 @@ class TestEdgeTable:
             for target in targets:
                 assert target in NODES or target == "end", f"{name} -> {target}"
 
-    def test_review_cannot_escalate_directly(self):
-        # A rejected stage is a planning problem, not a human's problem.
-        assert "escalate" not in EDGES["review"]
+    def test_a_rejected_stage_still_goes_to_the_planner(self):
+        # The original of this test banned `escalate` from `review` outright,
+        # on the true premise that a rejected stage is a planning problem
+        # rather than a human's. But `review` had grown a second exit — the
+        # full suite killed by a signal after approval, where the work is
+        # correct and the environment is gone — and the ban made that a crash
+        # rather than the escalation it was written as. The doctrine is about
+        # rejections, so this asserts what it actually meant.
+        assert {"execute", "plan"} <= set(EDGES["review"])
 
     def test_verify_can_reach_the_planner(self):
         # Scope violations and exhausted retries route there.
@@ -61,11 +150,25 @@ class TestEdgeTable:
         tree is clean. It is the safest stopping point in the graph, and it had
         to be added to the table because a node routing outside its edges
         raises rather than rerouting.
+
+        `execute` and `review` joined it for the same reason and not by the
+        same route: they had *already* been escalating in `nodes.py` — a hook
+        refusing the commit, a full suite killed by a signal after approval —
+        and the table's omission turned each into a `RuntimeError`. So this is
+        not a widening either. It is the table catching up with two exits that
+        have been written, commented and unit-tested for as long as they have
+        existed. The version of this test that banned them read as a design
+        constraint and was really a description of a bug.
+
+        What remains banned is the thing the doctrine is actually about, and
+        it is asserted in `test_a_rejected_stage_still_goes_to_the_planner`
+        rather than here: a rejection is the planner's problem, and neither
+        new edge carries one.
         """
         escalators = {n for n, t in EDGES.items() if "escalate" in t}
-        assert escalators == {"plan", "precheck", "verify", "advance", "finalize"}
-        assert "escalate" not in EDGES["review"], "a rejection is the planner's"
-        assert "escalate" not in EDGES["execute"], "a failed attempt is retried"
+        assert escalators == {
+            "plan", "precheck", "execute", "verify", "review", "advance", "finalize"
+        }
 
     def test_every_entry_point_is_a_real_node(self):
         for entry in ENTRY_POINTS:

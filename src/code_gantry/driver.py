@@ -66,9 +66,25 @@ EDGES: dict[str, list[str]] = {
     # lie: the gate would report "the attempt produced no changes", which is
     # observably true and diagnostically wrong. Bounded by `max_test_retries`
     # like any other executor retry.
-    "execute": ["verify", "plan", "execute"],
+    #
+    # And it escalates when the repository refuses the commit. A pre-commit
+    # hook is not a gate and not a planning defect — the planner cannot rewrite
+    # a hook, and the next attempt is refused identically — so the node has
+    # returned `_escalate` there since that branch was written. The edge was
+    # never added. Both halves had a passing test, one asserting the node
+    # returns `escalate` and the other asserting `escalate` is unreachable
+    # from here, and nothing compared them until a hook refused a stage 16
+    # landings into a run and the escalation came out as a stack trace.
+    "execute": ["verify", "plan", "execute", "escalate"],
     "verify": ["review", "advance", "execute", "plan", "escalate"],
-    "review": ["advance", "execute", "plan"],
+    # `review` escalates for one case, and it is not a rejection: the full
+    # suite killed by a signal after the stage was approved. A rejection is a
+    # planning problem and still routes to `plan` — but a dead environment is
+    # neither the plan's fault nor something another attempt can fix, and
+    # reading it as a rejection would send correct work back for rework
+    # against the same corpse. The ban was written about rejections and the
+    # signal case was added underneath it years later.
+    "review": ["advance", "execute", "plan", "escalate"],
     # `escalate` because a pause is checked immediately after the squash
     # rather than only before the next planner call. Those were the same
     # instant while this routed to `plan` alone; a queue of stages from one

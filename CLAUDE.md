@@ -1959,6 +1959,44 @@ none, and would have gone on approving them. When a check is written over
 source text, run the equivalent search by hand once and make the two agree
 before trusting the green.
 
+**Two green tests can contradict each other if neither drives the seam
+between them.** `nodes.execute` has returned `_escalate(...)` on a refused
+commit since that branch was written, with a paragraph explaining why a
+pre-commit hook is neither a gate nor a planning defect. `EDGES["execute"]`
+never listed `escalate`, and `driver._next` raises rather than rerouting — by
+design, because a node asking for an edge the spec lacks is a bug. So the
+careful escalation came out as `RuntimeError: node 'execute' routed to
+'escalate'`, 16 landings into an overnight run, when a hook refused three lines
+of trailing whitespace.
+
+Both halves were tested. `test_commit_refused` asserts the node returns
+`escalate`; `test_edges_match_the_spec` asserted `escalate` is unreachable from
+`execute`. Each passed, each was right about its own end, and the value crosses
+from one to the other at runtime — the rule about testing a journey rather than
+its endpoints, arriving as two tests that state opposite things and never meet.
+The table is now checked against the nodes by parsing `nodes.py` for every
+`next_hop` each node can return, resolved to a fixpoint through module-level
+helpers, because this is the second time the two have drifted: `EDGES`' own
+comment records `execute → execute` being illegal for the same reason.
+
+**And a ban can be a bug wearing a design constraint's clothes.** The same
+pass found `review` escalating too — a full suite killed by a signal *after*
+approval, where the work is correct and the environment is gone. Three
+separate assertions forbade it, one of them named
+`test_review_cannot_escalate_directly` with the reason "a rejected stage is a
+planning problem, not a human's problem". That reason is true and does not
+cover the case: a signal-killed suite is not a rejection. The category was
+drawn around rejections and a different kind of exit was added underneath it
+years later, so the tests read as stating a rule and were really describing a
+crash nobody had hit yet. When a test forbids something, check that the thing
+it forbids is the thing its reason is about.
+
+Worth noting what would *not* have found either. Both nodes' escalation
+branches are correct, commented and covered. The edge table is correct and
+covered. The architecture document had drifted from both — it was missing
+`execute → execute` as well, which `EDGES` had carried for months. Three
+statements of one fact, each maintained, none compared.
+
 ## Where things live
 
 `nodes.py` holds the loop's decisions — which failures route to the executor,

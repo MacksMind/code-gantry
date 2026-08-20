@@ -512,6 +512,12 @@ precheck  → escalate   (setup failed — a broken environment, not a planning 
 execute   → verify
 execute   → plan       (a context command failed, so the prompt would have been
                         built from missing information)
+execute   → execute    (the executor failed to run at all — transport, a
+                        rejected request, a missing credential — so there is
+                        nothing for a gate to look at)
+execute   → escalate   (a commit hook refused the work: not a gate and not a
+                        planning defect, and the next attempt is refused
+                        identically)
 
 verify    → review     (every layer passed, and the stage wants review)
 verify    → advance    (every layer passed, and it does not)
@@ -526,6 +532,9 @@ verify    → plan       (same, retries exhausted)
 review    → advance    (reviewer approved and full suite green)
 review    → execute    (rejected or suite red; rework retries remain)
 review    → plan       (rejected or suite red; rework retries exhausted)
+review    → escalate   (the full suite was killed by a signal after approval —
+                        the work is correct and the environment is gone, so
+                        this is the one review exit that is not a rejection)
 
 advance   → plan       (next stage)
 
