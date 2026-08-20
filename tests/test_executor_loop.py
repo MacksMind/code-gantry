@@ -26,6 +26,12 @@ def repo(tmp_path):
     r = tmp_path / "target"
     (r / "app").mkdir(parents=True)
     (r / "app" / "a.rb").write_text("class A\nend\n")
+    # This fixture shadows conftest's, which carries the same line and says
+    # every real project needs it: the work dir defaults inside the repo and
+    # anything the run writes there — the price cache included — is a dirty
+    # tree otherwise. Omitting it made every test in this file laxer than
+    # production, and they stayed green until something wrote to the work dir.
+    (r / ".gitignore").write_text(".code_gantry/\n")
     for args in (
         ["git", "init", "-q"],
         ["git", "config", "user.email", "t@example.com"],
@@ -785,12 +791,11 @@ class TestTheContextHighWaterMarkAndCostReachTheResult:
     def test_an_unpriced_model_reports_none_rather_than_zero(self, repo, monkeypatch, tmp_path):
         # `load_price_map` fetches before it falls back, so without
         # blocking the fetch this reads the live table and the pinned
-        # one is never consulted. And the loop memoises, so the cache
-        # has to be cleared between tests.
+        # one is never consulted. And the table is memoised per process, so
+        # the cache has to be cleared between tests.
         import code_gantry.pricing as pricing
-        from code_gantry import executorloop
         monkeypatch.setattr(pricing, "_fetch", lambda url: (_ for _ in ()).throw(OSError()))
-        monkeypatch.setattr(executorloop, "_PRICES", None)
+        pricing.clear_price_cache()
         # `price_usage` returns None for "no rate", and the distinction is the
         # whole reason to compute this rather than scrape it: a zero has meant
         # "not priced" as often as "free".
@@ -804,12 +809,11 @@ class TestTheContextHighWaterMarkAndCostReachTheResult:
     def test_a_priced_model_is_billed_from_real_counts(self, repo, monkeypatch, tmp_path):
         # `load_price_map` fetches before it falls back, so without
         # blocking the fetch this reads the live table and the pinned
-        # one is never consulted. And the loop memoises, so the cache
-        # has to be cleared between tests.
+        # one is never consulted. And the table is memoised per process, so
+        # the cache has to be cleared between tests.
         import code_gantry.pricing as pricing
-        from code_gantry import executorloop
         monkeypatch.setattr(pricing, "_fetch", lambda url: (_ for _ in ()).throw(OSError()))
-        monkeypatch.setattr(executorloop, "_PRICES", None)
+        pricing.clear_price_cache()
         table = tmp_path / "prices.json"
         table.write_text(json.dumps({
             "m": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}
@@ -840,9 +844,8 @@ class TestTheContextHighWaterMarkAndCostReachTheResult:
         77,402,051 billed, the largest single unbilled attempt 2,319,957.
         """
         import code_gantry.pricing as pricing
-        from code_gantry import executorloop
         monkeypatch.setattr(pricing, "_fetch", lambda url: (_ for _ in ()).throw(OSError()))
-        monkeypatch.setattr(executorloop, "_PRICES", None)
+        pricing.clear_price_cache()
         table = tmp_path / "prices.json"
         table.write_text(json.dumps({
             "m": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}

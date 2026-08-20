@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 import os
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 PRICE_MAP_URL = os.getenv(
@@ -47,34 +47,151 @@ def _fetch(url: str) -> str:
         return fh.read().decode("utf-8")
 
 
+def price_map_path(cfg) -> Path | None:
+    """Where the cache lives, or `None` when there is nowhere to put it.
+
+    This used to be the bare relative string `PRICE_MAP_FILENAME`, spelled out
+    at all three call sites, which meant the file landed wherever the process
+    had been started from. Launched beside the plan documents — the obvious
+    cwd, because it is where the config is — that put 1.76MB of somebody
+    else's rate table into a *tracked* directory of the target repository. It
+    sat untracked until a stage's `checks` commit swept it onto the stage
+    branch, the scope gate correctly flagged it, and the revision prompt then
+    embedded its whole 1,807,718-character diff and was refused by the
+    provider at 1,020,584 tokens against a 1,000,000 ceiling. The run ended
+    there, on a stage that had nothing wrong with it.
+
+    That the cwd decided this was invisible: it appears in no config, no log
+    header and no artifact. So the path is derived from the work directory,
+    which is gitignored by construction, and there is no cwd-relative fallback
+    to reach for — a `None` return says "do not cache" rather than "cache
+    somewhere arbitrary".
+
+    `CODE_GANTRY_PRICE_MAP` still names the file outright, so a test can pin
+    one and an air-gapped operator can supply one.
+    """
+    override = os.getenv("CODE_GANTRY_PRICE_MAP")
+    if override:
+        return Path(override)
+    work_dir = getattr(cfg, "work_dir", None)
+    return Path(work_dir) / PRICE_MAP_FILENAME if work_dir else None
+
+
+def configured_models(cfg) -> tuple[str, ...]:
+    """Every model this run can be billed for, in role order.
+
+    The one place the roles are enumerated for pricing, so the cache, the
+    report and the loop cannot disagree about which models matter. Named
+    explicitly rather than discovered, for the same reason `_stage_spend`
+    names them: a fourth role should be a line here, not a rule to work out.
+    """
+    seen: list[str] = []
+    for role in ("planner", "executor", "reviewer"):
+        model = getattr(getattr(cfg, role, None), "model", None)
+        if model and model not in seen:
+            seen.append(model)
+    return tuple(seen)
+
+
+def project_entries(price_map: dict, models: Iterable[str | None]) -> dict:
+    """Just the models this run prices, each entry kept whole.
+
+    Measured on the real table: 3,055 entries and 1.76MB, of which a run reads
+    three — 5,165 characters between them. Keeping the whole table was the
+    `config should hold the path, not the copy` instinct honoured at the config
+    layer and abandoned one layer out: we avoided a hand-maintained rate table
+    by making a verbatim copy of somebody else's.
+
+    Projected by *model* and not by key. Trimming each entry to the four rates
+    `price_usage` reads would save a few kilobytes off a file that is now a few
+    kilobytes, and it would be a hand-written subset of an upstream schema —
+    which is the shape that has already cost this project an artifact missing
+    the field that answered the question it existed for.
+
+    Keyed by whatever key actually resolved, so `entry_for` finds it again on
+    the fallback path exactly as it does on the live one.
+    """
+    out: dict = {}
+    for model in models:
+        if not model:
+            continue
+        for key in (model, model.rsplit("/", 1)[-1]):
+            entry = price_map.get(key)
+            if isinstance(entry, dict):
+                out[key] = entry
+                break
+    return out
+
+
 def load_price_map(
-    cache_path: Path | str,
+    cache_path: Path | str | None,
+    models: Iterable[str | None],
     url: str | None = None,
     fetch: Callable[[str], str] | None = None,
 ) -> dict:
-    """The public price table, refreshed if reachable and cached if not.
+    """The rates for `models`, refreshed if reachable and cached if not.
 
     Deliberately unable to fail. A price list is a report, not a gate: a run
     that stopped because a JSON file was unreachable would be trading the work
     for the accounting. Every failure path lands on the cached copy and then on
     `{}`, which prices nothing and says so.
+
+    `models` is required rather than defaulted, because a caller that could
+    omit it would be a caller that could write the whole table again — and the
+    three that existed each wrote it, none of them deliberately.
+
+    What is returned is the projection on both paths. A fallback that hands
+    back a different shape from the path it stands in for is the trap rather
+    than the protection; a cache written before this shipped is the whole
+    table and still answers, because `entry_for` looks up the same keys.
     """
-    cache_path = Path(cache_path)
     fetch = fetch or _fetch
+    cache_path = Path(cache_path) if cache_path is not None else None
     try:
-        text = fetch(url or PRICE_MAP_URL)
-        data = json.loads(text)
+        data = json.loads(fetch(url or PRICE_MAP_URL))
         if isinstance(data, dict) and data:
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            cache_path.write_text(text)
-            return data
+            wanted = project_entries(data, models)
+            if cache_path is not None:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                cache_path.write_text(json.dumps(wanted, indent=2, sort_keys=True))
+            return wanted
     except Exception:
         pass
+    if cache_path is None:
+        return {}
     try:
         data = json.loads(cache_path.read_text())
     except Exception:
         return {}
-    return data if isinstance(data, dict) else {}
+    return project_entries(data, models) if isinstance(data, dict) else {}
+
+
+# One table per (cache path, model set) for the life of the process.
+#
+# `executorloop` carried this memo, with a comment explaining that the loader
+# reaches the network on every call and that pricing an attempt without one
+# would make hundreds of HTTP calls a run. `nodes._stage_spend` called the
+# loader directly and is reached from `advance`, so every landed stage
+# refetched the table and rewrote the cache — the guard was written for one of
+# the two call sites. It lives here now, where a third caller inherits it.
+#
+# Rebuilt on the next start, which is when a changed rate would matter anyway.
+_MEMO: dict[tuple[str, tuple[str, ...]], dict] = {}
+
+
+def clear_price_cache() -> None:
+    """Forget the memo. For tests, and for anything that reloads config."""
+    _MEMO.clear()
+
+
+def cached_price_map(cfg, fetch: Callable[[str], str] | None = None) -> dict:
+    """The rates for this config's roles, fetched at most once per process."""
+    path = price_map_path(cfg)
+    models = configured_models(cfg)
+    key = (str(path), models)
+    if key not in _MEMO:
+        _MEMO[key] = load_price_map(path, models, fetch=fetch)
+    return _MEMO[key]
 
 
 def entry_for(price_map: dict, model: str | None) -> dict | None:

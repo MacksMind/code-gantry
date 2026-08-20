@@ -2636,14 +2636,9 @@ def _stage_spend(cfg, usage: dict, executor_cost: float | None = None) -> list[d
     endpoint and a missing rate identical — and the two are told apart here by
     the field simply being absent.
     """
-    import os
+    from code_gantry.pricing import cached_price_map, entry_for, price_usage
 
-    from code_gantry.pricing import entry_for, load_price_map, price_usage
-    from code_gantry.report import PRICE_MAP_FILENAME
-
-    prices = load_price_map(
-        os.environ.get("CODE_GANTRY_PRICE_MAP") or PRICE_MAP_FILENAME
-    )
+    prices = cached_price_map(cfg)
     out: list[dict] = []
     # The reviewer's keys are unprefixed: it was the first role to write here
     # and the shape was not role-aware yet. Named explicitly rather than

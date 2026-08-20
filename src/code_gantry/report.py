@@ -14,13 +14,10 @@ invoice.
 
 from __future__ import annotations
 
-import os
-
 from code_gantry.config import ProjectConfig
 from code_gantry.pricing import (
-    PRICE_MAP_FILENAME,
+    cached_price_map,
     entry_for,
-    load_price_map,
     price_usage,
 )
 from code_gantry.state import RunState
@@ -257,18 +254,6 @@ def _wall_clock_lines(state: RunState, cfg: ProjectConfig) -> list[str]:
     return lines
 
 
-def _price_map() -> dict:
-    """The public rate table, cached beside the run's own artifacts.
-
-    `CODE_GANTRY_PRICE_MAP` names the cache so a test can pin it and an
-    air-gapped operator can supply one; unset, it lands in the working
-    directory. Failure here is never fatal — see `load_price_map`.
-    """
-    return load_price_map(
-        os.environ.get("CODE_GANTRY_PRICE_MAP") or PRICE_MAP_FILENAME
-    )
-
-
 def _dollars(
     prices: dict, model: str, prompt: int, cached: int, writes: int, completion: int
 ) -> str:
@@ -302,7 +287,7 @@ def _cost_section(state: RunState, cfg: ProjectConfig) -> list[str]:
 
     cache_writes = run_usage.get("cache_write_tokens", 0)
     planner_writes = run_usage.get("planner_cache_write_tokens", 0)
-    prices = _price_map()
+    prices = cached_price_map(cfg)
 
     lines = [
         "## Cost",

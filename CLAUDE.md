@@ -1912,6 +1912,53 @@ content before deleting. "Read artifacts; do not regex them" is usually read as
 being about patterns; a string search for a delimiter that the format repeats
 is the same bet with different syntax.
 
+**A relative path is a decision the launch command makes, and it appears in
+no config, no log and no artifact.** `PRICE_MAP_FILENAME` was the bare string
+`"model-prices.json"`, spelled out at three call sites, so litellm's public
+rate table cached against the *process cwd*. Launched from beside the plan
+documents — the obvious cwd, because that is where the config is — 1.76MB of
+somebody else's JSON landed in a **tracked** directory of the target
+repository. It sat untracked until a stage's `checks` commit swept it onto the
+stage branch; the scope gate correctly flagged it; and the revision prompt,
+which embeds the whole stage diff, was refused by the provider at 1,020,584
+tokens against a 1,000,000 ceiling. 1,807,718 of the 1,829,531 characters in
+that block were the one file, and every other file in the diff came to 12,266.
+A 29-minute run died on a stage that had nothing wrong with it.
+
+Three things worth separating out of that. **The cache had already appeared
+somewhere it did not belong and been answered with a `.gitignore` line** —
+`code-gantry/.gitignore:39` is a bare `model-prices.json` — which suppressed
+the symptom in the one repository that noticed and left the mechanism running
+everywhere else. **The size was never needed**: the table is 3,055 entries and
+a run prices three, 5,165 characters between them, so the cache is a
+projection now and measures 5,929 bytes rather than 1,758,871. Keeping it
+whole was the `config should hold the path, not the copy` instinct honoured at
+the config layer and abandoned one layer out — we avoided a hand-maintained
+rate table by making a verbatim copy of someone else's. And **the diff a
+revision prompt carries has no ceiling at all**: `max_chars_per_call` bounds
+what the planner *reads*, and this arrived through a channel with no budget on
+it, which is the 1,103,000-token rejection again by a route the fix for that
+one does not cover.
+
+**And the guard existed at one of the two call sites.** `executorloop` memoised
+the table with a comment explaining that the loader reaches the network on
+every call and that pricing per attempt without one would make hundreds of HTTP
+calls a run. `nodes._stage_spend` called the loader directly and is reached
+from `advance`, so every landed stage refetched 1.76MB and rewrote the file.
+Same reasoning, same module pair, written once. The memo is in the loader now,
+where a third caller inherits it rather than having to remember it — the same
+answer as the transcript being a `list` subclass.
+
+**A test that searches for a constant's value cannot find the code that names
+it.** The test written to pin the single path selector asserted that no other
+module contains `PRICE_MAP_FILENAME` — and passed against all three offenders,
+because the imported symbol evaluates to `"model-prices.json"` while the code
+in question spells the *identifier*. It reads exactly like a test that
+verified something. Grep found the three files in one command; the test found
+none, and would have gone on approving them. When a check is written over
+source text, run the equivalent search by hand once and make the two agree
+before trusting the green.
+
 ## Where things live
 
 `nodes.py` holds the loop's decisions — which failures route to the executor,
@@ -1990,6 +2037,15 @@ predict what an existing gate observes.
 clearing it is replacing it rather than zeroing a list of fields; `count_calls`,
 `count_refusals` and `render_counts` are the one summariser all three roles
 report through, after each had grown its own.
+
+`pricing.py` turns token counts into dollars from a table nobody here
+maintains. `price_map_path` is the single selector for where the cache goes —
+under `work_dir`, which is gitignored by construction, and `None` rather than a
+cwd-relative fallback when there is no work dir, because "somewhere arbitrary"
+is what cost a run. `project_entries` keeps only the models `configured_models`
+names, entries whole: projecting by *key* would be a hand-written subset of an
+upstream schema, and it would save kilobytes on a file that is now kilobytes.
+`cached_price_map` is the one memo, so a caller cannot fetch per landing.
 
 `configversion.py` is what replaced `approval.py`: a config is identified by
 its git blob sha, recorded at run start and checked on every resume, so an
