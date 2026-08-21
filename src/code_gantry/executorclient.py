@@ -146,10 +146,30 @@ def session_param(cfg: ExecutorConfig, session_id) -> dict:
 
     Empty for a missing identity rather than sending `""`, which is not
     stickiness but a malformed request.
+
+    Returned wrapped in `extra_body`, because this is a *body* field the
+    Responses schema knows nothing about. Handed over as a keyword it is a
+    `TypeError` on every call, which is how it reached production: the unit
+    test asserted the dict and a hand probe happened to pass the value as
+    `extra_body`, so nothing compared what the loop builds against what the
+    SDK accepts.
     """
     if not session_id or not is_openrouter(cfg.resolve_api_base()):
         return {}
-    return {"session_id": session_id}
+    return {"extra_body": {"session_id": session_id}}
+
+
+def merged_body(cfg: ExecutorConfig, session_id) -> dict:
+    """One `extra_body`, holding both the operator's fields and ours.
+
+    Two `extra_body` keys in one splat and the later one wins silently, so
+    they cannot be separate kwargs. Ours goes on last, which is safe rather
+    than rude: `session_id` is a reserved key that `request_extra` may not
+    set, so there is nothing of the operator's to overwrite.
+    """
+    body = dict((request_extra(cfg).get("extra_body") or {}))
+    body.update(session_param(cfg, session_id).get("extra_body") or {})
+    return {"extra_body": body} if body else {}
 
 
 def _reasoning_param(cfg: ExecutorConfig) -> dict:
@@ -290,8 +310,9 @@ class OpenAIExecutorModel:
             **_reasoning_param(self.cfg),
             # Last, but it cannot reach anything above it: the reserved keys
             # are refused at config load, so this adds and never replaces.
-            **session_param(self.cfg, self.session_id),
-            **request_extra(self.cfg),
+            # One body for both, built by `merged_body`. These were two
+            # separate splats and the second silently replaced the first.
+            **merged_body(self.cfg, self.session_id),
         }
         if cache_key:
             extra["prompt_cache_key"] = cache_key

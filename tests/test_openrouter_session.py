@@ -62,7 +62,7 @@ class TestItIsSentWithoutBeingAskedFor:
         from code_gantry.executorclient import session_param
 
         cfg = ExecutorConfig(model="m", api_base="https://openrouter.ai/api/v1")
-        assert session_param(cfg, "run-1") == {"session_id": "run-1"}
+        assert session_param(cfg, "run-1") == {"extra_body": {"session_id": "run-1"}}
 
     def test_a_first_party_endpoint_does_not(self):
         """It would 400 on an argument it does not recognise."""
@@ -121,3 +121,68 @@ class TestOperatorsCannotSetIt:
         cfg = ExecutorConfig(model="m", request_extra={"session_id": "mine"})
         problems = _request_extra_problems("executor", cfg)
         assert problems and "session_id" in problems[0]
+
+
+class TestTheKwargsAreAcceptable:
+    """The seam neither earlier test drove, and it stopped a run.
+
+    `session_param` returned `{"session_id": ...}` and the loop splatted it
+    into `responses.create(**extra)`. That is not a parameter of the Responses
+    API, so every call raised `TypeError: got an unexpected keyword argument
+    'session_id'` — four attempts in seconds, before the executor read a file.
+    The unit test passed because it asserted the dict; the probe passed because
+    it happened to pass the value as `extra_body`. Neither drove what the loop
+    actually builds against what the SDK actually accepts.
+
+    `session_id` is a *body* field, like the operator's `plugins`, so both have
+    to end up inside one `extra_body` — two `extra_body` keys in one splat and
+    the later wins silently.
+    """
+
+    def test_the_session_goes_inside_the_body(self):
+        from code_gantry.executorclient import session_param
+
+        cfg = ExecutorConfig(model="m", api_base="https://openrouter.ai/api/v1")
+        assert session_param(cfg, "run-1") == {"extra_body": {"session_id": "run-1"}}
+
+    def test_it_merges_with_an_operator_declared_body(self):
+        """Rather than one replacing the other."""
+        from code_gantry.executorclient import merged_body
+
+        cfg = ExecutorConfig(
+            model="m",
+            api_base="https://openrouter.ai/api/v1",
+            request_extra={"plugins": [{"id": "pareto-router"}]},
+        )
+        body = merged_body(cfg, "run-1")["extra_body"]
+        assert body["session_id"] == "run-1"
+        assert body["plugins"] == [{"id": "pareto-router"}]
+
+    def test_every_top_level_kwarg_is_one_the_sdk_accepts(self):
+        """Checked against the installed SDK's own signature.
+
+        Provider shapes come from the installed package, not from recall — and
+        the failure this pins was a keyword the package does not declare.
+        """
+        import inspect
+
+        from openai import OpenAI
+        from code_gantry.executorclient import merged_body, _reasoning_param
+
+        cfg = ExecutorConfig(
+            model="m",
+            api_base="https://openrouter.ai/api/v1",
+            reasoning_effort="max",
+            request_extra={"plugins": [{"id": "pareto-router"}]},
+        )
+        built = {
+            "prompt_cache_options": {"mode": "explicit"},
+            **_reasoning_param(cfg),
+            **merged_body(cfg, "run-1"),
+            "prompt_cache_key": "k",
+        }
+        accepted = set(
+            inspect.signature(OpenAI(api_key="x").responses.create).parameters
+        )
+        unknown = sorted(set(built) - accepted)
+        assert not unknown, f"not parameters of responses.create: {unknown}"
