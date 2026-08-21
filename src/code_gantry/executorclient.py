@@ -111,18 +111,43 @@ def request_extra(cfg: ExecutorConfig) -> dict:
     return {"extra_body": dict(extra)} if extra else {}
 
 
-def session_param(cfg: ExecutorConfig, session_id) -> dict:
-    """`session_id`, when the endpoint is a router that understands it.
+def is_openrouter(api_base) -> bool:
+    """Whether this endpoint is OpenRouter, by host.
 
-    Absent by default for the reason `_reasoning_param` gives below and one
-    more: this is a gateway's field, and a first-party endpoint rejects an
-    argument it does not recognise, so sending it unasked would turn every
-    call into a 400.
+    A hostname in code, which is normally the wrong place for anything a
+    deployment knows — but this is the same category as `prompt_cache_options`
+    two functions down, which is OpenAI's field and hardcoded: knowledge of a
+    provider's API rather than of a project. It has to be a fact rather than a
+    declaration because a first-party endpoint rejects an argument it does not
+    recognise, so getting it wrong is a 400 on every call rather than a missed
+    optimisation.
+
+    Matched on the host, not on the string appearing somewhere in the URL: a
+    path that happens to contain the name is a different service.
+    """
+    if not api_base:
+        return False
+    from urllib.parse import urlparse
+
+    host = (urlparse(str(api_base)).hostname or "").lower()
+    return host == "openrouter.ai" or host.endswith(".openrouter.ai")
+
+
+def session_param(cfg: ExecutorConfig, session_id) -> dict:
+    """`session_id`, on every OpenRouter call.
+
+    Not a router control, which is how it was first read here. OpenRouter uses
+    it as the sticky-routing key generally — a session goes back to the
+    provider holding the warm cache — and one model can be served by several
+    upstream providers with separate caches. So a *pinned* model needs it too,
+    or consecutive calls land on different providers and the prefix is cold
+    through no fault of the model. Reusing a resolved model is an extra effect
+    on router models, not the whole of it.
 
     Empty for a missing identity rather than sending `""`, which is not
     stickiness but a malformed request.
     """
-    if not getattr(cfg, "session_stickiness", False) or not session_id:
+    if not session_id or not is_openrouter(cfg.resolve_api_base()):
         return {}
     return {"session_id": session_id}
 

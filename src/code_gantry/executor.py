@@ -161,6 +161,7 @@ class Executor:
         git: Git | None = None,
         log=None,
         tool_log=None,
+        run_id: str = "",
     ):
         self.cfg = cfg
         self.runner = runner
@@ -174,6 +175,21 @@ class Executor:
         self.log = log
         # Reads, to the file the timeline is kept free of. See `RunPaths`.
         self.tool_log = tool_log
+        # Scopes the gateway session below. Per run rather than per project:
+        # the first cut keyed it on `project_branch`, which is stable across
+        # runs, so two runs inside the idle window could inherit each other's
+        # routing and a fresh run could be held on the model the last one
+        # resolved. A fresh run should re-ask — that is the whole argument for
+        # letting the executor follow the frontier at all.
+        self.run_id = run_id
+
+    def session_identity(self) -> str:
+        """The gateway session this run's executor calls belong to.
+
+        Empty without a run id rather than falling back to a constant, which
+        every run would then share — the defect this replaced.
+        """
+        return cache_key("session", self.run_id) if self.run_id else ""
 
     def _tracked_paths(self) -> list[str] | None:
         """What the repository currently tracks, for the mention shield.
@@ -275,7 +291,7 @@ class Executor:
         # takes 274-353. Per stage it would expire between every pair of
         # stages by construction; this way it is identical inside an attempt
         # and at least asks to hold across them.
-        model.session_id = cache_key("session", self.cfg.project_branch)
+        model.session_id = self.session_identity()
         kept = set(_within_read_budget(stage.read_files, self.cfg))
 
         from code_gantry.prompts import build_executor_messages

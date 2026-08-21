@@ -469,7 +469,13 @@ def build_runtime(
         runner=runner,
         # The executor takes git only to list tracked paths, which is what tells
         # the mention shield what counts as a path in the prompt it is handed.
-        executor=Executor(cfg, runner, git=git, log=logger, tool_log=tool_log),
+        executor=Executor(
+            cfg, runner, git=git, log=logger, tool_log=tool_log,
+            # Scopes the gateway session to this run. `paths` is the
+            # only thing here that knows the run id, and the executor
+            # is built before the run has done anything.
+            run_id=paths.run_id,
+        ),
         planner=planner,
         reviewer=reviewer,
         log=logger,
