@@ -51,6 +51,13 @@ class Dialect:
     _cache_marker: Callable[[str | None], dict]
     _request_cache_options: dict
     _usage: Callable[[object], object]
+    _tool_calls: Callable[[object], list]
+    _stopped: Callable[[object], bool]
+    _append_model_turn: Callable[[list, object], None]
+    _append_tool_results: Callable[..., None]
+    _tool_schemas: Callable[[object], list]
+    _split_system: Callable[..., tuple]
+    _client: Callable[[object], object]
 
     def structured(self, schema) -> dict:
         """The schema argument, when the caller wants a parsed answer."""
@@ -98,6 +105,73 @@ class Dialect:
         return self._usage(raw)
 
 
+    def split_system(self, conversation: list) -> tuple[list | None, list]:
+        """The system prompt, lifted out where the wire wants it separate.
+
+        Responses carries it as the first input item; Messages takes it as its
+        own argument and rejects a `{"role": "system"}` item outright. A role
+        builds one conversation and should not have to know which.
+
+        Never mutates: the caller holds this list across turns and mirrors it
+        to disk as it grows.
+        """
+        return self._split_system(self, conversation)
+
+    def client(self, cfg):
+        """The SDK client this wire talks through.
+
+        The key comes from the environment by name, never from config: config
+        is committed and hashed, and a key in either place is a key in the
+        repository.
+        """
+        return self._client(cfg)
+
+
+    # --- the tool loop ----------------------------------------------------
+    #
+    # Both clients grew their own: the planner's on Messages, the executor's
+    # on Responses, neither aware the other existed. They do the same four
+    # things in two shapes, and the shape belongs to the endpoint rather than
+    # the vendor — the same Google model returned `function_call` items on one
+    # and `tool_use` blocks on the other.
+
+    def tool_calls(self, response) -> list[dict]:
+        """What the model asked for, as `{id, name, args}`.
+
+        Tolerant of shape: this reads an SDK object in one place and a stub in
+        another, and a fourteen-hour run should not end on an attribute error.
+        """
+        return self._tool_calls(response)
+
+    def stopped(self, response) -> bool:
+        """Whether the model has finished asking for things.
+
+        Deliberately not a claim of success — "I am done" and "this needs a
+        file outside my scope so I have stopped" are the same signal here, and
+        the gates decide which happened.
+        """
+        return self._stopped(response)
+
+    def append_model_turn(self, conversation: list, response) -> None:
+        """Put the model's turn back into the conversation, in this wire's shape."""
+        self._append_model_turn(conversation, response)
+
+    def append_tool_results(
+        self, conversation: list, results, cache: bool = False, ttl: str | None = None
+    ) -> None:
+        """Answer every call from the last turn, marking only the last result.
+
+        A moving breakpoint rather than an accumulating one: on Messages only
+        the final mark counts for Gemini, and marking every result would pass
+        four breakpoints by the fifth turn and be rejected.
+        """
+        self._append_tool_results(self, conversation, list(results), cache, ttl)
+
+    def tool_schemas(self, specs) -> list[dict]:
+        """Operator- and role-declared tools, in this wire's shape."""
+        return self._tool_schemas(specs)
+
+
 def _responses_usage(raw):
     from code_gantry.openaiclient import extract_usage
 
@@ -108,6 +182,182 @@ def _messages_usage(raw):
     from code_gantry.planner import _extract_usage
 
     return _extract_usage(raw)
+
+
+
+# --- Responses ------------------------------------------------------------
+
+def _responses_tool_calls(response) -> list[dict]:
+    import json as _json
+
+    out = []
+    for item in getattr(response, "output", None) or []:
+        if _get(item, "type") != "function_call":
+            continue
+        raw = _get(item, "arguments") or "{}"
+        try:
+            args = _json.loads(raw)
+        except (TypeError, ValueError):
+            # A bad request, not a dead turn: an empty dict reaches dispatch,
+            # which answers with a refusal the model can act on.
+            args = {}
+        out.append({"id": _get(item, "call_id") or "", "name": _get(item, "name") or "",
+                    "args": args if isinstance(args, dict) else {}})
+    return out
+
+
+def _responses_stopped(response) -> bool:
+    return not _responses_tool_calls(response)
+
+
+def _responses_append_model_turn(conversation: list, response) -> None:
+    # The whole output list, not just the calls: a reasoning model emits a
+    # reasoning item that each function_call declares as required, and sending
+    # the call alone is rejected outright.
+    conversation.extend(getattr(response, "output", None) or [])
+
+
+def _responses_append_tool_results(wire, conversation, results, cache, ttl):
+    for i, (call_id, text) in enumerate(results):
+        block = {"type": "input_text", "text": text}
+        if cache and i == len(results) - 1:
+            block["prompt_cache_breakpoint"] = {"mode": "explicit"}
+        conversation.append(
+            {"type": "function_call_output", "call_id": call_id, "output": [block]}
+        )
+
+
+def _responses_tool_schemas(specs) -> list[dict]:
+    # Strict is not a preference: the SDK will not auto-parse a structured
+    # response beside a non-strict tool.
+    return [
+        {"type": "function", "name": s["name"], "description": s.get("description", ""),
+         "strict": True, "parameters": s["parameters"]}
+        for s in specs
+    ]
+
+
+# --- Messages -------------------------------------------------------------
+
+def _messages_tool_calls(response) -> list[dict]:
+    out = []
+    for block in getattr(response, "content", None) or []:
+        if _get(block, "type") != "tool_use":
+            continue
+        out.append({"id": _get(block, "id") or "", "name": _get(block, "name") or "",
+                    "args": _get(block, "input") or {}})
+    return out
+
+
+def _messages_stopped(response) -> bool:
+    return getattr(response, "stop_reason", None) != "tool_use"
+
+
+def _messages_append_model_turn(conversation: list, response) -> None:
+    blocks = []
+    for block in getattr(response, "content", None) or []:
+        kind = _get(block, "type")
+        if kind == "text":
+            blocks.append({"type": "text", "text": _get(block, "text") or ""})
+        elif kind == "tool_use":
+            blocks.append({"type": "tool_use", "id": _get(block, "id") or "",
+                           "name": _get(block, "name") or "",
+                           "input": _get(block, "input") or {}})
+        elif kind == "thinking":
+            # Carried so the model keeps its own reasoning across turns.
+            blocks.append({"type": "thinking", "thinking": _get(block, "thinking") or "",
+                           "signature": _get(block, "signature") or ""})
+        elif kind == "redacted_thinking":
+            # Gemini emits these on this wire. A thinking block dropped from
+            # the echo breaks the turn it belongs to.
+            blocks.append({"type": "redacted_thinking", "data": _get(block, "data") or ""})
+    if blocks:
+        conversation.append({"role": "assistant", "content": blocks})
+
+
+def _messages_append_tool_results(wire, conversation, results, cache, ttl):
+    # One message holding all of them: the API requires every tool_use to be
+    # answered in the next message.
+    blocks = [{"type": "tool_result", "tool_use_id": cid, "content": text}
+              for cid, text in results]
+    if blocks and cache:
+        blocks[-1]["cache_control"] = wire._cache_marker(ttl)
+    if blocks:
+        conversation.append({"role": "user", "content": blocks})
+
+
+def _messages_tool_schemas(specs) -> list[dict]:
+    return [
+        {"name": s["name"], "description": s.get("description", ""),
+         "input_schema": s["parameters"]}
+        for s in specs
+    ]
+
+
+def _get(obj, name):
+    """Attribute or key. An SDK object here, a plain dict in a transcript."""
+    if isinstance(obj, dict):
+        return obj.get(name)
+    return getattr(obj, name, None)
+
+
+
+def _no_split(wire, conversation):
+    """Responses keeps the system prompt where the caller put it."""
+    return None, list(conversation)
+
+
+def _lift_system(wire, conversation):
+    conv = list(conversation)
+    if not conv or _get(conv[0], "role") != "system":
+        return None, conv
+    head = conv[0]
+    blocks = [
+        {"type": "text", "text": _get(b, "text") or ""}
+        for b in (_get(head, "content") or [])
+    ]
+    return blocks, conv[1:]
+
+
+def _api_key(cfg) -> str:
+    import os
+
+    name = getattr(cfg, "api_key_env", None)
+    if not name:
+        raise KeyError("no api_key_env is configured for this endpoint")
+    if name not in os.environ:
+        raise KeyError(
+            f"{name} is not set; the client cannot authenticate. It is named in "
+            "the project config and read from the environment so that no key is "
+            "ever written to a file that gets committed."
+        )
+    return os.environ[name]
+
+
+def _responses_client(cfg):
+    from openai import OpenAI
+
+    kwargs = {"api_key": _api_key(cfg), "max_retries": 0}
+    base = cfg.resolve_api_base() if hasattr(cfg, "resolve_api_base") else None
+    if base:
+        kwargs["base_url"] = base
+    timeout = getattr(cfg, "request_timeout_seconds", None)
+    if timeout:
+        kwargs["timeout"] = timeout
+    return OpenAI(**kwargs)
+
+
+def _messages_client(cfg):
+    import anthropic
+
+    kwargs = {"api_key": _api_key(cfg), "max_retries": 0}
+    base = cfg.resolve_api_base() if hasattr(cfg, "resolve_api_base") else None
+    if base:
+        kwargs["base_url"] = base
+    timeout = getattr(cfg, "request_timeout_seconds", None)
+    if timeout:
+        kwargs["timeout"] = timeout
+    return anthropic.Anthropic(**kwargs)
 
 
 RESPONSES = Dialect(
@@ -122,6 +372,13 @@ RESPONSES = Dialect(
     _cache_marker=lambda _ttl: {"mode": "explicit"},
     _request_cache_options={"prompt_cache_options": {"mode": "explicit"}},
     _usage=_responses_usage,
+    _tool_calls=_responses_tool_calls,
+    _stopped=_responses_stopped,
+    _append_model_turn=_responses_append_model_turn,
+    _append_tool_results=_responses_append_tool_results,
+    _tool_schemas=_responses_tool_schemas,
+    _split_system=_no_split,
+    _client=_responses_client,
 )
 
 MESSAGES = Dialect(
@@ -134,6 +391,13 @@ MESSAGES = Dialect(
     _cache_marker=lambda ttl: {"type": "ephemeral", **({"ttl": ttl} if ttl else {})},
     _request_cache_options={},
     _usage=_messages_usage,
+    _tool_calls=_messages_tool_calls,
+    _stopped=_messages_stopped,
+    _append_model_turn=_messages_append_model_turn,
+    _append_tool_results=_messages_append_tool_results,
+    _tool_schemas=_messages_tool_schemas,
+    _split_system=_lift_system,
+    _client=_messages_client,
 )
 
 # Substrings, matched against a normalised model id. Deliberately not exact

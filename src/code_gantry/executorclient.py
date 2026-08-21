@@ -331,23 +331,22 @@ class OpenAIExecutorModel:
                 out.failure = f"the executor refused to answer: {declined}"
                 return out
 
-            requests = [
-                item
-                for item in (getattr(response, "output", None) or [])
-                if getattr(item, "type", "") == "function_call"
-            ]
+            wire = _dialect(self.cfg)
+            requests = wire.tool_calls(response)
             if not requests:
                 out.stopped = True
                 out.text = _final_text(response)
                 return out
 
-            # The whole turn back, then its results — every output item, not
-            # just the calls, because each `function_call` declares the
-            # reasoning item as required and echoing one without it is
-            # rejected.
-            conversation.extend(getattr(response, "output", None) or [])
-            for item in requests:
-                name, args = tool_request(item)
+            # The model's turn back, in whichever shape this wire wants — the
+            # whole output list on Responses, because each `function_call`
+            # declares its reasoning item as required; one assistant message
+            # of blocks on Messages, thinking included, because a dropped
+            # thinking block breaks the turn it belongs to.
+            wire.append_model_turn(conversation, response)
+            answers: list[tuple[str, str]] = []
+            for req in requests:
+                name, args = req["name"], req["args"]
                 out.calls.append(describe_call(name, args))
                 # Answered here rather than in `dispatch`, which is text in and
                 # text out for every other tool. A control signal returned as a
@@ -360,30 +359,27 @@ class OpenAIExecutorModel:
                 if name == REPLAN_TOOL["name"]:
                     out.replan_kind = str(args.get("kind") or "")
                     out.replan_reason = str(args.get("reason") or "")
-                conversation.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": item.call_id,
-                        "output": [
-                            {
-                                "type": "input_text",
-                                "text": dispatch(
-                                    name,
-                                    args,
-                                    reader,
-                                    editor,
-                                    semantic,
-                                    project_tools=self.project_tools,
-                                    runner=self.runner,
-                                ),
-                                # Marks accumulate rather than move, so every
-                                # turn extends the cached prefix instead of
-                                # restarting it.
-                                "prompt_cache_breakpoint": {"mode": "explicit"},
-                            }
-                        ],
-                    }
+                answers.append(
+                    (
+                        req["id"],
+                        dispatch(
+                            name,
+                            args,
+                            reader,
+                            editor,
+                            semantic,
+                            project_tools=self.project_tools,
+                            runner=self.runner,
+                        ),
+                    )
                 )
+            # Marked, so the cached prefix follows the conversation: on
+            # Responses marks accumulate and every turn extends it; on Messages
+            # only the last one counts, so it moves.
+            wire.append_tool_results(
+                conversation, answers, cache=True,
+                ttl=getattr(self.cfg, "cache_ttl", None),
+            )
             logged = self._log_new_calls(reader, editor, logged)
 
             # The model has handed the stage back, so there is nothing further
