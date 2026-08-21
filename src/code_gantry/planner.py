@@ -166,6 +166,15 @@ class PlannedStage(BaseModel):
             "preserving existing behaviour."
         ),
     )
+    difficulty: Literal["low", "medium", "high"] = Field(
+        description=(
+            "How much *reasoning* this stage asks of whoever executes it: "
+            "`low`, `medium` or `high`.\n\n"
+            "Do not judge by expected diff size. A mechanical rename across "
+            "fifty files is easy. A one-line change may be very difficult when "
+            "the obvious solution is not the correct one."
+        ),
+    )
     forbidden_patterns: list[str] = Field(
         default_factory=list,
         description=(
@@ -1649,6 +1658,7 @@ def append_stage_cost(
     spend: list[dict] | None = None,
     roles: tuple[tuple[str, str, str], ...] = (),
     changed: tuple[int, int, int] | None = None,
+    difficulty: str = "",
 ) -> Path:
     """Record what a landed stage cost, durably, in one shape for all three roles.
 
@@ -1691,6 +1701,20 @@ def append_stage_cost(
         f"{STAGE_COST_PREFIX}`{merge_sha}` `{stage_id}` — "
         f"{files} file(s), {context_tokens:,} context"
     )
+    # The planner's own estimate, recorded beside what the stage actually
+    # cost. Nothing routes on it; it is here so the estimate can be checked
+    # against the outcome, which is the only way to find out whether the
+    # planner can tell a hard stage from an easy one.
+    #
+    # It lands in a file the planner reads, so this is a calibration loop
+    # rather than a blind prediction — the next derivation sees its own past
+    # ratings next to what they turned out to cost. That is a feature and a
+    # confound at once, and it is worth knowing which when the numbers are
+    # read. Omitted when absent, like every other optional segment here,
+    # because a placeholder would be noise on every line of a file the planner
+    # pays for on every call.
+    if difficulty:
+        line += f", {difficulty} difficulty"
     # What the stage actually changed, beside what it was allowed to. The
     # declared count is a permission and stages routinely touch less than they
     # may; this is measured off the landing commit. Both are kept because they

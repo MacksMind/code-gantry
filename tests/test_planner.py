@@ -41,6 +41,10 @@ def a_stage(**over):
         "id": "extract-service",
         "instruction": "Extract the service object.",
         "edit_files": ["app/services/**"],
+        # Required on the schema, so every fixture answers it. The value is
+        # arbitrary here — what the field is for is measured against real
+        # stages, not asserted in a builder.
+        "difficulty": "medium",
     }
     fields.update(over)
     return PlannedStage(**fields)
@@ -113,7 +117,11 @@ class TestSchemaExcludesExecutableFields:
         # Pydantic ignores unknown keys here; the allowlist filter in config is
         # the second line of defence.
         stage = PlannedStage(
-            id="s", instruction="x", edit_files=["a"], command="rm -rf /"
+            id="s",
+            instruction="x",
+            edit_files=["a"],
+            difficulty="low",
+            command="rm -rf /",
         )
         assert not hasattr(stage, "command")
 

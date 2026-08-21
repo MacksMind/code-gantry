@@ -30,6 +30,7 @@ def _fields(sid="s", **over):
         "must_not_remain": [],
         "test_paths": [],
         "require_new_tests": False,
+        "difficulty": "medium",
     }
     base.update(over)
     return base

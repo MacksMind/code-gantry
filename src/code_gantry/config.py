@@ -55,6 +55,11 @@ PLANNER_WRITABLE_FIELDS = frozenset(
         # the operator's. What counts as a test file stays in operator config,
         # so this asks for coverage without reaching anything executable.
         "require_new_tests",
+        # An adjective about the work. Nothing here can become an instruction
+        # to run, which is the question to answer deliberately whenever a
+        # field joins `Stage`. Read by nothing that decides anything — it is
+        # recorded beside what the stage cost so the rating can be checked.
+        "difficulty",
     }
 )
 
@@ -603,6 +608,11 @@ class Stage(_Strict):
     read_excerpts: list[Excerpt] = []
     constraints: str | None = None
     acceptance: str | None = None
+    # The planner's own estimate: "low", "medium" or "high". Empty on a stage
+    # drawn before this existed, which matters because `current` is a dumped
+    # `Stage` and `Stage` forbids extras — a resume must survive the field
+    # appearing.
+    difficulty: str = ""
     forbidden_patterns: list[str] = []
     # Regexes that must not survive anywhere in `edit_files` once the stage is
     # done. The complement of `forbidden_patterns`, which reads added lines and

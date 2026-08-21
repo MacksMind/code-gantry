@@ -1962,6 +1962,8 @@ def advance(state: RunState, rt: Runtime) -> dict:
             # stage's declared scope. `edit_files` is a permission and stages
             # routinely touch less than it allows.
             changed=rt.git.shortstat(result["merge_sha"]),
+            # What the planner said this would take, beside what it took.
+            difficulty=stage.difficulty,
         )
     rt.log(f"[advance] {stage.id} landed as {result['merge_sha'][:12]}")
 

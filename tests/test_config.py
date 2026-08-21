@@ -253,6 +253,11 @@ class TestPlannerPartition:
             "must_not_remain",
             "test_paths",
             "require_new_tests",
+            # An adjective about the work, and the plainest entry on the list:
+            # one of three words, read by nothing that decides anything. It is
+            # recorded beside what the stage cost so the planner's estimate can
+            # be checked against the outcome.
+            "difficulty",
         }
 
     def test_executable_fields_are_not_writable(self):
