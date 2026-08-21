@@ -804,8 +804,8 @@ def check_executor_endpoint(cfg: ProjectConfig) -> list[Check]:
         )
         return checks
 
-    wanted = _served_model_name(cfg.executor.model)
-    if wanted in names:
+    wanted = cfg.executor.model
+    if model_is_offered(wanted, names):
         checks.append(
             Check(f"endpoint offers {wanted!r}", True, f"{len(names)} model(s) available")
         )
@@ -814,12 +814,7 @@ def check_executor_endpoint(cfg: ProjectConfig) -> list[Check]:
             Check(
                 f"endpoint offers {wanted!r}",
                 False,
-                f"{label}/models does not list {wanted!r}. It offers: "
-                + ", ".join(sorted(names))
-                + f".\nexecutor.model is {cfg.executor.model!r}; everything after "
-                "the provider prefix must match a name the server accepts. If "
-                "this endpoint lists models lazily, this is the check to "
-                "reconsider.",
+                f"{label}/models: " + unavailable_detail(wanted, names),
             )
         )
     return checks
@@ -833,6 +828,60 @@ def _redact(value, address: str, label: str) -> str:
 def _served_model_name(configured: str) -> str:
     """The model name as the server will see it, minus the litellm prefix."""
     return configured.split("/", 1)[1] if "/" in configured else configured
+
+
+def model_is_offered(configured: str, names) -> bool:
+    """Whether the catalogue contains the configured model, either convention.
+
+    Two exist and they are opposites. A litellm-style route carries the
+    provider in the model string and strips it before the request leaves, so
+    `openai/qwen3-coder-next` reaches the server as `qwen3-coder-next`. A
+    gateway does the reverse: the slug *is* the id, and `openrouter/pareto-code`
+    must be matched whole.
+
+    The whole form is tried first and the stripped one only as a fallback, so a
+    qualified catalogue is never matched on its suffix — `openai/pareto-code`
+    is not `openrouter/pareto-code`, and collapsing them would merge two
+    vendors' identically named models.
+
+    Written after the first real gateway config failed this check against a
+    catalogue that contained the model. A gate that refuses a correct config is
+    worse than one that is merely absent, because the lesson it teaches is to
+    turn it off.
+    """
+    names = set(names)
+    if configured in names:
+        return True
+    stripped = _served_model_name(configured)
+    return stripped != configured and stripped in names and not any(
+        "/" in name for name in names
+    )
+
+
+def unavailable_detail(configured: str, names) -> str:
+    """Why the model was not found, without reciting the whole catalogue.
+
+    The first failure printed 437 names into `last-run.out`, which is appended
+    across every resume. What an operator needs is the near miss — a typo is
+    the overwhelmingly likely cause — and a count for everything else.
+    """
+    import difflib
+
+    names = sorted(names)
+    close = difflib.get_close_matches(configured, names, n=5, cutoff=0.6)
+    if not close:
+        close = difflib.get_close_matches(
+            _served_model_name(configured), names, n=5, cutoff=0.6
+        )
+    shown = ", ".join(names) if len(names) <= 12 else ", ".join(close) or "nothing similar"
+    return (
+        f"{configured!r} is not offered. {len(names)} model(s) available; "
+        f"closest: {shown}.\nA model id is matched whole first and then "
+        "without its routing prefix, so both `openrouter/pareto-code` and "
+        "`openai/qwen3-coder-next` are spelled here exactly as the operator "
+        "means them. If this endpoint lists models lazily, this is the check "
+        "to reconsider."
+    )
 
 
 def _model_names(body: str) -> set[str] | None:
