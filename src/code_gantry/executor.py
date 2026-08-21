@@ -262,6 +262,20 @@ class Executor:
             project_tools=self.cfg.project_tools,
             runner=self.runner,
         )
+        # The same identity as the cache key, a different control. A router
+        # re-ranks every request and, absent this, falls back to fingerprinting
+        # the first two messages — a fallback that engages only once the
+        # provider has reported cache usage, so the opening turn is always free
+        # to be re-routed. Measured: an attempt served turn 1 from one model
+        # and turns 2-20 from another, switching at exactly that boundary.
+        #
+        # Scoped like the cache key rather than per stage, and the arithmetic
+        # decides it: a session expires after five minutes idle, while our
+        # inter-stage gaps run 500-900 seconds because the full suite alone
+        # takes 274-353. Per stage it would expire between every pair of
+        # stages by construction; this way it is identical inside an attempt
+        # and at least asks to hold across them.
+        model.session_id = cache_key("session", self.cfg.project_branch)
         kept = set(_within_read_budget(stage.read_files, self.cfg))
 
         from code_gantry.prompts import build_executor_messages

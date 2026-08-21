@@ -111,6 +111,22 @@ def request_extra(cfg: ExecutorConfig) -> dict:
     return {"extra_body": dict(extra)} if extra else {}
 
 
+def session_param(cfg: ExecutorConfig, session_id) -> dict:
+    """`session_id`, when the endpoint is a router that understands it.
+
+    Absent by default for the reason `_reasoning_param` gives below and one
+    more: this is a gateway's field, and a first-party endpoint rejects an
+    argument it does not recognise, so sending it unasked would turn every
+    call into a 400.
+
+    Empty for a missing identity rather than sending `""`, which is not
+    stickiness but a malformed request.
+    """
+    if not getattr(cfg, "session_stickiness", False) or not session_id:
+        return {}
+    return {"session_id": session_id}
+
+
 def _reasoning_param(cfg: ExecutorConfig) -> dict:
     """Effort, only when the operator chose one.
 
@@ -149,6 +165,11 @@ class OpenAIExecutorModel:
         # the one-line-per-call view, in the same file the planner and reviewer
         # write to, so one `tail -f` shows every role.
         self.tool_log = tool_log
+        # Constant for the life of a run, so it is bound here rather than
+        # handed over on every call — the same reasoning that puts the tool
+        # menu and the runner on the instance. Assigned by `Executor`, which is
+        # the only thing that knows the project identity this is derived from.
+        self.session_id: str | None = None
         self._client = client if client is not None else build_openai_client(cfg)
 
     @staticmethod
@@ -244,6 +265,7 @@ class OpenAIExecutorModel:
             **_reasoning_param(self.cfg),
             # Last, but it cannot reach anything above it: the reserved keys
             # are refused at config load, so this adds and never replaces.
+            **session_param(self.cfg, self.session_id),
             **request_extra(self.cfg),
         }
         if cache_key:

@@ -227,6 +227,21 @@ class ExecutorConfig(_EndpointConfig):
     # conversation. `RESERVED_REQUEST_KEYS` refuses those at config load, which
     # is the first moment the question can be answered.
     request_extra: dict = Field(default_factory=dict)
+    # Send `session_id`, so a router keeps this project on one model.
+    #
+    # OpenRouter's routers re-rank per request. Without an explicit session
+    # they fall back to fingerprinting the first system and user message, and
+    # that fallback engages only *after* the provider reports cache usage —
+    # which has not happened on the opening turn. Measured: an attempt served
+    # turn 1 from one model and turns 2-20 from another, switching at exactly
+    # that boundary.
+    #
+    # Declared rather than inferred from the model id, because a first-party
+    # endpoint rejects an argument it does not recognise, and which endpoints
+    # accept this is a property of a deployment. The *value* is ours, derived
+    # from the project identity next to the cache key — which is why
+    # `session_id` is a reserved key that `request_extra` may not set.
+    session_stickiness: bool = False
     # Caching is a property of the
     # endpoint rather than of the work: against a local server that prices
     # nothing and caches nothing it buys nothing and adds a keepalive ping
@@ -1582,6 +1597,9 @@ RESERVED_REQUEST_KEYS = frozenset(
         # an unexplained bill.
         "prompt_cache_options",
         "prompt_cache_key",
+        # Derived from the project identity, like the two above. A constant in
+        # config would put two projects, or two roles, on one session.
+        "session_id",
     }
 )
 
