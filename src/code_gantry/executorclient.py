@@ -167,9 +167,30 @@ def merged_body(cfg: ExecutorConfig, session_id) -> dict:
     than rude: `session_id` is a reserved key that `request_extra` may not
     set, so there is nothing of the operator's to overwrite.
     """
-    body = dict((request_extra(cfg).get("extra_body") or {}))
+    declared = dict((request_extra(cfg).get("extra_body") or {}))
+    if not is_openrouter(cfg.resolve_api_base()):
+        return {"extra_body": declared} if declared else {}
+
+    body: dict = {
+        # Route only to providers that can honour what this request carries.
+        #
+        # Not a provider list: `provider.only` pins one upstream and discards
+        # the fallback that is the reason to use a gateway. This keeps every
+        # provider that supports the parameters and excludes only those that
+        # would drop one — which the gateway does silently.
+        #
+        # Measured, and the tell was the token count rather than the answer. A
+        # planner call routed to a provider without structured-output support
+        # arrived carrying **107 input tokens** against 6,929 on every call
+        # that parsed: `output_format` serialises an 18,400-character schema,
+        # so 107 is the bare prompt. The parameter was removed in transit, not
+        # ignored on arrival, and prose is a well-formed answer to a prompt
+        # with no schema attached.
+        "provider": {"require_parameters": True},
+    }
+    body.update(declared)  # an operator's own routing block wins outright
     body.update(session_param(cfg, session_id).get("extra_body") or {})
-    return {"extra_body": body} if body else {}
+    return {"extra_body": body}
 
 
 def _reasoning_param(cfg: ExecutorConfig) -> dict:

@@ -186,3 +186,50 @@ class TestTheKwargsAreAcceptable:
         )
         unknown = sorted(set(built) - accepted)
         assert not unknown, f"not parameters of responses.create: {unknown}"
+
+
+class TestParametersMustSurviveTheRoute:
+    """Route only to providers that support what the request carries.
+
+    Not a provider list. `provider.only` pins one upstream and throws away the
+    fallback that is the reason to use a gateway at all; `require_parameters`
+    keeps every provider that can honour the request and excludes only those
+    that would silently drop something.
+
+    Measured, and the evidence is the token count rather than the answer. One
+    planner call routed to Amazon Bedrock came back as markdown, and the
+    gateway log shows it received **107 input tokens** against 6,929 on every
+    call that parsed. `output_format` serialises an 18,400-character JSON
+    schema into the request; 107 tokens is the bare prompt. So the parameter
+    was stripped in transit rather than ignored on arrival, and the model
+    answered the only question it was given.
+
+    That is the failure this prevents, and it is invisible in the response —
+    prose is a perfectly well-formed reply to a prompt with no schema attached.
+    """
+
+    def test_openrouter_calls_require_supported_parameters(self):
+        from code_gantry.executorclient import merged_body
+
+        cfg = ExecutorConfig(model="m", api_base="https://openrouter.ai/api/v1")
+        body = merged_body(cfg, "run-1")["extra_body"]
+        assert body["provider"]["require_parameters"] is True
+
+    def test_a_first_party_endpoint_is_left_alone(self):
+        """`provider` is the gateway's field and would be an unknown argument."""
+        from code_gantry.executorclient import merged_body
+
+        assert merged_body(ExecutorConfig(model="m"), "run-1") == {}
+
+    def test_an_operator_may_still_shape_routing(self):
+        """The default is a floor, not a ceiling. An operator who declares
+        their own `provider` block has made a deliberate choice and keeps it."""
+        from code_gantry.executorclient import merged_body
+
+        cfg = ExecutorConfig(
+            model="m",
+            api_base="https://openrouter.ai/api/v1",
+            request_extra={"provider": {"require_parameters": False, "sort": "price"}},
+        )
+        body = merged_body(cfg, "run-1")["extra_body"]
+        assert body["provider"] == {"require_parameters": False, "sort": "price"}
