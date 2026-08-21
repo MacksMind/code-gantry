@@ -21,9 +21,14 @@ from __future__ import annotations
 
 from code_gantry.dialects import MESSAGES, RESPONSES, dialect_for
 
+# Roles that still speak exactly one wire. The executor is absent because it
+# no longer does: its client, tool schemas, call, echo, results and stop
+# detection all come from the dialect its model asks for, so it has nothing to
+# mismatch against. This table shrinks as roles are ported, and empties when
+# the last one is — which is the point of it existing rather than a table of
+# what each role is.
 ROLE_WIRE = {
     "planner": MESSAGES,    # anthropic.Anthropic().messages.parse
-    "executor": RESPONSES,  # OpenAI().responses.create
     "reviewer": RESPONSES,  # OpenAI().responses.parse
 }
 

@@ -151,8 +151,9 @@ class TestAnsweringWithResults:
 
 class TestToolSchemas:
     SPEC = [{"name": "read_file", "description": "Read it.",
-             "parameters": {"type": "object", "properties": {"path": {"type": "string"}},
-                            "required": ["path"], "additionalProperties": False}}]
+             "input_schema": {"type": "object",
+                              "properties": {"path": {"type": "string"}},
+                              "required": ["path"]}}]
 
     def test_responses_is_flat_and_strict(self):
         """Strict is not a preference: the SDK will not auto-parse a structured
@@ -161,7 +162,14 @@ class TestToolSchemas:
         assert t["type"] == "function" and t["strict"] is True
         assert t["name"] == "read_file" and "parameters" in t
 
-    def test_messages_nests_the_schema_under_input_schema(self):
+    def test_messages_takes_the_neutral_spec_as_it_stands(self):
+        """The shape this codebase already builds *is* this wire's shape."""
         t = MESSAGES.tool_schemas(self.SPEC)[0]
         assert set(t) == {"name", "description", "input_schema"}
         assert t["input_schema"]["properties"]["path"]["type"] == "string"
+
+    def test_neither_mutates_what_it_was_handed(self):
+        before = json.dumps(self.SPEC)
+        RESPONSES.tool_schemas(self.SPEC)
+        MESSAGES.tool_schemas(self.SPEC)
+        assert json.dumps(self.SPEC) == before

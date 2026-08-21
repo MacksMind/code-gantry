@@ -58,6 +58,9 @@ class Dialect:
     _tool_schemas: Callable[[object], list]
     _split_system: Callable[..., tuple]
     _client: Callable[[object], object]
+    _refusal: Callable[[object], str]
+    _final_text: Callable[[object], str]
+    _send: Callable[..., object]
 
     def structured(self, schema) -> dict:
         """The schema argument, when the caller wants a parsed answer."""
@@ -103,6 +106,30 @@ class Dialect:
         part of it that was a cache read.
         """
         return self._usage(raw)
+
+
+    def refusal(self, response) -> str:
+        """The refusal text, if the model declined.
+
+        Looked for rather than read off a field: on Responses it is a content
+        part inside an output message; on Messages it is a stop reason. Missing
+        it lets the absence of an answer be reported as an unparsable one —
+        true, but not the diagnosis.
+        """
+        return self._refusal(response)
+
+    def final_text(self, response) -> str:
+        """The model's closing message, for the attempt log."""
+        return self._final_text(response)
+
+    def send(self, client, cfg, conversation: list, tools, extra: dict):
+        """One call, on this wire.
+
+        Everything shape-dependent is settled here: where the system prompt
+        goes, whether a token ceiling is mandatory, and which method carries a
+        tool loop.
+        """
+        return self._send(self, client, cfg, conversation, tools, extra)
 
 
     def split_system(self, conversation: list) -> tuple[list | None, list]:
@@ -238,12 +265,17 @@ def _responses_append_tool_results(wire, conversation, results, cache, ttl):
 
 def _responses_tool_schemas(specs) -> list[dict]:
     # Strict is not a preference: the SDK will not auto-parse a structured
-    # response beside a non-strict tool.
-    return [
-        {"type": "function", "name": s["name"], "description": s.get("description", ""),
-         "strict": True, "parameters": s["parameters"]}
-        for s in specs
-    ]
+    # response beside a non-strict tool, and strict in turn requires every
+    # property listed as required with `additionalProperties: false` — so
+    # optional ones are made nullable, which is the shape strict mode provides
+    # for "may be omitted".
+    #
+    # Delegated rather than reimplemented. `as_strict_tool` already rewrites
+    # nested object properties, which `edit` needs and which the planner's
+    # version never had to do.
+    from code_gantry.plannertools import as_strict_tool
+
+    return [as_strict_tool(spec) for spec in specs]
 
 
 # --- Messages -------------------------------------------------------------
@@ -296,11 +328,10 @@ def _messages_append_tool_results(wire, conversation, results, cache, ttl):
 
 
 def _messages_tool_schemas(specs) -> list[dict]:
-    return [
-        {"name": s["name"], "description": s.get("description", ""),
-         "input_schema": s["parameters"]}
-        for s in specs
-    ]
+    # The neutral spec this codebase already builds is this wire's shape:
+    # `{name, description, input_schema}`. Copied rather than passed through,
+    # so a caller cannot mutate what it was handed.
+    return [dict(spec) for spec in specs]
 
 
 def _get(obj, name):
@@ -369,6 +400,60 @@ def _messages_client(cfg):
     return anthropic.Anthropic(**kwargs)
 
 
+
+def _responses_refusal(response) -> str:
+    for item in getattr(response, "output", None) or []:
+        for part in _get(item, "content") or []:
+            if _get(part, "type") == "refusal":
+                return _get(part, "refusal") or "no reason given"
+    return ""
+
+
+def _messages_refusal(response) -> str:
+    return ("the model declined to answer"
+            if getattr(response, "stop_reason", None) == "refusal" else "")
+
+
+def _responses_final_text(response) -> str:
+    parts = []
+    for item in getattr(response, "output", None) or []:
+        for part in _get(item, "content") or []:
+            text = _get(part, "text")
+            if text:
+                parts.append(text)
+    return "\n".join(parts)
+
+
+def _messages_final_text(response) -> str:
+    parts = [_get(b, "text") for b in (getattr(response, "content", None) or [])
+             if _get(b, "type") == "text" and _get(b, "text")]
+    return "\n".join(parts)
+
+
+def _responses_send(wire, client, cfg, conversation, tools, extra):
+    return client.responses.create(
+        model=cfg.model,
+        # A plain list on the wire. `conversation` is a `Transcript` — a list
+        # subclass that mirrors itself to disk — and what the SDK does with a
+        # subclass is its business rather than a fact to rely on.
+        input=list(conversation),
+        tools=tools,
+        **extra,
+    )
+
+
+def _messages_send(wire, client, cfg, conversation, tools, extra):
+    system, messages = wire.split_system(conversation)
+    kwargs = {"model": cfg.model, "messages": messages, "tools": tools, **extra}
+    if system:
+        kwargs["system"] = system
+    # Mandatory on this wire, unlike the other. Generous rather than tight:
+    # thinking counts against it along with the answer, so a small budget
+    # truncates the response rather than the reasoning.
+    kwargs["max_tokens"] = getattr(cfg, "max_tokens", None) or 32_000
+    return client.messages.create(**kwargs)
+
+
 RESPONSES = Dialect(
     name="responses",
     _structured_key="text_format",
@@ -388,6 +473,9 @@ RESPONSES = Dialect(
     _tool_schemas=_responses_tool_schemas,
     _split_system=_no_split,
     _client=_responses_client,
+    _refusal=_responses_refusal,
+    _final_text=_responses_final_text,
+    _send=_responses_send,
 )
 
 MESSAGES = Dialect(
@@ -407,6 +495,9 @@ MESSAGES = Dialect(
     _tool_schemas=_messages_tool_schemas,
     _split_system=_lift_system,
     _client=_messages_client,
+    _refusal=_messages_refusal,
+    _final_text=_messages_final_text,
+    _send=_messages_send,
 )
 
 # Substrings, matched against a normalised model id. Deliberately not exact

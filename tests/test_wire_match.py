@@ -29,11 +29,7 @@ class TestWhatEachRoleSpeaks:
     def test_the_table_matches_the_clients_as_built(self):
         """Pinned, because this is the fact the check depends on and it stops
         being true the moment a role learns a second wire."""
-        assert ROLE_WIRE == {
-            "planner": MESSAGES,
-            "executor": RESPONSES,
-            "reviewer": RESPONSES,
-        }
+        assert ROLE_WIRE == {"planner": MESSAGES, "reviewer": RESPONSES}
 
 
 class TestAgreement:
@@ -41,13 +37,11 @@ class TestAgreement:
         cfg = _Cfg("anthropic/claude-opus-5", "openai/gpt-5.6-luna", "openai/gpt-5.6-sol")
         assert wire_mismatches(cfg) == []
 
-    def test_gemini_on_the_executor_is_reported(self):
-        """The case this exists for."""
+    def test_gemini_on_the_executor_is_no_longer_a_mismatch(self):
+        """The case this was built for, now fixed at the source: the executor
+        speaks whichever wire its model wants, so there is nothing to report."""
         cfg = _Cfg("anthropic/claude-opus-5", "google/gemini-3.7-flash", "openai/gpt-5.6-sol")
-        problems = wire_mismatches(cfg)
-        assert len(problems) == 1
-        assert "executor" in problems[0] and "google/gemini-3.7-flash" in problems[0]
-        assert "messages" in problems[0] and "responses" in problems[0]
+        assert wire_mismatches(cfg) == []
 
     def test_an_anthropic_reviewer_is_reported(self):
         cfg = _Cfg("anthropic/claude-opus-5", "openai/gpt-5.6-luna", "anthropic/claude-opus-5")
@@ -66,5 +60,5 @@ class TestAgreement:
 
     def test_the_message_says_what_is_lost(self):
         """Not just that they differ — an operator needs to know whether to act."""
-        cfg = _Cfg("anthropic/claude-opus-5", "google/gemini-3.7-flash", "openai/gpt-5.6-sol")
+        cfg = _Cfg("anthropic/claude-opus-5", "openai/gpt-5.6-luna", "anthropic/claude-opus-5")
         assert "cache" in wire_mismatches(cfg)[0].lower()

@@ -71,3 +71,75 @@ def gateway_body(cfg, session_id: str = "", declared: dict | None = None) -> dic
 def _api_base(cfg):
     resolve = getattr(cfg, "resolve_api_base", None)
     return resolve() if callable(resolve) else getattr(cfg, "api_base", None)
+
+
+def _probe(cfg) -> str:
+    """One throwaway call, to see which model a policy resolves to.
+
+    There is no cheaper way. OpenRouter documents no endpoint that reports what
+    a router *would* pick, and its Auto Router "ranks candidates from scratch on
+    each turn", so the answer exists only once a request has been made. The
+    reply is discarded; only `response.model` is read.
+
+    Always on the Responses surface, whatever the run will use afterwards.
+    Measured 2026-08-21: `min_coding_score` separates cleanly there — 0.3 to
+    `google/gemini-3.7-flash`, 0.9 to `openai/gpt-5.6-sol`, three times each —
+    and has no effect at all through Messages, where both scores returned the
+    High tier. Probing on the wrong surface would answer a question about a
+    tier we did not ask for.
+    """
+    from code_gantry.dialects import RESPONSES
+
+    client = RESPONSES.client(cfg)
+    # The operator's own routing fields go with it — the score is the whole
+    # point of the probe, and a probe sent without it would answer about a
+    # tier nobody asked for.
+    body = gateway_body(cfg, "", getattr(cfg, "request_extra", None))
+    response = client.responses.create(
+        model=cfg.model,
+        input=[{"role": "user", "content": [{"type": "input_text", "text": "."}]}],
+        max_output_tokens=16,
+        **body,
+    )
+    return getattr(response, "model", "") or ""
+
+
+def resolve_policy(cfg, ask=_probe, log=None):
+    """A routing policy, resolved to the model it picks today.
+
+    Returns `cfg` untouched for a concrete model, which must not pay for a call
+    that could only confirm itself.
+
+    A failed probe also returns `cfg` untouched, and that branch matters more
+    than the happy one: the router still answers, so what is lost is a warm
+    prefix and the ability to choose a dialect — not the run. Refusing to start
+    would turn an optimisation into a new way to fail.
+
+    Resolving once is not pinning. The frontier this follows moves over weeks
+    while a router re-decides per request; a fresh run re-resolves, which
+    samples it far more often than it changes. What per-request routing costs
+    is the cross-stage cache, any attribution of an outcome to a model, and the
+    dialect — `dialect_for` refuses a policy outright rather than guess, and it
+    resolved to three different families in one day.
+    """
+    from code_gantry.dialects import dialect_for
+
+    try:
+        dialect_for(getattr(cfg, "model", ""))
+    except ValueError:
+        pass  # a policy: the only case worth probing
+    else:
+        return cfg
+    try:
+        resolved = ask(cfg)
+    except Exception as e:  # noqa: BLE001 - any failure leaves the policy alone
+        if log:
+            log(f"[preflight] could not resolve {cfg.model!r} ({e}); the router "
+                "will pick per request, the prefix will not stay warm, and the "
+                "wire cannot be chosen from the model")
+        return cfg
+    if not resolved or resolved == cfg.model:
+        return cfg
+    if log:
+        log(f"[preflight] {cfg.model} resolved to {resolved} for this run")
+    return cfg.model_copy(update={"model": resolved})

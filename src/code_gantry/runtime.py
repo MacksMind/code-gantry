@@ -16,6 +16,7 @@ from code_gantry.cachekey import cache_key
 from code_gantry.commands import CommandRunner
 from code_gantry.config import ProjectConfig, validate_stage
 from code_gantry.executor import Executor
+from code_gantry.gateway import resolve_policy
 from code_gantry.gitops import Git, GitError
 from code_gantry.layout import summarize_layout
 from code_gantry.plandoc import PlanDocument, PlanTree, load_snapshot
@@ -468,6 +469,14 @@ def build_runtime(
             client.runner = runner
         if hasattr(client, "project_tools") and not getattr(client, "project_tools", None):
             client.project_tools = list(cfg.project_tools or [])
+    # A routing policy becomes the model it picks today, once, before anything
+    # is built from it. Until this happens `dialect_for` refuses to choose a
+    # wire — a policy resolved to three different families in one day — so the
+    # executor falls back to whatever its client already speaks and the
+    # cross-stage prefix cannot stay warm.
+    cfg = cfg.model_copy(
+        update={"executor": resolve_policy(cfg.executor, log=logger)}
+    )
     git = Git(cfg.target_repo)
     return Runtime(
         cfg=cfg,

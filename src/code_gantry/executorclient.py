@@ -172,7 +172,10 @@ class OpenAIExecutorModel:
         # menu and the runner on the instance. Assigned by `Executor`, which is
         # the only thing that knows the project identity this is derived from.
         self.session_id: str | None = None
-        self._client = client if client is not None else build_openai_client(cfg)
+        # Built by the dialect the model's family wants, so this role speaks
+        # whichever wire its model caches best on. Injected clients are left
+        # alone — the tests supply their own.
+        self._client = client if client is not None else _dialect(cfg).client(cfg)
 
     @staticmethod
     def _watermark(reader, editor) -> tuple[int, int]:
@@ -236,7 +239,11 @@ class OpenAIExecutorModel:
         held — this seam has broken twice, both times with the constructor
         taking the argument and nothing carrying it further.
         """
-        return openai_tool_schemas(semantic, self.project_tools)
+        from code_gantry.executortools import tool_schemas
+
+        return _dialect(self.cfg).tool_schemas(
+            tool_schemas(semantic, self.project_tools)
+        )
 
     def run(
         self,
@@ -285,16 +292,8 @@ class OpenAIExecutorModel:
         for _ in range(self._max_turns()):
             try:
                 response = with_provider_retry(
-                    lambda: self._client.responses.create(
-                        model=self.cfg.model,
-                        # A plain list on the wire. `conversation` is a
-                        # `Transcript` — a list subclass that mirrors itself to
-                        # disk — and what the SDK does with a subclass is its
-                        # business rather than a fact we should be relying on.
-                        # Copying it costs one shallow list per HTTP call.
-                        input=list(conversation),
-                        tools=tools,
-                        **extra,
+                    lambda: _dialect(self.cfg).send(
+                        self._client, self.cfg, conversation, tools, extra
                     ),
                     retry_on=transport_errors(),
                     transient=Backoff(
@@ -326,7 +325,7 @@ class OpenAIExecutorModel:
                 out.first_prompt_tokens = turn_usage.prompt_tokens
                 out.first_cached_tokens = turn_usage.cached_tokens
 
-            declined = refusal(response)
+            declined = _dialect(self.cfg).refusal(response)
             if declined:
                 out.failure = f"the executor refused to answer: {declined}"
                 return out
@@ -335,7 +334,7 @@ class OpenAIExecutorModel:
             requests = wire.tool_calls(response)
             if not requests:
                 out.stopped = True
-                out.text = _final_text(response)
+                out.text = _dialect(self.cfg).final_text(response)
                 return out
 
             # The model's turn back, in whichever shape this wire wants — the
