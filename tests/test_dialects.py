@@ -190,21 +190,15 @@ class TestEveryKwargIsOneItsOwnSdkAccepts:
     was nothing to catch it. A seam test that knows about one wire is not a
     seam test once there are two.
 
+    The kwargs come from `request_extras`, which is what the loop calls — not
+    from a list copied out of it. The first version of this test did copy the
+    list, which is the defect it exists to catch, one level up: a fifth
+    contribution added at the call site would have been invisible to it in
+    exactly the way `prompt_cache_key` was invisible to the `session_id` test.
+
     Signatures come from the installed packages rather than recall, for the
     reason every provider fact here does.
     """
-
-    import_error = None
-
-    def _extras(self, wire, cfg):
-        from code_gantry.gateway import gateway_body
-
-        return {
-            **wire.cache_options(),
-            **wire.effort("high"),
-            **wire.cache_key_param("k"),
-            **gateway_body(cfg, "sess-1", getattr(cfg, "request_extra", None)),
-        }
 
     @pytest.mark.parametrize("wire_name", ["responses", "messages"])
     def test_no_kwarg_is_unknown_to_the_sdk(self, wire_name):
@@ -214,20 +208,46 @@ class TestEveryKwargIsOneItsOwnSdkAccepts:
         from openai import OpenAI
 
         from code_gantry.config import ExecutorConfig
+        from code_gantry.executorclient import request_extras
 
-        wire = RESPONSES if wire_name == "responses" else MESSAGES
         method = (
             OpenAI(api_key="x").responses.create
             if wire_name == "responses"
             else Anthropic(api_key="x").messages.create
         )
         cfg = ExecutorConfig(
-            model="anthropic/claude-opus-5" if wire_name == "messages" else "openai/gpt-5.6-sol",
-            api_base="https://openrouter.ai/api"
-            + ("" if wire_name == "messages" else "/v1"),
+            model="openai/gpt-5.6-sol" if wire_name == "responses" else "anthropic/claude-opus-5",
+            api_base="https://openrouter.ai/api" + ("/v1" if wire_name == "responses" else ""),
             reasoning_effort="high",
         )
-        built = self._extras(wire, cfg)
-        accepted = set(inspect.signature(method).parameters)
-        unknown = sorted(set(built) - accepted)
+        built = request_extras(cfg, session_id="sess-1", cache_key="k")
+        assert built, "the assembly returned nothing, so this proves nothing"
+        unknown = sorted(set(built) - set(inspect.signature(method).parameters))
         assert not unknown, f"{wire_name}: not parameters of the SDK call: {unknown}"
+
+    def test_the_loop_assembles_nothing_of_its_own(self):
+        """`run` must call `request_extras` and add no keys beside it.
+
+        Otherwise the test above checks a function the production path has
+        quietly grown past — which is how both outages happened.
+        """
+        import ast
+        import inspect
+
+        from code_gantry.executorclient import OpenAIExecutorModel
+
+        import textwrap
+
+        tree = ast.parse(textwrap.dedent(inspect.getsource(OpenAIExecutorModel.run)))
+        assigned = [
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.AnnAssign)
+            and isinstance(n.target, ast.Name)
+            and n.target.id == "extra"
+        ]
+        assert len(assigned) == 1, "expected one `extra:` assignment in run()"
+        value = assigned[0].value
+        assert isinstance(value, ast.Call), "extra should be one call, not a literal"
+        assert getattr(value.func, "id", "") == "request_extras", (
+            "run() builds its own kwargs again; they will not be checked"
+        )

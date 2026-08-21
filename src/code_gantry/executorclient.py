@@ -139,6 +139,45 @@ def _reasoning_param(cfg: ExecutorConfig) -> dict:
     return {"reasoning": {"effort": effort}} if effort else {}
 
 
+def request_extras(cfg, session_id: str = "", cache_key: str | None = None) -> dict:
+    """Every top-level keyword the executor's call carries beyond the basics.
+
+    One function because it is one decision, and because the two outages it
+    exists to prevent were both a keyword the endpoint does not take —
+    `session_id` to `responses.create`, then `prompt_cache_key` to
+    `messages.create`. Each was pinned afterwards by a test that rebuilt this
+    dict by hand, so each test could only see the keys whoever wrote it
+    remembered. A copy of an assembly is not a check on it.
+
+    Assembled here, the loop adds nothing of its own and the seam test reads
+    what production reads. That is the same answer as the transcript being a
+    `list` subclass and `executor-loop.json`'s writer walking
+    `dataclasses.fields`: make the recording a property of the only thing that
+    can change it.
+    """
+    wire = _dialect(cfg)
+    return {
+        # GPT-5.6 caches at breakpoints and does not fall back to the longest
+        # matching prefix, so the opt-in is required rather than helpful. The
+        # marks themselves go on the tool results. Spelled by the dialect the
+        # model's family wants: the wire is a property of the model, not of
+        # this file.
+        **wire.cache_options(),
+        # Spelled by the dialect for the same reason, and it is the one that
+        # was not: `prompt_cache_key` is a Responses parameter, and hardcoded
+        # at the call site it reached `messages.create()` and ended a run.
+        **wire.cache_key_param(cache_key),
+        **wire.effort(
+            getattr(cfg, "reasoning_effort", None) or getattr(cfg, "effort", None)
+        ),
+        # Last, but it cannot reach anything above it: the reserved keys are
+        # refused at config load, so this adds and never replaces. One body for
+        # both, built by `merged_body` — these were two separate splats and the
+        # second silently replaced the first.
+        **gateway_body(cfg, session_id, request_extra(cfg).get("extra_body")),
+    }
+
+
 class OpenAIExecutorModel:
     """Drives one edit cycle: the model calls tools until it stops."""
 
@@ -266,30 +305,7 @@ class OpenAIExecutorModel:
         # watermark each, because they grow independently.
         logged = self._watermark(reader, editor)
 
-        extra: dict = {
-            # GPT-5.6 caches at breakpoints and does not fall back to the
-            # longest matching prefix, so the opt-in is required rather than
-            # helpful. The marks themselves go on the tool results below.
-            # Spelled by the dialect the model's family wants, rather than
-            # hardcoded here. Same values today; the point is that the wire is
-            # now a property of the model rather than of this file.
-            **_dialect(self.cfg).cache_options(),
-            # Spelled by the dialect for the same reason, and it is the one
-            # that was not: `prompt_cache_key` is a Responses parameter, and
-            # hardcoded here it reached `messages.create()` and ended a run.
-            **_dialect(self.cfg).cache_key_param(cache_key),
-            **_dialect(self.cfg).effort(getattr(self.cfg, "reasoning_effort", None)
-                                        or getattr(self.cfg, "effort", None)),
-            # Last, but it cannot reach anything above it: the reserved keys
-            # are refused at config load, so this adds and never replaces.
-            # One body for both, built by `merged_body`. These were two
-            # separate splats and the second silently replaced the first.
-            **gateway_body(
-                self.cfg,
-                self.session_id,
-                request_extra(self.cfg).get("extra_body"),
-            ),
-        }
+        extra: dict = request_extras(self.cfg, self.session_id, cache_key)
 
         for _ in range(self._max_turns()):
             try:

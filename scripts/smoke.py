@@ -64,6 +64,12 @@ REVIEWER_MODEL = "gpt-5.6-sol"
 # Live mode still stubs the executor, but names a real model so preflight's
 # endpoint check verifies against the real server.
 LIVE_EXECUTOR_MODEL = "qwen3-coder-next"
+# The executor's wire is a property of its model, so driving the Messages
+# path is a matter of naming a model whose family maps there. It has to be
+# distinguishable from the planner's, which shares the endpoint: on
+# `/v1/responses` the reviewer and executor are already told apart by model
+# id rather than by path, and `/v1/messages` now needs the same.
+MESSAGES_EXECUTOR_MODEL = "claude-smoke-executor"
 
 # What llama.cpp reports as n_ctx_slot for that model — the ceiling the
 # executor's read and output budgets are sized against.
@@ -86,6 +92,10 @@ STAGES = [
         "acceptance": "multiply(3, 4) == 12",
         "forbidden_patterns": [],
         "test_paths": [],
+        # Required, and a required field is why it is here: nothing runs this
+        # script in CI, so it sat broken from the moment `difficulty` was added
+        # while the unit suite stayed green.
+        "difficulty": "low",
     },
     {
         "id": "add-divide",
@@ -99,6 +109,7 @@ STAGES = [
         "acceptance": "divide(8, 2) == 4, and divide(1, 0) raises",
         "forbidden_patterns": [],
         "test_paths": [],
+        "difficulty": "medium",
     },
 ]
 
@@ -209,7 +220,12 @@ class ModelStub(BaseHTTPRequestHandler):
         """
         payload = {
             "object": "list",
-            "data": [{"id": "local-model", "object": "model", "owned_by": "llama-swap"}],
+            # Both arms' executor models, because preflight checks that the
+            # configured one is offered and the endpoint is shared.
+            "data": [
+                {"id": name, "object": "model", "owned_by": "llama-swap"}
+                for name in ("local-model", MESSAGES_EXECUTOR_MODEL)
+            ],
         }
         self._respond(payload)
 
@@ -219,7 +235,12 @@ class ModelStub(BaseHTTPRequestHandler):
         model = body.get("model", "stub")
 
         if "/messages" in self.path:
-            self._respond(self._anthropic(model))
+            # Same reasoning as `/responses` below: the path says which
+            # wire, the model id says which role.
+            if model == MESSAGES_EXECUTOR_MODEL:
+                self._respond(self._executor_messages(model, body))
+            else:
+                self._respond(self._anthropic(model))
         elif "/responses" in self.path:
             # Both the executor and the reviewer speak the Responses API, on
             # the same path, so the model id is what tells them apart. Splitting
@@ -389,6 +410,106 @@ class ModelStub(BaseHTTPRequestHandler):
                 }
             ],
             "usage": usage,
+        }
+
+    def _executor_messages(self, model: str, body: dict) -> dict:
+        """The same stand-in executor, in the Messages shape.
+
+        It exists because the executor's wire is chosen by model family, and
+        for the whole life of that mechanism this script drove only Responses
+        — so the path production actually took, once a router resolved to a
+        Messages-family model, had no end-to-end coverage at all. A keyword
+        the endpoint does not accept (`prompt_cache_key`) reached
+        `messages.create()` and ended a run sixteen stages in, and nothing in
+        the suite could have caught it.
+
+        The differences from the Responses shape are the ones that matter and
+        are easy to get wrong from memory: tool calls are `tool_use` content
+        blocks rather than `function_call` items, `input` is a dict rather
+        than a JSON string, the loop is finished by `stop_reason` rather than
+        by the absence of calls, and results come back as `tool_result` blocks
+        inside a user message.
+        """
+        messages = body.get("messages") or []
+        blocks = [
+            block
+            for message in messages
+            if isinstance(message, dict)
+            for block in (message.get("content") or [])
+            if isinstance(block, dict)
+        ]
+        text = " ".join(str(b.get("text", "")) for b in blocks)
+        # The system prompt is a separate argument on this wire, and the stage
+        # subject is in it. Reading only `messages` found nothing and the
+        # stand-in reported that it could not tell which operation this was.
+        for block in body.get("system") or []:
+            if isinstance(block, dict):
+                text += " " + str(block.get("text", ""))
+        answered = any(b.get("type") == "tool_result" for b in blocks)
+        usage = {
+            "input_tokens": 8_000,
+            "output_tokens": 120,
+            "cache_read_input_tokens": 7_400,
+        }
+        base = {
+            "id": "msg_smoke_exec",
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "usage": usage,
+        }
+        if answered:
+            return {
+                **base,
+                "stop_reason": "end_turn",
+                "content": [{"type": "text", "text": "Implemented, with tests."}],
+            }
+
+        op = stage_subject(text)
+        if not op:
+            return {
+                **base,
+                "stop_reason": "end_turn",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "cannot tell which operation this stage is "
+                        f"about; this stand-in implements only "
+                        f"{sorted(IMPLEMENTATIONS)}",
+                    }
+                ],
+            }
+        source, test_source = IMPLEMENTATIONS[op]
+        return {
+            **base,
+            "stop_reason": "tool_use",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "call_smoke_1",
+                    "name": "edit",
+                    "input": {
+                        "path": "src/calc.py",
+                        "edits": [
+                            {"old_string": CALC_ANCHOR, "new_string": CALC_ANCHOR + source}
+                        ],
+                    },
+                },
+                {
+                    "type": "tool_use",
+                    "id": "call_smoke_2",
+                    "name": "edit",
+                    "input": {
+                        "path": TEST_FILE,
+                        "edits": [
+                            {
+                                "old_string": TEST_ANCHOR,
+                                "new_string": TEST_ANCHOR + test_source,
+                            }
+                        ],
+                    },
+                },
+            ],
         }
 
     def _anthropic(self, model: str) -> dict:
@@ -602,7 +723,7 @@ def cli(work: Path, env: dict, *args: str, expect: int = 0) -> str:
     return output
 
 
-def patch_config(config: Path, live: bool = False) -> None:
+def patch_config(config: Path, live: bool = False, wire: str = "responses") -> None:
     """Do what an operator does after `init`: fill in what it could not infer.
 
     Each replacement asserts the placeholder was there. If `init`'s draft
@@ -626,9 +747,20 @@ def patch_config(config: Path, live: bool = False) -> None:
     # No `openai/` prefix. That was litellm routing, which the executor needed
     # while it ran as a subprocess; in-process it calls the SDK directly
     # and the model id is the endpoint's own.
+    # `local-model` is an unknown family, which `dialect_for` answers with
+    # Responses; the Messages arm names a model whose family maps there. The
+    # wire is never configured directly — that is the point of the family map,
+    # and a smoke test that set it directly would be testing a knob production
+    # does not have.
+    if live:
+        executor_model = LIVE_EXECUTOR_MODEL
+    else:
+        executor_model = (
+            MESSAGES_EXECUTOR_MODEL if wire == "messages" else "local-model"
+        )
     swap(
         'model: "<model-id-from-/v1/models>"',
-        f'model: "{LIVE_EXECUTOR_MODEL if live else "local-model"}"',
+        f'model: "{executor_model}"',
     )
     # `init` drafts the executor's `api_base_env` commented out, because talking
     # to the provider directly is the common case. Uncommenting it is exactly
@@ -815,6 +947,14 @@ def main() -> int:
         "stubbed, so this exercises planning and review without generating "
         "code. Costs money.",
     )
+    parser.add_argument(
+        "--executor-wire",
+        choices=("responses", "messages"),
+        default="responses",
+        help="Which wire the executor's model family resolves to. The Messages "
+        "arm had no end-to-end coverage until a keyword the endpoint does not "
+        "accept ended a live run; both are worth running before a release.",
+    )
     args = parser.parse_args()
     if args.live:
         missing = [
@@ -852,7 +992,12 @@ def main() -> int:
                 {
                     "ANTHROPIC_API_KEY": "smoke-planner-key",
                     "OPENAI_API_KEY": "smoke-reviewer-key",
-                    EXECUTOR_API_BASE_VAR: f"http://127.0.0.1:{PORT}/v1",
+                    # No `/v1` on the Messages arm: the Anthropic SDK
+                    # appends it, exactly as it does for the planner. With
+                    # one here the executor would call `/v1/v1/messages`,
+                    # which is a bug this project has already shipped once.
+                    EXECUTOR_API_BASE_VAR: f"http://127.0.0.1:{PORT}"
+                    + ("" if args.executor_wire == "messages" else "/v1"),
                 }
             )
 
@@ -862,7 +1007,7 @@ def main() -> int:
         config = repo / "docs" / "code_gantry.yaml"
         cli(work, env, "init", str(repo / "docs" / "plan.md"), str(config))
         check(config.is_file(), "drafted a config")
-        patch_config(config, live=args.live)
+        patch_config(config, live=args.live, wire=args.executor_wire)
 
         # Commit it. The config now lives in the target repo, so an uncommitted
         # one leaves the tree dirty — and a run must begin from a known state
@@ -886,7 +1031,14 @@ def main() -> int:
             "resolved the executor endpoint from the environment",
             checks,
         )
-        expected_model = LIVE_EXECUTOR_MODEL if args.live else "local-model"
+        if args.live:
+            expected_model = LIVE_EXECUTOR_MODEL
+        else:
+            expected_model = (
+                MESSAGES_EXECUTOR_MODEL
+                if args.executor_wire == "messages"
+                else "local-model"
+            )
         check(
             f"endpoint offers '{expected_model}'" in checks,
             "verified the model id against the endpoint's /v1/models",
