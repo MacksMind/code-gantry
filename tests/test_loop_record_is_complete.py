@@ -104,5 +104,18 @@ class TestItStaysBestEffort:
         _write_loop_record(tmp_path / "does" / "not" / "exist", a_result())
 
     def test_a_missing_usage_object_still_writes(self, tmp_path):
+        """Empty rather than zeros.
+
+        This asserted `prompt_tokens == 0`, which invents a reading: an
+        attempt whose provider reported nothing did not use nothing. It is the
+        same zero-versus-absent confusion `_price` exists to guard — a zero
+        has meant "no figure" as often as it has meant "none" — and reading a
+        written zero as a measurement is how a whole channel of executor cost
+        was once reported as free.
+
+        The record still exists and the run still survives, which is what this
+        class is about.
+        """
         written = _written(tmp_path, a_result(usage=None))
-        assert written["usage"]["prompt_tokens"] == 0
+        assert written["usage"] == {}
+        assert "ok" in written

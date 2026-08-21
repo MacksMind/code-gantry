@@ -663,7 +663,7 @@ def _write_loop_record(history_dir: Path, out: ExecutionResult) -> None:
     """
     import json
 
-    from dataclasses import fields
+    from dataclasses import fields, is_dataclass
 
     # Two names the artifact says better than the attribute does, and one
     # object that is flattened rather than dumped.
@@ -675,12 +675,19 @@ def _write_loop_record(history_dir: Path, out: ExecutionResult) -> None:
         for f in fields(ExecutionResult)
         if f.name not in nested
     }
-    record["usage"] = {
-        "prompt_tokens": getattr(out.usage, "prompt_tokens", 0),
-        "cached_tokens": getattr(out.usage, "cached_tokens", 0),
-        "cache_write_tokens": getattr(out.usage, "cache_write_tokens", 0),
-        "completion_tokens": getattr(out.usage, "completion_tokens", 0),
-    }
+    # Walked, for the reason the paragraph above gives about the outer record —
+    # and this block is where that prediction came true. It named four fields
+    # by hand, `TokenUsage` grew two more, and neither reached this file.
+    # `provider_cost_usd` going missing cost a wrong reading the same
+    # afternoon: `usage.get("provider_cost_usd")` returns `None` for a key
+    # that was never written, and that was read as the provider having
+    # reported no cost. An absent field does not fail to answer; it answers
+    # wrongly, which is exactly what the enumeration above was removed for.
+    record["usage"] = (
+        {f.name: getattr(out.usage, f.name) for f in fields(type(out.usage))}
+        if is_dataclass(out.usage)
+        else {}
+    )
     # The opening turn is the only figure that answers whether the prefix
     # arranged to be shared across stages actually is — everything after it in
     # an attempt reads what it wrote.
