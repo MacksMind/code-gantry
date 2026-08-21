@@ -321,6 +321,10 @@ class OpenAIReviewer:
             # hardcoded here. Same values today; the point is that the wire is
             # now a property of the model rather than of this file.
             **_dialect(self.cfg).cache_options(),
+            # Spelled by the dialect for the same reason, and it is the one
+            # that was not: `prompt_cache_key` is a Responses parameter, and
+            # hardcoded here it reached `messages.create()` and ended a run.
+            **_dialect(self.cfg).cache_key_param(cache_key),
             **_dialect(self.cfg).effort(getattr(self.cfg, "reasoning_effort", None)
                                         or getattr(self.cfg, "effort", None)),
             # Empty against a first-party endpoint. When this role is pointed
@@ -328,8 +332,6 @@ class OpenAIReviewer:
             # decided from the endpoint rather than declared — see `gateway`.
             **gateway_body(self.cfg, getattr(self, "session_id", "") or ""),
         }
-        if cache_key:
-            extra["prompt_cache_key"] = cache_key
 
         tools = (
             openai_tool_schemas(self.semantic, self.project_tools, "reviewer")

@@ -274,6 +274,10 @@ class OpenAIExecutorModel:
             # hardcoded here. Same values today; the point is that the wire is
             # now a property of the model rather than of this file.
             **_dialect(self.cfg).cache_options(),
+            # Spelled by the dialect for the same reason, and it is the one
+            # that was not: `prompt_cache_key` is a Responses parameter, and
+            # hardcoded here it reached `messages.create()` and ended a run.
+            **_dialect(self.cfg).cache_key_param(cache_key),
             **_dialect(self.cfg).effort(getattr(self.cfg, "reasoning_effort", None)
                                         or getattr(self.cfg, "effort", None)),
             # Last, but it cannot reach anything above it: the reserved keys
@@ -286,8 +290,6 @@ class OpenAIExecutorModel:
                 request_extra(self.cfg).get("extra_body"),
             ),
         }
-        if cache_key:
-            extra["prompt_cache_key"] = cache_key
 
         for _ in range(self._max_turns()):
             try:

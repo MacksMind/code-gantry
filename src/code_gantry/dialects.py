@@ -61,6 +61,11 @@ class Dialect:
     _refusal: Callable[[object], str]
     _final_text: Callable[[object], str]
     _send: Callable[..., object]
+    # The request-level cache-key parameter, where the wire has one at all.
+    # Empty on Messages: Anthropic keys its cache off the `cache_control`
+    # markers, so there is no request field to name. Last on the dataclass,
+    # like `cache_write_tokens` on `TokenUsage` and for the same reason.
+    _cache_key_param: str = ""
 
     def structured(self, schema) -> dict:
         """The schema argument, when the caller wants a parsed answer."""
@@ -95,6 +100,23 @@ class Dialect:
         so the marks below only count if this is set.
         """
         return dict(self._request_cache_options)
+
+    def cache_key_param(self, key: str | None) -> dict:
+        """The request-level cache key, spelled for this wire.
+
+        Beside `cache_options` because it is the same kind of decision, and it
+        is the one that was left behind: hardcoded as `prompt_cache_key` at two
+        call sites, it reached `messages.create()` on the first run whose
+        executor resolved to a Messages-wire model and was refused client-side
+        before a request left the process. Sixteen stages had landed; four
+        attempts died in seconds without the coding model being invoked.
+
+        The empty-key guard lives here rather than at the callers. Both had
+        their own `if key:` and a third would have had to remember one.
+        """
+        if not key or not self._cache_key_param:
+            return {}
+        return {self._cache_key_param: key}
 
     def usage(self, raw):
         """Provider counts, normalised.
@@ -491,6 +513,7 @@ RESPONSES = Dialect(
     # does not take.
     _cache_marker=lambda _ttl: {"mode": "explicit"},
     _request_cache_options={"prompt_cache_options": {"mode": "explicit"}},
+    _cache_key_param="prompt_cache_key",
     _usage=_responses_usage,
     _tool_calls=_responses_tool_calls,
     _stopped=_responses_stopped,
