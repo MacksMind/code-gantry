@@ -126,6 +126,14 @@ class ExecutionResult:
     # that points at the detail beats one that repeats it.
     tool_counts: dict[str, int] = field(default_factory=dict)
     refusal_counts: dict[str, int] = field(default_factory=dict)
+    # Which model answered, and how many turns each one took. Empty against an
+    # endpoint that does not echo the model; one key against a pinned one. It
+    # exists for the router case, where `cfg.model` names a *policy* rather
+    # than a model — `openrouter/pareto-code` resolved to `openai/gpt-5.6-sol`
+    # and `x-ai/grok-4.6` on the same call shape at different scores. Without
+    # this the artifact would record the policy and nothing would record the
+    # answer, which is the shape of every value this codebase has lost.
+    served_models: dict[str, int] = field(default_factory=dict)
     # What the loop proved green, and against which tree: layer name ->
     # {"command", "head_sha"}. The gate reads this to decide whether running
     # the same command again would ask a question already answered. Not trust

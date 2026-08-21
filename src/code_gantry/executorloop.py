@@ -107,6 +107,12 @@ def run_loop(
         out.context_tokens = max(out.context_tokens, turn.usage.peak_prompt_tokens)
         if turn.usage is not None:
             out.usage = _merge(out.usage, turn.usage)
+        # Accumulated across cycles as well as turns, because a rework is the
+        # likeliest place for a router to change its mind: minutes have passed,
+        # and the stickiness that keeps a conversation on one model is a
+        # five-minute window.
+        for served, count in turn.served_models.items():
+            out.served_models[served] = out.served_models.get(served, 0) + count
         out.log = turn.text or out.log
 
         if turn.failure:
@@ -206,7 +212,26 @@ def _price(cfg, usage, model: str | None) -> float | None:
     """
     if usage is None:
         return None
-    from code_gantry.pricing import cached_price_map, entry_for, price_usage
+
+    # A gateway that bills us reports what it billed, and that beats deriving
+    # the same number from a rate table — the fact rather than the label. Under
+    # a router it is not merely better, it is the only answer available:
+    # `openrouter/pareto-code` picks the model per request and has no price of
+    # its own, so `entry_for` would be asked about a model that resolves after
+    # the call it is meant to price.
+    #
+    # Checked with `is not None` rather than for truthiness, because a reported
+    # zero is a real answer and the whole point of this function is that a zero
+    # from nowhere is not.
+    from code_gantry import pricing
+
+    reported = getattr(usage, "provider_cost_usd", None)
+    if reported is not None:
+        return reported
+
+    cached_price_map = pricing.cached_price_map
+    entry_for = pricing.entry_for
+    price_usage = pricing.price_usage
 
     prices = cached_price_map(cfg)
     return price_usage(

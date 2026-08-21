@@ -75,6 +75,25 @@ class ExecutorTurn:
         # with no cross-stage reuse at all still reports 90%-plus.
         self.first_prompt_tokens: int = 0
         self.first_cached_tokens: int = 0
+        # What actually answered, per turn. A count rather than a name because
+        # a router resolves per request: `openrouter/pareto-code` was measured
+        # answering one call shape as `openai/gpt-5.6-sol` and another as
+        # `x-ai/grok-4.6`, and nothing forbids that happening inside a single
+        # attempt. Against a pinned model this is one key with the turn count
+        # on it, which is exactly the uninteresting answer that makes the
+        # interesting one legible.
+        self.served_models: dict[str, int] = {}
+
+    def note_served(self, model) -> None:
+        """Record which model answered a turn.
+
+        Silent on an absent name rather than counting `""`: a provider that
+        does not echo the model is a provider we cannot attribute, and an empty
+        key would render as a model whose name is nothing.
+        """
+        if not model:
+            return
+        self.served_models[model] = self.served_models.get(model, 0) + 1
 
 
 def _reasoning_param(cfg: ExecutorConfig) -> dict:
@@ -251,6 +270,7 @@ class OpenAIExecutorModel:
             # to be a `max` written out here, from before `TokenUsage` had the
             # field, and keeping both would be one number in two places.
             out.usage = merge_usage(out.usage, turn_usage)
+            out.note_served(getattr(response, "model", None))
             if out.turns == 1:
                 out.first_prompt_tokens = turn_usage.prompt_tokens
                 out.first_cached_tokens = turn_usage.cached_tokens

@@ -52,6 +52,23 @@ class TokenUsage:
     # Last, like `cache_write_tokens` and for the same reason: this type is
     # constructed positionally.
     peak_prompt_tokens: int = 0
+    # What the provider says this cost, when the provider says anything. A
+    # gateway that bills us knows the number; deriving it from a rate table is
+    # a second arithmetic over the same tokens, and `pricing.py` exists only
+    # because the endpoints we started with report tokens and leave the money
+    # to us.
+    #
+    # It stops being an improvement and becomes the only option under a router.
+    # `openrouter/pareto-code` chooses the model per request and lists its own
+    # price as `-1`; measured on one call shape it answered as
+    # `openai/gpt-5.6-sol` at high scores and `x-ai/grok-4.6` below 0.66. There
+    # is no table entry to look up, because there is no model to look up until
+    # after the answer comes back.
+    #
+    # `None` rather than `0.0`, which is the distinction `_price` was written
+    # to protect: a zero has meant "no rate for this model" as often as it has
+    # meant "free". And last, for the reason the two fields above say.
+    provider_cost_usd: float | None = None
 
     @property
     def uncached_prompt_tokens(self) -> int:
@@ -136,7 +153,21 @@ def merge_usage(left: TokenUsage, right: TokenUsage) -> TokenUsage:
         # common shape: a loop ends with a short call, because the model has
         # stopped asking and is answering.
         peak_prompt_tokens=max(left.peak_prompt_tokens, right.peak_prompt_tokens),
+        # Summed like the token totals, because a loop is billed once per turn
+        # and pays for each — but summed *through* `None`, which is not the
+        # same as summing zeros. Unreported plus unreported is still
+        # unreported; unreported plus a real charge is that charge. Treating an
+        # absent field as free is the exact reading this type spent a paragraph
+        # above warning about.
+        provider_cost_usd=_add_costs(left.provider_cost_usd, right.provider_cost_usd),
     )
+
+
+def _add_costs(left: float | None, right: float | None) -> float | None:
+    """Sum two optional costs without inventing a zero."""
+    if left is None and right is None:
+        return None
+    return (left or 0.0) + (right or 0.0)
 
 
 def extract_usage(usage) -> TokenUsage:
@@ -174,4 +205,9 @@ def extract_usage(usage) -> TokenUsage:
         # answer for free — the same reasoning that made the transcript a
         # `list` subclass.
         peak_prompt_tokens=prompt or 0,
+        # Absent on the first-party endpoints, which report tokens and leave
+        # the money to us; present on a gateway that does the billing. Read
+        # with `getattr` rather than asked for, so the same function serves
+        # both without knowing which it is talking to.
+        provider_cost_usd=getattr(usage, "cost", None),
     )
