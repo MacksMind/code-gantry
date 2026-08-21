@@ -1428,7 +1428,15 @@ def _output_config(cfg) -> dict:
     literal buried in a call the tests would have to reach through a stub to
     see. It was `{"effort": "high"}` inline, and nothing pinned it.
     """
-    return {"effort": cfg.effort}
+    from code_gantry.dialects import MESSAGES, dialect_for
+
+    try:
+        wire = dialect_for(getattr(cfg, "model", ""))
+    except ValueError:
+        # A routing policy resolves per run; this client speaks Messages.
+        wire = MESSAGES
+    # Unwrapped, because the caller passes this as `output_config=` already.
+    return wire.effort(cfg.effort).get("output_config", {"effort": cfg.effort})
 
 
 _NO_DECLARED_TOOLS = """

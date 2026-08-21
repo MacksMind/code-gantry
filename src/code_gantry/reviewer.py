@@ -52,6 +52,23 @@ Verdict = Literal["approved", "rework", "blocked"]
 
 
 
+
+def _dialect(cfg):
+    """The wire this role's configured model wants.
+
+    Falls back to what this client actually speaks when the model names a
+    routing policy — a policy resolves per run and cannot be classified, and a
+    run must not fail here over it. `wirecheck` reports the case where the two
+    genuinely disagree.
+    """
+    from code_gantry.dialects import RESPONSES, dialect_for
+
+    try:
+        return dialect_for(getattr(cfg, "model", ""))
+    except ValueError:
+        return RESPONSES
+
+
 def _reasoning_param(cfg) -> dict:
     """The reasoning setting, or nothing at all.
 
@@ -300,8 +317,12 @@ class OpenAIReviewer:
         self._reset_reads()
 
         extra: dict = {
-            "prompt_cache_options": {"mode": "explicit"},
-            **_reasoning_param(self.cfg),
+            # Spelled by the dialect the model's family wants, rather than
+            # hardcoded here. Same values today; the point is that the wire is
+            # now a property of the model rather than of this file.
+            **_dialect(self.cfg).cache_options(),
+            **_dialect(self.cfg).effort(getattr(self.cfg, "reasoning_effort", None)
+                                        or getattr(self.cfg, "effort", None)),
             # Empty against a first-party endpoint. When this role is pointed
             # at a gateway it carries the same two fields the executor does,
             # decided from the endpoint rather than declared — see `gateway`.

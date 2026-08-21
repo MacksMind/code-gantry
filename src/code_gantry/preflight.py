@@ -98,6 +98,7 @@ def run_preflight(
     checks.append(_read_budget_check(cfg, git))
     checks.append(_unfolded_progress_check(cfg))
     checks.extend(_endpoint_checks(cfg))
+    checks.extend(check_wire_match(cfg))
     if check_endpoint:
         checks.extend(check_executor_endpoint(cfg))
 
@@ -748,6 +749,25 @@ def endpoint_label(endpoint) -> str:
     if endpoint.api_base_env:
         return f"${endpoint.api_base_env}"
     return endpoint.api_base or "(unset)"
+
+
+def check_wire_match(cfg: ProjectConfig) -> list[Check]:
+    """Each role's client against the dialect its model wants.
+
+    A warning rather than a blocker: the call works and what is lost is cache
+    control. Worth saying out loud because the failure is otherwise silent —
+    a Gemini model on the Responses wire caches once and never grows, and
+    nothing in any log names the cause.
+    """
+    from code_gantry.wirecheck import wire_mismatches
+
+    problems = wire_mismatches(cfg)
+    if not problems:
+        return [Check("model wires match their clients", True)]
+    return [
+        Check("model wires match their clients", True, detail)
+        for detail in problems
+    ]
 
 
 def check_executor_endpoint(cfg: ProjectConfig) -> list[Check]:

@@ -112,6 +112,23 @@ def request_extra(cfg: ExecutorConfig) -> dict:
     return {"extra_body": dict(extra)} if extra else {}
 
 
+
+def _dialect(cfg):
+    """The wire this role's configured model wants.
+
+    Falls back to what this client actually speaks when the model names a
+    routing policy — a policy resolves per run and cannot be classified, and a
+    run must not fail here over it. `wirecheck` reports the case where the two
+    genuinely disagree.
+    """
+    from code_gantry.dialects import RESPONSES, dialect_for
+
+    try:
+        return dialect_for(getattr(cfg, "model", ""))
+    except ValueError:
+        return RESPONSES
+
+
 def _reasoning_param(cfg: ExecutorConfig) -> dict:
     """Effort, only when the operator chose one.
 
@@ -246,8 +263,12 @@ class OpenAIExecutorModel:
             # GPT-5.6 caches at breakpoints and does not fall back to the
             # longest matching prefix, so the opt-in is required rather than
             # helpful. The marks themselves go on the tool results below.
-            "prompt_cache_options": {"mode": "explicit"},
-            **_reasoning_param(self.cfg),
+            # Spelled by the dialect the model's family wants, rather than
+            # hardcoded here. Same values today; the point is that the wire is
+            # now a property of the model rather than of this file.
+            **_dialect(self.cfg).cache_options(),
+            **_dialect(self.cfg).effort(getattr(self.cfg, "reasoning_effort", None)
+                                        or getattr(self.cfg, "effort", None)),
             # Last, but it cannot reach anything above it: the reserved keys
             # are refused at config load, so this adds and never replaces.
             # One body for both, built by `merged_body`. These were two
