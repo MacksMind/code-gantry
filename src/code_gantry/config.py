@@ -214,6 +214,19 @@ class NoDirectEdit(_Strict):
 class ExecutorConfig(_EndpointConfig):
     model: str
     api_key_env: str | None = None
+    # Extra request-body parameters, merged into every executor call.
+    #
+    # It exists because a gateway's controls are not always a model string. The
+    # Pareto router's quality tier is `plugins: [{"id": "pareto-router",
+    # "min_coding_score": 0.6}]` in the body, and naming that here would put one
+    # deployment's vocabulary into a tool that is supposed to have none — the
+    # same rule that keeps a framework's file extensions out of a prompt.
+    #
+    # Wide on purpose and bounded at the one place it must be: `tools` is the
+    # capability partition, `model` decides who answers, `input` is the
+    # conversation. `RESERVED_REQUEST_KEYS` refuses those at config load, which
+    # is the first moment the question can be answered.
+    request_extra: dict = Field(default_factory=dict)
     # Caching is a property of the
     # endpoint rather than of the work: against a local server that prices
     # nothing and caches nothing it buys nothing and adds a keepalive ping
@@ -1536,6 +1549,7 @@ def _structural_problems(cfg: ProjectConfig) -> list[str]:
         ("planner", cfg.planner),
         ("reviewer", cfg.reviewer),
     ):
+        problems.extend(_request_extra_problems(role, endpoint))
         if endpoint.api_base and endpoint.api_base_env:
             problems.append(
                 f"{role} sets both api_base and api_base_env. Pick one — "
@@ -1546,6 +1560,48 @@ def _structural_problems(cfg: ProjectConfig) -> list[str]:
     problems.extend(_tool_name_problems(cfg.project_tools))
     problems.extend(denylist_violations(cfg.all_commands()))
     return problems
+
+
+RESERVED_REQUEST_KEYS = frozenset(
+    {
+        # Who answers. A router is chosen by naming one here as the model, not
+        # by an operator swapping it underneath the call.
+        "model",
+        # The conversation. Replacing it would discard the prompt the whole
+        # caching arrangement is built around.
+        "input",
+        "messages",
+        # The capability partition. This is the safety story: the executor can
+        # do exactly what its tool schemas allow, and a config key able to
+        # extend that list would be a way around every guard in `config.py`.
+        "tools",
+        "tool_choice",
+        # The cache controls the loop sets deliberately. GPT-5.6 does not fall
+        # back to a longest matching prefix, so these are load-bearing rather
+        # than advisory, and an operator overriding them would show up only as
+        # an unexplained bill.
+        "prompt_cache_options",
+        "prompt_cache_key",
+    }
+)
+
+
+def _request_extra_problems(role: str, endpoint) -> list[str]:
+    """Refuse a passthrough that would replace something we set on purpose.
+
+    Asked at config load because that is where it can first be answered, and
+    because the alternative — noticing at the call site — means noticing a
+    changed tool list by its consequences.
+    """
+    extra = getattr(endpoint, "request_extra", None) or {}
+    return [
+        f"{role}.request_extra sets {key!r}, which CodeGantry sets itself. "
+        "Extra parameters are merged into the request and may add to it, "
+        "never replace what makes an attempt what it is — the model, the "
+        "conversation, the tool schemas or the cache controls."
+        for key in sorted(extra)
+        if key in RESERVED_REQUEST_KEYS
+    ]
 
 
 def _tool_name_problems(tools: list[ProjectTool]) -> list[str]:

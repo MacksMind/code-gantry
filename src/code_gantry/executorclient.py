@@ -96,6 +96,21 @@ class ExecutorTurn:
         self.served_models[model] = self.served_models.get(model, 0) + 1
 
 
+def request_extra(cfg: ExecutorConfig) -> dict:
+    """Operator-declared request parameters, as SDK kwargs.
+
+    Empty when nothing was declared, for the reason `_reasoning_param` gives
+    just below: a model that does not take a parameter should not be sent one,
+    and no default of ours should override a provider's.
+
+    Wrapped in `extra_body` because these are body fields the SDK has no named
+    argument for — a router's `plugins` is not part of the Responses schema and
+    would be dropped rather than sent if handed over as a keyword.
+    """
+    extra = getattr(cfg, "request_extra", None) or {}
+    return {"extra_body": dict(extra)} if extra else {}
+
+
 def _reasoning_param(cfg: ExecutorConfig) -> dict:
     """Effort, only when the operator chose one.
 
@@ -227,6 +242,9 @@ class OpenAIExecutorModel:
             # helpful. The marks themselves go on the tool results below.
             "prompt_cache_options": {"mode": "explicit"},
             **_reasoning_param(self.cfg),
+            # Last, but it cannot reach anything above it: the reserved keys
+            # are refused at config load, so this adds and never replaces.
+            **request_extra(self.cfg),
         }
         if cache_key:
             extra["prompt_cache_key"] = cache_key
