@@ -99,9 +99,43 @@ def _probe(cfg) -> str:
         model=cfg.model,
         input=[{"role": "user", "content": [{"type": "input_text", "text": "."}]}],
         max_output_tokens=16,
+        # The shape of the work, not just a text completion.
+        #
+        # `provider.require_parameters` filters providers by the parameters
+        # *in the request*. A bare prompt carries almost none, so it would
+        # happily resolve to a model that cannot do strict function calling or
+        # honour the configured effort — and Pareto picks on coding score,
+        # which says nothing about capability. The failure would land on stage
+        # one, as a router-chosen model that cannot run the workload it was
+        # chosen for.
+        #
+        # One representative strict tool rather than the real menu: the filter
+        # reads which parameters are present, not what the schemas contain, and
+        # the menu is thousands of tokens on a call whose reply is discarded.
+        tools=_PROBE_TOOLS,
+        **RESPONSES.effort(getattr(cfg, "reasoning_effort", None)),
+        **RESPONSES.cache_options(),
         **body,
     )
     return getattr(response, "model", "") or ""
+
+
+# Shaped like the executor's own: strict, with every property required and
+# `additionalProperties: false`, which is what strict mode demands.
+_PROBE_TOOLS = [
+    {
+        "type": "function",
+        "name": "read_file",
+        "description": "Read a range of lines from a file.",
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+    }
+]
 
 
 def resolve_policy(cfg, ask=_probe, log=None):

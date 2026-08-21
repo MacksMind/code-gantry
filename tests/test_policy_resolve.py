@@ -92,3 +92,68 @@ class TestWhatItUnlocks:
             dialect_for(cfg.model)
         out = resolve_policy(cfg, ask=lambda _c: "google/gemini-3.7-flash")
         assert dialect_for(out.model) is MESSAGES
+
+
+class TestTheProbeLooksLikeTheWork:
+    """A probe that asks a different question gets a different answer.
+
+    `provider.require_parameters` filters providers by the parameters *in the
+    request*. A bare text prompt carries almost none, so it would admit a model
+    that cannot do strict function calling or honour the configured effort —
+    and Pareto picks on coding score, which says nothing about capability.
+    The failure would land on stage one, as a router-chosen model that cannot
+    run the workload it was chosen for.
+
+    One representative strict tool rather than the whole menu: the filter reads
+    which parameters are present, not what the schemas contain, and the real
+    menu is thousands of tokens on a call whose reply is discarded.
+    """
+
+    def _sent(self, cfg):
+        seen = {}
+
+        class _Client:
+            class responses:
+                @staticmethod
+                def create(**kw):
+                    seen.update(kw)
+                    return type("R", (), {"model": "google/gemini-3.7-flash"})()
+
+        import code_gantry.dialects as d
+        from code_gantry.gateway import _probe
+
+        original = d.RESPONSES._client
+        object.__setattr__(d.RESPONSES, "_client", lambda _c: _Client())
+        try:
+            _probe(cfg)
+        finally:
+            object.__setattr__(d.RESPONSES, "_client", original)
+        return seen
+
+    def _cfg(self):
+        return ExecutorConfig(
+            model="openrouter/pareto-code",
+            api_base="https://openrouter.ai/api/v1",
+            api_key_env="OPENROUTER_API_KEY",
+            reasoning_effort="max",
+            request_extra={"plugins": [{"id": "pareto-router", "min_coding_score": 0.3}]},
+        )
+
+    def test_it_carries_a_strict_tool(self):
+        sent = self._sent(self._cfg())
+        assert sent["tools"] and sent["tools"][0]["strict"] is True
+
+    def test_it_carries_the_configured_effort(self):
+        assert self._sent(self._cfg())["reasoning"] == {"effort": "max"}
+
+    def test_it_carries_the_cache_options(self):
+        assert self._sent(self._cfg())["prompt_cache_options"] == {"mode": "explicit"}
+
+    def test_it_still_carries_the_routing_fields(self):
+        body = self._sent(self._cfg())["extra_body"]
+        assert body["provider"]["require_parameters"] is True
+        assert body["plugins"][0]["min_coding_score"] == 0.3
+
+    def test_it_stays_cheap(self):
+        """The reply is discarded; only `response.model` is read."""
+        assert self._sent(self._cfg())["max_output_tokens"] <= 64
