@@ -374,11 +374,36 @@ def _api_key(cfg) -> str:
     return os.environ[name]
 
 
+def _gateway_base(base, wire: str):
+    """OpenRouter's base URL for this wire.
+
+    The two SDKs disagree about what a base is: the OpenAI client wants
+    `.../api/v1` and appends `responses`, the Anthropic client wants `.../api`
+    and appends `v1/messages`. That was survivable while each role's wire was
+    fixed — the planner's config carries no `/v1` and the executor's does.
+    Choosing the wire from the *model* makes one `api_base` serve both, and an
+    executor pointed at a Gemini model built an Anthropic client on
+    `.../api/v1`, resolving to `/api/v1/v1/messages`.
+
+    Only OpenRouter's layout is ours to know. Anything else is spelled by
+    whoever runs it and is left exactly as configured.
+    """
+    from code_gantry.gateway import is_openrouter
+
+    if not base or not is_openrouter(base):
+        return base
+    trimmed = str(base).rstrip("/")
+    if trimmed.endswith("/v1"):
+        trimmed = trimmed[: -len("/v1")]
+    return f"{trimmed}/v1" if wire == "responses" else trimmed
+
+
 def _responses_client(cfg):
     from openai import OpenAI
 
     kwargs = {"api_key": _api_key(cfg), "max_retries": 0}
     base = cfg.resolve_api_base() if hasattr(cfg, "resolve_api_base") else None
+    base = _gateway_base(base, "responses")
     if base:
         kwargs["base_url"] = base
     timeout = getattr(cfg, "request_timeout_seconds", None)
@@ -392,6 +417,7 @@ def _messages_client(cfg):
 
     kwargs = {"api_key": _api_key(cfg), "max_retries": 0}
     base = cfg.resolve_api_base() if hasattr(cfg, "resolve_api_base") else None
+    base = _gateway_base(base, "messages")
     if base:
         kwargs["base_url"] = base
     timeout = getattr(cfg, "request_timeout_seconds", None)

@@ -75,3 +75,52 @@ class TestClients:
         for wire in (RESPONSES, MESSAGES):
             with pytest.raises(KeyError, match="DEFINITELY_NOT_SET_ANYWHERE"):
                 wire.client(cfg)
+
+
+class TestTheBaseUrlSuitsTheWire:
+    """One host in config; each wire adds the suffix it needs.
+
+    The two SDKs disagree about what a base URL is. The OpenAI client wants
+    `.../api/v1` and appends `responses`; the Anthropic client wants
+    `.../api` and appends `v1/messages`. The planner's config carries no `/v1`
+    for exactly that reason and the executor's carries one.
+
+    That was survivable while a role's wire was fixed. It stops being
+    survivable when the wire is chosen from the model: the same `api_base`
+    then has to serve both, and the executor pointed at a Gemini model built
+    an Anthropic client on `.../api/v1`, which resolves to
+    `/api/v1/v1/messages`.
+
+    So config names the endpoint and the dialect adjusts, which is the same
+    division as everything else here — an operator should not have to know
+    that two SDKs count path segments differently.
+    """
+
+    def test_messages_drops_a_trailing_v1_on_openrouter(self):
+        from code_gantry.dialects import MESSAGES
+
+        c = MESSAGES.client(_Cfg("https://openrouter.ai/api/v1"))
+        assert str(c.base_url).rstrip("/") == "https://openrouter.ai/api"
+
+    def test_responses_adds_v1_on_openrouter(self):
+        from code_gantry.dialects import RESPONSES
+
+        c = RESPONSES.client(_Cfg("https://openrouter.ai/api"))
+        assert str(c.base_url).rstrip("/") == "https://openrouter.ai/api/v1"
+
+    def test_each_wire_leaves_a_correct_base_alone(self):
+        from code_gantry.dialects import MESSAGES, RESPONSES
+
+        m = MESSAGES.client(_Cfg("https://openrouter.ai/api"))
+        r = RESPONSES.client(_Cfg("https://openrouter.ai/api/v1"))
+        assert str(m.base_url).rstrip("/") == "https://openrouter.ai/api"
+        assert str(r.base_url).rstrip("/") == "https://openrouter.ai/api/v1"
+
+    def test_a_non_gateway_base_is_untouched(self):
+        """Only OpenRouter's layout is ours to know. A local server or a
+        first-party endpoint is spelled by whoever runs it."""
+        from code_gantry.dialects import MESSAGES, RESPONSES
+
+        for wire in (MESSAGES, RESPONSES):
+            c = wire.client(_Cfg("http://localhost:8080/v1"))
+            assert str(c.base_url).rstrip("/") == "http://localhost:8080/v1"
