@@ -121,14 +121,27 @@ class TestAnsweringWithResults:
         blocks = conv[0]["content"]
         assert [b["tool_use_id"] for b in blocks] == ["toolu_0", "toolu_1"]
 
-    def test_the_cache_mark_lands_on_the_last_result_only(self):
-        """A moving breakpoint: on Messages only the last one counts for
-        Gemini, and marking every result would pass four by the fifth turn."""
+    def test_messages_marks_the_last_result_only(self):
+        """It *moves* on this wire: only the last one counts for Gemini, and
+        four is a hard ceiling that marking every result would pass by the
+        fifth turn."""
         conv = []
         MESSAGES.append_tool_results(conv, [("a", "x"), ("b", "y")], cache=True)
         blocks = conv[0]["content"]
         assert "cache_control" not in blocks[0]
         assert blocks[-1]["cache_control"] == {"type": "ephemeral"}
+
+    def test_responses_marks_every_result(self):
+        """It *accumulates* on this wire — a request writes its latest four but
+        matching considers up to eighty, so each mark extends the cached prefix
+        rather than restarting it. Pinned because collapsing the two wires onto
+        one rule silently changed the path measured at 97-99% cached."""
+        conv = []
+        RESPONSES.append_tool_results(conv, [("a", "x"), ("b", "y")], cache=True)
+        assert all(
+            item["output"][0]["prompt_cache_breakpoint"] == {"mode": "explicit"}
+            for item in conv
+        )
 
     def test_no_mark_when_not_asked(self):
         conv = []
