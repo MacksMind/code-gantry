@@ -28,6 +28,7 @@ from __future__ import annotations
 import os
 
 from code_gantry.config import ExecutorConfig
+from code_gantry.gateway import gateway_body
 from code_gantry.executortools import REPLAN_TOOL, dispatch, openai_tool_schemas
 from code_gantry.openaiclient import (
     TokenUsage,
@@ -109,88 +110,6 @@ def request_extra(cfg: ExecutorConfig) -> dict:
     """
     extra = getattr(cfg, "request_extra", None) or {}
     return {"extra_body": dict(extra)} if extra else {}
-
-
-def is_openrouter(api_base) -> bool:
-    """Whether this endpoint is OpenRouter, by host.
-
-    A hostname in code, which is normally the wrong place for anything a
-    deployment knows — but this is the same category as `prompt_cache_options`
-    two functions down, which is OpenAI's field and hardcoded: knowledge of a
-    provider's API rather than of a project. It has to be a fact rather than a
-    declaration because a first-party endpoint rejects an argument it does not
-    recognise, so getting it wrong is a 400 on every call rather than a missed
-    optimisation.
-
-    Matched on the host, not on the string appearing somewhere in the URL: a
-    path that happens to contain the name is a different service.
-    """
-    if not api_base:
-        return False
-    from urllib.parse import urlparse
-
-    host = (urlparse(str(api_base)).hostname or "").lower()
-    return host == "openrouter.ai" or host.endswith(".openrouter.ai")
-
-
-def session_param(cfg: ExecutorConfig, session_id) -> dict:
-    """`session_id`, on every OpenRouter call.
-
-    Not a router control, which is how it was first read here. OpenRouter uses
-    it as the sticky-routing key generally — a session goes back to the
-    provider holding the warm cache — and one model can be served by several
-    upstream providers with separate caches. So a *pinned* model needs it too,
-    or consecutive calls land on different providers and the prefix is cold
-    through no fault of the model. Reusing a resolved model is an extra effect
-    on router models, not the whole of it.
-
-    Empty for a missing identity rather than sending `""`, which is not
-    stickiness but a malformed request.
-
-    Returned wrapped in `extra_body`, because this is a *body* field the
-    Responses schema knows nothing about. Handed over as a keyword it is a
-    `TypeError` on every call, which is how it reached production: the unit
-    test asserted the dict and a hand probe happened to pass the value as
-    `extra_body`, so nothing compared what the loop builds against what the
-    SDK accepts.
-    """
-    if not session_id or not is_openrouter(cfg.resolve_api_base()):
-        return {}
-    return {"extra_body": {"session_id": session_id}}
-
-
-def merged_body(cfg: ExecutorConfig, session_id) -> dict:
-    """One `extra_body`, holding both the operator's fields and ours.
-
-    Two `extra_body` keys in one splat and the later one wins silently, so
-    they cannot be separate kwargs. Ours goes on last, which is safe rather
-    than rude: `session_id` is a reserved key that `request_extra` may not
-    set, so there is nothing of the operator's to overwrite.
-    """
-    declared = dict((request_extra(cfg).get("extra_body") or {}))
-    if not is_openrouter(cfg.resolve_api_base()):
-        return {"extra_body": declared} if declared else {}
-
-    body: dict = {
-        # Route only to providers that can honour what this request carries.
-        #
-        # Not a provider list: `provider.only` pins one upstream and discards
-        # the fallback that is the reason to use a gateway. This keeps every
-        # provider that supports the parameters and excludes only those that
-        # would drop one — which the gateway does silently.
-        #
-        # Measured, and the tell was the token count rather than the answer. A
-        # planner call routed to a provider without structured-output support
-        # arrived carrying **107 input tokens** against 6,929 on every call
-        # that parsed: `output_format` serialises an 18,400-character schema,
-        # so 107 is the bare prompt. The parameter was removed in transit, not
-        # ignored on arrival, and prose is a well-formed answer to a prompt
-        # with no schema attached.
-        "provider": {"require_parameters": True},
-    }
-    body.update(declared)  # an operator's own routing block wins outright
-    body.update(session_param(cfg, session_id).get("extra_body") or {})
-    return {"extra_body": body}
 
 
 def _reasoning_param(cfg: ExecutorConfig) -> dict:
@@ -333,7 +252,11 @@ class OpenAIExecutorModel:
             # are refused at config load, so this adds and never replaces.
             # One body for both, built by `merged_body`. These were two
             # separate splats and the second silently replaced the first.
-            **merged_body(self.cfg, self.session_id),
+            **gateway_body(
+                self.cfg,
+                self.session_id,
+                request_extra(self.cfg).get("extra_body"),
+            ),
         }
         if cache_key:
             extra["prompt_cache_key"] = cache_key

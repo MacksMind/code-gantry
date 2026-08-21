@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from code_gantry.cachekey import cache_key
 from code_gantry.commands import CommandRunner
 from code_gantry.config import ProjectConfig, validate_stage
 from code_gantry.executor import Executor
@@ -455,6 +456,13 @@ def build_runtime(
     # this is the only place that has both. The declared menu goes with it: the
     # reviewer's factory never took one at all, and a role holding tools it
     # cannot run is the same defect as a role that was never offered them.
+    # The gateway session these two belong to, scoped per run like the
+    # executor's. Bound here rather than in their factories for the reason
+    # everything else in this loop is: the clients are built before the run
+    # exists, and this is the only place that has both. Harmless against a
+    # first-party endpoint, where `gateway_body` sends nothing at all.
+    for label, client in (("plan", planner), ("review", reviewer)):
+        client.session_id = cache_key(label, paths.run_id) if paths.run_id else ""
     for client in (planner, reviewer):
         if hasattr(client, "runner"):
             client.runner = runner

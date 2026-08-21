@@ -568,6 +568,28 @@ def evidence_surviving_a_revision(previous: dict | None, keep_branch: bool) -> d
     return {"suite_failing_paths": sorted(set(paths))} if paths else {}
 
 
+def usage_deltas(prefix: str, usage) -> dict:
+    """Every field a usage record carries, prefixed for its role.
+
+    Walks the dataclass rather than naming fields, because the four call sites
+    that named them by hand are four places to forget the next one — and this
+    codebase has lost `cache_write_tokens`, `peak_prompt_tokens` and a cost
+    figure that way already, each computed correctly at both ends and dropped
+    crossing a schema. A field has to be *excluded* on purpose now.
+
+    `prefix` is empty for the reviewer, whose keys are unprefixed because it
+    was the first role to write here.
+    """
+    import dataclasses
+
+    if usage is None or not dataclasses.is_dataclass(usage):
+        return {}
+    return {
+        f"{prefix}{f.name}": getattr(usage, f.name)
+        for f in dataclasses.fields(usage)
+    }
+
+
 def accumulate_usage(current: dict[str, int] | None, **deltas: int) -> dict[str, int]:
     """Add every figure except the ones that are not totals.
 
@@ -585,6 +607,16 @@ def accumulate_usage(current: dict[str, int] | None, **deltas: int) -> dict[str,
     for key, value in deltas.items():
         if "peak" in key:
             out[key] = max(out.get(key, 0), value)
+        elif "cost" in key:
+            # Summed like a total, but *through* `None`, which is not the same
+            # as summing zeros: unreported plus unreported is still
+            # unreported, and only a provider saying so makes a zero real. A
+            # gateway reports what it billed; a first-party endpoint reports
+            # nothing and the figure comes from the rate table instead.
+            prior = out.get(key)
+            out[key] = value if prior is None else (
+                prior if value is None else prior + value
+            )
         else:
             out[key] = out.get(key, 0) + value
     return out

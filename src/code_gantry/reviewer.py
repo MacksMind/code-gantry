@@ -34,6 +34,7 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel
 
+from code_gantry.gateway import gateway_body
 from code_gantry.config import ReviewerConfig
 from code_gantry.openaiclient import (
     TokenUsage,
@@ -301,6 +302,10 @@ class OpenAIReviewer:
         extra: dict = {
             "prompt_cache_options": {"mode": "explicit"},
             **_reasoning_param(self.cfg),
+            # Empty against a first-party endpoint. When this role is pointed
+            # at a gateway it carries the same two fields the executor does,
+            # decided from the endpoint rather than declared — see `gateway`.
+            **gateway_body(self.cfg, getattr(self, "session_id", "") or ""),
         }
         if cache_key:
             extra["prompt_cache_key"] = cache_key

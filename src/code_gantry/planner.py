@@ -34,6 +34,7 @@ from typing import Callable, Literal, Protocol
 from pydantic import BaseModel, Field
 
 from code_gantry.config import PlannerConfig
+from code_gantry.gateway import gateway_body
 from code_gantry.plannertools import (
     REPOSITORY_TEXT_IS_EVIDENCE,
     STATE_NOT_CHANGE,
@@ -459,6 +460,12 @@ class PlannerUsage:
     # at 1,103,000 tokens against a 1,000,000 ceiling, with nothing recorded
     # that would have seen it coming.
     peak_prompt_tokens: int = 0
+    # What the provider says this cost, when it says anything. Absent on a
+    # first-party endpoint, which reports tokens and leaves the money to us;
+    # present through a gateway that does the billing. `None` rather than
+    # `0.0`, the distinction `_price` exists to protect. Last, like the two
+    # fields above and for the same reason.
+    provider_cost_usd: float | None = None
 
 
 @dataclass
@@ -873,6 +880,14 @@ class AnthropicPlanner:
                         messages=_with_loop_breakpoint(conversation),
                         output_format=PlannerResponse,
                         **({"tools": tools} if tools else {}),
+                        # Empty against a first-party endpoint. Through a
+                        # gateway this carries `require_parameters`, which is
+                        # what keeps `output_format` above from being stripped
+                        # in transit — the failure that returns prose and
+                        # names no cause.
+                        **gateway_body(
+                            self.cfg, getattr(self, "session_id", "") or ""
+                        ),
                     ),
                     retry_on=_transport_errors(),
                     transient=Backoff(
@@ -1108,6 +1123,7 @@ def _extract_usage(usage) -> PlannerUsage:
     written = getattr(usage, "cache_creation_input_tokens", 0) or 0
     total_in = uncached + read + written
     return PlannerUsage(
+        provider_cost_usd=getattr(usage, "cost", None),
         prompt_tokens=total_in,
         cached_tokens=read,
         cache_write_tokens=written,

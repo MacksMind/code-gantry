@@ -35,7 +35,7 @@ class TestTheTrigger:
         ],
     )
     def test_openrouter_endpoints_are_recognised(self, base):
-        from code_gantry.executorclient import is_openrouter
+        from code_gantry.gateway import is_openrouter
 
         assert is_openrouter(base)
 
@@ -52,29 +52,29 @@ class TestTheTrigger:
         ],
     )
     def test_everything_else_is_not(self, base):
-        from code_gantry.executorclient import is_openrouter
+        from code_gantry.gateway import is_openrouter
 
         assert not is_openrouter(base)
 
 
 class TestItIsSentWithoutBeingAskedFor:
     def test_an_openrouter_endpoint_gets_it(self):
-        from code_gantry.executorclient import session_param
+        from code_gantry.gateway import gateway_body
 
         cfg = ExecutorConfig(model="m", api_base="https://openrouter.ai/api/v1")
-        assert session_param(cfg, "run-1") == {"extra_body": {"session_id": "run-1"}}
+        assert gateway_body(cfg, "run-1")["extra_body"]["session_id"] == "run-1"
 
     def test_a_first_party_endpoint_does_not(self):
         """It would 400 on an argument it does not recognise."""
-        from code_gantry.executorclient import session_param
+        from code_gantry.gateway import gateway_body
 
-        assert session_param(ExecutorConfig(model="m"), "run-1") == {}
+        assert gateway_body(ExecutorConfig(model="m"), "run-1") == {}
 
     def test_no_identity_means_nothing_is_sent(self):
-        from code_gantry.executorclient import session_param
+        from code_gantry.gateway import gateway_body
 
         cfg = ExecutorConfig(model="m", api_base="https://openrouter.ai/api/v1")
-        assert session_param(cfg, "") == {}
+        assert gateway_body(cfg, "").get("extra_body", {}).get("session_id") is None
 
 
 class TestTheIdentityIsPerRun:
@@ -140,21 +140,21 @@ class TestTheKwargsAreAcceptable:
     """
 
     def test_the_session_goes_inside_the_body(self):
-        from code_gantry.executorclient import session_param
+        from code_gantry.gateway import gateway_body
 
         cfg = ExecutorConfig(model="m", api_base="https://openrouter.ai/api/v1")
-        assert session_param(cfg, "run-1") == {"extra_body": {"session_id": "run-1"}}
+        assert gateway_body(cfg, "run-1")["extra_body"]["session_id"] == "run-1"
 
     def test_it_merges_with_an_operator_declared_body(self):
         """Rather than one replacing the other."""
-        from code_gantry.executorclient import merged_body
+        from code_gantry.gateway import gateway_body
 
         cfg = ExecutorConfig(
             model="m",
             api_base="https://openrouter.ai/api/v1",
             request_extra={"plugins": [{"id": "pareto-router"}]},
         )
-        body = merged_body(cfg, "run-1")["extra_body"]
+        body = gateway_body(cfg, "run-1", cfg.request_extra)["extra_body"]
         assert body["session_id"] == "run-1"
         assert body["plugins"] == [{"id": "pareto-router"}]
 
@@ -167,7 +167,8 @@ class TestTheKwargsAreAcceptable:
         import inspect
 
         from openai import OpenAI
-        from code_gantry.executorclient import merged_body, _reasoning_param
+        from code_gantry.gateway import gateway_body
+        from code_gantry.executorclient import _reasoning_param
 
         cfg = ExecutorConfig(
             model="m",
@@ -178,7 +179,7 @@ class TestTheKwargsAreAcceptable:
         built = {
             "prompt_cache_options": {"mode": "explicit"},
             **_reasoning_param(cfg),
-            **merged_body(cfg, "run-1"),
+            **gateway_body(cfg, "run-1", cfg.request_extra),
             "prompt_cache_key": "k",
         }
         accepted = set(
@@ -209,27 +210,27 @@ class TestParametersMustSurviveTheRoute:
     """
 
     def test_openrouter_calls_require_supported_parameters(self):
-        from code_gantry.executorclient import merged_body
+        from code_gantry.gateway import gateway_body
 
         cfg = ExecutorConfig(model="m", api_base="https://openrouter.ai/api/v1")
-        body = merged_body(cfg, "run-1")["extra_body"]
+        body = gateway_body(cfg, "run-1", cfg.request_extra)["extra_body"]
         assert body["provider"]["require_parameters"] is True
 
     def test_a_first_party_endpoint_is_left_alone(self):
         """`provider` is the gateway's field and would be an unknown argument."""
-        from code_gantry.executorclient import merged_body
+        from code_gantry.gateway import gateway_body
 
-        assert merged_body(ExecutorConfig(model="m"), "run-1") == {}
+        assert gateway_body(ExecutorConfig(model="m"), "run-1") == {}
 
     def test_an_operator_may_still_shape_routing(self):
         """The default is a floor, not a ceiling. An operator who declares
         their own `provider` block has made a deliberate choice and keeps it."""
-        from code_gantry.executorclient import merged_body
+        from code_gantry.gateway import gateway_body
 
         cfg = ExecutorConfig(
             model="m",
             api_base="https://openrouter.ai/api/v1",
             request_extra={"provider": {"require_parameters": False, "sort": "price"}},
         )
-        body = merged_body(cfg, "run-1")["extra_body"]
+        body = gateway_body(cfg, "run-1", cfg.request_extra)["extra_body"]
         assert body["provider"] == {"require_parameters": False, "sort": "price"}

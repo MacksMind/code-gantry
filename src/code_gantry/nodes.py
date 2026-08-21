@@ -58,6 +58,7 @@ from code_gantry.prompts import (
 from code_gantry.reviewer import issues_as_feedback
 from code_gantry.runtime import Runtime
 from code_gantry.state import (
+    usage_deltas,
     clear_rework_after_approval,
     RunState,
     zero_usage,
@@ -380,11 +381,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
 
     usage = accumulate_usage(
         state.get("run_usage"),
-        planner_prompt_tokens=outcome.usage.prompt_tokens,
-        planner_cached_tokens=outcome.usage.cached_tokens,
-        planner_cache_write_tokens=outcome.usage.cache_write_tokens,
-        planner_completion_tokens=outcome.usage.completion_tokens,
-        planner_peak_prompt_tokens=outcome.usage.peak_prompt_tokens,
+        **usage_deltas("planner_", outcome.usage),
     )
 
     append_status(
@@ -468,11 +465,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
         # the same stage.
         "stage_usage": accumulate_usage(
             state.get("stage_usage"),
-            planner_prompt_tokens=outcome.usage.prompt_tokens,
-            planner_cached_tokens=outcome.usage.cached_tokens,
-            planner_cache_write_tokens=outcome.usage.cache_write_tokens,
-            planner_completion_tokens=outcome.usage.completion_tokens,
-            planner_peak_prompt_tokens=outcome.usage.peak_prompt_tokens,
+            **usage_deltas("planner_", outcome.usage),
         ),
         "planner_notes": notes,
         # Accumulated rather than assigned: a revision is more planning for the
@@ -1020,16 +1013,7 @@ def execute(state: RunState, rt: Runtime) -> dict:
     # so a later attempt cannot inherit an earlier one's answers.
     measured["gate_records"] = dict(result.gate_records)
     if result.usage is not None:
-        deltas = {
-            "executor_prompt_tokens": getattr(result.usage, "prompt_tokens", 0),
-            "executor_cached_tokens": getattr(result.usage, "cached_tokens", 0),
-            "executor_cache_write_tokens": getattr(
-                result.usage, "cache_write_tokens", 0
-            ),
-            "executor_completion_tokens": getattr(
-                result.usage, "completion_tokens", 0
-            ),
-        }
+        deltas = usage_deltas("executor_", result.usage)
         measured["run_usage"] = accumulate_usage(state.get("run_usage"), **deltas)
         # The same deltas onto the stage. Every attempt is its own session, so
         # a stage reworked three times is billed for three.
@@ -1503,19 +1487,11 @@ def review(state: RunState, rt: Runtime) -> dict:
 
     usage = accumulate_usage(
         state.get("run_usage"),
-        prompt_tokens=outcome.usage.prompt_tokens,
-        cached_tokens=outcome.usage.cached_tokens,
-        cache_write_tokens=outcome.usage.cache_write_tokens,
-        completion_tokens=outcome.usage.completion_tokens,
-        peak_prompt_tokens=outcome.usage.peak_prompt_tokens,
+        **usage_deltas("", outcome.usage),
     )
     stage_usage = accumulate_usage(
         state.get("stage_usage"),
-        prompt_tokens=outcome.usage.prompt_tokens,
-        cached_tokens=outcome.usage.cached_tokens,
-        cache_write_tokens=outcome.usage.cache_write_tokens,
-        completion_tokens=outcome.usage.completion_tokens,
-        peak_prompt_tokens=outcome.usage.peak_prompt_tokens,
+        **usage_deltas("", outcome.usage),
     )
     # The peak beside the total, because they answer different questions and
     # the total was twice mistaken for the answer to the second. A tool loop
@@ -2676,9 +2652,19 @@ def _stage_spend(cfg, usage: dict, executor_cost: float | None = None) -> list[d
     endpoint and a missing rate identical — and the two are told apart here by
     the field simply being absent.
     """
-    from code_gantry.pricing import cached_price_map, entry_for, price_usage
+    from code_gantry import pricing
 
-    prices = cached_price_map(cfg)
+    # Loaded on first use, not up front. Every role may report what it was
+    # billed, in which case the table is never needed — and this is the
+    # function `advance` calls per landing, where an eager load once refetched
+    # 1.76MB of somebody else's rate card on every stage.
+    cached: dict = {}
+
+    def prices() -> dict:
+        if "map" not in cached:
+            cached["map"] = pricing.cached_price_map(cfg)
+        return cached["map"]
+
     out: list[dict] = []
     # The reviewer's keys are unprefixed: it was the first role to write here
     # and the shape was not role-aware yet. Named explicitly rather than
@@ -2694,12 +2680,12 @@ def _stage_spend(cfg, usage: dict, executor_cost: float | None = None) -> list[d
         known = executor_cost if label == "executor" else None
         if not prompt and not completion and not known:
             continue
-        cached = usage.get(f"{prefix}cached_tokens", 0)
+        cached_tokens = usage.get(f"{prefix}cached_tokens", 0)
         writes = usage.get(f"{prefix}cache_write_tokens", 0)
         row = {
             "role": label,
             "prompt": prompt,
-            "cached": cached,
+            "cached": cached_tokens,
             "completion": completion,
         }
         # Where one is recorded. The summed figure is what the role was billed
@@ -2716,10 +2702,18 @@ def _stage_spend(cfg, usage: dict, executor_cost: float | None = None) -> list[d
         # that does. Preferring its figure keeps one arithmetic rather than
         # two agreeing ones — the second is the one that drifts, and
         # `_price`'s own docstring says so.
+        # A gateway bills us and says what it billed; that beats deriving the
+        # same number from a rate table, and under a router it is the only
+        # answer available. Same precedence as the executor's own figure just
+        # above — one arithmetic, chosen by a condition, rather than two that
+        # can disagree.
         cost = known
         if cost is None:
-            cost = price_usage(
-                entry_for(prices, model), prompt, cached, writes, completion
+            cost = usage.get(f"{prefix}provider_cost_usd")
+        if cost is None:
+            cost = pricing.price_usage(
+                pricing.entry_for(prices(), model),
+                prompt, cached_tokens, writes, completion,
             )
         if cost:
             row["cost_usd"] = cost
