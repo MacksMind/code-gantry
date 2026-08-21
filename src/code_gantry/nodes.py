@@ -807,6 +807,33 @@ def precheck(state: RunState, rt: Runtime) -> dict:
 # --- execute -------------------------------------------------------------
 
 
+def served_summary(served_models) -> str:
+    """Which model answered, for the execute line.
+
+    Under a router `cfg.model` names a *policy* — `openrouter/pareto-code`
+    resolved to three different models in one day — so the configured name in
+    the log answers a different question from the one an operator is asking.
+    The artifact has carried this since it existed; the log is what anyone
+    actually reads while a run is going, and reading it meant inferring the
+    model from the tier.
+
+    Ordered by turns because the majority model is the one that did the work,
+    and a split is the case worth seeing: sticky routing is a five-minute
+    window, an attempt often runs longer, and a switch mid-attempt means a cold
+    prefix at full input price. Without the split that arrives as an
+    unexplained bill.
+
+    Empty for an endpoint that echoes no model, rather than ` via `: absence
+    and a model named nothing are different facts.
+    """
+    if not served_models:
+        return ""
+    ranked = sorted(served_models.items(), key=lambda kv: (-kv[1], kv[0]))
+    if len(ranked) == 1:
+        return f" via {ranked[0][0]}"
+    return " via " + ", ".join(f"{name} x{turns}" for name, turns in ranked)
+
+
 def execute(state: RunState, rt: Runtime) -> dict:
     stage = current_stage(state, rt)
     attempt = _attempt(state)
@@ -931,6 +958,7 @@ def execute(state: RunState, rt: Runtime) -> dict:
         # reads as a measurement rather than as its absence, which is the
         # difference between "no cache" and "nobody looked".
         paid = ""
+        served = served_summary(getattr(result, "served_models", None))
         if result.usage is not None:
             prompt = getattr(result.usage, "prompt_tokens", 0)
             cached = getattr(result.usage, "cached_tokens", 0)
@@ -944,6 +972,7 @@ def execute(state: RunState, rt: Runtime) -> dict:
             f"call(s) over {result.cycles} cycle(s): {asked}"
             + (f"; refused {refused}" if refused else "")
             + paid
+            + served
         )
 
     if result.dropped_reads:
