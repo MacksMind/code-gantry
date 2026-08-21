@@ -232,16 +232,6 @@ class ExecutorConfig(_EndpointConfig):
     # conversation. `RESERVED_REQUEST_KEYS` refuses those at config load, which
     # is the first moment the question can be answered.
     request_extra: dict = Field(default_factory=dict)
-    # Vestigial, and read by nothing. `session_id` is now sent on every
-    # OpenRouter call, decided from the endpoint host rather than declared —
-    # it is not a router control but the gateway's sticky-routing key, so a
-    # pinned model needs it as much as a routed one.
-    #
-    # Kept for one cycle only because `ExecutorConfig` forbids extras, and a
-    # config carrying this key is checked out in a repository with a live run
-    # against it: deleting the field would make that config fail to load on a
-    # resume. It goes with the config line at the next fresh run.
-    session_stickiness: bool = False
     # Caching is a property of the
     # endpoint rather than of the work: against a local server that prices
     # nothing and caches nothing it buys nothing and adds a keepalive ping
