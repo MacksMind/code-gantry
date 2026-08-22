@@ -2140,6 +2140,149 @@ observation. Check once more after the loop, for the same reason a monitor is
 anchored to this run: the instrument's own shape is the thing most likely to be
 lying.
 
+**Send it to the endpoint.** The night this file grew the four entries below,
+every one of them was found by starting a run, waiting twenty minutes, and
+reading a corpse. Each was a single parameter or a single field, and each was
+answerable in one call against the live API with the payload production
+actually assembles. The operator's correction is the rule: *write your code,
+take the output of that code, send it to the endpoint, see what you get back.*
+A stub answers what you taught it; the endpoint answers what is true. Two
+probes that afternoon settled the caching question that six hours of reasoning
+had not, and the same two commands would have caught all four defects before
+the first run started.
+
+**A stub cannot fail the way the thing it stands in for fails.**
+`scripts/smoke.py` serves canned JSON, so it catches what raises *client-side*
+— a keyword the SDK does not declare — and cannot catch what the server
+rejects. Its Messages arm reported 29 checks passed for three consecutive
+stages of a live run whose every request came back 400. Adding a check that
+the request's content-block discriminators are in
+`anthropic.types.ContentBlockParam` closed that particular hole, and the
+general form does not close: a stand-in validates what its author thought to
+validate. Anything a stub says green about is a hypothesis until an endpoint
+agrees.
+
+**Moving one component onto a new axis leaves its neighbours on the old one.**
+Making the wire a property of the model moved the *client* and left everything
+that builds a request behind, each of which then spoke Responses to a Messages
+endpoint: `prompt_cache_key`, a Responses-only parameter, hardcoded at two call
+sites; `input_text` and `prompt_cache_breakpoint`, Responses-only content
+fields, hardcoded at seven; `extract_usage`, OpenAI's reader, applied to every
+response whatever wire it came from. Four defects, one shape, found one live
+run at a time over a night. The refactor reviews as complete because the thing
+it was about is complete. Ask instead what *else* touches the request, and go
+through them before the first run rather than after each failure.
+
+**A parameter no provider declares is not ignored; it excludes every
+provider.** `output_config` is Anthropic-native, so through OpenRouter it works
+where the upstream is Anthropic and nowhere else — and with
+`provider.require_parameters` on, which is there so structured output cannot be
+silently dropped, the gateway answers **404 `No endpoints found that can handle
+the requested parameters`** rather than 400. Read as a routing problem it sends
+you looking at the model; it is a request problem. Measured across all three
+endpoints, because recall and the docs were both wrong:
+
+| spelling               | Anthropic direct | OR → claude | OR → gemini |
+| `output_config`        | OK               | OK          | **404**     |
+| `extra_body.reasoning` | **400**          | OK          | OK          |
+
+So the spelling follows the *route*, not the model family — the same model
+takes different spellings depending on how you reach it. OpenRouter's own model
+listing says as much: nothing on it declares `output_config` and everything
+declares `reasoning`. `GET /api/v1/models` carries `supported_parameters` per
+model and is the cheapest way to ask.
+
+**Cold on the Messages wire means `input_tokens: 0`.** Anthropic reports three
+orthogonal counts and the prefix lands entirely in the cache fields on the turn
+that writes it. Read with OpenAI's extractor — which looks for
+`input_tokens_details.cached_tokens` — a cold turn records **no prompt tokens
+at all**, not merely no cache. That is why every `opening_turn` of one run is
+`{0, 0}`: the opening turn is precisely the one where the whole prefix is a
+write. The dollar figure survived because a gateway puts `cost` at the top
+level, which is what made the loss look like a cache-rate question rather than
+a token-accounting one.
+
+The operator caught it by reading their provider dashboard against our log
+line. `CLAUDE.md` already says to check the instrument before the world; I had
+even written that a categorical zero usually means a mechanism, and then went
+looking for the mechanism in the provider. A number that is *exactly* zero
+across every sample is a reader that cannot see the field, until proven
+otherwise.
+
+**A resume hands the planner the failure a human just fixed.** A harness fault
+— a keyword the endpoint refuses — is recorded in `opening_failure` and
+survives into the resume, which re-enters at `plan` because the failure layer
+was the planner's. The planner then reads a deterministic harness error,
+concludes correctly that no stage it could draw would change which keyword
+arguments the harness sends, and blocks. It re-blocks on every subsequent
+resume, having run nothing. `--reset-progress-budget` exists for exactly this
+shape one field over, and its docstring already argues the case: "a config
+change or a code fix does not clear it by itself; someone has to say that the
+earlier failures no longer apply." Nothing says it for `opening_failure`. A
+fresh run is the workaround and costs a preflight plus a derivation.
+
+**An empty final turn reads as success.** A model that returns `end_turn`
+carrying no text and no tool calls is, to the loop, a model that has finished.
+One attempt made 96 searches and 3 reads across 101 turns, applied no edits,
+attempted none — `edit_refusals` was empty — produced not one assistant text
+block, and recorded `ok: true`, `turns_exhausted: false`, `log: ""`, $0.35. The
+scope gate then reports "the attempt produced no changes", which reads as a
+badly drawn stage and sends the planner to redraw one that was never the
+problem. Finishing and giving up are different events and the wire renders them
+identically; only the absence of *any* content separates them, and nothing
+looks at it.
+
+**An artifact that renders part of a payload cannot reconstruct it.**
+`planner-prompt.md` exists because a rejected prompt left no way to find out
+what was in it, and its own docstring says reconstruction "cannot be made to
+converge". It renders `messages` only — no tools, no system block, no
+structured-output schema. That is 17,622 tokens, and it is the exact region
+this project's cache question turned on. Rebuilding a payload from it produced
+something 4,300 tokens short, which missed the cache by construction, and the
+miss was reported as a reproduction of the very thing being investigated. An
+artifact whose purpose is reconstruction has to carry everything the call
+carries, or it is a trap laid for whoever trusts it.
+
+**What the planner's cache actually covers, measured.** The cached region is
+exactly the pre-message prefix — tools, system block and output schema, 17,622
+tokens, matching `count_tokens` to within its own rounding. Everything in the
+messages, 276,891 tokens of which block 0 is essentially all, is written fresh
+and read back never across derivations. Block 0 is 735,413 characters: the
+repository's agent documents 9%, the layout 2%, and the plan documents 89%,
+with `progress_log.md` last at 106,156 characters because it is the one that
+grows. Every landing rewrites the whole segment.
+
+Three hypotheses were tested and refuted, all at full scale against the live
+endpoint: `session_id` does not affect matching (identical payload, fresh
+session, full 294,586-token read); the `1h` TTL is honoured and reported in
+`ephemeral_1h_input_tokens`; and size does not decay it (293,532 read back
+after eleven minutes). One pair of runs six minutes apart with byte-identical
+prompts did miss, and it has never reproduced. Report that as n=1, not as a
+mechanism.
+
+**A falsification harness is code and can be broken.** Reintroducing a bug to
+prove a new test catches it: the patch asserted on a string that also appeared
+elsewhere in the file, so the replacement never happened, the assert passed
+anyway, and the test's passing was reported as proof it would not catch the
+bug. `CLAUDE.md` already says a test that searches for a constant's value
+cannot find the code that names it; the same trap is waiting in the throwaway
+script written to check a test. Print the diff and confirm the file changed
+before believing what the run tells you.
+
+**A prompt must not tell the executor it may not change the file it is there
+to change.** The excerpt block was headed "Lines from files you may read but
+not change", borrowed from the `read_files` block directly above it where the
+claim is true. It is not true of `read_excerpts`: that field exists because the
+planner may not write an after-image and a reference can only point at code
+that already exists, so the excerpt is very often *the thing being rewritten*.
+Measured over this project's recorded stages, **1,562 of 2,586 excerpts — 60% —
+name a file the stage's own `edit_files` permits**, and a live prompt carried
+`cart_controller.rb` under both headings six lines apart. Found by the operator
+reading a prompt, which is the only thing that finds this class of defect:
+every participant downstream reads it as intended and no gate compares two
+sections of one document.
+
+
 ## Where things live
 
 `nodes.py` holds the loop's decisions — which failures route to the executor,
@@ -2165,6 +2308,37 @@ that the same edit was harmless whenever the module happened to be cached
 already, so every time it worked taught the wrong lesson. After `pin_modules`
 returns, a live run finishes on the code it started with, and edits take effect
 at the next start.
+
+`dialects.py` is what replaced role-decides-wire. Two dialects, RESPONSES and
+MESSAGES, and `dialect_for(model)` maps a model family to one of them —
+answering with RESPONSES for a family nobody has classified, because a router
+can resolve to anything and an unknown model must not end a run. A dialect owns
+every spelling that differs between the two endpoints: structured-output kwarg,
+effort kwarg, text-block type, cache markers and their TTL, request cache
+options, the cache-key parameter, tool schemas, reading tool calls, echoing the
+model's turn, shaping tool results, stop detection, refusals, closing text,
+splitting the system prompt, the base-URL suffix, usage normalisation, and
+building the client. **Shape belongs to the endpoint, not the vendor** — the
+same Google model returns `function_call` items on Responses and `tool_use`
+blocks on Messages, and a Google model on the Messages wire is reached through
+the Anthropic SDK. `normalise` translates a conversation built in Responses
+vocabulary into the other wire, at `send` rather than at the seven places that
+construct blocks, because the eighth will not remember.
+
+`gateway.py` is what OpenRouter needs, decided from the endpoint host rather
+than declared in config — `session_id`, `provider.require_parameters`, and the
+effort spelling, which follows the route rather than the model. It also holds
+`resolve_policy`, which turns a routing policy into the model it picks today
+with one throwaway call, because nothing reports what a router *would* choose.
+`wirecheck.py` warns when a role's configured model wants a wire that role
+cannot speak; the planner and reviewer each call their own SDK method and are
+pinned to one wire, so only the executor is wire-polymorphic.
+
+`executorclient.request_extras` is the single assembly of every top-level
+keyword the executor's call carries. It is one function because two outages
+were a keyword the endpoint does not take, and both were then pinned by a test
+that rebuilt the dict by hand — a copy of an assembly is not a check on it. An
+AST test asserts the loop adds nothing beside it.
 
 `gates.py` is the layer shared by the executor's loop and `verify.py` — patterns,
 residue, new tests, checks, tests — so the two cannot select different test
