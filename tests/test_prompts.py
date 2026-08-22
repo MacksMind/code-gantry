@@ -2722,4 +2722,60 @@ class TestExcerptsDoNotClaimTheyAreReadOnly:
         """A model reading an excerpt of the file it must rewrite needs one
         unambiguous answer about whether it may."""
         section = self._prompt(tmp_path).split("## Existing lines, quoted from the repository")[1].split("\n## ")[0]
-        assert "edit_files" in section or "list above" in section
+        # By the heading the reader can see, not by the planner's field name.
+        # The first version of this said `edit_files`, which appears nowhere in
+        # the executor's prompt — precise-sounding and pointing at nothing.
+        assert "Files you may change" in section
+
+
+class TestTheExecutorPromptNamesNothingItCannotSee:
+    """A prompt may only point at what the reader is looking at.
+
+    The excerpt block told the executor that "`edit_files` above is the only
+    thing that decides" which files it may change. That block renders as
+    **Files you may change**, and the string `edit_files` appears nowhere in
+    the executor's prompt — it is the planner's field name, correct in the
+    planner's prompt and in the gate messages routed to it, and meaningless
+    here. Naming a field the reader cannot find is the same defect as
+    describing a capability it does not have: the sentence reads as precise
+    and points at nothing.
+    """
+
+    def test_the_field_name_never_reaches_the_executor(self, tmp_path):
+        from code_gantry.config import Stage
+        from code_gantry.prompts import build_executor_prompt
+
+        stage = Stage(
+            id="s",
+            instruction="do the thing",
+            edit_files=["app/a.rb"],
+            read_files=["app/b.rb"],
+        )
+        text = build_executor_prompt(
+            stage,
+            _exec_cfg(tmp_path),
+            excerpts=[("`app/a.rb:1-2`", "    1 | class A\n    2 | end")],
+        )
+
+        # The block has to be there, or this asserts the absence of a string
+        # from a document that was never rendered.
+        assert "Existing lines, quoted from the repository" in text
+        assert "edit_files" not in text
+
+    def test_the_excerpts_point_at_the_heading_that_is_there(self, tmp_path):
+        from code_gantry.config import Stage
+        from code_gantry.prompts import build_executor_prompt
+
+        stage = Stage(
+            id="s",
+            instruction="do the thing",
+            edit_files=["app/a.rb"],
+        )
+        text = build_executor_prompt(
+            stage,
+            _exec_cfg(tmp_path),
+            excerpts=[("`app/a.rb:1-2`", "    1 | class A\n    2 | end")],
+        )
+
+        assert "## Files you may change" in text
+        assert "Files you may change" in text.split("Existing lines")[-1]

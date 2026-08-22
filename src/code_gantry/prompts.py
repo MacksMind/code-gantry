@@ -353,8 +353,9 @@ def build_executor_prompt(
             "## Existing lines, quoted from the repository\n\n"
             "With line numbers, because whoever drew this stage had already "
             "read them. Some will be from files this stage changes and some "
-            "will not: `edit_files` above is the only thing that decides "
-            f"that, and nothing here narrows it. {currency}\n\n"
+            "will not: the list under **Files you may change** above is the "
+            "only thing that decides that, and nothing here narrows it. "
+            f"{currency}\n\n"
             + "\n\n".join(blocks)
         )
 
