@@ -309,3 +309,78 @@ class TestTheOpeningTurnIsRecordedSeparately:
         # the opening one has to be recorded on its own.
         assert out.usage.prompt_tokens == 10_000
         assert out.usage.cached_tokens == 9_700
+
+
+class TestUsageIsReadInTheWireItArrivedOn:
+    """The loop normalised every response with the *Responses* extractor.
+
+    `Dialect.usage` exists for this and `test_each_wire_is_read_in_its_own_shape`
+    proves it reads both shapes — but the loop called
+    `extract_usage(response.usage)` directly, so a Messages-wire attempt was
+    parsed by OpenAI's reader. The field names line up just well enough to hide
+    it: `input_tokens` and `output_tokens` are spelled the same on both wires
+    and came through, `cost` is top-level on the gateway and came through, and
+    the two that have no OpenAI counterpart — `cache_read_input_tokens` and
+    `cache_creation_input_tokens` — silently read zero.
+
+    So every executor attempt of a Messages-wire run reported **0% cached**
+    while the provider's own logs showed the cache working. A categorical zero
+    from an instrument nobody had driven end to end, which is the whole of
+    "check the instrument before the world": the operator's dashboard was
+    right and this reading was wrong.
+
+    Two green tests stating opposite things, with nothing exercising the seam
+    between them. Same shape as `execute` routing to an edge `EDGES` did not
+    list.
+    """
+
+    @staticmethod
+    def _messages_response():
+        """One turn in the Anthropic shape, ending the loop."""
+        return SimpleNamespace(
+            id="msg_1",
+            type="message",
+            role="assistant",
+            stop_reason="end_turn",
+            content=[SimpleNamespace(type="text", text="done")],
+            usage=SimpleNamespace(
+                input_tokens=40,
+                output_tokens=10,
+                cache_read_input_tokens=60,
+                cache_creation_input_tokens=5,
+            ),
+        )
+
+    class _MessagesClient:
+        def __init__(self, response):
+            self._response = response
+            self.requests = []
+
+        @property
+        def messages(self):
+            return self
+
+        def create(self, **kwargs):
+            self.requests.append(kwargs)
+            return self._response
+
+    def test_a_messages_attempt_records_the_cache_it_actually_got(self, parts):
+        editor, _, reader = parts
+        cfg = ExecutorConfig(model="anthropic/claude-opus-5")
+        client = self._MessagesClient(self._messages_response())
+        out = OpenAIExecutorModel(cfg, client=client).run(
+            [], reader=reader, editor=editor
+        )
+        assert out.usage.cached_tokens == 60, "read with the wrong wire's extractor"
+        assert out.usage.cache_write_tokens == 5
+        # Anthropic reports these orthogonally, so total input is the sum.
+        assert out.usage.prompt_tokens == 105
+
+    def test_the_responses_wire_is_still_read_correctly(self, parts):
+        """The fix must not change the wire that was already right."""
+        editor, _, reader = parts
+        m, _ = model([response([SimpleNamespace(
+            type="message", content=[SimpleNamespace(type="output_text", text="done")]
+        )], usage())])
+        out = m.run([], reader=reader, editor=editor)
+        assert out.usage.prompt_tokens > 0

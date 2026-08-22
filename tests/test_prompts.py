@@ -2681,3 +2681,45 @@ class TestGateHistoryBlock:
             )
         )
         assert "gate verdict" not in text
+
+
+class TestExcerptsDoNotClaimTheyAreReadOnly:
+    """The heading said "Lines from files you may read but not change".
+
+    It was borrowed from the `read_files` block directly above it, where the
+    claim is true. It is not true here: `read_excerpts` is how the planner
+    quotes the code a stage is about, because it may not write an after-image
+    and a reference can only point at what already exists. So the excerpt is
+    very often the thing being rewritten.
+
+    Measured over this project's recorded stages: **1,562 of 2,586 excerpts,
+    60%, name a file the stage's own `edit_files` permits.** The heading was
+    wrong in the majority case, and wrong about the one file the executor was
+    most likely to be editing — telling it, on the same page as its
+    instruction, that the code it must change is off limits.
+
+    `edit_files` is the only thing that decides what may change, so the
+    heading names what the lines *are* and points at that list rather than
+    making a permission claim of its own.
+    """
+
+    def _prompt(self, tmp_path, **kw):
+        from code_gantry.config import Stage
+        from code_gantry.prompts import build_executor_prompt
+
+        cfg = _exec_cfg(tmp_path)
+        stage = Stage(id="s", instruction="do", edit_files=["app.py"])
+        return build_executor_prompt(
+            stage, cfg, excerpts=[("`app.py:1-2`", "1  def hello():")], **kw
+        )
+
+    def test_it_does_not_claim_they_cannot_be_changed(self, tmp_path):
+        text = self._prompt(tmp_path)
+        assert "## Existing lines, quoted from the repository" in text
+        assert "may read but not change" not in text
+
+    def test_it_points_at_the_list_that_actually_decides(self, tmp_path):
+        """A model reading an excerpt of the file it must rewrite needs one
+        unambiguous answer about whether it may."""
+        section = self._prompt(tmp_path).split("## Existing lines, quoted from the repository")[1].split("\n## ")[0]
+        assert "edit_files" in section or "list above" in section

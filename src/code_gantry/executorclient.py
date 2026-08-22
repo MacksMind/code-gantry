@@ -337,7 +337,13 @@ class OpenAIExecutorModel:
                 return out
 
             out.turns += 1
-            turn_usage = extract_usage(getattr(response, "usage", None))
+            # Through the wire it arrived on. This was `extract_usage`,
+            # OpenAI's reader, applied to every response — so a
+            # Messages attempt lost `cache_read_input_tokens` and
+            # `cache_creation_input_tokens`, which have no counterpart
+            # there, and reported 0% cached while the provider's own
+            # logs showed the cache working.
+            turn_usage = _dialect(self.cfg).usage(getattr(response, "usage", None))
             # The peak rides on `usage`: `extract_usage` sets it from the one
             # reading and `merge_usage` maxes it while everything else sums, so
             # a high-water mark of one context — what the operator needs for

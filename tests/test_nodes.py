@@ -439,7 +439,7 @@ class TestAnUnresolvableExcerptReachesThePlanner:
         # prompt carries the prior attempt on purpose, so asserting over the
         # whole prompt would fail for a correct reason.
         prompt = executor.prompts[-1]
-        after = prompt.split("## Lines from files you may read but not change")[1]
+        after = prompt.split("## Existing lines, quoted from the repository")[1]
         section = after.split("\n## ")[0]
         assert "def hello" in section  # the line as it stood when the stage began
         assert "MOVED_BY_A_PRIOR_ATTEMPT" not in section

@@ -300,9 +300,45 @@ def _responses_usage(raw):
 
 
 def _messages_usage(raw):
-    from code_gantry.planner import _extract_usage
+    """Anthropic's three orthogonal counts, as one `TokenUsage`.
 
-    return _extract_usage(raw)
+    Built here rather than borrowed from the planner's `_extract_usage`, which
+    returns a `PlannerUsage`: the two carry the same field *names* in a
+    different *order*, and both are constructed positionally elsewhere. A type
+    that merges correctly today and silently transposes on the next positional
+    caller is not worth the shared line.
+
+    `input_tokens` excludes both cache figures on this wire, so total input is
+    the sum — read as OpenAI's shape it produced a 251% hit rate in a real
+    report.
+    """
+    from code_gantry.openaiclient import TokenUsage
+
+    if raw is None:
+        return TokenUsage()
+    read = _num(raw, "cache_read_input_tokens")
+    written = _num(raw, "cache_creation_input_tokens")
+    prompt = _num(raw, "input_tokens") + read + written
+    return TokenUsage(
+        prompt_tokens=prompt,
+        completion_tokens=_num(raw, "output_tokens"),
+        cached_tokens=read,
+        cache_write_tokens=written,
+        # One reading is its own peak; `merge_usage` maxes this while
+        # everything else sums.
+        peak_prompt_tokens=prompt,
+        provider_cost_usd=getattr(raw, "cost", None),
+    )
+
+
+def _num(raw, name) -> int:
+    value = getattr(raw, name, None)
+    if value is None and isinstance(raw, dict):
+        value = raw.get(name)
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 

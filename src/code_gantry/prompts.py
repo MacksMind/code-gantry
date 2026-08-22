@@ -350,9 +350,11 @@ def build_executor_prompt(
             else "Treat them as current — you do not need to look them up again."
         )
         parts.append(
-            "## Lines from files you may read but not change\n\n"
-            "Quoted from the repository with line numbers, because whoever "
-            f"drew this stage had already read them. {currency}\n\n"
+            "## Existing lines, quoted from the repository\n\n"
+            "With line numbers, because whoever drew this stage had already "
+            "read them. Some will be from files this stage changes and some "
+            "will not: `edit_files` above is the only thing that decides "
+            f"that, and nothing here narrows it. {currency}\n\n"
             + "\n\n".join(blocks)
         )
 
