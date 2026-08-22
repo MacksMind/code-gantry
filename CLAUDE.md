@@ -2282,6 +2282,58 @@ reading a prompt, which is the only thing that finds this class of defect:
 every participant downstream reads it as intended and no gate compares two
 sections of one document.
 
+And the same block, one day later, named a field the reader cannot see. The
+rewrite told the executor that `edit_files` "above is the only thing that
+decides" what it may change — but that block renders as **Files you may
+change**, and the string `edit_files` appears nowhere in the executor's prompt.
+It is the planner's field name, correct in the planner's own prompt and on the
+two gate messages routed there, and meaningless here. A sentence naming a field
+the reader cannot find is the same defect as one describing a capability it
+does not have: precise-sounding, and pointing at nothing. Found the same way,
+by the operator reading the prompt, which is now twice in two days on one
+block. The sweep afterwards was clean, which is the useful half — every other
+model-facing mention was planner-routed, and the executor's own out-of-scope
+refusal already names the globs rather than the field.
+
+**A knob that only restricts cannot be the lever you want.** The executor made
+6,645 tool calls across 6,764 turns on one run — **0.98 per turn, never once
+more than one** — while a tool loop re-sends the whole conversation every turn,
+so one stage paid 1,186,709 prompt tokens for a 45,806-token context. The
+natural suspicion is that something in our request suppresses batching, and the
+natural fix is a parameter. Neither survives: `tool_choice` is set for no role
+and is on `RESERVED_REQUEST_KEYS` so an operator cannot set it either, the
+tools reach the Messages wire in the same shape the planner's do, and *neither
+wire has a setting that encourages parallel calls* — Messages offers
+`disable_parallel_tool_use` and Responses `parallel_tool_calls`, both defaulting
+to permitted. There was nothing to turn on. Before reaching for a parameter,
+check which direction it points; a default that already allows the thing means
+the knob is for forbidding it.
+
+**And a documented parameter can be accepted and ignored.** Measured on the
+gateway route: `tool_choice: {"type": "none"}` returned zero calls three times
+and forcing a named tool returned exactly that tool three times, so the
+parameter survives the route. `disable_parallel_tool_use: true` — which the
+installed SDK's own docstring says means "the model will output at most one
+tool use" — returned **2, 3, 2, 2, 2**. The parent is honoured and the
+sub-field is dropped in silence. That is worse than a rejection, which is the
+standing shape here: a 404 sends you looking, and a silently ignored field
+leaves a request that reads as constrained and is not. Anything relied on for
+*correctness* through a translating gateway has to be observed doing its job,
+not merely accepted.
+
+**What did move it was one sentence, and it was worth measuring first.** The
+model defaults to one call a turn and can be told otherwise: sampled five times
+an arm against the live route with the same tools and the same wire, the
+opening turn asked for one thing 5/5 without a sentence about independent
+calls, two 5/5 with one, and a deliberately harder-pushing version bought
+nothing further. Told to read three named files it emitted three calls at once
+on the first try, so the capability was never in question. The shipped wording
+then measured 2, 3, 2, 2, 2 — checked separately, because the experiment's
+paraphrase and the string that ships are different strings and only one of them
+is in the prompt. Roughly half the turns, which is a real saving and not a
+transformation; claiming more would be the capability-versus-effect mistake
+this file already records.
+
 
 ## Where things live
 

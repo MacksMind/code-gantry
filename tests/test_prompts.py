@@ -2779,3 +2779,38 @@ class TestTheExecutorPromptNamesNothingItCannotSee:
 
         assert "## Files you may change" in text
         assert "Files you may change" in text.split("Existing lines")[-1]
+
+
+class TestIndependentCallsAreAskedForTogether:
+    """The loop accepts a batch of tool calls; the model has to know that.
+
+    Measured over one run's 76 attempts: 6,645 tool calls over 6,764 turns —
+    0.98 per turn, never once more than one. A tool loop re-sends the whole
+    conversation every turn, so one stage spent 1,186,709 prompt tokens on a
+    45,806-token context, and the turn count is what multiplies it.
+
+    Nothing was suppressing it. `tool_choice` is set nowhere and its only
+    parallel knob can restrict rather than encourage; the tools reach the
+    Messages wire in the same shape the planner's do. The model simply
+    defaults to one at a time. Sampled five times per arm against the live
+    route: without a sentence it asked for one thing per turn 5/5, with one it
+    asked for two 5/5, and a harder-pushing version bought nothing more. So
+    the claim this pins is modest and measured — it is worth a sentence, and
+    the sentence is worth about half the turns.
+    """
+
+    def test_the_system_prompt_says_a_turn_may_carry_several(self, tmp_path):
+        from code_gantry.prompts import _executor_system_prompt
+
+        text = _executor_system_prompt(_exec_cfg(tmp_path))
+        assert "same turn" in text
+        assert "do not depend on each other" in text
+
+    def test_it_is_stated_as_the_loop_s_behaviour_not_as_advice(self, tmp_path):
+        # The tool states its own behaviour: every call in a turn is answered
+        # before the model is asked again. A model told only to "be efficient"
+        # has no reason to believe the results come back together.
+        from code_gantry.prompts import _executor_system_prompt
+
+        text = _executor_system_prompt(_exec_cfg(tmp_path))
+        assert "answered together" in text or "answered before" in text

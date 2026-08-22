@@ -1565,6 +1565,29 @@ def _executor_system_prompt(cfg: ProjectConfig | None) -> str:
         "`create_file` writes a new file. `delete_file` removes one, and is "
         "the only way to empty a file — an `edit` you got slightly wrong is "
         "refused rather than clearing it.",
+        # The tool stating its own behaviour, which is this file's standing
+        # rule and the only reason a model would believe the results come
+        # back together. Measured before it was written: over one run's 76
+        # attempts the executor made 6,645 calls across 6,764 turns — 0.98
+        # per turn, never more than one — while a tool loop re-sends the
+        # whole conversation each turn, so one stage paid 1,186,709 prompt
+        # tokens for a 45,806-token context.
+        #
+        # Nothing was suppressing it. `tool_choice` is set nowhere, its only
+        # parallel knob restricts rather than encourages, and on the Messages
+        # wire these tools arrive in the same shape the planner's do. The
+        # model defaults to one at a time and a sentence moves it: sampled
+        # five times an arm against the live route, one call per turn 5/5
+        # without this and two 5/5 with it. Pushing harder bought nothing, so
+        # this claims half the turns rather than a transformation.
+        "## Asking for more than one thing\n\n"
+        "A turn may carry several tool calls, and every one of them is "
+        "answered together before you are asked again. So when the next "
+        "things you want do not depend on each other's results — reading "
+        "four files, or a search and a read you already know you need — ask "
+        "for them in the same turn rather than one at a time.\n\n"
+        "Where one genuinely depends on another, do them in order. This is "
+        "about the calls where it makes no difference.",
         "## Scope\n\n"
         "A write outside this stage's declared files is refused by the tool, "
         "not reported later. If the task cannot be done without such a file, "
