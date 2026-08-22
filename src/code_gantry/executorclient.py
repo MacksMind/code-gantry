@@ -69,6 +69,13 @@ class ExecutorTurn:
         self.replan_reason: str = ""
         self.text: str = ""
         self.failure: str = ""
+        # Turns that ended with no tool calls and no text. Counted rather than
+        # flagged, because one is a hiccup that the nudge below resolves and
+        # two in a row is the model's answer. `stopped` cannot carry this: it
+        # is true for a model that finished and for one that gave up, and the
+        # wire renders those identically — `stop_reason` is the same either
+        # way, and the only difference is that one response carries content.
+        self.empty_finishes: int = 0
         # The first turn of a cycle, kept apart from the total. Summed
         # usage cannot answer whether the static prefix survived from the
         # previous stage: within one attempt the conversation grows and
@@ -95,6 +102,15 @@ class ExecutorTurn:
         if not model:
             return
         self.served_models[model] = self.served_models.get(model, 0) + 1
+
+
+EMPTY_FINISH_PROMPT = (
+    "That turn ended with no tool call and nothing said, which leaves no way "
+    "to tell whether you finished or stopped. Say which. If the work is done, "
+    "say what you changed. If you cannot do it — the stage contradicts itself, "
+    "or needs a file you may not touch — call `{replan}` and say why. "
+    "Otherwise carry on."
+).format(replan=REPLAN_TOOL["name"])
 
 
 def request_extra(cfg: ExecutorConfig) -> dict:
@@ -364,8 +380,35 @@ class OpenAIExecutorModel:
             wire = _dialect(self.cfg)
             requests = wire.tool_calls(response)
             if not requests:
+                closing = wire.final_text(response)
+                if not closing.strip() and not out.empty_finishes:
+                    # Measured over one run's 76 attempts: 6 ended here with
+                    # nothing at all — no text, no calls, no edits — and were
+                    # recorded `ok: True` with an empty log, one of them after
+                    # 96 searches and $0.35. The scope gate then reported "the
+                    # attempt produced no changes", which reads as a badly
+                    # drawn stage and sends the planner to redraw one that was
+                    # never the problem.
+                    #
+                    # Asked here because this is where the question can first
+                    # be answered, and asked *once*: a turn against a wasted
+                    # attempt is cheap, and a model that answers silence twice
+                    # has said what it means. The response itself is not
+                    # appended — an assistant message whose content is empty
+                    # is not a message the next request can carry — so this
+                    # user turn is also the only record that it happened.
+                    out.empty_finishes += 1
+                    conversation.append(
+                        {
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": EMPTY_FINISH_PROMPT}],
+                        }
+                    )
+                    continue
                 out.stopped = True
-                out.text = _dialect(self.cfg).final_text(response)
+                out.text = closing
+                if not closing.strip():
+                    out.empty_finishes += 1
                 return out
 
             # The model's turn back, in whichever shape this wire wants — the

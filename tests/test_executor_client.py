@@ -32,6 +32,20 @@ def reasoning_item():
     return SimpleNamespace(type="reasoning", id="r1", content=[])
 
 
+def finished():
+    """A model saying it is done.
+
+    The terminator used to be a `message` with no content at all — which is
+    the one shape the loop can no longer read as finishing, because it is
+    exactly what a model that gives up returns. A fixture standing in for
+    completion has to carry what completion carries, or every test in this
+    file is exercising the branch production treats as a failure.
+    """
+    return SimpleNamespace(
+        type="message", content=[SimpleNamespace(type="output_text", text="done")]
+    )
+
+
 def response(output, usage=None):
     return SimpleNamespace(output=output, usage=usage, status="completed")
 
@@ -104,7 +118,7 @@ class TestTheLoop:
                 '{"path": "app/a.rb", "edits": [{"old_string": "class A", '
                 '"new_string": "class B", "replace_all": false}]}',
             )], usage()),
-            response([SimpleNamespace(type="message", content=[])], usage()),
+            response([finished()], usage()),
         ])
         conversation = []
         out = m.run(conversation, reader=reader, editor=editor)
@@ -124,7 +138,7 @@ class TestTheLoop:
                 '{"path": "app/a.rb", "edits": [{"old_string": "class A", '
                 '"new_string": "class B", "replace_all": false}]}',
             )], usage()),
-            response([SimpleNamespace(type="message", content=[])], usage()),
+            response([finished()], usage()),
         ])
         conversation = []
         m.run(conversation, reader=reader, editor=editor)
@@ -142,7 +156,7 @@ class TestTheLoop:
         editor, _, reader = parts
         m, _ = model([
             response([call("read_file", '{"path": "app/a.rb"}')], usage()),
-            response([SimpleNamespace(type="message", content=[])], usage()),
+            response([finished()], usage()),
         ])
         conversation = []
         m.run(conversation, reader=reader, editor=editor)
@@ -157,7 +171,7 @@ class TestTheLoop:
         # GPT-5.6 caches at breakpoints and does not fall back to the longest
         # matching prefix, so the opt-in is required rather than helpful.
         editor, _, reader = parts
-        m, client = model([response([SimpleNamespace(type="message", content=[])], usage())]), None
+        m, client = model([response([finished()], usage())]), None
         m[0].run([], reader=reader, editor=editor)
         sent = m[0]._client.requests[0]
         assert sent["prompt_cache_options"] == {"mode": "explicit"}
@@ -173,7 +187,7 @@ class TestTheLoop:
         """
         editor, _, reader = parts
         m, _ = model(
-            [response([SimpleNamespace(type="message", content=[])], usage())],
+            [response([finished()], usage())],
             reasoning_effort="max",
         )
         m.run([], reader=reader, editor=editor)
@@ -183,7 +197,7 @@ class TestTheLoop:
         # A model that does not take the parameter must not be sent it, and no
         # default of ours should override a provider's.
         editor, _, reader = parts
-        m, _ = model([response([SimpleNamespace(type="message", content=[])], usage())])
+        m, _ = model([response([finished()], usage())])
         m.run([], reader=reader, editor=editor)
         assert "reasoning" not in m._client.requests[0]
 
@@ -203,7 +217,7 @@ class TestAccounting:
         editor, _, reader = parts
         m, _ = model([
             response([call("read_file", '{"path": "app/a.rb"}')], usage(100, 10)),
-            response([SimpleNamespace(type="message", content=[])], usage(150, 20)),
+            response([finished()], usage(150, 20)),
         ])
         out = m.run([], reader=reader, editor=editor)
         assert out.usage.prompt_tokens == 250
@@ -215,7 +229,7 @@ class TestAccounting:
         editor, _, reader = parts
         m, _ = model([
             response([call("read_file", '{"path": "app/a.rb"}')], usage(100)),
-            response([SimpleNamespace(type="message", content=[])], usage(150)),
+            response([finished()], usage(150)),
         ])
         out = m.run([], reader=reader, editor=editor)
         assert out.usage.peak_prompt_tokens == 150
@@ -261,7 +275,7 @@ class TestFailures:
         editor, _, reader = parts
         m, _ = model([
             response([call("edit", "{not json")], usage()),
-            response([SimpleNamespace(type="message", content=[])], usage()),
+            response([finished()], usage()),
         ])
         conversation = []
         out = m.run(conversation, reader=reader, editor=editor)
@@ -299,7 +313,7 @@ class TestTheOpeningTurnIsRecordedSeparately:
         editor, _, reader = parts
         m, _ = model([
             response([call("read_file", '{"path": "app/a.rb"}')], usage(1000, 5, cached=800)),
-            response([SimpleNamespace(type="message", content=[])], usage(9000, 5, cached=8900)),
+            response([finished()], usage(9000, 5, cached=8900)),
         ])
         out = m.run([], reader=reader, editor=editor)
 
@@ -384,3 +398,67 @@ class TestUsageIsReadInTheWireItArrivedOn:
         )], usage())])
         out = m.run([], reader=reader, editor=editor)
         assert out.usage.prompt_tokens > 0
+
+
+class TestAnEmptyFinishIsNotAFinish:
+    """A model that says nothing and asks for nothing has not finished.
+
+    Measured over one run's 76 attempts: 6 ended with `ok: True`, `log: ""`
+    and no edits at all, one of them after 96 searches and $0.35. The wire
+    renders finishing and giving up identically — `stop_reason` is the same
+    either way — and the only thing separating them is that one carries
+    content and the other carries none. Nothing looked, so the scope gate
+    reported "the attempt produced no changes", which reads as a badly drawn
+    stage and sends the planner to redraw one that was never the problem.
+
+    Asked once rather than adjudicated: a turn is cheap against a wasted
+    attempt, and the answer settles which of the two it was.
+    """
+
+    def test_an_empty_close_is_asked_about_once(self, parts):
+        editor, _, reader = parts
+        m, _ = model([
+            response([SimpleNamespace(type="message", content=[])], usage()),
+            response([SimpleNamespace(
+                type="message",
+                content=[SimpleNamespace(type="output_text", text="done, actually")],
+            )], usage()),
+        ])
+        conversation = []
+        out = m.run(conversation, reader=reader, editor=editor)
+
+        assert out.stopped is True
+        assert out.empty_finishes == 1
+        assert out.turns == 2
+        assert "done, actually" in out.text
+        # And the question is in the record, because the response that
+        # provoked it is the one item never appended to the conversation.
+        asked = conversation[-1]
+        assert asked["role"] == "user"
+        assert "request_replan" in asked["content"][0]["text"]
+
+    def test_a_second_empty_close_is_taken_as_the_answer(self, parts):
+        editor, _, reader = parts
+        m, _ = model([
+            response([SimpleNamespace(type="message", content=[])], usage()),
+            response([SimpleNamespace(type="message", content=[])], usage()),
+        ])
+        out = m.run([], reader=reader, editor=editor)
+
+        assert out.stopped is True
+        assert out.empty_finishes == 2
+        assert out.turns == 2
+        assert out.text == ""
+
+    def test_a_close_that_says_something_is_left_alone(self, parts):
+        editor, _, reader = parts
+        client_responses = [response([SimpleNamespace(
+            type="message", content=[SimpleNamespace(type="output_text", text="done")]
+        )], usage())]
+        m, _ = model(client_responses)
+        conversation = []
+        out = m.run(conversation, reader=reader, editor=editor)
+
+        assert out.empty_finishes == 0
+        assert out.turns == 1
+        assert conversation == []

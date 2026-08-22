@@ -964,6 +964,16 @@ def execute(state: RunState, rt: Runtime) -> dict:
             f"[execute] {stage.id}: {sum(result.tool_counts.values())} tool "
             f"call(s) over {result.cycles} cycle(s): {asked}"
             + (f"; refused {refused}" if refused else "")
+            # Only when it happened, like `refused` above: a zero here would
+            # be one more number to read past on every stage. Printed at all
+            # because six of one run's 76 attempts ended this way and nothing
+            # said so — the artifact recorded `ok: True` with an empty log,
+            # and the only outward sign was a stage that quietly did nothing.
+            + (
+                f"; {result.empty_finishes} empty finish(es)"
+                if result.empty_finishes
+                else ""
+            )
             + paid
             + served
         )

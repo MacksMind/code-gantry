@@ -1033,3 +1033,51 @@ class TestTheHookIsAskedBeforeTheCommit:
         out = drive(repo, cfg, stage, model)
         assert model.calls == 1
         assert out.commits and not out.commit_refused
+
+
+class TestAnEmptyFinishIsReportedAsOne:
+    """An attempt that changed nothing must say which nothing it was.
+
+    `log` was `""` for every one of these, and the loop reported `ok=True`, so
+    the artifact that exists to answer *why did this attempt end* was silent on
+    the only question it had. The routing is unchanged — the scope gate still
+    owns the sentence about no changes — but the reason now travels beside it.
+    """
+
+    def test_the_log_says_so_when_nothing_was_touched(self, repo):
+        cfg, stage = build(repo)
+
+        class EmptyFinisher:
+            def run(self, conversation, reader, editor, semantic=None, cache_key=None):
+                from code_gantry.executorclient import ExecutorTurn
+
+                out = ExecutorTurn()
+                out.turns = 2
+                out.stopped = True
+                out.empty_finishes = 2
+                return out
+
+        out = drive(repo, cfg, stage, EmptyFinisher())
+
+        assert out.edits_applied == 0
+        assert out.empty_finishes == 2
+        assert out.log
+        assert "no tool calls" in out.log
+
+    def test_a_model_that_spoke_keeps_its_own_words(self, repo):
+        cfg, stage = build(repo)
+
+        class Speaker:
+            def run(self, conversation, reader, editor, semantic=None, cache_key=None):
+                from code_gantry.executorclient import ExecutorTurn
+
+                out = ExecutorTurn()
+                out.turns = 1
+                out.stopped = True
+                out.text = "there was nothing left to do"
+                return out
+
+        out = drive(repo, cfg, stage, Speaker())
+
+        assert out.empty_finishes == 0
+        assert out.log == "there was nothing left to do"

@@ -112,6 +112,10 @@ class ExecutionResult:
     # set in three places and read in none, so an attempt cut off mid-survey
     # arrived at the gate as "the attempt produced no changes".
     turns_exhausted: bool = False
+    # Turns that ended with no tool calls and no text, across every cycle.
+    # Accumulated rather than assigned, for the reason `cost_usd` gives: what
+    # is worth recording is the attempt's, not the last cycle's.
+    empty_finishes: int = 0
     # Set when the model called `request_replan`: "unsatisfiable" or
     # "incomplete", and what it said. Read by `execute`, which routes to the
     # planner instead of the gates. Recorded in `executor-loop.json` without

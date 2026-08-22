@@ -132,6 +132,7 @@ def run_loop(
         # Read at last. Its own comment said the loop must not treat this as
         # finished, and the loop did exactly that because nothing consulted it.
         out.turns_exhausted = not turn.stopped
+        out.empty_finishes += turn.empty_finishes
 
         if turn.replan_kind:
             # Before the no-changes check below, because the two shapes overlap
@@ -147,6 +148,18 @@ def run_loop(
             # The model stopped without changing anything. Not adjudicated
             # here: the scope gate already owns the sentence "the attempt
             # produced no changes", and two places saying it is how they drift.
+            #
+            # What the gate cannot supply is which nothing this was. An attempt
+            # that ended in silence and one that decided there was nothing left
+            # to do arrive at it identically, and the artifact that exists to
+            # answer *why did this attempt end* carried `log: ""` for every
+            # one of the six measured on one run. The routing is unchanged; the
+            # reason travels beside it.
+            if out.empty_finishes and not out.log:
+                out.log = (
+                    f"the model ended {out.empty_finishes} turn(s) with no tool "
+                    "calls and no text, and changed nothing"
+                )
             break
 
         failure = _gate_cycle(stage, cfg, git, runner, out, since_sha, log=log)
