@@ -251,3 +251,119 @@ class TestEveryKwargIsOneItsOwnSdkAccepts:
         assert getattr(value.func, "id", "") == "request_extras", (
             "run() builds its own kwargs again; they will not be checked"
         )
+
+
+class TestBlocksTheEndpointWillActuallyAccept:
+    """The conversation is built in Responses vocabulary; Messages must translate.
+
+    `prompt_cache_key` was a Responses-only *parameter* that reached
+    `messages.create()`. These are Responses-only *content fields* that
+    reached it the same way, one layer in: `build_executor_messages` hardcodes
+    `{"type": "input_text"}` on every block and embeds
+    `prompt_cache_breakpoint` inside one of them. The endpoint answers 400
+    `invalid_request_error` naming the offending messages, so the coding model
+    never sees the instruction — twelve attempts across three stages, none of
+    which reached a model.
+
+    `split_system` already translated the system block, which is why the 400
+    named `messages[0]` and `messages[1]` and not the system, and why this
+    looked for a while like a problem with the prompt rather than with the
+    wire.
+
+    The accepted discriminators come from the installed SDK's own union rather
+    than a list written here, for the reason every provider fact in this file
+    does: a hand-written copy is a bet on a schema somebody else owns.
+    """
+
+    @staticmethod
+    def _accepted() -> set:
+        import typing
+
+        from anthropic.types import ContentBlockParam
+
+        names = set()
+        for arm in typing.get_args(ContentBlockParam):
+            hints = typing.get_type_hints(arm) if hasattr(arm, "__annotations__") else {}
+            names.update(typing.get_args(hints.get("type")) or ())
+        return names
+
+    def test_input_text_is_not_a_thing_on_this_wire(self):
+        """The premise. If this ever fails the translation is unnecessary."""
+        assert "input_text" not in self._accepted()
+        assert "text" in self._accepted()
+
+    def test_messages_translates_the_text_type(self):
+        conv = [{"role": "user", "content": [{"type": "input_text", "text": "GO"}]}]
+        out = MESSAGES.normalise(conv)
+        assert out[0]["content"][0] == {"type": "text", "text": "GO"}
+
+    def test_messages_translates_the_cache_marker(self):
+        """A breakpoint has to survive the translation or the Messages arm
+        silently loses the caching the Responses arm has."""
+        conv = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "CONVENTIONS",
+                        "prompt_cache_breakpoint": {"mode": "explicit"},
+                    }
+                ],
+            }
+        ]
+        block = MESSAGES.normalise(conv)[0]["content"][0]
+        assert block["type"] == "text"
+        assert "prompt_cache_breakpoint" not in block
+        assert block["cache_control"]["type"] == "ephemeral"
+
+    def test_responses_leaves_its_own_vocabulary_alone(self):
+        conv = [{"role": "user", "content": [{"type": "input_text", "text": "GO"}]}]
+        assert RESPONSES.normalise(conv) == conv
+
+    def test_neither_touches_tool_traffic(self):
+        """`append_tool_results` already builds these per wire; normalising
+        must not reach into what the dialect got right."""
+        conv = [
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "1",
+                                          "content": "ok"}]},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "1",
+                                               "name": "edit", "input": {}}]},
+        ]
+        assert MESSAGES.normalise(conv) == conv
+
+    def test_it_does_not_mutate_what_it_was_given(self):
+        """The caller holds this list across turns and mirrors it to disk."""
+        conv = [{"role": "user", "content": [{"type": "input_text", "text": "GO"}]}]
+        MESSAGES.normalise(conv)
+        assert conv[0]["content"][0]["type"] == "input_text"
+
+    def test_a_real_executor_conversation_survives_the_endpoint(self, tmp_path):
+        """The one that would have caught it: the actual builder, not a fixture."""
+        from code_gantry.config import Stage, parse_config
+        from code_gantry.prompts import build_executor_messages
+
+        cfg = parse_config({
+            "target_repo": str(tmp_path),
+            "base_ref": "main",
+            "project_branch": "proj",
+            "plan_root": "PLAN.md",
+            "test_command": "true",
+            "executor": {"model": "anthropic/claude-opus-5"},
+            "planner": {"model": "claude-opus-5"},
+            "reviewer": {"model": "gpt-5.6-sol"},
+        })
+        stage = Stage(id="s", instruction="do the thing", edit_files=["src/**"])
+        conv = build_executor_messages(
+            stage, cfg, "PROMPT", agent_context="CONVENTIONS",
+            feedback=["a gate failed"], failure_layer="tests",
+        )
+        _system, rest = MESSAGES.split_system(MESSAGES.normalise(conv))
+        seen = {
+            b.get("type")
+            for message in rest
+            for b in (message.get("content") or [])
+            if isinstance(b, dict)
+        }
+        unknown = sorted(seen - self._accepted())
+        assert not unknown, f"the endpoint rejects these block types: {unknown}"

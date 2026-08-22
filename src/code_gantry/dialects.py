@@ -38,6 +38,11 @@ from dataclasses import dataclass
 from typing import Callable
 
 
+# The text-block discriminators any builder here writes. Named once so the
+# translation and the builders cannot drift apart silently.
+_TEXT_TYPES = ("input_text", "output_text", "text")
+
+
 @dataclass(frozen=True)
 class Dialect:
     """One provider's spelling of the same handful of request decisions."""
@@ -66,6 +71,10 @@ class Dialect:
     # markers, so there is no request field to name. Last on the dataclass,
     # like `cache_write_tokens` on `TokenUsage` and for the same reason.
     _cache_key_param: str = ""
+    # Whether this wire needs the conversation translated out of the
+    # Responses vocabulary it is built in. False where it *is* that
+    # vocabulary, so the common path stays an identity.
+    _translates_blocks: bool = False
 
     def structured(self, schema) -> dict:
         """The schema argument, when the caller wants a parsed answer."""
@@ -165,6 +174,56 @@ class Dialect:
         to disk as it grows.
         """
         return self._split_system(self, conversation)
+
+    def normalise(self, conversation: list) -> list:
+        """The conversation in this wire's own vocabulary.
+
+        Every builder in this codebase writes Responses shapes — `input_text`
+        blocks carrying `prompt_cache_breakpoint` — because that is what the
+        executor spoke when they were written. Once the wire became a property
+        of the model, those builders were left behind: `messages.create()`
+        answers 400 `invalid_request_error` on an unknown block discriminator,
+        and the coding model never sees the instruction.
+
+        Translated here rather than at the seven sites that construct blocks,
+        for the reason `request_extras` is one function: the eighth site will
+        not remember. `split_system` had been translating the system block on
+        its own, which is why the rejection named `messages[0]` and
+        `messages[1]` and looked like a prompt problem.
+
+        Never mutates. The caller holds this list across turns and mirrors it
+        to disk as it grows, so a rewrite in place would corrupt the record as
+        well as the request.
+        """
+        if not self._translates_blocks:
+            return conversation
+        out = []
+        for message in conversation:
+            content = _get(message, "content")
+            if not isinstance(content, list):
+                out.append(message)
+                continue
+            out.append({**message, "content": [self._translate(b) for b in content]})
+        return out
+
+    def _translate(self, block):
+        """One block, if it is one of ours to translate.
+
+        Only the text vocabulary moves. Tool calls and tool results are built
+        per wire by `append_model_turn` and `append_tool_results`, and reaching
+        into those would break what the dialect already gets right.
+        """
+        if not isinstance(block, dict) or block.get("type") not in _TEXT_TYPES:
+            return block
+        out = {k: v for k, v in block.items() if k != "prompt_cache_breakpoint"}
+        out["type"] = self._text_type
+        if "prompt_cache_breakpoint" in block and self._cache_key != "prompt_cache_breakpoint":
+            # A breakpoint has to survive, or the translated wire silently
+            # loses caching the other one has. No TTL: the one marker in the
+            # executor's prompt closes the static region, and the loop's own
+            # marks carry their own lifetime.
+            out[self._cache_key] = self._cache_marker(None)
+        return out
 
     def client(self, cfg):
         """The SDK client this wire talks through.
@@ -491,7 +550,10 @@ def _responses_send(wire, client, cfg, conversation, tools, extra):
 
 
 def _messages_send(wire, client, cfg, conversation, tools, extra):
-    system, messages = wire.split_system(conversation)
+    # Translate before splitting: `split_system` only ever handled the
+    # system block, and everything behind it went out in the other wire's
+    # vocabulary and was refused.
+    system, messages = wire.split_system(wire.normalise(conversation))
     kwargs = {"model": cfg.model, "messages": messages, "tools": tools, **extra}
     if system:
         kwargs["system"] = system
@@ -536,6 +598,7 @@ MESSAGES = Dialect(
     _cache_key="cache_control",
     _cache_marker=lambda ttl: {"type": "ephemeral", **({"ttl": ttl} if ttl else {})},
     _request_cache_options={},
+    _translates_blocks=True,
     _usage=_messages_usage,
     _tool_calls=_messages_tool_calls,
     _stopped=_messages_stopped,

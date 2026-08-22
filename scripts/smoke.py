@@ -200,6 +200,36 @@ Stage 2: division, raising `ValueError` on divide-by-zero.
 # --- the stand-in models -------------------------------------------------
 
 
+# Read from the installed SDK rather than written out here: this is somebody
+# else's schema, and a hand-copied list is a bet on it not moving.
+def _messages_block_types() -> set:
+    import typing
+
+    from anthropic.types import ContentBlockParam
+
+    names = set()
+    for arm in typing.get_args(ContentBlockParam):
+        hints = typing.get_type_hints(arm) if hasattr(arm, "__annotations__") else {}
+        names.update(typing.get_args(hints.get("type")) or ())
+    return names
+
+
+MESSAGES_BLOCK_TYPES = _messages_block_types()
+
+
+def _rejected_blocks(body: dict) -> set:
+    """Block discriminators in this request the Messages API would refuse."""
+    seen = set()
+    for message in body.get("messages") or []:
+        for block in (message.get("content") or []) if isinstance(message, dict) else []:
+            if isinstance(block, dict):
+                seen.add(block.get("type"))
+    for block in body.get("system") or []:
+        if isinstance(block, dict):
+            seen.add(block.get("type"))
+    return seen - MESSAGES_BLOCK_TYPES - {None}
+
+
 class ModelStub(BaseHTTPRequestHandler):
     """Both paid models, in their own wire formats, on one port.
 
@@ -235,6 +265,19 @@ class ModelStub(BaseHTTPRequestHandler):
         model = body.get("model", "stub")
 
         if "/messages" in self.path:
+            # The endpoint validates; a stand-in that does not will report
+            # green on a request the real one answers 400 to. That is not
+            # hypothetical: `input_text` blocks reached `messages.create()`
+            # for three stages of a live run while this arm passed, because a
+            # canned responder never looked at what it was sent.
+            bad = _rejected_blocks(body)
+            if bad:
+                self._respond_error(
+                    "invalid_request_error",
+                    f"content blocks with unaccepted type(s) {sorted(bad)}; "
+                    f"the Messages API accepts {sorted(MESSAGES_BLOCK_TYPES)}",
+                )
+                return
             # Same reasoning as `/responses` below: the path says which
             # wire, the model id says which role.
             if model == MESSAGES_EXECUTOR_MODEL:
@@ -253,6 +296,16 @@ class ModelStub(BaseHTTPRequestHandler):
                 self._respond(self._executor(model, body))
         else:
             self._respond(self._openai(model))
+
+    def _respond_error(self, kind: str, message: str) -> None:
+        """A 400 in the provider's own shape, so the SDK raises as it would."""
+        raw = json.dumps({"type": "error", "error": {"type": kind, "message": message}})
+        body = raw.encode()
+        self.send_response(400)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _respond(self, payload: dict) -> None:
         raw = json.dumps(payload).encode()
