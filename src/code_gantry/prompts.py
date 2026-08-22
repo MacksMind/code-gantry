@@ -1586,8 +1586,15 @@ def _executor_system_prompt(cfg: ProjectConfig | None) -> str:
         "things you want do not depend on each other's results — reading "
         "four files, or a search and a read you already know you need — ask "
         "for them in the same turn rather than one at a time.\n\n"
-        "Where one genuinely depends on another, do them in order. This is "
-        "about the calls where it makes no difference.",
+        "Ask before each turn which of the things you want next actually "
+        "need an earlier answer. Usually few of them do, and the ones that "
+        "do not go together.\n\n"
+        "- One turn asking for four reads is right.\n"
+        "- Four turns asking for one read each is the same work at four "
+        "times the cost, and it is the more common mistake.\n\n"
+        "Where one genuinely depends on another — you cannot quote a line "
+        "until you have read it — do those in order. This is about the calls "
+        "where it makes no difference.",
         "## Scope\n\n"
         "A write outside this stage's declared files is refused by the tool, "
         "not reported later. If the task cannot be done without such a file, "

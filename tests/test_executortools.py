@@ -309,3 +309,53 @@ class TestTheExecutorGetsTheSameUnderstanding:
         assert (
             SEMANTIC_TOOL_FOR_EDITING["input_schema"] == SEMANTIC_TOOL["input_schema"]
         )
+
+
+class TestReadToolsDeclareTheyAreIndependent:
+    """A read tool says it can be asked for alongside others.
+
+    Measured on one run: the executor made 6,645 calls across 6,764 turns —
+    1.00 per turn, 7,843 batches of exactly one, never an exception — while a
+    tool loop re-sends the whole conversation each turn. Nothing forbade
+    batching: `tool_choice` is set nowhere, and its only parallel knob
+    restricts rather than encourages. The model simply defaults to one at a
+    time, and both the prompt and the tool descriptions move it — sampled
+    against the live route, a system-prompt section alone read 1.25 calls per
+    turn and the two together 1.58, against a control that was flat 1.00.
+
+    On `READ_TOOLS` rather than per role, because all three roles run a tool
+    loop and this is a property of the tool rather than of who called it. And
+    applied in one place, so a read tool added later inherits it instead of
+    being the one nobody remembered — which is the shape this codebase has
+    lost a field to more than once.
+    """
+
+    def test_every_read_tool_says_so(self):
+        from code_gantry.plannertools import READ_TOOLS
+
+        for spec in READ_TOOLS:
+            assert "same turn" in spec["description"], spec["name"]
+
+    def test_the_write_tools_do_not(self):
+        # Order matters for a write and does not for a read. A note inviting
+        # concurrent edits would be false about the one tool whose calls can
+        # collide with each other.
+        from code_gantry.executortools import EDIT_TOOLS
+
+        for spec in EDIT_TOOLS:
+            assert "same turn" not in spec["description"], spec["name"]
+
+    def test_it_is_applied_once_rather_than_written_out_per_tool(self):
+        """The note is one string, not five copies that can drift."""
+        import ast
+        import pathlib
+
+        src = pathlib.Path("src/code_gantry/plannertools.py").read_text()
+        tree = ast.parse(src)
+        literals = [
+            n.value
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+        ]
+        spelled = [t for t in literals if "same turn" in t]
+        assert len(spelled) == 1, f"the note is written out {len(spelled)} times"

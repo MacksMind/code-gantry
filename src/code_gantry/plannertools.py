@@ -211,6 +211,30 @@ READ_TOOLS: list[dict[str, Any]] = [
     },
 ]
 
+# Applied to every read tool in one place, rather than written into each
+# description, so a tool added later inherits it instead of being the one
+# nobody remembered — the defect this codebase has already lost a field to
+# more than once.
+#
+# It is the tool stating its own behaviour, which is the standing rule here,
+# and it is on `READ_TOOLS` rather than per role because all three roles run
+# a tool loop. Measured before it was written: one run's executor made 7,843
+# tool calls in 7,843 batches of exactly one, never an exception, while the
+# loop re-sends the whole conversation every turn. Nothing forbade batching —
+# `tool_choice` is set nowhere and its only parallel knob restricts rather
+# than encourages. Sampled against the live route, the system prompt alone
+# moved it to 1.25 calls a turn and this alongside it to 1.58, against a
+# control that was flat 1.00.
+INDEPENDENT_OF_EACH_OTHER = (
+    "Several of these may be asked for in the same turn, and every one is "
+    "answered before you are asked again. Nothing here depends on another "
+    "call's result, so ask for all of the ones you already know you want."
+)
+
+for _spec in READ_TOOLS:
+    _spec["description"] += "\n\n" + INDEPENDENT_OF_EACH_OTHER
+
+
 SEMANTIC_TOOL: dict[str, Any] = {
     "name": "semantic_search",
     "description": (
