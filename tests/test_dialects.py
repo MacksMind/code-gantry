@@ -367,3 +367,72 @@ class TestBlocksTheEndpointWillActuallyAccept:
         }
         unknown = sorted(seen - self._accepted())
         assert not unknown, f"the endpoint rejects these block types: {unknown}"
+
+
+class TestEffortIsSpelledForTheRouteNotTheModel:
+    """Measured against all three live endpoints on 2026-08-22.
+
+    | spelling                | Anthropic direct | OR -> claude | OR -> gemini |
+    | `output_config`         | OK               | OK           | **404**      |
+    | `extra_body.reasoning`  | **400**          | OK           | OK           |
+
+    `output_config` is Anthropic-native, so it survives OpenRouter only where
+    the upstream *is* Anthropic. OpenRouter's own model listing bears this out:
+    no model on it declares `output_config`, and every one declares `reasoning`.
+    With `require_parameters` on — which is there to stop a provider silently
+    dropping structured output — a parameter no provider can honour excludes
+    every provider, and the gateway answers 404 `No endpoints found that can
+    handle the requested parameters`. Four attempts a second, three stages, no
+    model ever reached.
+
+    So the axis is the *route*, not the model family: the same
+    `anthropic/claude-opus-5` takes `output_config` through the gateway and
+    `reasoning` through it too, while direct Anthropic takes only the first.
+    That is `gateway.py`'s question rather than the dialect's, which is why
+    the spelling moves here and `request_extras` stops asking the wire for it.
+    """
+
+    @staticmethod
+    def _cfg(base):
+        from code_gantry.config import ExecutorConfig
+
+        return ExecutorConfig(
+            model="anthropic/claude-opus-5", api_base=base, reasoning_effort="high"
+        )
+
+    def test_through_the_gateway_it_rides_in_extra_body(self):
+        from code_gantry.executorclient import request_extras
+
+        built = request_extras(self._cfg("https://openrouter.ai/api"), cache_key=None)
+        assert built["extra_body"]["reasoning"] == {"effort": "high"}
+        assert "output_config" not in built
+
+    def test_first_party_keeps_the_native_parameter(self):
+        from code_gantry.executorclient import request_extras
+
+        built = request_extras(self._cfg("https://api.anthropic.com"), cache_key=None)
+        assert built["output_config"] == {"effort": "high"}
+        assert "reasoning" not in built.get("extra_body", {})
+
+    def test_no_effort_configured_sends_neither(self):
+        from code_gantry.config import ExecutorConfig
+        from code_gantry.executorclient import request_extras
+
+        cfg = ExecutorConfig(model="anthropic/claude-opus-5",
+                             api_base="https://openrouter.ai/api")
+        built = request_extras(cfg, cache_key=None)
+        assert "output_config" not in built
+        assert "reasoning" not in built.get("extra_body", {})
+
+    def test_the_responses_wire_is_untouched(self):
+        """It already spells effort `reasoning` at the top level, which both
+        OpenAI and the gateway accept. Nothing measured says to change it."""
+        from code_gantry.config import ExecutorConfig
+        from code_gantry.executorclient import request_extras
+
+        cfg = ExecutorConfig(model="openai/gpt-5.6-sol",
+                             api_base="https://openrouter.ai/api/v1",
+                             reasoning_effort="high")
+        built = request_extras(cfg, cache_key=None)
+        assert built["reasoning"] == {"effort": "high"}
+        assert "reasoning" not in built.get("extra_body", {})

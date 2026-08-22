@@ -75,6 +75,11 @@ class Dialect:
     # Responses vocabulary it is built in. False where it *is* that
     # vocabulary, so the common path stays an identity.
     _translates_blocks: bool = False
+    # Whether this wire's native effort parameter is one a gateway can
+    # route. Responses spells it `reasoning` at the top level, which both
+    # OpenAI and OpenRouter take; Messages spells it `output_config`,
+    # which only Anthropic itself accepts.
+    _effort_in_gateway_body: bool = False
 
     def structured(self, schema) -> dict:
         """The schema argument, when the caller wants a parsed answer."""
@@ -109,6 +114,11 @@ class Dialect:
         so the marks below only count if this is set.
         """
         return dict(self._request_cache_options)
+
+    @property
+    def effort_in_gateway_body(self) -> bool:
+        """See `_effort_in_gateway_body`; read by `request_extras`."""
+        return self._effort_in_gateway_body
 
     def cache_key_param(self, key: str | None) -> dict:
         """The request-level cache key, spelled for this wire.
@@ -599,6 +609,7 @@ MESSAGES = Dialect(
     _cache_marker=lambda ttl: {"type": "ephemeral", **({"ttl": ttl} if ttl else {})},
     _request_cache_options={},
     _translates_blocks=True,
+    _effort_in_gateway_body=True,
     _usage=_messages_usage,
     _tool_calls=_messages_tool_calls,
     _stopped=_messages_stopped,

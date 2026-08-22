@@ -28,7 +28,7 @@ from __future__ import annotations
 import os
 
 from code_gantry.config import ExecutorConfig
-from code_gantry.gateway import gateway_body
+from code_gantry.gateway import gateway_body, gateway_effort_body
 from code_gantry.executortools import REPLAN_TOOL, dispatch, openai_tool_schemas
 from code_gantry.openaiclient import (
     TokenUsage,
@@ -156,6 +156,14 @@ def request_extras(cfg, session_id: str = "", cache_key: str | None = None) -> d
     can change it.
     """
     wire = _dialect(cfg)
+    level = getattr(cfg, "reasoning_effort", None) or getattr(cfg, "effort", None)
+    # Effort is spelled for the route on this wire, not for the model. See
+    # `gateway_effort_body` for the measurement; the short version is that
+    # `output_config` 404s through the gateway for anything whose upstream is
+    # not Anthropic, and `require_parameters` turns that into every provider
+    # being excluded rather than one parameter being ignored.
+    via_body = gateway_effort_body(cfg, level) if wire.effort_in_gateway_body else {}
+    declared = dict(request_extra(cfg).get("extra_body") or {})
     return {
         # GPT-5.6 caches at breakpoints and does not fall back to the longest
         # matching prefix, so the opt-in is required rather than helpful. The
@@ -167,14 +175,13 @@ def request_extras(cfg, session_id: str = "", cache_key: str | None = None) -> d
         # was not: `prompt_cache_key` is a Responses parameter, and hardcoded
         # at the call site it reached `messages.create()` and ended a run.
         **wire.cache_key_param(cache_key),
-        **wire.effort(
-            getattr(cfg, "reasoning_effort", None) or getattr(cfg, "effort", None)
-        ),
+        **({} if via_body else wire.effort(level)),
         # Last, but it cannot reach anything above it: the reserved keys are
         # refused at config load, so this adds and never replaces. One body for
         # both, built by `merged_body` — these were two separate splats and the
         # second silently replaced the first.
-        **gateway_body(cfg, session_id, request_extra(cfg).get("extra_body")),
+        # An operator's own declared fields win outright, so ours go under.
+        **gateway_body(cfg, session_id, {**via_body, **declared}),
     }
 
 

@@ -68,6 +68,33 @@ def gateway_body(cfg, session_id: str = "", declared: dict | None = None) -> dic
     return {"extra_body": body}
 
 
+def gateway_effort_body(cfg, level) -> dict:
+    """Reasoning effort as the gateway spells it, or nothing off-gateway.
+
+    Measured against all three endpoints on 2026-08-22, because recall and the
+    docs were both wrong about it:
+
+        spelling                 Anthropic direct   OR -> claude   OR -> gemini
+        output_config            OK                 OK             404
+        extra_body.reasoning     400                OK             OK
+
+    `output_config` is Anthropic-native and survives the gateway only where
+    the upstream *is* Anthropic. OpenRouter's model listing agrees — nothing on
+    it declares `output_config` and everything declares `reasoning`. Combined
+    with `require_parameters`, which exists so a provider cannot silently drop
+    structured output, a parameter no provider can honour excludes every
+    provider and the answer is 404 `No endpoints found that can handle the
+    requested parameters`: four attempts a second, three stages drawn, no model
+    ever reached.
+
+    So the spelling follows the *route*, not the model family, which is why it
+    lives here and not on the dialect.
+    """
+    if not level or not is_openrouter(_api_base(cfg)):
+        return {}
+    return {"reasoning": {"effort": level}}
+
+
 def _api_base(cfg):
     resolve = getattr(cfg, "resolve_api_base", None)
     return resolve() if callable(resolve) else getattr(cfg, "api_base", None)
