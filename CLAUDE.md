@@ -345,30 +345,20 @@ in append-only prose turns them into "claims about history that history had
 invalidated".
 
 **A prompt that describes a capability must be generated from the thing that
-grants it.** `PLANNER_SYSTEM_PROMPT` stated flatly that the executor "cannot
-run commands" and has "no tool for running anything". True of every project
-until `project_tools` shipped, false the same day for any project that declares
-one — while the plan documents, written by people who knew, said the opposite.
-The planner found the contradiction, reported it correctly and *withheld the
-work*: "the two documents and the pipeline contract disagree, so check which
-holds before drawing one of these". A stream of dependency work went undrawn on
-the strength of a sentence in our own prompt.
+grants it.** `PLANNER_SYSTEM_PROMPT` asserted the executor "cannot run
+commands" — true of every project until `project_tools` shipped, false the same
+day for any project declaring one. The capability paragraph is built from
+`cfg.project_tools` now; a project declaring none reads what it always read.
 
-That is the expensive failure direction, and it is worth naming as a general
-shape. A missing capability produces a stage whose premise the code
-contradicts, and the gates catch it. A *phantom* constraint makes work read as
-blocked — and a stage that is never drawn leaves no artifact for anything
-downstream to find wrong, so nothing catches it at all. It surfaced only
-because the planner is asked to report contradictions in the plan; without that
-channel it would still be true.
-
-So the capability paragraph is built from `cfg.project_tools` rather than
-asserted, and a project declaring none reads exactly what it read before. The
-same reasoning put the *wrong dependency* case into `PlanNote.kind`: the plan
+**A phantom constraint is the expensive direction.** A missing capability
+produces a stage whose premise the code contradicts, and the gates catch it. A
+constraint that does not exist makes work read as *blocked*, and a stage never
+drawn leaves no artifact for anything to find wrong. A stream of dependency
+work went undrawn on the strength of one sentence in our own prompt, and
+surfaced only because the planner is asked to report contradictions in the
+plan. The same reasoning put *wrong dependency* into `PlanNote.kind`: the plan
 states what depends on what, the code decides whether that is true, and a
-prerequisite that does not exist can hold an item closed for the life of a
-project.
-
+prerequisite that does not exist can hold an item closed for a project's life.
 **And the same sentence goes stale twice, in two prompts, for one reason.**
 The rule above was written about `PLANNER_SYSTEM_PROMPT`; the identical claim
 was sitting in `_conventions_block`, telling the executor a procedure "is never
@@ -384,25 +374,20 @@ capability sentence, search for its *paraphrases* in the other roles' prompts
 before closing the task; one component describing another from memory is
 rarely a single site.
 
-**A feature's original role is the one that never gets scoped.** `project_tools`
-was built for the executor, so `executortools` took the whole declared list —
-by history rather than by decision. Adding a `roles` field and wiring the two
-new roles through it would have scoped two of three and left the founding role
-reading every declaration, and it would not have failed loudly: the tools most
-likely to belong to another role are read-only, so the symptom is a boundary
-that holds everywhere except where the feature started. Whenever a capability
-grows an audience, the first thing to check is the caller that predates the
-audience existing.
+**A feature's original role is the one that never gets scoped.**
+`project_tools` was built for the executor, so `executortools` took the whole
+declared list by history rather than by decision. Adding a `roles` field and
+wiring the *new* roles through it would have scoped two of three and left the
+founding role reading everything — and it would not have failed loudly, since
+the tools most likely to belong elsewhere are read-only. When a capability
+grows an audience, check the caller that predates the audience existing.
 
-The corollary is where the boundary goes. Scoping only where the schema is
-built is the `search` glob leak again — a filter over what is *advertised* is
-not a constraint on what is *reachable*, and a model can name a tool it was
-never offered. Both the schema builder and the dispatcher scope through one
-selector, `for_role`, called with the same role argument; that is one function
-evaluated twice rather than two filters that can drift, and it is why neither
-caller is allowed to hand over a pre-scoped list. A caller that could pass the
-wrong scope makes the wrong scope expressible.
-
+**Scope where a thing is reachable, not where it is advertised.** A filter over
+the schema is not a constraint on the dispatcher, and a model can name a tool
+it was never offered. Both go through one selector, `for_role`, with the same
+role argument — one function evaluated twice rather than two filters that can
+drift — and neither caller may hand over a pre-scoped list, because a caller
+that could pass the wrong scope makes the wrong scope expressible.
 **A renderer written against a fixed set of names is a guess once the set is
 extensible.** `call_detail` names a call by the first of `path`, `pattern`,
 `glob`, `question`, `ref` that it finds — exact for the five built-in read
@@ -441,41 +426,27 @@ different things rendering identically, and the missing half is whichever one
 nobody wrote down.
 
 **Improving a tool's answers cannot make anything reach for it more often.**
-There is no memory across runs, so a good result is not carried anywhere — a
-model decides whether to call a tool from the description in front of it and
-nothing else. The index decides what a call is *worth*; the description decides
-how many calls *happen*. Which means the two can never confound a measurement,
-and it is worth knowing before designing an experiment to separate them: I
-proposed landing an index fix and a prompt edit separately so the effect could
-be attributed, and there was nothing to attribute. It also means a usage rate
-is not a verdict on value. Semantic search sat at 0.9% of calls while returning
-five 2007-era migration filenames out of six hits; excluding `db/migrate` and
-an archived progress log from the index turned the same question into the three
-links of the chain it was actually asking about, with no change in score — the
-top hit moved 0.696 to 0.679. Rank was never the signal. What changed is what
-it was competing against.
+There is no memory across runs: a model decides whether to call a tool from the
+description in front of it and nothing else. The index decides what a call is
+*worth*; the description decides how many calls *happen*. So the two cannot
+confound each other, and an experiment designed to separate them has nothing to
+attribute.
 
-Reproduced end to end six weeks later, and the contaminant had become *our own
-output*. Replaying eight recorded queries against the live index: the live
-progress log, the plan tree, and `.claude/skills/` between them took 6 of 42
-hits, one of them a reviewer summary of a stage that had landed twenty minutes
-earlier, scored above the model the executor was asking about. Three successive
-exclusions — `docs/*/progress_log.md`, then `docs/*/*`, then `.claude/*` — took
-it 6/42 → 5/48 → 1/48 → **0/48**, while every top score stayed put (0.679 to
-0.688, 0.740 to 0.744, both explained by landed stages moving the corpus). The
-freed slots on one query became the view that renders the link and the
-controller method behind it. Same finding, twice, by different routes: the win
-is in what loses.
+**A usage rate is not a verdict on a tool's value, and rank is not the signal.**
+Semantic search sat at 0.9% of calls while returning five 2007-era migration
+filenames out of six hits. Excluding `db/migrate` and an archived log turned the
+same question into the chain it was actually asking about — top hit moved 0.696
+to 0.679. The win is in what loses.
 
-Two things that only the second pass showed. The exclusion list lives in the
-*target repository's* indexer, so nothing here can pin it and nothing here will
-notice when it regresses — the pipeline's own artifacts are indexed by a tool
-this codebase does not own. And a bad query stays bad: the one call that was a
-stage id plus loose keywords still returns three unrelated classes whose names
-happen to share one token with it — four of six hits matching on that token
-alone. It was searching for a document rather than asking about code, and removing the
-document it was chasing does not turn it into a question.
-
+**The index's worst contaminant is the pipeline's own output.** Successive
+exclusions of `docs/*/progress_log.md`, `docs/*/*` and `.claude/*` took our
+artifacts from 6 of 42 hits to **0 of 48**, top scores unmoved. One displaced
+hit was a reviewer summary of a stage that had landed twenty minutes earlier,
+ranked above the model the executor was asking about. Two cautions: the
+exclusion list lives in the *target repository's* indexer, so nothing here pins
+it or notices a regression; and a bad query stays bad — one that was a stage id
+plus loose keywords still matches unrelated classes on a single shared token,
+because it was looking for a document rather than asking about code.
 **A tool reads more than you hand it.** The subprocess editor this project
 once shelled out to scanned the message *and its own reply* for anything
 path-shaped and attached the file, auto-answering the prompt; no flag disabled
@@ -552,35 +523,18 @@ calls at each site — and the duplication it replaced, `_clip` written twice in
 `nodes.py` and `verify.py`, is how the decision got made twice in the first
 place.
 
-**The executor is not free any more.** The economics the design rests on —
-planner at 91% of tokens, executor at 2.2% of prompt volume — were measured
-against a local model on a Spark. A hosted executor invalidates both, so
-`stage-costs.md` now carries dollars beside the context figure. The
-subprocess editor reported cost only when its rate table knew
-`input_cost_per_token`, so a zero meant "not priced" as often as it meant
-"free"; and its cache accounting read two providers' fields but never OpenAI's
-`prompt_tokens_details.cached_tokens`, so a silent zero there was the
-instrument, not the cache. Measured directly at
-the API: an identical 16k prefix caches at 99.9% on chat/completions with
-nothing configured — **and that figure does not cover the path the executor
-now takes.** It routes through `openai/responses/<model>`, and the measurement
-was made against chat/completions, which is the same substitution the rule two
-paragraphs up was written about: a fact established on the layer beside the one
-being called. Three artifacts were checked for a reading on the real path and
-none carries one — its console log reports `38k sent` with no cache fields,
-its raw prompt-and-response dump holds no usage block at all, and
-our own accounting bills every token at full input price while
-`executor-model.json` declares a `cache_read_input_token_cost` it never
-applies. So the honest state is *unmeasured*, not *zero* and not *99.9%*.
+**A reading is worth taking when a decision depends on the answer.**
+Executor spend is $3.30 across 152 recorded stages, median $0.0079, against
+$199.15 of planner spend on one run. A perfect cache discount there saves about
+the price of a single planner call, so measuring it would buy a number with
+nothing attached to it. The instinct to close an open question is right about
+the question and wrong about the priority.
 
-Left unmeasured deliberately, which is the part worth remembering. Executor
-spend is $3.30 across 152 recorded stages — median $0.0079 — against $199.15 of
-planner spend on a single run. A perfect cache discount there saves about the
-price of one planner call, so the measurement would buy a number with no
-decision attached to it. The instinct to close an open question is right about
-the question and wrong about the priority: what makes a reading worth taking is
-that something changes depending on the answer.
-
+**And a zero is a reading about the instrument until proven otherwise.** Cost
+accounting that reports zero for "not priced" as often as for "free" is why
+prices are `None` rather than `0.0`; an accounting layer that reads two
+providers' cache fields and not the third reports a silent zero that is the
+reader, not the cache.
 **And then it closed itself, which is the more useful half.** Replacing the
 subprocess editor with an in-process client made the reading free: we now hold the usage block the
 provider returns instead of scraping someone else's console. Measured over 46
@@ -608,27 +562,22 @@ system is a *reading*, and a reading with no instrument behind it should be
 deleted rather than approximated.
 
 **A category drawn around the mechanism excludes the case drawn around the
-meaning.** The transport retry was built for a dropped Wi-Fi and its category
-was written as *the request never arrived* — `APIConnectionError`, and the
-docstring said so. A 529 `overloaded_error` then ended a 29-stage run at 09:43
-with the work intact: the request arrived, and the provider said come back
-later. Same outage, same correct response, outside the category because the
-category described the plumbing rather than what the failure meant. The
-question to ask of any such set is not "is this complete" — it looked complete
-— but "what is this a set *of*", and whether the name would still hold if the
-same event reached us by a different route.
+meaning.** The transport retry was categorised as *the request never arrived* —
+`APIConnectionError`. A 529 `overloaded_error` then ended a 29-stage run: the
+request arrived and the provider said come back later. Same outage, same
+correct response, outside the category because the category described the
+plumbing rather than what the failure meant. Ask not "is this set complete" but
+"what is this a set *of*", and whether the name holds if the same event arrives
+by a different route.
 
-The fix is also a small lesson in the rule below it. The obvious
-implementation is a list of exception classes, and it is wrong: 529 is
-`OverloadedError` on the Anthropic SDK and `InternalServerError` on OpenAI's,
-so a class list is right in exactly one of the two files that need it. Both
-SDKs decide by status code in their own `_should_retry`, and so does
-`is_transient_status` — which the tests pin *against the installed SDKs*, so a
-provider that changes its mind fails a test here rather than stopping a run at
-3am. 429 is included, which would be unsafe as an SDK `max_retries` honouring
-`retry-after`, and is safe here only because the wait is bounded by our wall
-clock.
-
+**Classify a provider failure by status code, not by exception class.** 529 is
+`OverloadedError` on Anthropic's SDK and `InternalServerError` on OpenAI's, so
+a class list is right in exactly one of the two files that need it. Both SDKs
+decide by status in their own `_should_retry`, and so does
+`is_transient_status`, whose tests are pinned *against the installed SDKs* — a
+provider changing its mind fails a test here rather than stopping a run at 3am.
+429 is included, which would be unsafe as an SDK `max_retries` honouring
+`retry-after` and is safe here only because our wall clock bounds the wait.
 **Test the layer you are actually going to call.** Reaching `max` on the
 executor needed litellm's Responses bridge, and a metadata file with
 `mode: responses` triggered it perfectly — in litellm. Through the editor in
@@ -718,32 +667,23 @@ not housekeeping; it is the largest single lever on the run's bill.
 
 **Content cannot move between a pinned document and a live one.** The plan is
 read once at `plan_sha` so the reviewer judges a diff against the text the
-planner drew it from; the progress log is spliced from the worktree on every
-call, because freezing it had the planner reading 6,680 bytes of a 114,554-byte
-record. Both are right, and together they have a seam: a fold moves content
-*out* of the log and *into* the plan documents and `AGENTS.md`. A resume
-inherits `plan_sha` in `**saved` and re-reads nothing, so it sees neither copy
-— the live log no longer carries it and the pinned documents never did. From
-the planner's side a fold is then indistinguishable from deleting the log. The
-two policies are only consistent while the live document is append-only, which
-is exactly what a fold ends. `_plan_unmoved` refuses the resume rather than
-re-reading, because `current` and everything queued behind it were derived
-against the old text and loading the new does not make them valid. Ask of any
-two inputs read at different revisions whether anything ever moves between
-them.
+planner drew from; the progress log is spliced live, because freezing it had
+the planner reading 6,680 bytes of a 114,554-byte record. Both are right and
+together they have a seam: a fold moves content *out* of the log and *into* the
+plan documents, and a resume inherits `plan_sha` and re-reads nothing — so it
+sees neither copy. `_plan_unmoved` refuses the resume rather than re-reading,
+because `current` and everything queued behind it were derived against the old
+text. Ask of any two inputs read at different revisions whether anything ever
+moves between them.
 
-It fired for real, and not on a fold. A paused run refused to resume because
-`AGENTS.md` had changed — a human, in another session, had rewritten the
-paragraph on `action_on_unpermitted_parameters` to say the opposite of what the
-pinned copy said: `:raise` in test and development where the old text said
-nothing raises. Resuming would have planned against the reverse of what the
-branch now does. So the guard is not about folds, which is all the prose above
-describes; it is about *any* edit to a pinned document, and the most likely
-author of one is a person working in the same repository for unrelated reasons.
-A fresh run was the only way forward and cost almost nothing, because the queue
-was empty and landed work lives on the project branch — the expensive case is a
-refusal with a derived stage and a queue behind it.
-
+**And the guard is about any edit to a pinned document, not only a fold.** It
+fired when a human in another session rewrote the `AGENTS.md` paragraph on
+`action_on_unpermitted_parameters` to say the opposite of the pinned copy;
+resuming would have planned against the reverse of what the branch does. The
+likeliest author of such an edit is a person working in the same repository for
+unrelated reasons. A fresh run is the way forward and costs almost nothing when
+the queue is empty, since landed work lives on the project branch — the
+expensive case is a refusal with a derived stage and a queue behind it.
 **A delimiter drawn from the content's own alphabet is not a delimiter.**
 `read_file` numbered with a five-character field and *two spaces*, and
 indentation is also spaces. A line indented by two arrived as four with nothing
@@ -885,28 +825,20 @@ All correct, and the consequence was not noticed for 77 stages: **10 tracked
 files were silently converted from CRLF to LF** — 4 `.js`, 5 `.erb`, one
 `.haml` — each landing as a whole-file rewrite that no participant ever saw.
 
-**The follow-up measurement is the more useful half, because it refuted the
-reason first given for caring.** That reason was that the repository had been
-made *mixed* where it was uniform. It was never uniform: 552 of 3,184 tracked
-text files carried CRLF at the run's base sha, 17%, and the count is 542 now.
-Ten files moving to the majority convention does not meaningfully change a
-repository that has been 17% CRLF for years. The count has also not moved since
-— this was a burst, not a rate — so there was nothing accruing to stop. The
-residual cost is `git blame` on ten files, already spent, and unrecoverable by
-acting now. The right answer was to do nothing, and the operator's default of
-doing nothing was better calibrated than the write-up that prompted the
-question.
+**A gate exemption wants a counter, or a periodic look at what it has
+swallowed.** Declaring a behaviour to the one participant that would otherwise
+reject it is not the same as accounting for it: the complaint stops while the
+effect keeps accruing where nothing is looking. Hiding the editor's
+line-ending churn from the reviewer silently converted 10 tracked files from
+CRLF to LF over 77 stages, each a whole-file rewrite no participant saw.
 
-Keep the rule and distrust the alarm. Declaring a behaviour to the one
-participant that would otherwise reject it is not the same as accounting for
-it: a gate exemption suppresses the complaint while the effect keeps accruing
-where nothing is looking, so an exemption wants a counter or a periodic look at
-what it has been swallowing. That is exactly how the ten were found. But a
-finding produced that way arrives without a magnitude, and the instinct is to
-supply one from the shape of the thing rather than from a measurement — *mixed
-where it was uniform* was written without ever counting the base. Ask what the
-number was before, not only what it is now.
-
+**And a finding produced that way arrives without a magnitude — measure the
+before, not only the after.** The reason first given for caring was that the
+repository had been made *mixed* where it was uniform. It was never uniform:
+552 of 3,184 tracked text files carried CRLF at the base sha, 17%, and the
+count is 542 now. Ten files joining the majority changes nothing, the count has
+not moved since so it was a burst rather than a rate, and the residual cost was
+already spent and unrecoverable. The right answer was to do nothing.
 **A test suite can be exercising the path you are about to delete.** The
 integration tests drove a fake executor binary on `PATH`, and they were green
 the whole time the in-process executor was running live — because
@@ -934,25 +866,21 @@ own are the ones that vanish.
 
 **A test that forbids a name is not the same as a test that pins a decision.**
 `FEEDBACK_OUTPUT_CHARS = 4_000` was declared in `gates.py` and again in
-`nodes.py`, each with its own one-line helper — a regrowth of the duplication
-`clip_for_model` was extracted to end, one level up: the function was
-centralised and the number it is called with was not. Nothing fails when two
-copies of a constant disagree; one role simply starts giving a model less of a
-failure to read than the other.
+`nodes.py`: the function was centralised and the number it is called with was
+not. Nothing fails when two copies of a constant disagree — one role simply
+gives a model less of a failure to read than the other.
 
-The first test written for it forbade any function called `clip` outside
-`gates`, and failed immediately on `verify._clip` — a one-line delegation
-carrying the reason the ordering inside it matters. A named wrapper is not the
-failure mode; a second *application* of a budget is. Rewritten to assert that
-`FEEDBACK_OUTPUT_CHARS` is spent exactly once, it leaves the other budgets
-alone, because a lint diff and a one-line log note are genuinely different
-decisions rather than copies. A test that bans a word forces unrelated things
-to be inlined to satisfy it.
+**Ban the second application, not the word.** The first test forbade any
+function named `clip` outside `gates` and failed on a one-line delegation that
+existed for a documented reason. A named wrapper is not the failure mode; a
+second *application* of a budget is. Asserting the constant is spent exactly
+once leaves genuinely different decisions alone — a lint diff and a one-line
+log note are not copies of each other. A test that bans a word forces unrelated
+things to be inlined to satisfy it.
 
-The same sweep is worth running deliberately rather than by accident: parse
-every module and list the names defined in more than one. Of five, four were
-delegating wrappers whose docstrings said why, and one was this.
-
+**And the sweep is worth running deliberately:** parse every module and list
+the names defined in more than one. Of five, four were delegating wrappers
+whose docstrings said why, and one was this.
 **Cut code with a parser, not a pattern.** Twice in five minutes, deleting the
 subprocess executor by regex removed the wrong span: a method boundary matched a `def`
 nested inside a *later* function and swallowed six module-level definitions,
@@ -1050,28 +978,24 @@ declaration to predict an outcome, ask what it would cost to measure the
 outcome instead — usually less, and it is right about causes nobody enumerated.
 
 **"There is no shell" is a claim about the tool schema, and the pipeline runs
-shell scripts.** The executor is given no command tool, and that is the whole
+shell scripts.** The executor gets no command tool, and that is the whole
 safety story — but `setup_command`, the four test commands and every `checks`
-entry are operator-declared argv, and on a real project they name scripts *in
-the repository being edited*. A stage that may edit one of those has arbitrary
-execution by a slower route, and the edit reads as ordinary in-scope work: no
-gate is looking for it, because from `verify`'s side a script is a file like any
-other. `no_direct_edit` is the only thing standing there. Measured on one
-project's config: five files were reachable that way — the bring-up script, the
-parallel runner, the plain runner, the linter wrapper, and the linter's own
-`Gemfile`, which is the sharp one because `bin/rubocop` is a single line
-resolving through it, so the loophole never needed the script at all.
+entry are operator-declared argv naming scripts *in the repository being
+edited*. A stage that may edit one has arbitrary execution by a slower route,
+and it reads as ordinary in-scope work: from `verify`'s side a script is a file
+like any other. `no_direct_edit` is the only thing standing there. Measured on
+one config, five files were reachable — including the linter's own `Gemfile`,
+since `bin/rubocop` is one line resolving through it, so the loophole never
+needed the script at all.
 
-Two corollaries, both learned by nearly getting them wrong. **The ban belongs on
-the files, not on the directory** — the same `bin/` held two exclusion lists that
-stages had legitimately edited 94 times between them, and a blanket glob would
-have blocked real work to close a hole five files opened. And **adding a tool
-adds a script**: a declared command may not start with `sh`, because argv without
-a shell is what makes a model-supplied argument inert, so any tool whose body is
-more than one program becomes a file in the repository — which is then reachable
-and needs its own entry. Three of the eight entries on that project exist because
-of tools added the same afternoon as the ban.
+**The ban belongs on the files, not the directory.** The same `bin/` held two
+exclusion lists stages had legitimately edited 94 times between them; a blanket
+glob would have blocked real work to close a hole five files opened.
 
+**And adding a tool adds a script.** A declared command may not start with
+`sh`, because argv without a shell is what makes a model-supplied argument
+inert — so any tool whose body is more than one program becomes a file in the
+repository, which is then reachable and needs its own entry.
 **A replan lands nothing and leaves everything.** `request_replan` skips the
 gates and routes to the planner, so no diff is judged and no stage lands — and
 the executor's edits stay committed on the stage branch and checked out in the
@@ -1179,27 +1103,21 @@ is not ending it there, and the cleanup has to be aimed at the far side. Aim it
 narrowly — a pattern broad enough to catch the workers is broad enough to catch
 the entrypoint that owns the container.
 
-**A tool can read the wrong stream, and the layer was right.** `search` passed
-ripgrep no path argument. Given none, ripgrep searches **stdin** whenever stdin
-is not a terminal — so the tool worked at a shell and returned nothing from
-`subprocess.run` with an inherited pipe. Measured against one literal on a real
-repository: inherited stdin `rc=1, 0 files`; `stdin=DEVNULL` and an explicit
-path both `rc=0, 399 files`. Nothing warns and nothing errors; every search is
-simply empty, which reads as "not in this repository" — the same wrong answer
-the pathspec bug gave, by an unrelated route, and it would strike or spare a run
-according to how it happened to be launched.
+**A subprocess inherits more than argv: cwd, env, and stdin are inputs too.**
+`search` passed ripgrep no path, and ripgrep searches **stdin** when stdin is
+not a terminal — so the tool worked at a shell and returned nothing under
+`subprocess.run` with an inherited pipe. Measured on one literal: inherited
+stdin `rc=1, 0 files`; `stdin=DEVNULL` or an explicit path, `rc=0, 399 files`.
+Nothing warns; every search is simply empty, which reads as "not in this
+repository".
 
-The rule above it says to test the layer you are actually going to call, and that
-was followed: the calls went through `RepoReader`. What differed was the
-*stream* the call inherited, which no unit test and no shell probe can see,
-because pytest and a terminal sit on opposite sides of it. Over several hours
-this produced five contradictory measurements that were each blamed on the
-target repository moving under a live run — a plausible story that was true once
-and wrong four times. When a subprocess result varies with nothing you changed,
-suspect what it inherited before you suspect the world: argv, cwd, env, and
-stdin are all inputs, and only the first two are visible in the command you
-think you ran.
-
+**Testing the right layer does not cover what that layer inherited.** The calls
+did go through `RepoReader`; what differed was the stream, which no unit test
+and no shell probe can see, because pytest and a terminal sit on opposite sides
+of it. This produced five contradictory measurements over several hours, each
+blamed on the target repository moving under a live run — a story that was true
+once and wrong four times. When a subprocess result varies with nothing you
+changed, suspect what it inherited before you suspect the world.
 **And once a path is passed, a guard that read an exit code may become
 unreachable.** ripgrep folds "your glob selected nothing" into status 2 only
 when it has no path to search; with one supplied it exits 1 like any empty
@@ -1318,6 +1236,8 @@ pricing and all were green, because their fixture makes no edits and leaves by
 a different exit. Prefer one exit; when there are several, ask which one the
 happy case takes.
 
+Seen again adding a per-turn usage series to the reviewer: four exits assign the totals and were routed through one helper, and the series still came out empty on every *approved* review — because the fifth exit is a constructor, and it is the one the happy case takes. Routing the exits you can see is not the same as finding the one that leaves by a different door.
+
 **A resume is not a fresh process with the old state.** Three defects in one
 mechanism, each invisible because the work survived elsewhere. `resume_fields`
 said it was "what a resume merges over the saved checkpoint" and nothing merged
@@ -1391,24 +1311,21 @@ read as a suite result. Both are the standing rule about checking what a
 command actually returns, and both were committed to before anyone asked what
 the number counted.
 
-**A value that fits is a value that fits *where it is*.** `prompt_cache_key` is
-capped at 64 characters and nothing had been near it: a slug-shaped key ran to
-19. Moving the config into the repository it describes made `work_dir` the
-project's identity, the identity a path, and the key 98 — so the first reviewer
-call of the first run on the new layout came back 400. Nothing about the value
-changed except its length. That is the same door as a value being private only
-while its file was private, and the same discipline answers both: when a source
-moves, re-read every field it feeds as though seeing it for the first time. This
-one was measurable at any point in the six hours between the move and the
-failure by taking `len()` of a string.
+**A value that fits is a value that fits *where it is*.** `prompt_cache_key`
+is capped at 64 characters and a slug-shaped key ran to 19. Moving the config
+into the repository it describes made `work_dir` the project's identity, the
+identity a path, and the key 98 — so the first reviewer call on the new layout
+came back 400. Nothing changed but its length, and `len()` would have found it
+at any point in the six hours before the failure. When a source moves, re-read
+every field it feeds as though seeing it for the first time.
 
-And the fix was already written once. `executor.py` had met the same limit and
-answered `[:64]` at its own call site; the reviewer's site never got it. Blind
-truncation is also wrong — two projects under a long shared prefix truncate to
-the same key and silently share a cache — so both sites hash through one helper
-now, with short identities passing through unchanged so no warm cache is thrown
-away by the fix.
-
+**And blind truncation is the wrong fix for a capped identifier.** Two projects
+under a long shared prefix truncate to the same key and silently share a cache.
+Both sites hash through one helper, with short identities passing through
+unchanged so no warm cache is discarded by the fix. The `[:64]` that had
+already been written at one call site never reached the other, which is the
+usual shape: a fix applied where the problem was noticed rather than where it
+lives.
 **A tuple literal evaluates before the loop body sees anything.** The executor's
 gates were the elements of one, ordered cheapest-first with a module docstring
 saying so, and the full suite ran even when `patterns` had already failed — for
@@ -1443,31 +1360,22 @@ actually sent, was 50 of 70. An absent field and a zero are indistinguishable
 to a reader, so an artifact that drops fields does not merely fail to answer —
 it answers wrongly, with the confidence of a record.
 
-**And the writer must be the model, not a list of keys.** Both rules above were
-written and `executor-loop.json` still carried ten fields of twenty. The four
-it omitted — `ok`, `timed_out`, `turns_exhausted`, `log` — are between them the
-entire answer to *why did this attempt end*, which is the only question the
-per-attempt record exists for. Found by making the mistake: asked why an
-attempt stopped after three reads and no edits, I read the file, got nothing
-for those four, and was one step from reporting that the loop had not recorded
-it. It had — in `executor.log` next door, where the model said the fix lay in a
-file outside `edit_files`. The enumeration is also what makes the *next* field
-go missing: `commit_refused` was added the same morning and was already absent.
-So the writer walks `dataclasses.fields` and a field has to be excluded on
-purpose. The rule generalises past artifacts: wherever a subset is written out
-by hand, the hand is the defect.
+**And the writer must be the model, not a list of keys.** `executor-loop.json`
+carried ten fields of twenty; the four it omitted — `ok`, `timed_out`,
+`turns_exhausted`, `log` — are between them the entire answer to *why did this
+attempt end*, the only question a per-attempt record exists for. The
+enumeration is also what makes the *next* field go missing: `commit_refused`
+was added that morning and was already absent. The writer walks
+`dataclasses.fields` now, so a field has to be excluded on purpose. Wherever a
+subset is written out by hand, the hand is the defect.
 
-A third instance, in a module nobody would have looked in. `append_flakes`
-assembled its line field by field, and `preflight` — written before the
-`examples` argument existed — called it without one, so **every baseline flake
-this project has ever excused recorded no locator**, silently, for as long as
-locators have existed. Nothing was wrong at either end: the writer was right,
-the caller was right, and the caller was simply older than the argument. That
-is the shape to expect from an optional keyword — a new one does not reach the
-call sites that predate it, and the omission is indistinguishable from a value
-that was genuinely absent. The record is a dataclass now, and the fix is the
-same one twice over: make the writer the thing being written.
-
+**An optional keyword does not reach the call sites that predate it.**
+`append_flakes` was called by `preflight` without the `examples` argument it
+gained later, so **every baseline flake this project ever excused recorded no
+locator** — silently, for as long as locators have existed. Nothing was wrong
+at either end; the caller was simply older than the argument, and the omission
+is indistinguishable from a value that was genuinely absent. The record is a
+dataclass now: make the writer the thing being written.
 **A sentinel is a value in the wrong field.** The same call site passed the
 string `"preflight"` as its `stage_id`, because there is no stage before a run
 starts. It reads as harmless and it means the ledger could separate a baseline
@@ -1492,23 +1400,20 @@ changing it grows with the file rather than with the change.
 
 **A counter added underneath another is not reset by the code that resets the
 first.** `plan()` cleared `calls` and zeroed `_lines_used`; `max_total_chars`
-arrived later, under `max_total_lines`, and nothing taught the reset about it.
-`_chars_used` then accumulated for the life of the process, and past the
-ceiling *every planner call was refused on its first read* — 14 of 31 on one
-run, each drawing a stage with no way to check a premise against the code,
-which is the documented cause of all-attempts-zero-diff stages. The cliff is
-the tell: stage 025 got 3 reads of 7 and every call after it got zero.
+arrived later and nothing taught the reset about it, so `_chars_used`
+accumulated for the life of the process. Past the ceiling, *every planner call
+was refused on its first read* — 14 of 31 on one run, each drawing a stage with
+no way to check a premise against the code, which is the documented cause of
+all-attempts-zero-diff stages. The cliff is the tell: stage 025 got 3 reads of
+7 and every call after it got zero.
 
-The fix that matters is not a tidier reset. Clearing field by field is a list
-somebody maintains, and the next counter is one more line to forget in a place
-whose omission stays invisible until a long run crosses a ceiling. The spent
-state is one object now and clearing it is replacing it. That introduced its
-own hazard worth knowing: something else held the list being replaced —
-`SemanticSearch` was constructed with `calls=reader.calls` — so it would have
-gone on appending to an orphan, losing every semantic call from the log with
-nothing raising. Whatever shares a mutable structure has to reach *through* the
-owner, not hold the structure.
-
+**Clear spent state by replacing one object, not by zeroing a list of fields.**
+A field-by-field reset is a list somebody maintains, and the next counter is
+one more line to forget somewhere the omission stays invisible until a long run
+crosses a ceiling. The hazard that introduces: whatever *shares* the mutable
+structure must reach through the owner rather than hold it —
+`SemanticSearch(calls=reader.calls)` would have gone on appending to an orphan,
+losing every semantic call from the log with nothing raising.
 **And the reviewer had no reset at all**, which is the same defect arriving by
 the other door: not a field forgotten but a whole call site written without
 one. Its ledger accumulated across every review a process made, so
@@ -1620,45 +1525,36 @@ can mis-shape it. It also arrived as an observation about the *executor*
 repeating itself, which the transcripts refuted: 12 duplicate calls in 992.
 
 **A flag that filters can undo the boundary you thought bounded it.**
-`search`'s docstring stated the tracked-only boundary as ripgrep's ignore
-handling — "ignored files out, untracked-but-not-ignored in" — and named this
-operator's convention of keeping identifiable values in ignored files as the
-reason it was safe. `-g` is a filter over the walk rather than within it, so a
-model-supplied glob overrides `.gitignore` entirely, and the guarantee held for
-exactly the calls that named no path. Under `-g '**/*'`: 41 hits out of the
-executor's own conversation transcript, 18 out of `tools.log`, and
-`planner.json` for the stage being executed — the planner's reasoning, which
-the executor is deliberately not given. Then it compounds, because output is
-capped: 31 of 369 searches hit the cap, so artifacts winning the first 12k push
-the real hits out and the model searches again. A leak surfaced as repetition.
-Ask what a stated boundary is *made of*, and re-measure it under the inputs a
-model actually supplies rather than the ones the docstring was written against.
+`search`'s tracked-only guarantee rested on ripgrep's ignore handling. `-g` is
+a filter over the walk rather than within it, so a model-supplied glob
+overrides `.gitignore` entirely and the guarantee held only for calls naming no
+path. Under `-g '**/*'`: 41 hits out of the executor's own transcript, 18 out
+of `tools.log`, and `planner.json` for the stage being executed — the planner's
+reasoning, which the executor is deliberately not given. It then compounds,
+because output is capped: artifacts winning the first 12k push real hits out
+and the model searches again, so **a leak surfaces as repetition**. Ask what a
+stated boundary is *made of*, and re-measure it under the inputs a model
+supplies rather than the ones the docstring was written against.
 
-The fix carries a second lesson. The first fixture force-added the ignored
-files, which made them tracked, which made `git check-ignore` decline to report
-them — the test would have passed by making the leak legitimate. A fixture that
-has to reproduce an exclusion must be checked for whether it still excludes.
+**A fixture reproducing an exclusion must be checked for whether it still
+excludes.** The first one force-added the ignored files, which made them
+tracked, which made `git check-ignore` decline to report them — the test would
+have passed by making the leak legitimate.
+**A cache keyed on a string is keyed on its spelling.**
+`verify._recorded_answer` skips the gate's test run when the loop already ran
+*this command* on *this HEAD* — two facts compared rather than trust, and
+exactly right. But it compares the command as text, and the two sides build the
+path list in different orders by construction. Measured over one run: 18
+adjacent pairs naming an identical set of files, **18 of 18 differing only in
+order**, 790 seconds of specs re-run on a tree nothing had touched.
+`resolve_test_paths` sorts now — the "same command spelled the same way" rule
+applied to the argument list rather than the flags.
 
-**A cache keyed on a string is keyed on its spelling.** `verify._recorded_answer`
-skips the gate's test run when the loop already ran *this command* on *this
-HEAD* — two facts compared rather than trust, and exactly right. It compares
-the command as text, and the two sides build the path list in different orders
-by construction: the gate leads with what the diff says was touched, the loop
-with what the stage declared. Same set, different string, and the record missed
-in silence. Measured over one run's log: 18 adjacent pairs naming an identical
-set of files, **18 of 18 differing only in the order**, 790 seconds of specs
-re-run on a tree nothing had touched.
-
-The trap is one level out from the miss. The layer was not granted on that
-project, so the duplication read as the operator's choice and the fix looked
-like a one-line config change — which would have saved nothing and said
-nothing. A switch that reads as the whole story and is a no-op is worse than a
-switch nobody turned on, so verify that the mechanism *can* fire before
-recommending that someone enable it. `resolve_test_paths` sorts now, which also
-means two runs of the same set are visibly the same command in the log; this is
-the "same command in both places, spelled the same way" rule applied to the
-argument list rather than the flags.
-
+**Verify a mechanism *can* fire before recommending someone enable it.** The
+layer was not granted on that project, so the duplication read as the
+operator's choice and the fix looked like a one-line config change that would
+have saved nothing. A switch that reads as the whole story and is a no-op is
+worse than a switch nobody turned on.
 **And the measurement that argued against granting it was about something
 else.** The config had a careful note explaining why only `checks` was trusted:
 over 81 verdicts the gate disagreed with the loop about `tests` twelve times and
@@ -1674,46 +1570,34 @@ question that separates them is not "is this number right" but "what would have
 to be true for this number to change the answer".
 
 **A ledger that records the container cannot answer questions about the item.**
-The ledger — `flakes.md` then, `flakes.jsonl` now — recorded a file and an
-ordering seed for every excused flake — 277
-entries, 77 of them naming one feature spec — and could not say whether that
-was one example failing 77 times or 77 different ones. Those are different
-bugs, and the question is the reason the file exists. The answer had been on
-the line the parser was already reading: RSpec ends every failure with a re-run
-locator, and `failed_file_pattern` matched that line, took the path out of it,
-and discarded the rest. Recovered afterwards from archived logs, it was **three
-examples, consecutive siblings in one context** — a shared setup, not three
-defects. Ask what the ledger is for, then check that the thing it records is
-the thing the question is about.
+`flakes` recorded a file and an ordering seed per excusal — 277 entries, 77
+naming one feature spec — and could not say whether that was one example
+failing 77 times or 77 different ones. Those are different bugs, and the
+question is the reason the file exists. The answer was already on the line the
+parser read: RSpec ends every failure with a re-run locator, and the pattern
+took the path out and discarded the rest. Recovered later: **three examples,
+consecutive siblings in one context** — a shared setup, not three defects. Ask
+what the ledger is for, then check that what it records is what the question is
+about.
 
-The recovery is worth its own note, because the instinct was to add a field and
-move on: the run directory still held every failing suite's output, so the
-history was answerable without writing anything to the ledger. Before proposing
-a backfill of an append-only file, ask whether the raw material is still on
-disk — the answer arrived from a fifteen-line script and the operator declined
-the backfill, correctly, because the file only needs to be right going forward.
+**Before backfilling an append-only file, ask whether the raw material is still
+on disk.** The run directories still held every failing suite's output, so the
+history was answerable from a fifteen-line script without writing anything —
+and the file only needs to be right going forward.
+**A rule that is right about every case and silent about the sequence lets a
+deteriorating thing deteriorate at full speed.** The flake doctrine — "a file
+that passes whole and standalone is green" — is applied per excusal with no
+memory between them, so the second sighting reads exactly like the first. Over
+one sixteen-hour run a single example was excused **six times**; six stages
+landed over it; then it stopped passing alone and the cost arrived at once — a
+stage that had passed every gate and been approved lost its landing to a red
+suite it had not caused, an extra stage was drawn to repair the spec, three
+attempts failed at ~200s each, and the run was killed.
 
-**And nothing reads the ledger, which is where the whole doctrine leaks.** The
-flake rule is "a file that passes whole and standalone is green", applied per
-excusal, with no memory between them. Watched end to end over one sixteen-hour
-run: `order_funnel_add_item_spec.rb[1:2:1:2]` was excused **six times**, and I
-had already reported that morning that it was the run's worst offender by
-example — four sightings then, which is exactly the signal the locators were
-added to produce. Six stages landed over it. Then it stopped passing alone, and
-the cost arrived all at once: a stage that had passed every gate and been
-approved by the reviewer lost its landing to a red suite it had not caused, a
-whole extra stage was drawn to repair the spec, three attempts of it failed at
-~200s each, and the run was killed.
-
-Every individual excusal was correct. The doctrine has no escalation on
-*repetition*, so the second sighting reads exactly like the first, and the file
-built to make repetition countable is read by no code — `recent_flakes` has
-nine callers and all nine are tests. The ledger made the problem visible to a
-human who happened to sort it; nothing made it visible to the pipeline. A rule
-that is right about each case and silent about the sequence will let a
-deteriorating thing deteriorate at full speed, and the tell is that the record
-proving it exists and has no reader.
-
+**And the tell is a record that exists with no reader.** The file built to make
+repetition countable is read by no code: `recent_flakes` has nine callers and
+all nine are tests. It made the problem visible to a human who happened to sort
+it, and invisible to the pipeline.
 **Approved work does not survive a redraw.** The stage above had a clean diff,
 all gates green and a reviewer approval, and its branch still holds three
 commits. It will not land from them: `cut_stage_branch` reuses an existing
@@ -1726,65 +1610,51 @@ case where reaching into the quarantine is cheaper than letting the machine
 redo it.
 
 **An operator's regex is data, and code must not depend on its spelling.**
-`failed_file_pattern` opens `^\s*`, `\s` matches newlines, and `^` in multiline
-mode can anchor on the blank line above — so `match.start()` sat on the
-*previous* line's break, and slicing a line from it yielded the blank line.
-The extraction returned `{}`: not an error, not a partial answer, an empty
-result that reads as "this runner prints no locators", which is the same shape
-as the empty search that gets believed. Anchoring on `match.end()`, which is
-always inside the line the capture came from, removes the dependency entirely.
+`failed_file_pattern` opens `^\s*`; `\s` matches newlines and `^` in multiline
+mode can anchor on the blank line above, so `match.start()` sat on the previous
+line's break and slicing from it yielded the blank line. The extraction
+returned `{}` — not an error, not a partial answer, an empty result reading as
+"this runner prints no locators", which is the empty search that gets believed.
+Anchor on `match.end()`, which is always inside the line the capture came from,
+and the dependency is gone.
 
-Measured before deciding anything: 1,743 locator lines across every archived
-log, **every one flush left**, none indented, none preceded by a carriage
-return — so the `\s*` had never matched a character of horizontal whitespace,
-and dropping it changes nothing (replayed over 1,531 logs, zero disagreements
-in files, seeds or locators). But dropping it is not the fix. The next
-project's pattern is written by someone else, and correctness that depends on
-it not beginning with `\s*` is a defect waiting on a config nobody will think
-to check.
-
+**Measure before deciding, then fix the dependency rather than the instance.**
+1,743 locator lines across every archived log were flush left — the `\s*` had
+never matched a character, and dropping it changes nothing (replayed over 1,531
+logs, zero disagreements). Dropping it is still not the fix: the next project's
+pattern is written by someone else, and correctness that depends on it not
+beginning with `\s*` is a defect waiting on a config nobody will check.
 **A check that loads part of a thing has certified part of it.** The declared
-`bundle_install` and `bundle_update` tools resolved and then proved the
-application boots, with `RAILS_ENV=test bundle exec rails runner "exit"`. That
-loads what `Bundler.require(*Rails.groups)` loads, which in test is `:default`
-and `:test` — so a resolve that moved a `:development`-only gem was certified
-by a check that never opened it. It reported exit 0 on a bundle the app
-container could not boot, and the run died at the next bring-up against a stage
-that had nothing to do with it.
+`bundle_install` proved the app boots with `RAILS_ENV=test bundle exec rails
+runner "exit"` — which loads `Bundler.require(*Rails.groups)`, in test only
+`:default` and `:test`. A resolve that moved a `:development`-only gem was
+certified by a check that never opened it, reported exit 0 on a bundle the app
+container could not boot, and killed the run at the next bring-up against an
+unrelated stage.
 
-Nothing in the dependency graph could have caught it either: the gem declared
-`required_ruby_version >= 2.4.0` and its source used syntax from 2.6, so the
-metadata was wrong about the gem and **loading the file is the only instrument
-that separates them**. That is what a boot check is for and this one was not
-doing it. It evaluates `Bundler.require(*Bundler.definition.groups)` now —
-group list from bundler rather than hand-written, because the Gemfile already
+**Loading the file is the only instrument that separates a gem's metadata from
+its source.** That one declared `required_ruby_version >= 2.4.0` and used 2.6
+syntax. The check evaluates `Bundler.require(*Bundler.definition.groups)` now,
+with the group list from bundler rather than hand-written — the Gemfile already
 had a `group :staging, :production` a hand-written list would have skipped in
-silence. Measured in the container: the constant was `nil` before the call and
-present after, which is the blind spot and its closure in one reading.
+silence.
+**A state predicate is not a completion signal.** A bring-up waited for its
+container by polling `bundle check` — the same question the entrypoint asks,
+but the entrypoint asks it *once, before* installing and the poll asks it
+*repeatedly, during*. Bundler wraps `Installer#run` in `ProcessLock` and
+`bundle check` takes no lock, so the check reads a tree the installer is still
+writing and its answer flips partway through. Measured: the wait returned in
+under a second while the container log was still printing `Fetching savon`.
 
-**A state predicate is not a completion signal.** The same family, one level
-down, and the more general half. A bring-up waited for its container by polling
-`bundle check` — the same question the container's own entrypoint asks — on the
-reasoning that this is waiting on the entrypoint's own predicate. The question
-is the same and the moment is not: the entrypoint asks it *once, before*
-installing, while the poll asks it *repeatedly, during*. Nothing makes it a
-completion signal — bundler wraps `Installer#run` in `ProcessLock` and `bundle
-check` takes no lock at all, so the check reads a tree the installer is still
-writing and its answer flips partway through.
-
-Measured: the wait returned in under a second while the container log was still
-printing `Fetching savon 2.12.1`. The boot check after it then failed
-correctly, and **the remedy stacked on top of it — a restart — killed the
-install it had misjudged**, leaving the volume more partially populated each
-attempt. A loop written to recover from a bad container was manufacturing one.
-What replaced it is the entrypoint's own handoff: under `bash -e` it runs the
-install and only then `exec`s the real command, so PID 1 is the entrypoint
-script until the install has returned *successfully*. A property of the process
-rather than of the tree the process is writing to, and it cannot be true early
-by construction. Ask of any readiness check whether the thing it reads is
-finished when the work is finished, or merely *becomes* true somewhere in the
-middle.
-
+**And a remedy stacked on a misjudged state manufactures the fault it was
+written to recover from.** The restart that followed killed the install,
+leaving the volume more partially populated each attempt. What replaced it is
+the entrypoint's own handoff — under `bash -e` it installs and only then
+`exec`s the real command, so PID 1 is the entrypoint until the install returns
+*successfully*: a property of the process rather than of the tree it is
+writing, and one that cannot be true early. Ask of any readiness check whether
+what it reads is finished when the work is finished, or merely *becomes* true
+somewhere in the middle.
 **A rule is checked against new work; nothing re-reads what predates it.** This
 file already says a guard belongs where its question can first be answered,
 written about a startup question asked from inside `verify`. `run_preflight`
@@ -1825,28 +1695,22 @@ exists only in prose meant for a human. An intentional stop wants its own exit
 code and its own tag.
 
 
-**A write that grows a file in place can be read at its old length.** The
-editor used `Path.write_text` — `open(path, "w")`, truncate and rewrite the
-same inode — and Docker's file sharing caches a stat that nothing then
-invalidates. Measured on a bind-mounted repository: one comment edit made
-`Gemfile` 87 bytes longer, and the container went on reporting the *old* size
-while serving the *new* bytes. The host's `head -c 9007` and the container's
-whole-file digest were byte-identical. So every reader inside the container saw
-the file clipped back to its previous length, losing the last two `gem`
-declarations; bundler announced "79 Gemfile dependencies" instead of 81,
-resolved without `redis` and `connection_pool`, and wrote that lockfile back to
-the host. Two runs died of it hours apart, and what armed it was a *comment* —
-the only thing that mattered was that the edit made the file longer.
+**A write that grows a file in place can be read at its old length.**
+`Path.write_text` truncates and rewrites the same inode, and Docker's file
+sharing caches a stat nothing then invalidates. Measured on a bind mount: a
+comment edit made `Gemfile` 87 bytes longer, the container kept reporting the
+*old* size while serving the *new* bytes, and every reader inside saw the file
+clipped — bundler announced 79 dependencies instead of 81, resolved without
+`redis` and `connection_pool`, and wrote that lockfile back to the host. Two
+runs died hours apart. What armed it was a *comment*: all that mattered was
+that the edit made the file longer.
 
-`git checkout` was measured too and is not a writer of this kind: it unlinks
-and creates, so the path resolves to an inode no cache has seen. The
-target's own `dc_start` had blamed "after git restored it" for a year; the
-exposure was ours alone. `atomic_write` — sibling temp file, `os.replace` —
-puts a new inode at the path, which no stale stat can answer for. Whenever a
-tool of ours writes a file another process reads across a boundary we do not
-control, the question is not whether the bytes are right but whether the
-*name* now points somewhere the reader has never looked.
-
+**Put a new inode at the path.** `atomic_write` — sibling temp file,
+`os.replace` — is what no stale stat can answer for; `git checkout` was
+measured and is not a writer of this kind, since it unlinks and creates.
+Whenever a tool of ours writes a file another process reads across a boundary
+we do not control, the question is not whether the bytes are right but whether
+the *name* now points somewhere the reader has never looked.
 **A cache-timing fault answers "not reproduced" once and "reproduced" the next
 time.** The same three calls — resolve, edit, install — were replayed twice
 against the same clean tree. The first run stayed green and I reported it as a
@@ -1912,34 +1776,29 @@ content before deleting. "Read artifacts; do not regex them" is usually read as
 being about patterns; a string search for a delimiter that the format repeats
 is the same bet with different syntax.
 
-**A relative path is a decision the launch command makes, and it appears in
-no config, no log and no artifact.** `PRICE_MAP_FILENAME` was the bare string
-`"model-prices.json"`, spelled out at three call sites, so litellm's public
-rate table cached against the *process cwd*. Launched from beside the plan
-documents — the obvious cwd, because that is where the config is — 1.76MB of
-somebody else's JSON landed in a **tracked** directory of the target
-repository. It sat untracked until a stage's `checks` commit swept it onto the
-stage branch; the scope gate correctly flagged it; and the revision prompt,
-which embeds the whole stage diff, was refused by the provider at 1,020,584
-tokens against a 1,000,000 ceiling. 1,807,718 of the 1,829,531 characters in
-that block were the one file, and every other file in the diff came to 12,266.
-A 29-minute run died on a stage that had nothing wrong with it.
+**A relative path is a decision the launch command makes, and it appears in no
+config, no log and no artifact.** `PRICE_MAP_FILENAME` was a bare
+`"model-prices.json"` at three call sites, so litellm's rate table cached
+against the *process cwd*. Launched from beside the plan documents — the
+obvious cwd — 1.76MB of somebody else's JSON landed in a tracked directory of
+the target repo, was swept onto a stage branch by a `checks` commit, and the
+revision prompt was refused at 1,020,584 tokens against a 1,000,000 ceiling.
+1,807,718 of that block's 1,829,531 characters were the one file; every other
+file in the diff came to 12,266.
 
-Three things worth separating out of that. **The cache had already appeared
-somewhere it did not belong and been answered with a `.gitignore` line** —
-`code-gantry/.gitignore:39` is a bare `model-prices.json` — which suppressed
-the symptom in the one repository that noticed and left the mechanism running
-everywhere else. **The size was never needed**: the table is 3,055 entries and
-a run prices three, 5,165 characters between them, so the cache is a
-projection now and measures 5,929 bytes rather than 1,758,871. Keeping it
-whole was the `config should hold the path, not the copy` instinct honoured at
-the config layer and abandoned one layer out — we avoided a hand-maintained
-rate table by making a verbatim copy of someone else's. And **the diff a
-revision prompt carries has no ceiling at all**: `max_chars_per_call` bounds
-what the planner *reads*, and this arrived through a channel with no budget on
-it, which is the 1,103,000-token rejection again by a route the fix for that
-one does not cover.
+**A `.gitignore` line suppresses the symptom in the repository that noticed and
+leaves the mechanism running everywhere else.** That is what had already been
+done once.
 
+**Project a third-party copy rather than keeping it whole.** The table is 3,055
+entries and a run prices three — 5,929 bytes rather than 1,758,871. Avoiding a
+hand-maintained rate table by making a verbatim copy of someone else's is the
+`hold the path, not the copy` instinct honoured at the config layer and
+abandoned one layer out.
+
+**And the diff a revision prompt carries has no ceiling.** `max_chars_per_call`
+bounds what the planner *reads*; this arrives by a channel with no budget on
+it.
 **And the guard existed at one of the two call sites.** `executorloop` memoised
 the table with a comment explaining that the loader reaches the network on
 every call and that pricing per attempt without one would make hundreds of HTTP
@@ -1959,167 +1818,110 @@ none, and would have gone on approving them. When a check is written over
 source text, run the equivalent search by hand once and make the two agree
 before trusting the green.
 
-**Two green tests can contradict each other if neither drives the seam
-between them.** `nodes.execute` has returned `_escalate(...)` on a refused
-commit since that branch was written, with a paragraph explaining why a
-pre-commit hook is neither a gate nor a planning defect. `EDGES["execute"]`
-never listed `escalate`, and `driver._next` raises rather than rerouting — by
-design, because a node asking for an edge the spec lacks is a bug. So the
-careful escalation came out as `RuntimeError: node 'execute' routed to
-'escalate'`, 16 landings into an overnight run, when a hook refused three lines
-of trailing whitespace.
+**Two green tests can contradict each other if neither drives the seam between
+them.** `nodes.execute` returns `_escalate(...)` on a refused commit;
+`EDGES["execute"]` never listed `escalate`, and `driver._next` raises rather
+than rerouting. So a careful escalation came out as `RuntimeError: node
+'execute' routed to 'escalate'`, 16 landings into an overnight run, when a hook
+refused three lines of trailing whitespace. `test_commit_refused` asserted the
+node returns `escalate`; `test_edges_match_the_spec` asserted `escalate` is
+unreachable from `execute`. Each passed and each was right about its own end.
 
-Both halves were tested. `test_commit_refused` asserts the node returns
-`escalate`; `test_edges_match_the_spec` asserted `escalate` is unreachable from
-`execute`. Each passed, each was right about its own end, and the value crosses
-from one to the other at runtime — the rule about testing a journey rather than
-its endpoints, arriving as two tests that state opposite things and never meet.
-The table is now checked against the nodes by parsing `nodes.py` for every
-`next_hop` each node can return, resolved to a fixpoint through module-level
-helpers, because this is the second time the two have drifted: `EDGES`' own
-comment records `execute → execute` being illegal for the same reason.
+**Derive the table from the code rather than maintaining both.** `EDGES` is
+checked by parsing `nodes.py` for every `next_hop` each node can return,
+resolved to a fixpoint through module-level helpers — the second time the two
+had drifted, the first being `execute → execute`.
+**A ban can be a bug wearing a design constraint's clothes.** Three assertions
+forbade `review` escalating, one named `test_review_cannot_escalate_directly`
+with the reason "a rejected stage is a planning problem, not a human's
+problem". True, and it does not cover a full suite killed by a signal *after*
+approval, where the work is correct and the environment is gone. The category
+was drawn around rejections and a different kind of exit was added underneath
+it years later, so the tests read as stating a rule while describing a crash
+nobody had hit. When a test forbids something, check that the thing it forbids
+is the thing its reason is about.
 
-**And a ban can be a bug wearing a design constraint's clothes.** The same
-pass found `review` escalating too — a full suite killed by a signal *after*
-approval, where the work is correct and the environment is gone. Three
-separate assertions forbade it, one of them named
-`test_review_cannot_escalate_directly` with the reason "a rejected stage is a
-planning problem, not a human's problem". That reason is true and does not
-cover the case: a signal-killed suite is not a rejection. The category was
-drawn around rejections and a different kind of exit was added underneath it
-years later, so the tests read as stating a rule and were really describing a
-crash nobody had hit yet. When a test forbids something, check that the thing
-it forbids is the thing its reason is about.
+**Three maintained statements of one fact, none compared.** Both escalation
+branches were correct, commented and covered; the edge table was correct and
+covered; the architecture document had drifted from both.
+**Ask the question that expires first.** For each gate, ask whether its subject
+still exists after the step below it. Most read the tree and the tree is still
+there; a pre-commit hook reads the *index*, and the commit consumes it. One
+refused three lines of trailing whitespace and ended a run 16 stages in —
+`commit_refused` escalated correctly, because by then there was nothing left to
+do, while the same refusal asked *before* the commit is a cycle the model fixes
+in session from a message that names the file and the line.
 
-Worth noting what would *not* have found either. Both nodes' escalation
-branches are correct, commented and covered. The edge table is correct and
-covered. The architecture document had drifted from both — it was missing
-`execute → execute` as well, which `EDGES` had carried for months. Three
-statements of one fact, each maintained, none compared.
+**Two reasons an operator could not have fixed it in config.** `_gate_cycle`
+commits the model's raw work *before* `checks` runs, deliberately, so a
+linter's rewrite lands as its own attributable commit — which puts every
+autocorrecting entry downstream of the commit a hook refuses. And the hook was
+`core.hooksPath` set **globally**, so it is not the target repository's
+property at all and nothing in its config describes it.
+**Run the thing rather than modelling it.** The tempting fix was to strip
+trailing whitespace on write, beside the normalisation the editor already does.
+That fixes one hook and no other — a hook is operator policy, and the next rule
+it grows is not ours to predict — while normalising files behind a model that
+has stopped, in formats where two trailing spaces are a hard line break. `git
+hook run pre-commit` (git ≥ 2.36) invokes the hook exactly as a commit would:
+same cwd, environment and argv, so the gate cannot disagree with the commit it
+stands for.
 
-**Ask the question that expires first.** A pre-commit hook refused three
-lines of trailing whitespace in an `.erb` file and ended a run that had landed
-16 stages. `commit_refused` caught it and escalated to a human, which was the
-right answer to "the repository said no" given where it was asked — by then the
-commit had been attempted and there was nothing left to do. But the hook names
-the file and the line, which is exactly what the feedback channel carries, and
-asked *before* the commit the same refusal is a cycle the model fixes in
-session.
-
-Two things made this invisible. The first is that no operator could have fixed
-it in config: `_gate_cycle` commits the model's raw work **before** it runs
-`checks`, deliberately, so the linter's rewrite lands as its own attributable
-commit — which means every autocorrecting entry an operator has is *downstream*
-of the commit a hook refuses. A whitespace-stripping check would have sat there
-unreached. The second is that the hook was `core.hooksPath` set **globally**,
-so it is not the target repository's property at all; it fires on this
-repository's commits too, and nothing in the target's config describes it.
-
-The general form: for each gate, ask whether its subject still exists after the
-step below it. Most gates read the tree and the tree is still there. This one
-reads the *index*, and the commit is what consumes it.
-
-**And the fix is to run the thing, not to model it.** The tempting version was
-to strip trailing whitespace on write, beside the newline and line-ending
-normalisation the editor already does. It would have fixed this hook and no
-other — a hook is operator policy and the next rule it grows is not ours to
-predict — while normalising files behind a model that has stopped, in formats
-where two trailing spaces are a hard line break. `git hook run pre-commit`
-(git ≥ 2.36) has git invoke the hook exactly as a commit would: same cwd,
-environment and argv, so the gate cannot disagree with the commit it stands
-for. That is the "same command in both places, spelled the same way" rule
-bought rather than re-earned.
-
-Two facts had to be established rather than assumed, and both would have been
-wrong by recall. `git hook run` exits **1** with "cannot find a hook named
-pre-commit" when there is none — the same status as a refusal — so a
-no-hook repository would fail the gate on exit code and a message match would
-be the classifier-over-rendered-text mistake again; the answer comes from
-whether an executable file exists at `git rev-parse --git-path
-hooks/pre-commit`, which resolves `core.hooksPath` including a global one. And
-a pre-commit hook reads the **index**, so the gate stages first or it passes on
+**Two facts that recall would have got wrong.** `git hook run` exits **1** with
+"cannot find a hook named pre-commit" when there is none — the same status as a
+refusal — so presence comes from an executable existing at `git rev-parse
+--git-path hooks/pre-commit`, which resolves `core.hooksPath`; matching the
+message instead would be the classifier-over-rendered-text mistake again. And a
+pre-commit hook reads the **index**, so the gate stages first or it passes on
 work the commit is then refused for.
 
-`commit_refused` stays. Passing the gate means the hook accepted exactly those
-staged bytes; it is not a promise that the commit succeeds, because a hook may
-read the clock or the network. A gate is a check, not a guarantee, and removing
-the backstop because the check now usually catches it is how the unusual case
-becomes a stack trace.
+**A gate is a check, not a guarantee.** `commit_refused` stays: passing means
+the hook accepted those staged bytes, not that the commit will succeed, since a
+hook may read the clock or the network. Removing a backstop because the check
+usually catches it is how the unusual case becomes a stack trace.
+**A rule fixed in one role's type does not reach the role using the other
+type.** `PlannerUsage` grew `peak_prompt_tokens`; the reviewer uses
+`TokenUsage`, which did not — so eleven records carried tool-loop totals from
+473,595 to 2,211,906 and **no context figure**, while the log line renders a
+total as `(N prompt, M cached)`, which reads exactly like one. I twice reported
+the reviewer as near its ceiling on that basis. The totals track *call count*:
+8 calls → 473k, 32 → 1,505k, about 45-70k of real context each, or 6% of the
+window rather than the 143% the largest total appears to say.
 
-**A rule fixed in one role's type does not reach the role that uses the other
-type.** This file already says a total from a tool loop is not a context
-figure, and `PlannerUsage` grew `peak_prompt_tokens` because of it. The
-reviewer uses `TokenUsage`, which did not, so eleven records on one run carried
-totals from 473,595 to 2,211,906 and **no context figure at all** — and the log
-line renders the total as `(N prompt, M cached)`, which reads exactly like one.
-I reported the reviewer as close to its ceiling twice on the strength of it.
+**Fix it where one reading is its own peak** — `extract_usage` — so no call
+site can forget and any caller that merges gets it free.
 
-The totals track the *call count*, because a tool loop re-sends the
-conversation every turn: 8 calls → 473k, 32 → 1,505k, 30 → 2,212k, about 45-70k
-of real context each. Against `gpt-5.6-sol`'s **1,050,000**-token window that is
-6%, not the 143% the largest total appears to say.
+**And add the field last on a positionally-built dataclass**, where a new field
+in the middle silently reassigns every positional caller.
+**When a fix moves a value into a shared type, grep for the private copy the
+shared one was modelled on.** `ExecutorTurn` tracked its own peak years before
+`TokenUsage` had one; putting the field where it belonged left both — correct
+that day, one number in two places afterwards. It is one computation in
+`merge_usage` now, with a test asserting no second copy. Noticing a duplication
+and writing it up is the worse half: a duplication reported is a duplication
+shipped.
 
-Three things worth separating. The fix belongs in `extract_usage`, where one
-reading is its own peak, so no call site can forget it and any caller that
-merges gets it free — the transcript-as-`list`-subclass argument again. The
-reviewer's record dropped it because `as_dict` listed four field names by hand,
-which is the `executor-loop.json` defect a third time and the reason the writer
-now walks `dataclasses.fields`. And the field goes **last** on the dataclass,
-because `cache_write_tokens` carries a comment saying it went last for the same
-reason and this type is built positionally — a new field in the middle silently
-reassigns every positional caller.
+**A budget nothing records cannot be seen to be near.** With no peak recorded,
+"how close is the reviewer to its window" was unanswerable from the artifacts —
+the state the planner was in before being rejected at 1,103,000 tokens against
+a 1,000,000 ceiling. For scale: the reviewer's `max_total_chars` resolves to
+2,400,000 here, roughly 600,000 tokens or half the window, reachable by reads
+alone; measured consumption peaked at 71k. Nothing is near it, and until the
+figure existed nothing could have said so.
+**Attribute bytes by what ran between, not by whoever is nearest.** A stage
+branch carries several commits per cycle, and "the executor's work" names one
+of them. A hook refused three lines of trailing whitespace and I called them
+the executor's, twice. They were `rubocop -A`'s: the stage's own commit landed
+clean at 06:11:22 with the model's edit byte-for-byte as recorded, the linter
+ran at 06:11:25, and the after-checks commit was refused at 06:11:34. Before
+attributing a byte, find the commit that last held the file clean and enumerate
+what ran after it.
 
-**And fixing it in the shared type created the duplicate it was meant to
-remove.** `ExecutorTurn` had carried its own `peak_prompt_tokens` and maxed it
-by hand, because the executor tracked a peak years before `TokenUsage` had one.
-Putting the field where it belonged left both — correct that day, one number in
-two places afterwards, which is the shape this codebase has already lost a
-value to twice. I noticed it, wrote it up as an observation, and left it in,
-which is the worse half: a duplication reported is a duplication shipped. It is
-one computation now, in `merge_usage`, and a test asserts `ExecutorTurn` has no
-second copy. Whenever a fix moves a value into a shared type, the thing to grep
-for is the private copy the shared one was modelled on.
-
-The measurement that closed it is also the one nobody could have made: with no
-peak recorded, "how close is the reviewer to its window" was unanswerable from
-the artifacts. That is precisely the state the planner was in before it was
-rejected at 1,103,000 tokens against a 1,000,000 ceiling with nothing recorded
-that would have seen it coming. Two roles, one blind spot, and the second was
-only found because a total looked alarming enough to check.
-
-Worth knowing while reading those numbers: the reviewer's `max_total_chars`
-resolves to 2,400,000 on this project — derived from a configured
-`max_read_lines_total` of 30,000 — which is roughly 600,000 tokens, more than
-half the window, reachable by reads alone. Measured consumption peaked at 71k
-of 2,400k, so nothing is near it; but the budget permits getting near it, and
-until now nothing recorded the figure that would say so.
-
-**Attribute bytes by what ran between, not by whoever is nearest.** A commit
-hook refused three lines of trailing whitespace and I reported them as the
-executor's, twice, in the same breath as fixing them. They were `rubocop -A`'s:
-the stage's own commit landed clean at 06:11:22 with the model's edit byte-for-byte
-as its `new_string` recorded it, the linter ran at 06:11:25, and the
-after-checks commit was refused at 06:11:34. `.rubocop.yml` requires
-`rubocop-erb`, so the linter autocorrects templates — it split one correctly
-indented line at every comma, dedented the continuations to column zero, and
-left a trailing space on each. The operator asked whether the offending lines
-were the executor's and that question, not any reasoning of mine, is what
-opened it.
-
-Two costs, and the second is the one that matters. I "left the indentation
-alone as the model's formatting" — also the linter's. And the gate built that
-morning does not cover this case at all: it asks the hook above the *first*
-commit, which succeeded, while the refusal came on the *second*. The reason
-given for not putting the fix in the operator's `checks` — that checks run
-after the commit the hook refuses — is true of the first commit and false of
-the second, and conflating them is what made a correct-looking gate miss the
-only occurrence anyone had seen.
-
-The general form: a stage branch carries several commits per cycle, and "the
-executor's work" names one of them. Before attributing a byte, find the commit
-that last held the file clean and enumerate what ran after it — the actor whose
-name is on the stage is not automatically the author of its tree.
-
+**And a gate written for the first commit does not cover the second.** The
+hook gate asks above the *first* commit, which succeeded; the refusal came on
+the one after `checks`. "Checks run after the commit the hook refuses" is true
+of the first and false of the second, and conflating them made a
+correct-looking gate miss the only occurrence anyone had seen.
 **And it is worth knowing what the linter is doing when nothing refuses it.**
 The collision with the hook is the only reason this surfaced. `rubocop-erb`
 has been reformatting ERB on every stage that touches one, the reviewer
@@ -2173,25 +1975,23 @@ run at a time over a night. The refactor reviews as complete because the thing
 it was about is complete. Ask instead what *else* touches the request, and go
 through them before the first run rather than after each failure.
 
-**A parameter no provider declares is not ignored; it excludes every
-provider.** `output_config` is Anthropic-native, so through OpenRouter it works
-where the upstream is Anthropic and nowhere else — and with
-`provider.require_parameters` on, which is there so structured output cannot be
-silently dropped, the gateway answers **404 `No endpoints found that can handle
-the requested parameters`** rather than 400. Read as a routing problem it sends
-you looking at the model; it is a request problem. Measured across all three
+**A parameter no provider declares is not ignored; it excludes every provider.**
+`output_config` is Anthropic-native, so through OpenRouter it works where the
+upstream is Anthropic and nowhere else — and with `provider.require_parameters`
+on, the gateway answers **404 `No endpoints found that can handle the requested
+parameters`** rather than 400. Read as a routing problem it sends you looking
+at the model; it is a request problem.
+
+**The spelling follows the route, not the model family** — the same model takes
+different spellings depending on how you reach it. Measured across all three
 endpoints, because recall and the docs were both wrong:
 
 | spelling               | Anthropic direct | OR → claude | OR → gemini |
 | `output_config`        | OK               | OK          | **404**     |
 | `extra_body.reasoning` | **400**          | OK          | OK          |
 
-So the spelling follows the *route*, not the model family — the same model
-takes different spellings depending on how you reach it. OpenRouter's own model
-listing says as much: nothing on it declares `output_config` and everything
-declares `reasoning`. `GET /api/v1/models` carries `supported_parameters` per
-model and is the cheapest way to ask.
-
+`GET /api/v1/models` carries `supported_parameters` per model and is the
+cheapest way to ask.
 **Cold on the Messages wire means `input_tokens: 0`.** Anthropic reports three
 orthogonal counts and the prefix lands entirely in the cache fields on the turn
 that writes it. Read with OpenAI's extractor — which looks for
@@ -2269,32 +2069,23 @@ cannot find the code that names it; the same trap is waiting in the throwaway
 script written to check a test. Print the diff and confirm the file changed
 before believing what the run tells you.
 
-**A prompt must not tell the executor it may not change the file it is there
-to change.** The excerpt block was headed "Lines from files you may read but
-not change", borrowed from the `read_files` block directly above it where the
-claim is true. It is not true of `read_excerpts`: that field exists because the
-planner may not write an after-image and a reference can only point at code
-that already exists, so the excerpt is very often *the thing being rewritten*.
-Measured over this project's recorded stages, **1,562 of 2,586 excerpts — 60% —
-name a file the stage's own `edit_files` permits**, and a live prompt carried
-`cart_controller.rb` under both headings six lines apart. Found by the operator
-reading a prompt, which is the only thing that finds this class of defect:
-every participant downstream reads it as intended and no gate compares two
-sections of one document.
+**A prompt must not tell the executor it may not change the file it is there to
+change.** The excerpt block was headed "Lines from files you may read but not
+change", borrowed from the `read_files` block above it where the claim is true.
+`read_excerpts` exists because the planner may not write an after-image, so the
+excerpt is very often *the thing being rewritten*: **1,562 of 2,586 excerpts —
+60% — name a file the stage's own scope permits**.
 
-And the same block, one day later, named a field the reader cannot see. The
-rewrite told the executor that `edit_files` "above is the only thing that
-decides" what it may change — but that block renders as **Files you may
-change**, and the string `edit_files` appears nowhere in the executor's prompt.
-It is the planner's field name, correct in the planner's own prompt and on the
-two gate messages routed there, and meaningless here. A sentence naming a field
-the reader cannot find is the same defect as one describing a capability it
-does not have: precise-sounding, and pointing at nothing. Found the same way,
-by the operator reading the prompt, which is now twice in two days on one
-block. The sweep afterwards was clean, which is the useful half — every other
-model-facing mention was planner-routed, and the executor's own out-of-scope
-refusal already names the globs rather than the field.
+**And a prompt must not name a field its reader cannot see.** The rewrite then
+said `edit_files` "above is the only thing that decides" — but that block
+renders as **Files you may change**, and the string appears nowhere in the
+executor's prompt. It is the planner's field name: precise-sounding, pointing
+at nothing.
 
+**Both were found by a human reading a prompt, which is the only thing that
+finds this class.** Every participant downstream reads it as intended and no
+gate compares two sections of one document. Sweep the other roles' prompts for
+paraphrases when you fix one; that sweep was clean, which is the useful half.
 **A knob that only restricts cannot be the lever you want.** The executor made
 6,645 tool calls across 6,764 turns on one run — **0.98 per turn, never once
 more than one** — while a tool loop re-sends the whole conversation every turn,
@@ -2334,6 +2125,65 @@ is in the prompt. Roughly half the turns, which is a real saving and not a
 transformation; claiming more would be the capability-versus-effect mistake
 this file already records.
 
+
+**The block is the cache unit, not the prefix.** Ordering a growing document
+last inside a marked block does not protect what precedes it: the breakpoint
+covers the whole block, so one appended byte rewrites all of it. Block 0 ran to
+735,413 characters, was 99.2-99.7% identical to the previous derivation, and
+was read back from cache never. Put churn *after* the mark, not at the end of
+what the mark covers.
+
+**A breakpoint after content that changes every call costs more than no
+breakpoint.** It writes an entry at cache-write rates that nothing ever reads.
+Before marking a block, ask what varies between calls; if the answer is
+"something", the mark belongs earlier.
+
+**An aggregate cache rate cannot separate a flat cache from a growing one.**
+With a large prefix and small per-turn growth, "the opening prefix cached every
+turn" and "the prefix extends every turn" both land near 89%. Only a per-turn
+series tells them apart, and a sum cannot be decomposed afterwards — record the
+series at the item.
+
+**A probe that is not the production request answers a different question.**
+Three byte-identical reviewer-shaped calls reported `cached: 0` while
+production was caching ~200k a turn on the same route. Assemble a probe from
+the same code production calls — schema, tools, effort, cache options, gateway
+body — or expect to spend the afternoon chasing a difference you introduced.
+
+**Ask which direction a knob points before reaching for it.** Neither wire has
+a setting that *encourages* parallel tool calls; both default to permitted, so
+there was nothing to turn on. And a documented parameter can be accepted and
+ignored: `tool_choice` is honoured through the gateway — `none` returns zero
+calls, a named tool returns exactly that one — while its
+`disable_parallel_tool_use` sub-field is dropped in silence. A request that
+reads as constrained and is not is worse than one that is refused.
+
+**Deny-list the noise; never allow-list the signal.** A filter written for the
+shapes already seen drops the one nobody has seen. Filtering test output to
+`^/current/(app|lib|config).*: warning:` would have discarded a first-party
+`WARNING: Slash dates in ...`, which is the only warning class that was new.
+Exclude what is known to be mechanical and show the rest, whatever shape it
+arrives in.
+
+**A stream is not a log.** Warnings written to a process's stderr can never
+appear in a file written by an application's logger — they are produced by
+things that have never heard of it. One suite put 203 first-party warnings at
+five sites on stderr while the tally read only the Rails log, so a green run
+reported nothing. Ask which writer owns a file before assuming anything can
+reach it.
+
+**A model asks for one tool at a time unless told otherwise, and telling it is
+cheap.** 8,083 consecutive calling turns with never more than one call, against
+a loop that re-sends the whole conversation every turn. Nothing suppressed it.
+A section in the system prompt and a line on each read tool's description moved
+it, and the live effect is front-loaded into the opening survey where several
+targets are knowable at once — 3.6% of turns, not the 53% a synthetic harness
+predicted. Measure the lever where the work happens, not where it is easy.
+
+**Every gate says why; one did not.** A stage landed clean, the next printed
+its precheck header and `[plan] revising` one second later, and nothing in
+between named the cause. The reason reached the planner and the checkpoint —
+the two places a person does not look. When a check routes, it logs.
 
 ## Where things live
 
