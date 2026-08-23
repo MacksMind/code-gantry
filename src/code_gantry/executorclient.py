@@ -409,6 +409,25 @@ class OpenAIExecutorModel:
                 out.text = closing
                 if not closing.strip():
                     out.empty_finishes += 1
+                else:
+                    # The turn that ends the attempt, in the record of the
+                    # attempt. This branch used to return without appending,
+                    # so `executor-conversation.jsonl` ended on the last tool
+                    # call and never held what the model said to finish —
+                    # a hole at exactly the last item, in a transcript whose
+                    # whole design is that appending is the only way to record
+                    # so that nothing can forget.
+                    #
+                    # Only when it said something. A message with no content
+                    # is not one the next request can carry, and the nudge
+                    # above already leaves a record of that case.
+                    #
+                    # The second effect is deliberate: cycles within an
+                    # attempt share this conversation, so a rework now opens
+                    # with the model's own account of what it did in front of
+                    # it, rather than a gate failure attached to a
+                    # conversation that ends mid-tool-call.
+                    wire.append_model_turn(conversation, response)
                 return out
 
             # The model's turn back, in whichever shape this wire wants — the

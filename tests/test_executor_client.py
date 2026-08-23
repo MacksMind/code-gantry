@@ -432,10 +432,11 @@ class TestAnEmptyFinishIsNotAFinish:
         assert out.turns == 2
         assert "done, actually" in out.text
         # And the question is in the record, because the response that
-        # provoked it is the one item never appended to the conversation.
-        asked = conversation[-1]
-        assert asked["role"] == "user"
-        assert "request_replan" in asked["content"][0]["text"]
+        # provoked it carries no content and cannot be appended itself.
+        asked = [x for x in conversation
+                 if isinstance(x, dict) and x.get("role") == "user"]
+        assert len(asked) == 1
+        assert "request_replan" in asked[0]["content"][0]["text"]
 
     def test_a_second_empty_close_is_taken_as_the_answer(self, parts):
         editor, _, reader = parts
@@ -461,4 +462,79 @@ class TestAnEmptyFinishIsNotAFinish:
 
         assert out.empty_finishes == 0
         assert out.turns == 1
-        assert conversation == []
+        # No nudge — it said something. The closing turn itself is recorded,
+        # which is `TestTheClosingTurnIsRecorded` below.
+        assert not [x for x in conversation
+                    if isinstance(x, dict) and x.get("role") == "user"]
+
+
+class TestTheClosingTurnIsRecorded:
+    """The turn that ends an attempt belongs in the record of the attempt.
+
+    `append_model_turn` only ran on the branch where the model asked for
+    something, so the closing message — the one where it says what it did, or
+    gives up — was never appended. The conversation *is* the transcript: a
+    `list` subclass whose docstring says appending is the only way to record,
+    "so nothing can forget". There was a hole at exactly the last item, and it
+    is why six silent attempts could not be told apart from a broken text
+    extractor: the one turn that would have distinguished them was the one not
+    written down.
+
+    Appending it has a second effect, which is why it is deliberate rather
+    than incidental: cycles within an attempt share one conversation, so the
+    model's own summary is now in front of it on a rework. That is right —
+    a model reworking its own work should see what it said it did.
+
+    An empty close is still not appended. A message with no content is not
+    something the next request can carry, and the nudge already leaves a
+    record of that case.
+    """
+
+    def test_a_closing_message_is_appended(self, parts):
+        editor, _, reader = parts
+        m, _ = model([response([SimpleNamespace(
+            type="message",
+            content=[SimpleNamespace(type="output_text", text="I changed the thing.")],
+        )], usage())])
+        conversation = []
+        out = m.run(conversation, reader=reader, editor=editor)
+
+        assert "I changed the thing." in out.text
+        assert conversation, "the closing turn never reached the record"
+
+    def test_an_empty_close_appends_no_model_turn(self, parts):
+        editor, _, reader = parts
+        m, _ = model([
+            response([SimpleNamespace(type="message", content=[])], usage()),
+            response([SimpleNamespace(type="message", content=[])], usage()),
+        ])
+        conversation = []
+        out = m.run(conversation, reader=reader, editor=editor)
+
+        assert out.empty_finishes == 2
+        # Only the nudge, which is a user turn. Nothing with empty content.
+        roles = [x.get("role") for x in conversation if isinstance(x, dict)]
+        assert roles == ["user"], roles
+
+    def test_the_next_cycle_sees_what_the_model_said(self, parts):
+        """A rework opens with the model's own account in context."""
+        editor, _, reader = parts
+        m, _ = model([
+            response([SimpleNamespace(
+                type="message",
+                content=[SimpleNamespace(type="output_text", text="done, I think")],
+            )], usage()),
+            response([SimpleNamespace(
+                type="message",
+                content=[SimpleNamespace(type="output_text", text="fixed it")],
+            )], usage()),
+        ])
+        conversation = []
+        m.run(conversation, reader=reader, editor=editor)
+        before = len(conversation)
+        conversation.append({"role": "user", "content": [
+            {"type": "input_text", "text": "the tests failed"}]})
+        m.run(conversation, reader=reader, editor=editor)
+
+        assert before > 0
+        assert len(conversation) > before + 1
