@@ -61,9 +61,13 @@ class PlanTree:
         """One byte-stable block, roots first, for the cacheable prompt prefix.
 
         `last` names a document to sink to the end — the progress log, in
-        practice. A cached prefix is matched as a prefix, so a document that
-        grows invalidates everything concatenated *after* it, and only what
-        comes after it. The log is the one plan document that grows, and
+        practice. That was written believing a cached prefix is matched as a
+        prefix, so a document which grows would invalidate only what follows
+        it. `split_payload` below records why that is false of what we send.
+        The ordering is still right, and is what makes the split clean: the
+        one document that grows is already at the end, so it comes away
+        without disturbing the others. The log is the one plan document that
+        grows, and
         children are ordered by where the root links them: this project links
         the log in its opening paragraph, which put a file gaining ~2KB per
         landed stage ahead of seven static runbooks totalling ~168KB. Every
@@ -73,13 +77,41 @@ class PlanTree:
         planner is told which one records progress, so order carries no meaning
         to the reader. It is purely where the growth is allowed to happen.
         """
+        stable, trailing = self.split_payload(last)
+        return "\n\n".join(x for x in (stable, trailing) if x)
+
+    def split_payload(self, last: str | None = None) -> tuple[str, str]:
+        """The same documents, cut where the cache breakpoint should fall.
+
+        Sinking the growing document to the end was half of this, and the
+        docstring above once claimed the other half: that a document which
+        grows "invalidates everything concatenated after it, and only what
+        comes after it". That is true of prefix matching and false of what we
+        actually send, because the *block* is the cache unit — the planner's
+        breakpoint sits at the end of the block the log lives in, so a single
+        appended note discards the whole of it, plan documents and all.
+
+        Measured before this existed: block 0 ran to 735,413 characters and was
+        99.2-99.7% shared with the previous derivation, and was read back from
+        cache never. Shared is not cached.
+
+        So the caller gets two pieces and puts the mark between them. The
+        stable half — every document that does not grow — is then invalidated
+        only when a plan document actually changes, which is a fold. The
+        trailing half pays full price for its own size, which is what it
+        should cost.
+
+        Order is unchanged: the growing document was already last of the
+        documents, so it now leads whatever block follows rather than trailing
+        the one it left.
+        """
         docs = self.documents
-        if last:
-            docs = [d for d in docs if d.path != last] + [
-                d for d in docs if d.path == last
-            ]
-        blocks = [f"### {d.path}\n\n{d.content.strip()}" for d in docs]
-        return "\n\n".join(blocks)
+        trailing = [d for d in docs if last and d.path == last]
+        stable = [d for d in docs if not (last and d.path == last)]
+        render = lambda group: "\n\n".join(  # noqa: E731 - one shape, used twice
+            f"### {d.path}\n\n{d.content.strip()}" for d in group
+        )
+        return render(stable), render(trailing)
 
 
 def extract_links(content: str) -> list[str]:

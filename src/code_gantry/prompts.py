@@ -504,7 +504,7 @@ def _without_addendum(plan: PlanTree, addendum_path: str | None) -> PlanTree:
     )
 
 
-def _plan_block(plan: PlanTree, addendum_path: str | None = None) -> str:
+def _plan_block(plan: PlanTree, addendum_path: str | None = None) -> tuple[str, str]:
     """The plan documents, with the progress log identified among them.
 
     Once the plan links its log, the log arrives as one more child among
@@ -533,11 +533,14 @@ def _plan_block(plan: PlanTree, addendum_path: str | None = None) -> str:
             "It is still not a substitute for looking at the code. A count in "
             "a document is a claim about when someone wrote it down."
         )
-    # The log goes last among the documents. It is the only one that grows, and
-    # in a concatenated cache prefix a document that grows re-bills everything
-    # after it — here, seven static runbooks that happened to be linked below
-    # it in the plan's opening paragraph.
-    return intro + "\n\n" + plan.as_prompt_payload(last=addendum_path)
+    # Two pieces, because the caller puts the cache breakpoint between them.
+    # The log is the only document that grows, and while it sat inside the
+    # marked block one appended note discarded the whole of it — the plan
+    # documents were 99.2-99.7% identical to the previous derivation and were
+    # read back from cache never. Returned rather than concatenated so the
+    # split is the caller's to place, which is where the breakpoints live.
+    stable, progress = plan.split_payload(addendum_path)
+    return intro + "\n\n" + stable, progress
 
 
 def _costs_block(costs: list[dict] | None) -> str:
@@ -969,8 +972,11 @@ def build_review_messages(
                     # time. Before the plan because it describes the repository
                     # the plan is about, which is the order the planner reads
                     # them in too.
+                    # `[0]` by unpacking: the addendum is stripped from the
+                    # tree above rather than named here, so this call names no
+                    # growing document and the trailing half is always empty.
                     "text": _conventions_block(agent_context)
-                    + _plan_block(_without_addendum(plan, _addendum(cfg)), None),
+                    + _plan_block(_without_addendum(plan, _addendum(cfg)), None)[0],
                     "prompt_cache_breakpoint": {"mode": "explicit"},
                 }
             ],
@@ -1127,7 +1133,8 @@ def build_planner_messages(
     leading += _checks_block(cfg)
     if layout:
         leading += "## What the repository contains\n\n" + layout + "\n\n"
-    leading += _plan_block(plan, _addendum(cfg))
+    plan_text, progress = _plan_block(plan, _addendum(cfg))
+    leading += plan_text
 
     # The completed history used to live in here too, and it changes as the run
     # proceeds — so every landed stage re-billed the plan and the layout along
@@ -1168,17 +1175,22 @@ def build_planner_messages(
             "text": leading,
             "cache_control": cache_control(getattr(cfg, "cache_ttl", None)),
         },
-        # The second breakpoint, and the reason this is worth the complexity.
-        # The planner is an agentic loop: every turn re-sends the whole prompt,
-        # and a derivation runs ten to twenty-five turns. This block is
-        # byte-identical across all of them and was being re-sent uncached each
-        # time. Measured before the change: 118M prompt tokens across 72 calls
-        # at a 50% hit rate, with per-call volume risen from ~670k to ~2.96M as
-        # the history grew.
+        # The progress log leads this block and the history follows it, which
+        # is the order the reader already saw — the log was last of the plan
+        # documents and this block came next.
+        #
+        # No breakpoint. It carried one when it held the history alone, which
+        # is byte-identical across the turns of a derivation and worth marking.
+        # With the log in front of it that mark could never hit: a breakpoint
+        # after content that changes every landing writes an entry nobody
+        # reads, at cache-write rates, which costs more than not marking at
+        # all. The history is ~4KB since the channels that duplicated it were
+        # removed, so what the mark protected is now noise beside what the log
+        # was dragging through the cache with it. Within a derivation the
+        # moving loop mark covers both from the second turn on.
         {
             "type": "text",
-            "text": history,
-            "cache_control": cache_control(getattr(cfg, "cache_ttl", None)),
+            "text": "\n\n".join(x for x in (progress, history) if x),
         },
     ]
 

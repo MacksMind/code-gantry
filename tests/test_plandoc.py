@@ -307,3 +307,54 @@ class TestTheGrowingDocumentGoesLast:
     def test_a_name_that_is_not_in_the_tree_changes_nothing(self):
         payload = self._tree().as_prompt_payload(last="nowhere.md")
         assert payload.index("progress_log.md") < payload.index("stream_one.md")
+
+
+class TestTheGrowingDocumentComesOutOfTheCachedBlock:
+    """Sinking the log inside the block was half the fix.
+
+    `last=` orders the progress log after the static documents so it
+    invalidates only what follows it. But the planner's cache breakpoint sits
+    at the *end* of that block, so the entry covers the log too and one
+    appended note rewrites the whole 735KB — measured as block 0 being
+    99.2-99.7% shared with the previous derivation and read back never.
+    Shared is not cached.
+
+    Splitting it lets the marked block hold conventions, layout and the entire
+    plan, stable for the life of a run and invalidated only by a fold; the log
+    follows the mark and pays for its own size. Document order is unchanged,
+    because the log was already last of the documents and now leads the block
+    behind them.
+    """
+
+    def _tree(self, repo, run_git):
+        sha = commit_docs(
+            repo,
+            run_git,
+            {
+                "docs/plan.md": "ROOT [c](child.md) [log](progress_log.md)",
+                "docs/child.md": "CHILD",
+                "docs/progress_log.md": "LOG",
+            },
+        )
+        return resolve_plan_tree(Git(repo), "docs/plan.md", sha)
+
+    def test_the_stable_half_omits_the_growing_document(self, repo, run_git):
+        stable, trailing = self._tree(repo, run_git).split_payload(
+            "docs/progress_log.md"
+        )
+        assert "LOG" not in stable
+        assert "LOG" in trailing
+        assert "CHILD" in stable
+
+    def test_together_they_are_what_one_block_used_to_be(self, repo, run_git):
+        """No content is dropped by the split — only where the mark falls."""
+        tree = self._tree(repo, run_git)
+        stable, trailing = tree.split_payload("docs/progress_log.md")
+        whole = tree.as_prompt_payload(last="docs/progress_log.md")
+        assert "\n\n".join(x for x in (stable, trailing) if x) == whole
+
+    def test_no_growing_document_named_leaves_nothing_trailing(self, repo, run_git):
+        tree = self._tree(repo, run_git)
+        stable, trailing = tree.split_payload(None)
+        assert trailing == ""
+        assert stable == tree.as_prompt_payload()

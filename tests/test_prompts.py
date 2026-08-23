@@ -143,19 +143,22 @@ class TestPlannerCacheBreakpoint:
         )
         assert "intervention(s) left" not in leading_text(messages)
 
-    def test_two_breakpoints_and_no_more(self):
-        """One after the plan, one after the completed history.
+    def test_one_breakpoint_in_the_message_and_no_more(self):
+        """After the plan, and nowhere else in the message.
 
-        The second is what makes the agentic loop affordable: a derivation
-        runs ten to twenty-five turns, every turn re-sends the whole prompt,
-        and the history is byte-identical across all of them. It sits after
-        the plan rather than with it because it grows — and it grows only at
-        the end, so the provider extends the cached prefix instead of
-        rebuilding it.
+        There were two. The second closed the completed history, which is
+        byte-identical across the turns of a derivation and was worth marking
+        while it sat next to nothing that churned. The progress log now leads
+        that block — it came out of the plan block so a landing stops
+        discarding the plan with it — and a mark after content that changes
+        every landing writes an entry nobody reads, at cache-write rates. That
+        is worse than no mark, which is the same reason the cost table has
+        never carried one.
 
-        The cost table stays outside both: it is a sliding window of the last
-        twelve, so a breakpoint after it would miss on every stage and cost
-        more than not caching at all.
+        So the message spends one and the budget has a spare. Marking the log
+        would cost money; marking the history behind it would never hit; and
+        putting the history first to save its mark would reorder what the
+        planner reads to protect ~4KB.
         """
         messages = build_planner_messages(
             cfg=None, plan=a_plan(), completed=[], layout="x"
@@ -166,7 +169,7 @@ class TestPlannerCacheBreakpoint:
             for b in m["content"]
             if "cache_control" in b
         ]
-        assert len(marked) == 2
+        assert len(marked) == 1
 
     def test_the_prefix_is_identical_across_calls_within_a_stage(self):
         # Caching depends on a byte-identical prefix. Anything varying here —
@@ -707,22 +710,27 @@ class TestTheReviewerIsToldWhatTheEditorDoes:
 
 
 class TestTheBreakpointBudgetIsFullySpent:
-    """Four is the API's limit, and all four are now in use.
+    """Four is the API's limit; three are in use and the fourth is spare.
 
-    The system prompt, the plan-and-layout block and the completed history are
-    static and carry the configured lifetime. The fourth moves with the tool
-    loop and is added at request time by `_with_loop_breakpoint`.
+    The system prompt and the plan-and-layout block are static and carry the
+    configured lifetime. The third moves with the tool loop and is added at
+    request time by `_with_loop_breakpoint`.
 
-    Pinned because exceeding the limit fails the request, not a test — every
-    planner call in the run would break at once, and the cause would read as a
-    transport error. A fifth breakpoint means removing one of these four
-    deliberately, not adding to them.
+    The history used to hold the fourth. It lost it when the progress log
+    moved in front of it: a mark after content that changes every landing is
+    written and never read, which costs more than not marking. Leaving one
+    unspent is the deliberate state, not an oversight — pinned here so that
+    spending it is a decision somebody makes rather than a drift.
+
+    Still pinned at the ceiling because exceeding the limit fails the request,
+    not a test: every planner call in the run would break at once, and the
+    cause would read as a transport error.
     """
 
     def _marks(self, blocks):
         return [b for b in blocks if isinstance(b, dict) and "cache_control" in b]
 
-    def test_the_built_message_spends_exactly_two(self):
+    def test_the_built_message_spends_exactly_one(self):
         from code_gantry.prompts import build_planner_messages
 
         messages = build_planner_messages(
@@ -732,9 +740,9 @@ class TestTheBreakpointBudgetIsFullySpent:
             layout="- `src/` (1)",
         )
         assert len(messages) == 1, "one user message; the loop appends after it"
-        assert len(self._marks(messages[0]["content"])) == 2
+        assert len(self._marks(messages[0]["content"])) == 1
 
-    def test_system_plus_message_plus_the_moving_one_is_four(self):
+    def test_system_plus_message_plus_the_moving_one_stays_inside_four(self):
         from code_gantry.planner import _system_blocks, _with_loop_breakpoint
         from code_gantry.prompts import build_planner_messages
 
@@ -747,7 +755,8 @@ class TestTheBreakpointBudgetIsFullySpent:
         total = len(self._marks(system)) + sum(
             len(self._marks(m["content"])) for m in outgoing
         )
-        assert total == 4, f"the API allows 4 cache breakpoints, found {total}"
+        assert total == 3, f"three in use, one spare; found {total}"
+        assert total <= 4, "the API allows 4 cache breakpoints"
 
 
 class TestThePlannerSeesTheDiagnosisNotOnlyTheConsequence:
@@ -2814,3 +2823,61 @@ class TestIndependentCallsAreAskedForTogether:
 
         text = _executor_system_prompt(_exec_cfg(tmp_path))
         assert "answered together" in text or "answered before" in text
+
+
+class TestALandingDoesNotDisturbThePlan:
+    """The whole reason the log came out of the marked block.
+
+    While the progress log sat among the plan documents, the cache breakpoint
+    at the end of that block covered it — so one appended note discarded the
+    plan, the conventions and the layout along with it. Measured on a live
+    run: block 0 was 735,413 characters, 99.2-99.7% identical to the previous
+    derivation, and read back from cache never. Shared is not cached, and the
+    block is the unit.
+
+    This asserts the property directly rather than counting marks: two
+    prompts that differ only by a landing must be byte-identical up to and
+    including the marked block.
+    """
+
+    def _messages(self, log_text):
+        from code_gantry.plandoc import PlanDocument, PlanTree
+
+        plan = PlanTree(
+            root=PlanDocument(path="p.md", content="ROOT [l](log.md)"),
+            children=[PlanDocument(path="log.md", content=log_text)],
+            problems=[],
+            skipped=[],
+        )
+        return build_planner_messages(
+            cfg=SimpleNamespace(cache_ttl="1h", plan_addendum_path="log.md"),
+            plan=plan,
+            completed=[],
+            layout="- `src/` (1)",
+        )
+
+    def test_the_marked_block_survives_a_new_log_entry(self):
+        before = self._messages("entry one")
+        after = self._messages("entry one\n\nentry two")
+
+        marked_before = [b for b in before[0]["content"] if "cache_control" in b]
+        marked_after = [b for b in after[0]["content"] if "cache_control" in b]
+
+        assert len(marked_before) == 1
+        assert marked_before[0]["text"] == marked_after[0]["text"], (
+            "a landing changed the cached block; the log is back inside it"
+        )
+
+    def test_the_log_is_still_sent_just_after_the_mark(self):
+        messages = self._messages("entry one")
+        blocks = messages[0]["content"]
+        marked = next(i for i, b in enumerate(blocks) if "cache_control" in b)
+        following = "".join(b.get("text", "") for b in blocks[marked + 1:])
+
+        assert "entry one" in following, "the log must still reach the planner"
+        assert "entry one" not in blocks[marked]["text"]
+
+    def test_the_plan_documents_are_still_in_the_marked_block(self):
+        blocks = self._messages("entry one")[0]["content"]
+        marked = next(b for b in blocks if "cache_control" in b)
+        assert "ROOT" in marked["text"]
