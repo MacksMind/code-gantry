@@ -678,3 +678,72 @@ class TestToolLoop:
         assert out.tool_calls == ["read_file(a.rb) -> 1 line(s)"]
         # The first turn's tokens were still spent and must still be reported.
         assert out.usage.prompt_tokens == 100
+
+
+class TestThePerTurnUsageSeries:
+    """Totals cannot say where a cached prefix stops matching.
+
+    Observed on a live run: cached tokens per turn sat pinned near 200,000
+    while the peak prompt was ~230,000, so 22-35k was re-sent uncached every
+    turn — far more than the reviewer's own reads, which came to under 10k
+    tokens across a whole review. The aggregate cannot separate "the prefix
+    extends and there is little to add" from "the prefix stops matching
+    partway", because a flat cache against small growth gives the same overall
+    rate. Only the series does.
+
+    Kept per turn for the reason `executor-loop.json` keeps the attempt's
+    peak: a sum cannot be decomposed afterwards, so the per-item figure has to
+    live at the item.
+    """
+
+    def _usage(self, prompt, cached):
+        return SimpleNamespace(
+            input_tokens=prompt,
+            output_tokens=5,
+            input_tokens_details=SimpleNamespace(
+                cached_tokens=cached, cache_write_tokens=0
+            ),
+        )
+
+    def test_every_turn_is_recorded_in_order(self):
+        verdict = ReviewVerdict(
+            verdict="approved", summary="ok", record="what changed", issues=[]
+        )
+        asking = tool_response("read_file", '{"path": "a.rb"}')
+        asking.usage = self._usage(1000, 0)
+        client = SequenceClient(
+            [asking, response(parsed=verdict, usage=self._usage(1200, 1000))]
+        )
+
+        out = OpenAIReviewer(
+            cfg_with().reviewer, client=client, reader=StubReader()
+        ).review(MESSAGES)
+
+        assert [t["prompt_tokens"] for t in out.turn_usage] == [1000, 1200]
+        assert [t["cached_tokens"] for t in out.turn_usage] == [0, 1000]
+
+    def test_a_single_turn_review_still_records_one(self):
+        verdict = ReviewVerdict(
+            verdict="approved", summary="ok", record="what changed", issues=[]
+        )
+        client = StubClient(response(parsed=verdict, usage=self._usage(900, 800)))
+        out = OpenAIReviewer(cfg_with().reviewer, client=client).review(MESSAGES)
+        assert out.turn_usage == [
+            {"prompt_tokens": 900, "cached_tokens": 800, "cache_write_tokens": 0}
+        ]
+
+    def test_the_record_carries_every_field_of_the_outcome(self):
+        """The writer enumerates by hand, and has dropped a field before.
+
+        `peak_prompt_tokens` went missing that way and eleven records on one
+        run carried a tool-loop total with no context figure. This does not
+        rewrite the writer; it makes the next omission fail here rather than
+        be discovered by a question nobody can answer.
+        """
+        import dataclasses
+
+        from code_gantry.reviewer import ReviewOutcome
+
+        written = ReviewOutcome(verdict="approved", summary="s").as_dict()
+        declared = {f.name for f in dataclasses.fields(ReviewOutcome)}
+        assert not (declared - set(written) - {"failed"})

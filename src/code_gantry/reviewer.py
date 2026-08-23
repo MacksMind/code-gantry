@@ -120,6 +120,19 @@ class ReviewVerdict(BaseModel):
     observations: list[Observation] = []
 
 
+def _record_usage(outcome, usage, turns) -> None:
+    """Both halves of the accounting, at every exit.
+
+    Four paths leave this loop and each carries the totals out. The per-turn
+    series has to travel with them, and a second assignment at four sites is
+    the shape this codebase has already watched go quietly missing between two
+    correct changes — so what "recording usage" means is decided once here
+    rather than remembered four times.
+    """
+    outcome.usage = usage
+    outcome.turn_usage = list(turns)
+
+
 @dataclass
 class ReviewOutcome:
     verdict: Verdict
@@ -150,6 +163,16 @@ class ReviewOutcome:
     # back to the executor; these route nowhere and are written to the
     # progress log when the stage lands.
     observations: list[Observation] = field(default_factory=list)
+    # One reading per turn, in order. `usage` sums the loop and cannot say
+    # where a cached prefix stops matching: measured on a live run, cached
+    # tokens per turn sat pinned near 200,000 against a peak prompt of
+    # ~230,000, so 22-35k was re-sent uncached on every turn — far more than
+    # this role's own reads, which came to under 10k tokens across a whole
+    # review. A flat cache against small growth and a growing cache produce
+    # the same aggregate rate, so only the series separates them. Same reason
+    # `executor-loop.json` keeps the attempt's peak: a sum cannot be
+    # decomposed afterwards.
+    turn_usage: list[dict] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return {
@@ -168,6 +191,9 @@ class ReviewOutcome:
             # one read the same to anyone measuring later, and this
             # project has already answered a question wrongly that way.
             "semantic_results": list(self.semantic_results),
+            # The series, so a later reader can see where a cached prefix
+            # stopped matching. `usage` below is the sum and cannot answer it.
+            "turn_usage": list(self.turn_usage),
             # Every field, walked off the dataclass. The hand-written list
             # this replaces named four of five and dropped
             # `peak_prompt_tokens`, so eleven records on one run carried a
@@ -340,6 +366,10 @@ class OpenAIReviewer:
         )
         conversation = list(messages)
         usage = TokenUsage()
+        # Collected beside the running total rather than derived from it,
+        # because every exit below carries `usage` out and each one has to
+        # carry the series with it.
+        outcome_turns: list[dict] = []
         response = None
         # The ledger is cumulative, so each turn reports only what it added.
         logged = len(getattr(self.reader, "calls", []) or [])
@@ -369,13 +399,21 @@ class OpenAIReviewer:
                 )
             except Exception as e:  # noqa: BLE001 - any failure means "no verdict"
                 outcome = _blocked(f"The reviewer call failed: {e}")
-                outcome.usage = usage
+                _record_usage(outcome, usage, outcome_turns)
                 outcome.tool_calls = self._looked_at()
                 outcome.tool_counts = self._tool_counts()
                 outcome.semantic_results = self._semantic_results()
                 return outcome
 
-            usage = _merge_usage(usage, _extract_usage(getattr(response, "usage", None)))
+            reading = _extract_usage(getattr(response, "usage", None))
+            outcome_turns.append(
+                {
+                    "prompt_tokens": reading.prompt_tokens,
+                    "cached_tokens": reading.cached_tokens,
+                    "cache_write_tokens": reading.cache_write_tokens,
+                }
+            )
+            usage = _merge_usage(usage, reading)
 
             requests = [
                 item
@@ -436,7 +474,7 @@ class OpenAIReviewer:
         refusal = _refusal(response)
         if refusal:
             outcome = _blocked(f"The reviewer refused to answer: {refusal}")
-            outcome.usage = usage
+            _record_usage(outcome, usage, outcome_turns)
             outcome.tool_calls = self._looked_at()
             outcome.tool_counts = self._tool_counts()
             outcome.semantic_results = self._semantic_results()
@@ -452,7 +490,7 @@ class OpenAIReviewer:
                 f"The reviewer's response was truncated ({reason}), so its "
                 "verdict cannot be trusted."
             )
-            outcome.usage = usage
+            _record_usage(outcome, usage, outcome_turns)
             outcome.tool_calls = self._looked_at()
             outcome.tool_counts = self._tool_counts()
             outcome.semantic_results = self._semantic_results()
@@ -464,7 +502,7 @@ class OpenAIReviewer:
             # nothing parsable. Either way there is no verdict, and a review
             # that ran out of turns must say so rather than look like a refusal.
             outcome = _blocked("The reviewer returned no parsable verdict.")
-            outcome.usage = usage
+            _record_usage(outcome, usage, outcome_turns)
             outcome.tool_calls = self._looked_at()
             outcome.tool_counts = self._tool_counts()
             outcome.semantic_results = self._semantic_results()
@@ -477,6 +515,13 @@ class OpenAIReviewer:
             issues=list(parsed.issues),
             observations=list(getattr(parsed, "observations", None) or []),
             usage=usage,
+            # Beside `usage`, because this is the exit every approved review
+            # takes — the four `_record_usage` sites above are all failure
+            # paths. Adding the series to those alone left it empty on every
+            # successful review and populated only where something had gone
+            # wrong, which is `run_loop`'s pricing bug exactly: the happy case
+            # leaves by a different door.
+            turn_usage=list(outcome_turns),
             failed=False,
             tool_calls=self._looked_at(),
             tool_counts=self._tool_counts(),
