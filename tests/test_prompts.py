@@ -2881,3 +2881,52 @@ class TestALandingDoesNotDisturbThePlan:
         blocks = self._messages("entry one")[0]["content"]
         marked = next(b for b in blocks if "cache_control" in b)
         assert "ROOT" in marked["text"]
+
+
+class TestTheTestWarningsReachThePlanner:
+    """What a green suite still has to say.
+
+    The runner tallies deprecations and unexpected output after every run, and
+    that tally existed for as long as a scrollback buffer. Measured on one
+    run: 203 first-party warnings at five sites, on a stream nothing read, and
+    52 of 57 planner prompts mentioned any of it exactly once — a line in a
+    plan document about a *gem*, not the application's own code.
+
+    It sits after the cache breakpoint with the progress log, on the same
+    reasoning: it changes whenever the suite runs, and content that churns
+    ahead of the mark re-bills the plan behind it.
+    """
+
+    def _messages(self, warnings):
+        return build_planner_messages(
+            cfg=SimpleNamespace(cache_ttl="1h"),
+            plan=a_plan(),
+            completed=[],
+            layout="- `src/` (1)",
+            test_warnings=warnings,
+        )
+
+    def test_it_is_sent_when_there_is_one(self):
+        text = leading_text(self._messages("  12 DEPRECATION WARNING: something\n"))
+        assert "DEPRECATION WARNING: something" not in text
+
+        whole = "".join(
+            b.get("text", "")
+            for m in self._messages("  12 DEPRECATION WARNING: something\n")
+            for b in m["content"]
+        )
+        assert "DEPRECATION WARNING: something" in whole
+
+    def test_it_follows_the_cache_mark(self):
+        blocks = self._messages("  12 DEPRECATION WARNING: something\n")[0]["content"]
+        marked = next(i for i, b in enumerate(blocks) if "cache_control" in b)
+        after = "".join(b.get("text", "") for b in blocks[marked + 1:])
+        assert "DEPRECATION WARNING: something" in after
+
+    def test_a_project_without_one_says_nothing(self):
+        whole = "".join(
+            b.get("text", "")
+            for m in self._messages(None)
+            for b in m["content"]
+        )
+        assert "warnings" not in whole.lower().split("## what the repository")[0]

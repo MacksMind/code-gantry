@@ -316,6 +316,10 @@ def plan(state: RunState, rt: Runtime) -> dict:
         layout=rt.layout(state.get("plan_sha") or state.get("base_sha") or ""),
         agent_context=_planner_context(state, rt),
         stage_costs=recent_stage_costs(rt.project.project_dir),
+        # The runner's own tally, read live for the same reason the plan is:
+        # it describes the tree, and the stages being drawn are what change
+        # it. Behind the cache mark, on the same clock as the progress log.
+        test_warnings=rt.live_test_warnings,
         # Only when a stage is under revision: deriving a new one has no branch
         # and nothing to reconcile. Read from the same sha the reviewer's diff
         # is taken from, because the point of showing it is that the two agree.

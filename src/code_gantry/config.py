@@ -915,6 +915,13 @@ class ProjectConfig(_Strict):
     # by a stage. The scope guard treats it as a plan document precisely so an
     # executor cannot edit the record of its own work.
     plan_addendum_path: str | None = None
+    # Where the project's test runner leaves its tally of warnings and
+    # unexpected output. The path, not the copy: it is rewritten by every
+    # suite run and read at prompt-build time, so a transcription here would
+    # be the stale half of two records that disagree.
+    #
+    # Optional, and absent for a project whose runner writes no such file.
+    test_warnings_path: str | None = None
     # Documents the repository already keeps for whoever works in it: how to
     # run the suite, what the container does, which conventions bite. They are
     # maintained because humans and interactive sessions read them, and the

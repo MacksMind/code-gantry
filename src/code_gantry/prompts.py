@@ -543,6 +543,35 @@ def _plan_block(plan: PlanTree, addendum_path: str | None = None) -> tuple[str, 
     return intro + "\n\n" + stable, progress
 
 
+def _warnings_block(text: str | None) -> str:
+    """What the project's test runner says about the tree, as it stands now.
+
+    A tally of deprecations and unexpected output, rewritten by every suite
+    run. It goes behind the cache mark with the progress log because it
+    changes on the same clock, and it is handed over rather than read here so
+    the builder stays free of the filesystem.
+
+    Worth having in front of the planner because nothing else carries it:
+    measured on one run, 203 first-party warnings at five sites went to a
+    stream no artifact read, and the only mention reaching any planner prompt
+    was a line in a plan document about a gem.
+    """
+    if not text or not text.strip():
+        return ""
+    return (
+        "## Warnings from the last test run\n\n"
+        "The tally from whichever run wrote it, and a statement about the "
+        "tree rather than about any one stage. **It is the same run your "
+        "test-run record describes**, so what was actually executed — the "
+        "commit, whether the tree was dirty, and which targets were given — "
+        "is answered there and not here. A tally over four spec files says "
+        "nothing about the rest of the suite.\n\n"
+        "Read against runs of the same scope, a count that falls is work that "
+        "landed and one that appears is work that introduced it.\n\n"
+        f"```\n{text.strip()}\n```"
+    )
+
+
 def _costs_block(costs: list[dict] | None) -> str:
     """What stages have cost the executor, across every run of this project.
 
@@ -1065,6 +1094,7 @@ def build_planner_messages(
     interventions_max: int = 0,
     layout: str | None = None,
     stage_costs: list[dict] | None = None,
+    test_warnings: str | None = None,
     agent_context: str | None = None,
     stage_diff: str | None = None,
     stage_queue: list[dict] | None = None,
@@ -1190,7 +1220,7 @@ def build_planner_messages(
         # moving loop mark covers both from the second turn on.
         {
             "type": "text",
-            "text": "\n\n".join(x for x in (progress, history) if x),
+            "text": "\n\n".join(x for x in (progress, _warnings_block(test_warnings), history) if x),
         },
     ]
 

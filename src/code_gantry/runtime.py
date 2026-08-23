@@ -288,6 +288,26 @@ class Runtime:
         return "\n\n".join(blocks)
 
     @property
+    def live_test_warnings(self) -> str | None:
+        """The runner's warning tally as it stands now, or None.
+
+        Read live for the same reason the progress log is: it describes the
+        tree rather than the run, and a copy frozen at run start would be
+        answering about code that has since been changed by the very stages
+        that are meant to act on it.
+
+        Never raises. A project may not keep one, and a planner call is far
+        too expensive to fail over a missing file.
+        """
+        path = getattr(self.cfg, "test_warnings_path", None)
+        if not path:
+            return None
+        try:
+            return (Path(self.cfg.target_repo) / path).read_text()
+        except OSError:
+            return None
+
+    @property
     def live_progress_log(self) -> str | None:
         """The addendum as it stands now, or None if there isn't one.
 
