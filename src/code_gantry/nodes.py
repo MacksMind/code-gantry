@@ -721,6 +721,22 @@ def precheck(state: RunState, rt: Runtime) -> dict:
     # would be handed our excerpt block as the only code it gets.
     moved = stale_excerpts(rt.git, stage)
     if moved:
+        # Said out loud, because the reason reached the planner and the
+        # checkpoint and nowhere a person would look. Observed live: a stage
+        # landed cleanly at 11:42:03, the next printed its precheck header at
+        # 11:42:03 and `[plan] revising` at 11:42:04, and nothing in between
+        # said why — so a correct rejection, one second after a green full
+        # suite, read as something having gone wrong. Every other gate names
+        # its failure in the log; this one routed silently.
+        #
+        # The queue count goes with it because discarding the tail is the
+        # other half of what just happened and is otherwise invisible.
+        queued = len(state.get("stage_queue") or [])
+        rt.log(
+            f"[precheck] {stage.id}: back to the planner — "
+            f"{', '.join(moved)} changed since it was quoted"
+            + (f"; {queued} queued stage(s) discarded with it" if queued else "")
+        )
         return {**update, **_stale_excerpt_failure(state, stage, moved)}
 
     for command in stage.preconditions:

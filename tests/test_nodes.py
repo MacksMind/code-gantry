@@ -816,6 +816,30 @@ class TestPrecheck:
         out = nodes.precheck(state, rt)
         assert "stage_start_sha" not in out or out["stage_start_sha"] == pinned
 
+    def test_a_stale_excerpt_says_why_in_the_log(self, repo, tmp_path, monkeypatch):
+        """The reason has to reach the person watching, not only the planner.
+
+        Observed live: a stage landed cleanly, the next one printed
+        `[precheck] stage <id> revision 0` and then `[plan] revising <id>` one
+        second later, and nothing said why. The cause — a batch-mate had edited
+        a file this stage quoted — was in the checkpoint and in the planner's
+        prompt, and nowhere a human would look. Every other gate names its
+        failure in the log; this one routed silently, so a correct rejection
+        read as something going wrong.
+        """
+        cfg, rt, state = make(repo, tmp_path)
+        state["current"] = planned_stage()
+        monkeypatch.setattr(nodes, "stale_excerpts", lambda *_: ["spec/a_spec.rb"])
+        lines = []
+        monkeypatch.setattr(rt, "log", lines.append)
+
+        out = nodes.precheck(state, rt)
+
+        assert out["next_hop"] == "plan"
+        said = [x for x in lines if "spec/a_spec.rb" in x]
+        assert said, f"no log line named the stale file: {lines}"
+        assert "[precheck]" in said[0]
+
     def test_a_failed_precondition_goes_to_the_planner(self, repo, tmp_path):
         cfg, rt, state = make(repo, tmp_path)
         state["current"] = planned_stage(preconditions=["false"])
