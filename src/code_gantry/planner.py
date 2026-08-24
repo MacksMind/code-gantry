@@ -556,17 +556,31 @@ def _call_failure(error: Exception) -> str:
     The distinction matters because the two have different fixes. A transport
     failure is waited out; a truncation means the budget is too small for the
     instructions this planner writes, and no amount of retrying changes that.
+
+    **The whole error travels, collapsed rather than cut.** This kept
+    `splitlines()[0]`, and pydantic puts the count on the first line, the
+    finding on the second and a documentation link on the third — so what
+    survived was `1 validation error for PlannerResponse` and what was
+    discarded was `column 11710`, the one figure saying how large the answer
+    had grown before it ran out. The classifier above read that line to decide
+    the branch and then threw it away, which leaves a label with no measurement
+    under it and no way afterwards to tell a gate that reached its evidence
+    from one that never did. Collapsing is what the run log needs — it is one
+    line per event and this is a rendering — and it is applied to both branches,
+    because an ordinary provider error is just as capable of arriving in
+    several lines. Measured: a real truncation renders in 274 characters,
+    because pydantic already abbreviates the payload it is quoting.
     """
-    text = str(error)
+    text = " ".join(str(error).split())
     truncated = "EOF while parsing" in text or "json_invalid" in text
     if truncated:
         return (
             "the planner's response was truncated mid-JSON, so its verdict "
             "cannot be trusted. The output budget is too small for the stage "
             "instruction it was writing — raise the planner's max_tokens "
-            f"rather than retrying. ({text.splitlines()[0]})"
+            f"rather than retrying. ({text})"
         )
-    return f"the planner call failed: {error}"
+    return f"the planner call failed: {text}"
 
 
 def _blocked(reason: str) -> PlannerOutcome:

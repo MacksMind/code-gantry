@@ -1391,6 +1391,48 @@ class TestATruncatedAnswerIsLegible:
         assert "connection reset by peer" in text
         assert "truncated" not in text
 
+    def test_the_diagnosis_survives_and_not_only_the_count(self):
+        """The line that says how far it got is the second one.
+
+        pydantic renders a validation error as a count, then the finding, then
+        a documentation link. Keeping `splitlines()[0]` kept the count —
+        `1 validation error for PlannerResponse` — and discarded the column
+        number, which is the only figure that says how large the answer had
+        become before it ran out. A gate that reads its evidence and then
+        throws it away is indistinguishable afterwards from one that never
+        read it.
+        """
+        from code_gantry.planner import _call_failure
+
+        message = (
+            "1 validation error for PlannerResponse\n"
+            "  Invalid JSON: EOF while parsing a string at line 1 column 11710 "
+            "[type=json_invalid, input_value='{\"verdict\": \"deri', input_type=str]\n"
+            "    For further information visit https://errors.pydantic.dev/2.13/v/json_invalid"
+        )
+        text = _call_failure(ValueError(message))
+
+        assert "column 11710" in text
+        assert "json_invalid" in text
+
+    def test_the_message_stays_one_line(self):
+        """The run log is one line per event, and this is a rendering of it.
+
+        The same reasoning as `run_argv`'s joined label: a multi-line failure
+        pasted into a timeline attaches its tail to whatever came next. Collapse
+        rather than truncate — the offending detail is at the end.
+        """
+        from code_gantry.planner import _call_failure
+
+        truncation = _call_failure(
+            ValueError("1 validation error\n  Invalid JSON: EOF while parsing\n    see docs")
+        )
+        ordinary = _call_failure(RuntimeError("upstream said no\nand then said it again"))
+
+        assert "\n" not in truncation
+        assert "\n" not in ordinary
+        assert "and then said it again" in ordinary
+
 
 class TestReasoningEffortIsOperatorControlled:
     """Three roles, three providers, one knob each — and none of it was config.
