@@ -390,6 +390,61 @@ def strictify(schema: dict) -> dict:
     }
 
 
+def _declared_integers(name: str) -> set[str]:
+    """The arguments this built-in tool declares as integers.
+
+    Read back off the schema the model was handed rather than listed here, so
+    a tool that grows a numeric argument inherits the coercion below instead of
+    depending on whoever adds it having read this function.
+    """
+    for spec in [*READ_TOOLS, SEMANTIC_TOOL]:
+        if spec["name"] != name:
+            continue
+        return {
+            prop
+            for prop, shape in spec["input_schema"]["properties"].items()
+            if shape.get("type") == "integer"
+        }
+    return set()
+
+
+def coerce_args(name: str, args: dict) -> dict:
+    """Model-supplied arguments, made to match the types they were declared as.
+
+    A schema handed to a provider is a request, not a check. Anthropic passes
+    a model's tool call through without validating it against the schema it
+    was given, so `{"type": "integer"}` describes what was asked for and
+    guarantees nothing about what arrives. One `start` that came back as a
+    string reached `max(start or 1, 1)`, raised `TypeError` where `dispatch`
+    catches only `ToolError`, and ended a run 21 stages in.
+
+    Two different answers, because they are two different mistakes. A model
+    that says `"1196"` means line 1196 and coercing it costs nothing, while
+    refusing would spend a whole call establishing that we both knew. A model
+    that says `"the top"` has said something no line number can be recovered
+    from, and that has to reach it as a refusal it can read and retry — which
+    is what `dispatch` promises everywhere else.
+
+    Only the built-ins. An operator-declared tool takes its arguments as argv
+    elements, which are strings by construction.
+    """
+    numeric = _declared_integers(name)
+    if not numeric:
+        return args
+    out = dict(args)
+    for prop in numeric:
+        value = out.get(prop)
+        if value is None or isinstance(value, int):
+            continue
+        try:
+            out[prop] = int(str(value).strip())
+        except (TypeError, ValueError):
+            raise ToolError(
+                f"{prop} must be a line number; got {value!r}"
+            ) from None
+    return out
+
+
 def dispatch(
     name: str,
     args: dict,
@@ -418,6 +473,7 @@ def dispatch(
     if name in declared:
         return _run_declared(declared[name], args, runner, reader, role)
     try:
+        args = coerce_args(name, args)
         if name == "read_file":
             return reader.read_file(
                 args.get("path", ""), args.get("start"), args.get("end")

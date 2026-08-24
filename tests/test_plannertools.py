@@ -165,3 +165,76 @@ class TestSemanticNamesBothQuestionsItAnswers:
         text = self._text()
         for word in ("rails", "ruby", "controller", "role", "rspec", ".rb", "gem"):
             assert word not in text, f"{word!r} is project knowledge in a tool description"
+
+
+class TestArgumentsAreModelSupplied:
+    """A declared schema is documentation until something enforces it.
+
+    `read_file`'s schema says `start` and `end` are integers. Anthropic does
+    not validate a tool call against the schema it was given, so the type is a
+    request rather than a guarantee — and one string where an integer was
+    declared reached `max(start or 1, 1)` and ended a 21-stage run with a
+    `TypeError` from inside the dispatcher, which catches only `ToolError`.
+
+    Two obligations, and they are different. A model that answers `"1196"`
+    plainly means line 1196, so coercing costs nothing and refusing would
+    spend a call on pedantry. A model that answers `"the top"` cannot be
+    coerced, and that has to arrive as a refusal the planner can read and
+    recover from — the thing `dispatch` promises in its own docstring.
+    """
+
+    def test_an_integer_written_as_a_string_is_read_as_the_line_it_names(self, repo):
+        (repo / "app" / "order.rb").write_text("\n".join(f"line {n}" for n in range(1, 9)))
+        subprocess.run(["git", "commit", "-qam", "lines"], cwd=repo, check=True)
+        r = reader(repo)
+
+        out = dispatch("read_file", {"path": "app/order.rb", "start": "3", "end": "4"}, r, None)
+
+        assert "line 3" in out and "line 4" in out
+        assert "line 2" not in out and "line 5" not in out
+        assert r.calls[0].refusal == ""
+
+    def test_an_uncoercible_integer_is_a_refusal_and_not_a_crash(self, repo):
+        r = reader(repo)
+
+        out = dispatch("read_file", {"path": "app/order.rb", "start": "the top"}, r, None)
+
+        assert "cannot do that" in out
+        assert "start" in out
+        assert r.calls[0].tool == "read_file"
+        assert r.calls[0].refusal != ""
+
+    def test_a_string_argument_is_left_alone(self, repo):
+        """Coercion is keyed on the declared type, not on what a value looks like.
+
+        `search` takes a pattern, and a pattern of digits is a pattern.
+        """
+        r = reader(repo)
+
+        dispatch("search", {"pattern": "1196"}, r, None)
+
+        assert r.calls[0].detail.startswith("1196")
+        assert r.calls[0].refusal == ""
+
+    def test_every_integer_the_schemas_declare_is_covered(self, repo):
+        """Derived from the schemas rather than from a list of two names.
+
+        The bet a fixed list makes is that the next integer argument will be
+        added by someone who remembers this. Walking the declared properties
+        means it inherits the coercion instead.
+        """
+        from code_gantry.plannertools import READ_TOOLS, SEMANTIC_TOOL
+
+        integers = {
+            (spec["name"], prop)
+            for spec in [*READ_TOOLS, SEMANTIC_TOOL]
+            for prop, shape in spec["input_schema"]["properties"].items()
+            if shape.get("type") == "integer"
+        }
+        assert integers, "no integer arguments declared; this test has stopped asking anything"
+
+        for name, prop in integers:
+            r = reader(repo)
+            out = dispatch(name, {"path": "app/order.rb", prop: "not a number"}, r, None)
+            assert "cannot do that" in out, f"{name}.{prop} was not coerced or refused"
+            assert prop in out, f"{name}.{prop} refusal does not name the argument"
