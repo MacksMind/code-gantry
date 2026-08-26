@@ -80,6 +80,10 @@ class Dialect:
     # OpenAI and OpenRouter take; Messages spells it `output_config`,
     # which only Anthropic itself accepts.
     _effort_in_gateway_body: bool = False
+    # The SDK exception types a failure on this wire arrives as. Last on the
+    # dataclass, like `_cache_key_param` above and for the same reason: a new
+    # field in the middle silently reassigns every positional caller.
+    _transport_errors: Callable[[], tuple] | None = None
 
     def structured(self, schema) -> dict:
         """The schema argument, when the caller wants a parsed answer."""
@@ -234,6 +238,35 @@ class Dialect:
             # marks carry their own lifetime.
             out[self._cache_key] = self._cache_marker(None)
         return out
+
+    def transport_errors(self) -> tuple[type[BaseException], ...]:
+        """The exception types a retry on this wire must be told to catch.
+
+        Beside `client` because it is the same fact read from the other end:
+        the client decides which SDK makes the call, so the SDK's classes are
+        what a failure arrives as. `executorclient` asked
+        `openaiclient.transport_errors()` for them instead — correct while
+        every executor call was a Responses call, and silently wrong from the
+        day the executor became the wire-polymorphic role.
+
+        An `anthropic.APIStatusError` is not an `openai.APIStatusError`, so
+        `retry_on` matched nothing on the Messages wire and every failure
+        propagated on its first raise. Measured: four attempts in four
+        seconds, no backoff logged, the stage's whole rework allowance spent
+        by requests that never reached a model — and the same hole covered
+        429s and dropped sockets, so nothing on that wire had ever been
+        retried.
+
+        Raising rather than defaulting to an empty tuple: a dialect added
+        without one would reintroduce exactly this, and silently, because no
+        retrying looks identical to nothing having failed.
+        """
+        if self._transport_errors is None:
+            raise ValueError(
+                f"dialect {self.name!r} names no transport errors; a retry on "
+                "this wire would catch nothing"
+            )
+        return self._transport_errors()
 
     def client(self, cfg):
         """The SDK client this wire talks through.
@@ -525,6 +558,49 @@ def _gateway_base(base, wire: str):
     return f"{trimmed}/v1" if wire == "responses" else trimmed
 
 
+def _responses_transport_errors() -> tuple[type[BaseException], ...]:
+    from openai import APIConnectionError, APIStatusError
+
+    return (APIConnectionError, APIStatusError)
+
+
+def _messages_transport_errors() -> tuple[type[BaseException], ...]:
+    from anthropic import APIConnectionError, APIStatusError
+
+    return (APIConnectionError, APIStatusError)
+
+
+# Both wires' spellings, named once. A conversation is built in Responses
+# vocabulary and translated at `send`, so either can be on a block by the time
+# anything looks — and a stripper that knew only its own dialect's spelling
+# would leave the other one in place.
+CACHE_MARKER_FIELDS = ("cache_control", "prompt_cache_breakpoint")
+
+
+def without_cache_markers(payload):
+    """The same payload with every cache marker removed, however deep.
+
+    Recursive rather than a pass over the places that add markers, because
+    there are four of those in this module alone and the fifth is one wire
+    away. The marks go on text blocks, on tool results, and on blocks nested
+    inside a `function_call_output` — a caller that had to know which is a
+    caller that will miss one.
+
+    Only the markers. The conversation itself is untouched: what a stale-cache
+    rejection refuses is a pointer to a cache, and dropping any of the content
+    would answer a different problem.
+    """
+    if isinstance(payload, dict):
+        return {
+            key: without_cache_markers(value)
+            for key, value in payload.items()
+            if key not in CACHE_MARKER_FIELDS
+        }
+    if isinstance(payload, list):
+        return [without_cache_markers(item) for item in payload]
+    return payload
+
+
 def _responses_client(cfg):
     from openai import OpenAI
 
@@ -622,6 +698,7 @@ RESPONSES = Dialect(
     _cache_marker=lambda _ttl: {"mode": "explicit"},
     _request_cache_options={"prompt_cache_options": {"mode": "explicit"}},
     _cache_key_param="prompt_cache_key",
+    _transport_errors=_responses_transport_errors,
     _usage=_responses_usage,
     _tool_calls=_responses_tool_calls,
     _stopped=_responses_stopped,
@@ -642,6 +719,7 @@ MESSAGES = Dialect(
     _effort_shape=lambda level: {"effort": level},
     _text_type="text",
     _cache_key="cache_control",
+    _transport_errors=_messages_transport_errors,
     _cache_marker=lambda ttl: {"type": "ephemeral", **({"ttl": ttl} if ttl else {})},
     _request_cache_options={},
     _translates_blocks=True,

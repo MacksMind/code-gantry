@@ -538,3 +538,221 @@ class TestTheClosingTurnIsRecorded:
 
         assert before > 0
         assert len(conversation) > before + 1
+
+
+class _MessagesClient:
+    """A Messages-wire client that can be scripted to raise before answering.
+
+    Its own stub rather than `ScriptedClient` because the executor is the
+    wire-polymorphic role and the two wires are reached through different
+    attributes — `client.messages.create` against `client.responses.create`.
+    A test that only ever drives the Responses attribute cannot see anything
+    that goes wrong on the other one, which is how the missing retry survived.
+    """
+
+    def __init__(self, script):
+        self._script = list(script)
+        self.requests = []
+
+    @property
+    def messages(self):
+        return self
+
+    def create(self, **kwargs):
+        self.requests.append(kwargs)
+        item = self._script.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+
+def _refused(status, message, wire="messages"):
+    """The real SDK exception, built the way the SDK builds it.
+
+    A stand-in with a `status_code` attribute would pass `retry_on` for the
+    wrong reason: the whole defect was that the class hierarchy did not match,
+    and only a real one can show that.
+    """
+    import anthropic
+    import httpx
+    import openai
+
+    request = httpx.Request("POST", f"https://example.invalid/v1/{wire}")
+    response = httpx.Response(status, request=request)
+    family = anthropic if wire == "messages" else openai
+    kind = family.BadRequestError if status == 400 else family.RateLimitError
+    return kind(f"Error code: {status} - {message}", response=response, body=None)
+
+
+class _Block(dict):
+    """Read by attribute like an SDK object, built like a dict. Both happen."""
+
+    def __getattr__(self, key):
+        try:
+            return self[key]
+        except KeyError:
+            raise AttributeError(key) from None
+
+
+def _messages_done(text="done"):
+    """A Messages-wire model saying it has finished.
+
+    Carrying text and `end_turn` together, because an `end_turn` with no
+    content is the shape the loop reads as giving up rather than finishing.
+    """
+    return _Block(
+        content=[_Block(type="text", text=text)],
+        stop_reason="end_turn",
+        usage=None,
+    )
+
+
+def _markers(payload):
+    """Every cache marker anywhere in a request, however deeply nested."""
+    found = []
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key in ("cache_control", "prompt_cache_breakpoint"):
+                found.append(key)
+            found += _markers(value)
+    elif isinstance(payload, list):
+        for item in payload:
+            found += _markers(item)
+    return found
+
+
+class TestTheExecutorRetriesOnTheWireItIsCallingOn:
+    """The retry types came from the OpenAI SDK whatever wire was in use.
+
+    Correct while every executor call was a Responses call, and silently wrong
+    once the executor became the wire-polymorphic role. Measured on a live
+    run: a Gemini model resolves to Messages, a gateway returned 400, and
+    `anthropic.BadRequestError` is not an `openai.APIStatusError` — so
+    `retry_on` matched nothing, the exception propagated on its first raise,
+    and four attempts burned four seconds and the stage's whole rework
+    allowance without one request reaching a model.
+    """
+
+    def test_a_rate_limit_on_the_messages_wire_is_waited_out(self, parts):
+        editor, _, reader = parts
+        client = _MessagesClient([
+            _refused(429, "rate-limited upstream"),
+            _messages_done(),
+        ])
+        cfg = ExecutorConfig(model="google/gemini-3.7-flash", transport_retry_seconds=0.05)
+        out = OpenAIExecutorModel(cfg, client=client).run([], reader=reader, editor=editor)
+
+        assert out.failure == ""
+        assert len(client.requests) == 2, "the failure was not retried on this wire"
+
+    def test_a_persistent_failure_still_ends_the_attempt(self, parts):
+        # The budget is what bounds it. Retrying must not turn a dead provider
+        # into a hang, which is the failure the wall-clock bound exists for.
+        editor, _, reader = parts
+        client = _MessagesClient([_refused(429, "still unwell") for _ in range(4)])
+        cfg = ExecutorConfig(model="google/gemini-3.7-flash", transport_retry_seconds=0.02)
+        out = OpenAIExecutorModel(cfg, client=client).run([], reader=reader, editor=editor)
+
+        assert "still unwell" in out.failure
+
+
+class TestAStaleCacheHandleIsResentWithoutTheCache:
+    """The conversation was never the problem, so it goes back out whole.
+
+    Four attempts died on the identical `Cache content 590015763578880000 is
+    expired.`, with no generation recorded at the gateway for any of them. A
+    handle built for our marked prefix had died; every resend named the same
+    dead object. Replaying it unchanged is the one thing that cannot work.
+
+    So the same conversation is sent again with nothing pointing at a cache —
+    the full context, as if this were the first turn. The markers are stripped
+    in place rather than for one request, because a handle that is dead for
+    this turn is dead for the next one too, and flapping between marked and
+    unmarked would pay the rejection once per turn.
+    """
+
+    def test_the_resend_carries_no_markers(self, parts):
+        editor, _, reader = parts
+        client = _MessagesClient([
+            _refused(400, "Cache content 590015763578880000 is expired."),
+            _messages_done(),
+        ])
+        cfg = ExecutorConfig(model="google/gemini-3.7-flash")
+        conversation = [{
+            "role": "user",
+            "content": [{
+                "type": "text",
+                "text": "do the thing",
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            }],
+        }]
+        out = OpenAIExecutorModel(cfg, client=client).run(
+            conversation, reader=reader, editor=editor
+        )
+
+        assert out.failure == ""
+        assert len(client.requests) == 2
+        assert _markers(client.requests[0]), "the first request should have been marked"
+        assert _markers(client.requests[1]) == [], "the resend still pointed at a cache"
+
+    def test_the_conversation_stays_cold_for_the_rest_of_the_attempt(self, parts):
+        editor, _, reader = parts
+        client = _MessagesClient([
+            _refused(400, "Cache content 1 is expired."),
+            _messages_done(),
+        ])
+        cfg = ExecutorConfig(model="google/gemini-3.7-flash")
+        conversation = [{
+            "role": "user",
+            "content": [{
+                "type": "text",
+                "text": "hello",
+                "cache_control": {"type": "ephemeral"},
+            }],
+        }]
+        OpenAIExecutorModel(cfg, client=client).run(
+            conversation, reader=reader, editor=editor
+        )
+
+        assert _markers(conversation) == []
+
+    def test_the_content_itself_is_unchanged(self, parts):
+        # Cold, not truncated. What was rejected was a pointer to a cache, and
+        # dropping any of the conversation would answer a different problem.
+        editor, _, reader = parts
+        client = _MessagesClient([
+            _refused(400, "Cache content 1 is expired."),
+            _messages_done(),
+        ])
+        cfg = ExecutorConfig(model="google/gemini-3.7-flash")
+        conversation = [{
+            "role": "user",
+            "content": [{
+                "type": "text",
+                "text": "the whole context",
+                "cache_control": {"type": "ephemeral"},
+            }],
+        }]
+        OpenAIExecutorModel(cfg, client=client).run(
+            conversation, reader=reader, editor=editor
+        )
+
+        sent = client.requests[1]["messages"]
+        assert sent[0]["content"][0]["text"] == "the whole context"
+
+    def test_a_second_stale_answer_is_not_retried_forever(self, parts):
+        # One cold resend. If the provider says it again with nothing marked,
+        # the diagnosis belongs to whoever reads the failure.
+        editor, _, reader = parts
+        client = _MessagesClient([
+            _refused(400, "Cache content 1 is expired."),
+            _refused(400, "Cache content 1 is expired."),
+            _messages_done(),
+        ])
+        cfg = ExecutorConfig(model="google/gemini-3.7-flash")
+        out = OpenAIExecutorModel(cfg, client=client).run(
+            [], reader=reader, editor=editor
+        )
+
+        assert "is expired" in out.failure
+        assert len(client.requests) == 2

@@ -28,6 +28,7 @@ from __future__ import annotations
 import os
 
 from code_gantry.config import ExecutorConfig
+from code_gantry.dialects import without_cache_markers
 from code_gantry.gateway import gateway_body, gateway_effort_body
 from code_gantry.executortools import REPLAN_TOOL, dispatch, openai_tool_schemas
 from code_gantry.openaiclient import (
@@ -37,9 +38,8 @@ from code_gantry.openaiclient import (
     merge_usage,
     refusal,
     tool_request,
-    transport_errors,
 )
-from code_gantry.retry import Backoff, with_provider_retry
+from code_gantry.retry import Backoff, is_stale_cache_rejection, with_provider_retry
 
 
 class ExecutorTurn:
@@ -143,6 +143,16 @@ def _dialect(cfg):
         return dialect_for(getattr(cfg, "model", ""))
     except ValueError:
         return RESPONSES
+
+
+def _status_of(failure) -> int | None:
+    """The HTTP status a provider failure carries, if it carries one.
+
+    The same reading `with_provider_retry` takes by default, and spelled once:
+    both SDKs put it in the same place, and two copies of that fact is how a
+    classifier comes to disagree with the retry that runs beside it.
+    """
+    return getattr(failure, "status_code", None)
 
 
 def _reasoning_param(cfg: ExecutorConfig) -> dict:
@@ -307,6 +317,33 @@ class OpenAIExecutorModel:
             tool_schemas(semantic, self.project_tools)
         )
 
+    def _send(self, conversation, tools, extra):
+        """One request, waited out on the wire it actually goes out on.
+
+        `retry_on` used to come from `openaiclient.transport_errors()` at the
+        call site — OpenAI's classes, whatever wire the model resolved to. An
+        `anthropic.APIStatusError` is not an `openai.APIStatusError`, so on the
+        Messages wire the tuple matched nothing and every failure propagated on
+        its first raise: no backoff, no log line, four attempts in four
+        seconds. Asking the dialect is what keeps the question and the client
+        answering it in one place.
+        """
+        wire = _dialect(self.cfg)
+        return with_provider_retry(
+            lambda: wire.send(self._client, self.cfg, conversation, tools, extra),
+            retry_on=wire.transport_errors(),
+            transient=Backoff(
+                budget_seconds=self.cfg.transport_retry_seconds,
+                max_delay_seconds=self.cfg.transport_retry_max_delay_seconds,
+            ),
+            spurious=Backoff(
+                budget_seconds=self.cfg.invalid_request_retry_seconds,
+                initial_seconds=self.cfg.invalid_request_initial_seconds,
+                factor=self.cfg.invalid_request_factor,
+            ),
+            log=self.log,
+        )
+
     def run(
         self,
         conversation: list,
@@ -330,27 +367,37 @@ class OpenAIExecutorModel:
 
         extra: dict = request_extras(self.cfg, self.session_id, cache_key)
 
+        # Whether this attempt has given up on the provider's cache. Local to
+        # the attempt rather than to the turn: a handle that is dead for this
+        # turn is dead for the next one, and re-marking would pay the same
+        # rejection once per turn.
+        cold = False
+
         for _ in range(self._max_turns()):
             try:
-                response = with_provider_retry(
-                    lambda: _dialect(self.cfg).send(
-                        self._client, self.cfg, conversation, tools, extra
-                    ),
-                    retry_on=transport_errors(),
-                    transient=Backoff(
-                        budget_seconds=self.cfg.transport_retry_seconds,
-                        max_delay_seconds=self.cfg.transport_retry_max_delay_seconds,
-                    ),
-                    spurious=Backoff(
-                        budget_seconds=self.cfg.invalid_request_retry_seconds,
-                        initial_seconds=self.cfg.invalid_request_initial_seconds,
-                        factor=self.cfg.invalid_request_factor,
-                    ),
-                    log=self.log,
-                )
+                response = self._send(conversation, tools, extra)
             except Exception as e:  # noqa: BLE001 - any failure ends the cycle
-                out.failure = f"the executor call failed: {e}"
-                return out
+                if cold or not is_stale_cache_rejection(_status_of(e), str(e)):
+                    out.failure = f"the executor call failed: {e}"
+                    return out
+                # The conversation was never the problem: what was refused is a
+                # pointer to a cache the provider had built for our marked
+                # prefix and then dropped. So the same context goes back out
+                # whole, with nothing marked — the first turn again, at the
+                # price of a first turn.
+                cold = True
+                conversation[:] = without_cache_markers(conversation)
+                extra = request_extras(self.cfg, self.session_id, None)
+                if self.log:
+                    self.log(
+                        "the provider's cache reference had expired; resending "
+                        f"the whole context uncached: {e}"
+                    )
+                try:
+                    response = self._send(conversation, tools, extra)
+                except Exception as again:  # noqa: BLE001 - the cold send is the last word
+                    out.failure = f"the executor call failed: {again}"
+                    return out
 
             out.turns += 1
             # Through the wire it arrived on. This was `extract_usage`,
@@ -469,7 +516,7 @@ class OpenAIExecutorModel:
             # Responses marks accumulate and every turn extends it; on Messages
             # only the last one counts, so it moves.
             wire.append_tool_results(
-                conversation, answers, cache=True,
+                conversation, answers, cache=not cold,
                 ttl=getattr(self.cfg, "cache_ttl", None),
             )
             logged = self._log_new_calls(reader, editor, logged)

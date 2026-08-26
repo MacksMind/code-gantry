@@ -134,11 +134,48 @@ def is_spurious_request_status(status: int | None, message: str | None = None) -
     """
     if status != 400:
         return False
+    if is_stale_cache_rejection(status, message):
+        return False
     text = (message or "").lower()
     return not any(
         phrase in text
         for phrase in ("prompt is too long", "context length", "too many tokens")
     )
+
+
+def is_stale_cache_rejection(status: int | None, message: str | None = None) -> bool:
+    """A 400 that rejects a *pointer to a cache* rather than the request.
+
+    Measured on a live run: four executor attempts died in four seconds
+    carrying the identical `Cache content 590015763578880000 is expired.` from
+    a Google upstream reached through a gateway, and the gateway had recorded
+    no generation for any of them — the request was rejected before dispatch,
+    which is why all four cost zero tokens.
+
+    Nothing about the conversation was wrong. A handle the provider had built
+    for our marked prefix had died, and each resend named the same dead
+    object, so the answer was byte-identical every time. That is the shape the
+    replay budget above must not take: sending the same request again cannot
+    succeed, and five minutes of waiting only delays the one resend that can.
+    The caller answers it by sending the same conversation with nothing
+    pointing at a cache.
+
+    Matched on the sentence for the reason `is_spurious_request_status` is:
+    the status is 400 whatever the cause, and a gateway quotes its upstream's
+    words rather than translating them. Both halves are required — a message
+    merely *mentioning* a cache is not a dead handle, and a narrow match keeps
+    an unrecognised 400 on the replay it already had.
+
+    `not found` sits beside `expired` because a handle collected rather than
+    aged out is the same condition with the same remedy. Only the expired
+    spelling has been observed.
+    """
+    if status != 400:
+        return False
+    text = (message or "").lower()
+    if "cache" not in text:
+        return False
+    return "expired" in text or "not found" in text
 
 
 def with_provider_retry(

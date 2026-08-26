@@ -436,3 +436,65 @@ class TestEffortIsSpelledForTheRouteNotTheModel:
         built = request_extras(cfg, cache_key=None)
         assert built["reasoning"] == {"effort": "high"}
         assert "reasoning" not in built.get("extra_body", {})
+
+
+class TestEachWireNamesItsOwnSdksFailures:
+    """The retry types belong to the SDK the call actually goes out on.
+
+    `executorclient` asked `openaiclient.transport_errors()` for them, which
+    names OpenAI's classes — correct while every executor call was a Responses
+    call, and silently wrong the day the executor became the wire-polymorphic
+    role. An `anthropic.APIStatusError` is not an `openai.APIStatusError`, so
+    `retry_on` matched nothing on the Messages wire and every failure
+    propagated on its first raise.
+
+    Measured on a live run: four attempts, four seconds, no backoff logged,
+    and the stage's whole rework allowance spent by requests that never
+    reached a model. The same hole covered 429s and dropped sockets — nothing
+    on that wire had ever been retried.
+
+    So the tuple is a property of the dialect, beside `client`, which is the
+    thing that decides which SDK raises in the first place.
+    """
+
+    def test_responses_names_openais(self):
+        import openai
+
+        assert set(RESPONSES.transport_errors()) == {
+            openai.APIConnectionError,
+            openai.APIStatusError,
+        }
+
+    def test_messages_names_anthropics(self):
+        import anthropic
+
+        assert set(MESSAGES.transport_errors()) == {
+            anthropic.APIConnectionError,
+            anthropic.APIStatusError,
+        }
+
+    def test_the_wires_do_not_cover_each_other(self):
+        # The defect itself, stated as a fact about the SDKs rather than about
+        # our code: neither tuple would have caught the other's failure, so
+        # asking the wrong one is the same as not retrying.
+        import anthropic
+        import httpx
+        import openai
+
+        request = httpx.Request("POST", "https://example.invalid/v1/messages")
+        refused = anthropic.BadRequestError(
+            "Error code: 400 - Cache content 1 is expired.",
+            response=httpx.Response(400, request=request),
+            body=None,
+        )
+        assert not isinstance(refused, tuple(RESPONSES.transport_errors()))
+        assert isinstance(refused, tuple(MESSAGES.transport_errors()))
+        assert not isinstance(refused, openai.APIStatusError)
+
+    def test_every_dialect_answers(self):
+        # A dialect added later inherits the question rather than the default,
+        # which is how the executor came to be asking the wrong module.
+        from code_gantry.dialects import _BY_NAME
+
+        for name, wire in _BY_NAME.items():
+            assert wire.transport_errors(), f"{name} names no failures to retry"

@@ -440,3 +440,74 @@ class TestTheTwoBudgetsAreNamedApart:
         text = self._log_of(400, "invalid_request_error: something odd")
         assert "provider rejected the request" in text
         assert "transport failure" not in text.split("giving up")[0]
+
+
+class TestAStaleCacheReferenceIsAnsweredWithoutTheCache:
+    """A 400 naming a dead cache handle is not a request we got wrong.
+
+    Measured on a live run: four executor attempts died in four seconds, all
+    four carrying the identical `Cache content 590015763578880000 is expired.`
+    from a Google upstream reached through a gateway, and the gateway recorded
+    no generation for any of them — the request was rejected before it was
+    dispatched, which is why every one cost zero tokens.
+
+    Nothing about the conversation was wrong. A handle the provider had built
+    for our marked prefix had died, and each resend named the same dead object,
+    so the answer was byte-identical every time. That is the one shape the
+    spurious-400 budget must not take: replaying it unchanged cannot succeed,
+    and five minutes of waiting only delays the resend that can. The remedy is
+    to send the same conversation with nothing pointing at a cache.
+
+    Only the expired spelling has been observed. `not found` is included
+    because a handle that has been collected rather than aged out is the same
+    condition with the same remedy, and answering it costs one cold resend.
+    """
+
+    def test_the_message_the_run_actually_died_on(self):
+        from code_gantry.retry import is_stale_cache_rejection
+
+        assert is_stale_cache_rejection(
+            400, "Error code: 400 - Cache content 590015763578880000 is expired."
+        )
+
+    def test_a_collected_handle_reads_the_same_way(self):
+        from code_gantry.retry import is_stale_cache_rejection
+
+        assert is_stale_cache_rejection(400, "CachedContent not found")
+
+    def test_an_ordinary_rejection_is_not_one(self):
+        from code_gantry.retry import is_stale_cache_rejection
+
+        assert not is_stale_cache_rejection(400, "invalid_request_error")
+        assert not is_stale_cache_rejection(400, "")
+        assert not is_stale_cache_rejection(400, None)
+
+    def test_a_context_overflow_is_not_one(self):
+        from code_gantry.retry import is_stale_cache_rejection
+
+        assert not is_stale_cache_rejection(
+            400, "prompt is too long: 1138774 tokens > 1000000 maximum"
+        )
+
+    def test_a_word_about_caching_alone_is_not_one(self):
+        # The cache being *mentioned* is not the cache being dead. A narrow
+        # match keeps an unrecognised 400 on its existing replay rather than
+        # sending it cold and losing the prefix for nothing.
+        from code_gantry.retry import is_stale_cache_rejection
+
+        assert not is_stale_cache_rejection(400, "cache_control is not supported here")
+
+    def test_only_a_400(self):
+        from code_gantry.retry import is_stale_cache_rejection
+
+        for status in (401, 404, 429, 500, None):
+            assert not is_stale_cache_rejection(status, "Cache content 1 is expired.")
+
+    def test_it_is_excluded_from_the_replay_budget(self):
+        # Both classifications read the same message, and this is the one that
+        # decides whether the identical request goes back out. It must not.
+        from code_gantry.retry import is_spurious_request_status
+
+        assert not is_spurious_request_status(
+            400, "Error code: 400 - Cache content 590015763578880000 is expired."
+        )
