@@ -88,7 +88,7 @@ class StubExecutor:
 
     def run_agent_stage(
         self, stage, prompt, history_dir=None, since_sha="",
-        agent_context=None, feedback=None, failure_layer=None,
+        agent_context=None, feedback=None, failure_layer=None, model="",
     ):
         self.prompts.append(prompt)
         self.history_dirs.append(history_dir)
@@ -517,7 +517,7 @@ class TestTheExecutorsCostSurvivesTheJourney:
         class Priced(StubExecutor):
             def run_agent_stage(self, stage, prompt, history_dir=None,
                                 since_sha="", agent_context=None, feedback=None,
-                                failure_layer=None):
+                                failure_layer=None, model=""):
                 self._apply()
                 return ExecutionResult(ok=True, log="", cost_usd=0.05)
 
@@ -3365,7 +3365,7 @@ class TestTheNativeExecutorsMeasurementsSurviveTheTrip:
         class Measured(StubExecutor):
             def run_agent_stage(
                 self, stage, prompt, history_dir=None, since_sha="",
-                agent_context=None, feedback=None, failure_layer=None,
+                agent_context=None, feedback=None, failure_layer=None, model="",
             ):
                 self._apply()
                 return ExecutionResult(ok=True, log="", **fields)
@@ -3477,7 +3477,7 @@ class TestTheExecuteLineReportsWhatItPaid:
         class Counted(StubExecutor):
             def run_agent_stage(
                 self, stage, prompt, history_dir=None, since_sha="",
-                agent_context=None, feedback=None, failure_layer=None,
+                agent_context=None, feedback=None, failure_layer=None, model="",
             ):
                 self._apply()
                 return ExecutionResult(
@@ -3513,7 +3513,7 @@ class TestTheExecuteLineReportsWhatItPaid:
         class NoUsage(StubExecutor):
             def run_agent_stage(
                 self, stage, prompt, history_dir=None, since_sha="",
-                agent_context=None, feedback=None, failure_layer=None,
+                agent_context=None, feedback=None, failure_layer=None, model="",
             ):
                 self._apply()
                 return ExecutionResult(ok=True, log="", tool_counts={"read_file": 3})
@@ -3610,7 +3610,7 @@ class TestContextIsSummedAcrossAttempts:
         class Measured(StubExecutor):
             def run_agent_stage(
                 self, stage, prompt, history_dir=None, since_sha="",
-                agent_context=None, feedback=None, failure_layer=None,
+                agent_context=None, feedback=None, failure_layer=None, model="",
             ):
                 self._apply()
                 return ExecutionResult(ok=True, log="", context_tokens=peak)
@@ -3734,3 +3734,84 @@ class TestTheReviewLogLineIsASummary:
             next(rt.paths.run_dir.glob("stages/*/review.json")).read_text()
         )
         assert written["tool_calls"] == calls
+
+
+class TestTheModelIsChosenPerStage:
+    """A routing policy resolved once per run, and the run is the wrong unit.
+
+    Measured: one run held `google/gemini-3.7-flash` for 30 stages and
+    `z-ai/glm-5.3-flash` for the 11 after it — and the switch was not the
+    router changing its mind, it was a human resuming after a planner block.
+    So the frequency at which the frontier got re-sampled was set by
+    operational accidents: a run that goes forty hours uninterrupted never
+    re-asks, one interrupted five times asks five times.
+
+    Per stage follows a price move mid-run, gives every stage one model to
+    attribute its cost and its rework to, and lets a model that is serving
+    badly stop at the next stage instead of lasting the run.
+
+    What it must not do is change *within* a stage. Measured on the artifacts:
+    2 attempts of 468 had two models serving one conversation, and in one of
+    them a single foreign turn sat inside 32 of another model's, reading
+    nothing of the prefix they had built.
+
+    `resolve_policy` is patched here rather than the probe beneath it: `ask`
+    is a default argument bound at definition, so patching the probe does not
+    reach it — two tests in the first draft of this class passed without ever
+    touching the code they named. What that function does with a concrete
+    model, a policy and a failed probe is its own file's business.
+    """
+
+    def test_a_policy_is_resolved_at_stage_start(self, repo, tmp_path, monkeypatch):
+        cfg, rt, state = make(repo, tmp_path)
+        monkeypatch.setattr(
+            nodes, "resolve_policy",
+            lambda c, log=None: c.model_copy(update={"model": "vendor/concrete-1"}),
+        )
+        state["current"] = planned_stage()
+
+        out = nodes.precheck(state, rt)
+        assert out["stage_executor_model"] == "vendor/concrete-1"
+
+    def test_it_is_not_asked_again_inside_a_stage(self, repo, tmp_path, monkeypatch):
+        # The invariant the whole change exists for. `precheck` runs again on a
+        # revision that discards the branch, and asking again there would put a
+        # second model inside one stage's conversation.
+        asked = []
+
+        def counting(c, log=None):
+            asked.append(1)
+            return c.model_copy(update={"model": f"vendor/pick-{len(asked)}"})
+
+        cfg, rt, state = make(repo, tmp_path)
+        monkeypatch.setattr(nodes, "resolve_policy", counting)
+        state["current"] = planned_stage()
+        first = nodes.precheck(state, rt)
+
+        state["stage_executor_model"] = first["stage_executor_model"]
+        state["stage_branch"] = None
+        again = nodes.precheck(state, rt)
+
+        assert asked == [1], "the stage was re-routed part-way through"
+        assert "stage_executor_model" not in again
+
+    def test_the_choice_reaches_the_attempt(self, repo, tmp_path):
+        # The journey, not its endpoints: this value is set by one node, kept
+        # in state, and read by another. Four defects in this codebase have
+        # been values computed correctly and lost in transit, and every one
+        # passed its unit tests on both ends.
+        seen = {}
+
+        class Watching(StubExecutor):
+            def run_agent_stage(self, stage, prompt, history_dir=None,
+                                since_sha="", agent_context=None, feedback=None,
+                                failure_layer=None, model=""):
+                seen["model"] = model
+                return ExecutionResult(ok=True, log="")
+
+        cfg, rt, state = make(repo, tmp_path, executor=Watching(repo=repo))
+        state = with_stage(state, rt)
+        state["stage_executor_model"] = "vendor/locked-for-this-stage"
+
+        nodes.execute(state, rt)
+        assert seen["model"] == "vendor/locked-for-this-stage"

@@ -361,3 +361,47 @@ class TestExcerptsResolveAtACommit:
         with pytest.raises(ExcerptError) as excinfo:
             resolve_excerpts(stage, cfg, git=Git(repo), sha=sha)
         assert "symlink" in str(excinfo.value).lower()
+
+
+class TestTheStagesModelTravelsWithTheAttempt:
+    """The concrete model has to reach pricing, not just the client.
+
+    `run_loop` prices an attempt with `cfg.executor.model`, and
+    `configured_models` projects the rate table to the same field. Now that a
+    routing policy is resolved per stage rather than per run, leaving the run's
+    config in place would put the *policy* name in both — invisible against an
+    endpoint that reports its own `cost`, and an unpriced attempt against one
+    that does not.
+    """
+
+    def _seen_cfg(self, tmp_path, monkeypatch, model):
+        import code_gantry.executorloop as executorloop
+
+        seen = {}
+
+        def fake_run_loop(stage, cfg, *a, **kw):
+            seen["model"] = cfg.executor.model
+            raise SystemExit  # far enough: the config has been read
+
+        monkeypatch.setattr(executorloop, "run_loop", fake_run_loop)
+        monkeypatch.setenv("EXECUTOR_TEST_KEY", "k")
+        cfg, stage = cfg_with(executor={
+            "model": "openrouter/some-policy",
+            "api_base": "http://spark:8080/v1",
+            "api_key_env": "EXECUTOR_TEST_KEY",
+        })
+        cfg = cfg.model_copy(update={"target_repo": Path(tmp_path)})
+        ex = Executor(cfg, CommandRunner(Path(tmp_path), timeout=5))
+        with pytest.raises(SystemExit):
+            ex.run_agent_stage(stage, "prompt", model=model)
+        return seen["model"]
+
+    def test_the_loop_is_given_the_resolved_model(self, tmp_path, monkeypatch):
+        assert self._seen_cfg(
+            tmp_path, monkeypatch, "vendor/chosen-for-this-stage"
+        ) == "vendor/chosen-for-this-stage"
+
+    def test_without_one_the_run_config_is_left_alone(self, tmp_path, monkeypatch):
+        # A concrete configured model, or a probe that failed: the policy still
+        # answers, and nothing should be rewritten on its behalf.
+        assert self._seen_cfg(tmp_path, monkeypatch, "") == "openrouter/some-policy"

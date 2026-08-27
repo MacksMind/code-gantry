@@ -176,12 +176,21 @@ def resolve_policy(cfg, ask=_probe, log=None):
     prefix and the ability to choose a dialect — not the run. Refusing to start
     would turn an optimisation into a new way to fail.
 
-    Resolving once is not pinning. The frontier this follows moves over weeks
-    while a router re-decides per request; a fresh run re-resolves, which
-    samples it far more often than it changes. What per-request routing costs
-    is the cross-stage cache, any attribution of an outcome to a model, and the
+    Resolving once is not pinning. What per-request routing costs is the
+    cross-stage cache, any attribution of an outcome to a model, and the
     dialect — `dialect_for` refuses a policy outright rather than guess, and it
     resolved to three different families in one day.
+
+    Called per stage, by `precheck`. It was called once per run, and the run
+    was the wrong unit: the answer was re-sampled only when a human restarted,
+    so one run held one model for 30 stages and another for the 11 after a
+    resume — a sampling frequency set by operational accidents rather than by
+    anything about the work. Per stage follows a price move mid-run, gives
+    every stage one model to attribute its cost and its rework to, and lets a
+    model that is serving badly stop at the next stage instead of lasting the
+    run. Not per attempt and not per turn: those are one conversation, and a
+    turn served by a different model reads nothing of the prefix the others
+    built.
     """
     from code_gantry.dialects import dialect_for
 
@@ -202,5 +211,5 @@ def resolve_policy(cfg, ask=_probe, log=None):
     if not resolved or resolved == cfg.model:
         return cfg
     if log:
-        log(f"[preflight] {cfg.model} resolved to {resolved} for this run")
+        log(f"[precheck] {cfg.model} resolved to {resolved} for this stage")
     return cfg.model_copy(update={"model": resolved})

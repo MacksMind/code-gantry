@@ -16,7 +16,6 @@ from code_gantry.cachekey import cache_key
 from code_gantry.commands import CommandRunner
 from code_gantry.config import ProjectConfig, validate_stage
 from code_gantry.executor import Executor
-from code_gantry.gateway import resolve_policy
 from code_gantry.gitops import Git, GitError
 from code_gantry.layout import summarize_layout
 from code_gantry.plandoc import PlanDocument, PlanTree, load_snapshot
@@ -489,14 +488,18 @@ def build_runtime(
             client.runner = runner
         if hasattr(client, "project_tools") and not getattr(client, "project_tools", None):
             client.project_tools = list(cfg.project_tools or [])
-    # A routing policy becomes the model it picks today, once, before anything
-    # is built from it. Until this happens `dialect_for` refuses to choose a
-    # wire — a policy resolved to three different families in one day — so the
-    # executor falls back to whatever its client already speaks and the
-    # cross-stage prefix cannot stay warm.
-    cfg = cfg.model_copy(
-        update={"executor": resolve_policy(cfg.executor, log=logger)}
-    )
+    # A routing policy is *not* resolved here any more. It was, once per run,
+    # and the run turned out to be the wrong unit: the answer was re-sampled
+    # only when a human restarted, so one run held a model for 30 stages and a
+    # different one for the 11 after a resume. `precheck` asks per stage now,
+    # which follows a price move mid-run and gives every stage one model to
+    # attribute its cost and its rework to. Preflight still probes the
+    # endpoint, because "is the router reachable with this key" is a question
+    # worth answering before a run starts rather than on stage one.
+    #
+    # What this costs until `precheck` runs: `dialect_for` refuses a policy, so
+    # the executor falls back to whatever its client already speaks. That was
+    # true between this line and the first stage before, too.
     git = Git(cfg.target_repo)
     return Runtime(
         cfg=cfg,

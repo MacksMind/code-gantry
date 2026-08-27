@@ -240,6 +240,7 @@ class Executor:
         agent_context: str | None = None,
         feedback: list[str] | None = None,
         failure_layer: str | None = None,
+        model: str = "",
     ) -> ExecutionResult:
         """One attempt at a stage.
 
@@ -250,7 +251,7 @@ class Executor:
         """
         return self._run_in_process(
             stage, prompt, history_dir, since_sha, agent_context, feedback,
-            failure_layer,
+            failure_layer, model,
         )
 
     def _run_in_process(
@@ -262,6 +263,7 @@ class Executor:
         agent_context: str | None = None,
         feedback: list[str] | None = None,
         failure_layer: str | None = None,
+        model: str = "",
     ) -> ExecutionResult:
         """The in-process loop. See `executorloop.run_loop`.
 
@@ -277,8 +279,27 @@ class Executor:
         reader, editor, semantic = build_loop_parts(
             stage, self.cfg, self.cfg.target_repo
         )
-        model = OpenAIExecutorModel(
-            self.cfg.executor,
+        # The stage's model, where one was chosen for it. Passed in rather than
+        # read off `self.cfg`, which is shared for the whole run: an attempt is
+        # the thing that has a model, and an argument the caller can see is one
+        # no other stage can inherit by accident.
+        executor_cfg = (
+            self.cfg.executor.model_copy(update={"model": model})
+            if model and model != self.cfg.executor.model
+            else self.cfg.executor
+        )
+        # And the same config travels into the loop, because `cfg.executor.model`
+        # is what prices the attempt and what `configured_models` projects the
+        # rate table to. Left as the run's, a policy name would reach both — an
+        # endpoint that reports its own `cost` would not notice, and one that
+        # does not would record the attempt as unpriced.
+        run_cfg = (
+            self.cfg.model_copy(update={"executor": executor_cfg})
+            if executor_cfg is not self.cfg.executor
+            else self.cfg
+        )
+        client = OpenAIExecutorModel(
+            executor_cfg,
             log=self.log,
             tool_log=self.tool_log,
             # Project-declared tools and the runner that executes them. Bound
@@ -301,7 +322,7 @@ class Executor:
         # takes 274-353. Per stage it would expire between every pair of
         # stages by construction; this way it is identical inside an attempt
         # and at least asks to hold across them.
-        model.session_id = self.session_identity()
+        client.session_id = self.session_identity()
         kept = set(_within_read_budget(stage.read_files, self.cfg))
 
         from code_gantry.prompts import build_executor_messages
@@ -334,10 +355,10 @@ class Executor:
             _write_sent_prompt(history_dir, conversation)
         out = run_loop(
             stage,
-            self.cfg,
+            run_cfg,
             self.git if self.git is not None else Git(self.cfg.target_repo),
             self.runner,
-            model,
+            client,
             reader,
             editor,
             semantic=semantic,

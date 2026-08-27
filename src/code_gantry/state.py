@@ -151,6 +151,13 @@ class RunState(TypedDict, total=False):
     rework_refunded: bool
 
     stage_start_sha: str
+    # The concrete model this stage's attempts run against. A routing policy
+    # is resolved once, at stage start, and every attempt and revision of the
+    # stage uses the answer — the flip this exists to prevent is one inside a
+    # conversation, where a turn served by another model reads nothing of the
+    # prefix the others built. Empty means the configured model is already
+    # concrete, or the probe failed and the router will pick per request.
+    stage_executor_model: str
     stage_started_at: float
     started_at: float
     # `wall_clock_hours` bounds one unattended session, not a project's total
@@ -293,6 +300,7 @@ def new_state(
         rework_attempt=0,
         rework_refunded=False,
         stage_start_sha="",
+        stage_executor_model="",
         stage_started_at=0.0,
         started_at=started_at,
         session_started_at=started_at,

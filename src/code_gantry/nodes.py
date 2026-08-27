@@ -41,6 +41,7 @@ from code_gantry.executor import (
     resolve_excerpts,
 )
 from code_gantry.flake import adjudicate, append_flakes, predates_stage
+from code_gantry.gateway import resolve_policy
 from code_gantry.gitops import GitError
 # The gate's clip, under the name thirteen call sites here already use.
 # Imported rather than redefined: the budget and the helper are one
@@ -817,6 +818,24 @@ def precheck(state: RunState, rt: Runtime) -> dict:
         update["stage_started_at"] = time.time()
         rt.log(f"[precheck] cut {branch} at {start[:12]}")
 
+    # The model this stage runs against, chosen here and held for every attempt
+    # and revision of it. A routing policy resolved once per *run* re-sampled
+    # the frontier only when a human restarted: one run held one model for 30
+    # stages and another for the 11 after it, and the switch was a resume
+    # rather than the router changing its mind. Per stage follows a price move
+    # mid-run, gives each stage one model to attribute its cost and its rework
+    # to, and lets a model that is serving badly stop at the next stage instead
+    # of lasting the run.
+    #
+    # Not per attempt, and not per turn: those are one conversation, and a turn
+    # served by a different model reads nothing of the prefix the others built.
+    # Measured on the artifacts — 2 attempts of 468 had two models in one
+    # conversation, one of them a single foreign turn inside 32.
+    if not state.get("stage_executor_model"):
+        update["stage_executor_model"] = resolve_policy(
+            rt.cfg.executor, log=rt.log
+        ).model
+
     update["next_hop"] = "execute"
     return update
 
@@ -943,6 +962,10 @@ def execute(state: RunState, rt: Runtime) -> dict:
         agent_context=_conventions(state, rt),
         feedback=feedback,
         failure_layer=state.get("failure_layer"),
+        # Chosen once at stage start and held for every attempt and revision:
+        # a model that changes inside a conversation reads nothing of the
+        # prefix the turns before it built.
+        model=state.get("stage_executor_model", ""),
     )
 
     if result.tool_counts:
