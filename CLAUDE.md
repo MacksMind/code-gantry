@@ -27,12 +27,11 @@ belongs in project instructions and only reaches a summary is lost on a horizon
 nobody is watching.
 
 Run the tests with `uv run pytest -n auto`. They are fast and need no network —
-there is no reason not to run the whole suite. `-n auto` is the difference
-between about 25 seconds and several minutes on 1,400-odd tests, and the suite
-is the inner loop of working here, which is why `pytest-xdist` is a dev
-dependency rather than a nicety. It is not in `addopts` because a single-test
-run pays worker startup for nothing; add it whenever you are running more than
-a file.
+there is no reason not to run the whole suite. `-n auto` is several times
+faster on the whole suite, and the suite is the inner loop of working here,
+which is why `pytest-xdist` is a dev dependency rather than a nicety. It is not
+in `addopts` because a single-test run pays worker startup for nothing; add it
+whenever you are running more than a file.
 
 The suite must pass in a shell with the run's credentials loaded. That sounds
 obvious and was not true: a test asserted `OPENAI_API_KEY` was absent from a

@@ -18,11 +18,11 @@ dependencies = [
 code-gantry = "code_gantry.cli:main"
 
 [dependency-groups]
-# xdist because the suite is the inner loop of working on this codebase and it
-# had grown to ten minutes serially. Every test builds its own repository in a
-# `tmp_path`, and the two that change directory do it through `monkeypatch`, so
-# the state each worker touches is already per-test — the parallelism is safe
-# because of how the fixtures were written, not by luck.
+# xdist because the suite is the inner loop of working on this codebase. Every
+# test builds its own repository in a `tmp_path`, and the two that change
+# directory do it through `monkeypatch`, so the state each worker touches is
+# already per-test — the parallelism is safe because of how the fixtures were
+# written, not by luck.
 dev = ["pytest>=8.0", "pytest-xdist>=3.5"]
 
 [build-system]
