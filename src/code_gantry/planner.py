@@ -1114,13 +1114,14 @@ def make_planner(
 def _build_anthropic_client(cfg: PlannerConfig):
     import anthropic
 
-    if cfg.api_key_env not in os.environ:
-        raise RuntimeError(
-            f"planner.api_key_env names {cfg.api_key_env}, which is not set in "
-            "the environment"
-        )
+    # Through the same resolver the executor's clients use, so "this endpoint
+    # serves without a key" means the same thing in all three roles. Naming a
+    # variable and not setting it is still a mistake with a clear message;
+    # naming none is a decision, and the endpoint answers it.
+    from code_gantry.dialects import _api_key
+
     return anthropic.Anthropic(
-        api_key=os.environ[cfg.api_key_env],
+        api_key=_api_key(cfg),
         base_url=cfg.resolve_api_base(),
         timeout=cfg.request_timeout_seconds,
         max_retries=cfg.max_retries,

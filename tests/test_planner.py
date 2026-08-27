@@ -514,8 +514,11 @@ class TestUsageAccounting:
 
 class TestFactory:
     def test_missing_api_key_is_reported_clearly(self, monkeypatch):
+        # `KeyError` rather than `RuntimeError` since all three roles resolve a
+        # key through one function: naming a variable and not setting it is the
+        # same mistake wherever it happens, and it says the same thing.
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-        with pytest.raises(RuntimeError) as e:
+        with pytest.raises(KeyError) as e:
             make_planner(cfg())
         assert "ANTHROPIC_API_KEY" in str(e.value)
 

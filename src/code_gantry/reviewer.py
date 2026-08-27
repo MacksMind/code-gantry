@@ -587,14 +587,11 @@ def make_reviewer(
 def _build_openai_client(cfg: ReviewerConfig):
     from openai import OpenAI
 
-    if cfg.api_key_env not in os.environ:
-        raise RuntimeError(
-            f"reviewer.api_key_env names {cfg.api_key_env}, which is not set "
-            "in the environment"
-        )
+    # See `planner._build_anthropic_client`: one resolver for all three roles.
+    from code_gantry.dialects import _api_key
 
     return OpenAI(
-        api_key=os.environ[cfg.api_key_env],
+        api_key=_api_key(cfg),
         base_url=cfg.resolve_api_base(),
         timeout=cfg.request_timeout_seconds,
         max_retries=cfg.max_retries,

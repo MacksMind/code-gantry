@@ -348,7 +348,11 @@ class ExecutorConfig(_EndpointConfig):
 class PlannerConfig(_EndpointConfig):
     provider: Literal["anthropic"] = "anthropic"
     model: str
-    api_key_env: str = "ANTHROPIC_API_KEY"
+    # Optional in every role, not just the executor. Someone running three
+    # local models should be able to say so in all three places, and an
+    # operator naming no variable against a cloud endpoint has made a claim
+    # rather than an omission — the request goes out and the provider answers.
+    api_key_env: str | None = "ANTHROPIC_API_KEY"
     # Was hard-coded `high`, which is a tuning decision about a deployment
     # sitting in code the operator who owns the deployment cannot reach.
     # `high` remains the default so nothing changes for a project that never
@@ -457,7 +461,11 @@ class PlannerConfig(_EndpointConfig):
 class ReviewerConfig(_EndpointConfig):
     provider: Literal["openai"] = "openai"
     model: str
-    api_key_env: str = "OPENAI_API_KEY"
+    # Optional in every role, not just the executor. Someone running three
+    # local models should be able to say so in all three places, and an
+    # operator naming no variable against a cloud endpoint has made a claim
+    # rather than an omission — the request goes out and the provider answers.
+    api_key_env: str | None = "OPENAI_API_KEY"
     # Unset by default, which is what it has always been: the reviewer never
     # sent a reasoning parameter, so it ran at whatever the provider chose.
     # Picking a default here would silently change the gate's behaviour on

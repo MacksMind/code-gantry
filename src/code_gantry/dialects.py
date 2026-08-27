@@ -661,12 +661,24 @@ def _lift_system(wire, conversation):
     return blocks, conv[1:]
 
 
+# What a role sends when its config names no environment variable. Not empty:
+# one SDK builds without a key and the other refuses to, so an absence is two
+# different behaviours and a placeholder is one.
+NO_KEY_REQUIRED = "no-key-required"
+
+
 def _api_key(cfg) -> str:
     import os
 
     name = getattr(cfg, "api_key_env", None)
     if not name:
-        raise KeyError("no api_key_env is configured for this endpoint")
+        # A declared choice, not an omission: the operator has said this
+        # endpoint serves without one. A placeholder rather than nothing
+        # because `OpenAI(...)` refuses to build without a key while
+        # `anthropic.Anthropic(...)` does not, so omitting it works on one
+        # wire and raises on the other. Whatever the endpoint makes of it is
+        # the endpoint's answer to give.
+        return NO_KEY_REQUIRED
     if name not in os.environ:
         raise KeyError(
             f"{name} is not set; the client cannot authenticate. It is named in "
