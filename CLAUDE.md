@@ -2184,6 +2184,69 @@ its precheck header and `[plan] revising` one second later, and nothing in
 between named the cause. The reason reached the planner and the checkpoint —
 the two places a person does not look. When a check routes, it logs.
 
+**A guard and the reset it depends on are one decision written in two
+places.** `precheck` resolves the stage's model "only when unset", which is
+what lets a revision keep the model its stage was given — and nothing cleared
+the field between stages. So it locked the first stage's answer for the whole
+run: exactly the per-run behaviour the change existed to remove, keyed on
+whichever stage happened to be first. Both halves were written in the same
+commit and contradict each other; the comment beside the guard claimed the
+value was "always overwritten at the next precheck", which the guard is
+precisely what prevents. Observed within the hour: 042 resolved, 043 cut its
+branch and never asked. When you add a field whose meaning is "already decided
+for this unit of work", write the clearing in the same edit and name the node
+that owns the end of that unit.
+
+**Retry types belong to the SDK the call goes out on, not to the module you
+imported them from.** `executorclient` asked `openaiclient.transport_errors()`
+for them — right while every executor call was a Responses call, and silently
+wrong the day the executor became the wire-polymorphic role. An
+`anthropic.APIStatusError` is not an `openai.APIStatusError`, so on the
+Messages wire `retry_on` matched nothing and every failure propagated on its
+first raise: no backoff, no log line. **Nothing on that wire had ever been
+retried** — not 429s, not dropped sockets. Four attempts died in four seconds
+and spent a stage's whole rework allowance without one request reaching a
+model. It is a property of the dialect now, beside `client`, and raises rather
+than defaulting to empty, because no retrying looks identical to nothing
+having failed.
+
+**A rejection of a *pointer to a cache* cannot be answered by sending it
+again.** `Cache content <id> is expired.` arrived four times identically, with
+the gateway recording no generation for any of them — rejected before dispatch,
+zero tokens. The conversation was never the problem: a handle built for our
+marked prefix had died. It is excluded from the spurious-400 budget and
+answered by resending the same context with nothing marked, cold for the rest
+of the attempt rather than for one request, since a handle that is dead now is
+dead next turn.
+
+**A ratio that is exactly constant is the instrument.** Messages-wire opening
+turns reported `prompt == 2 x cached` on 282 of 356 samples — 36,420 and
+18,210, unchanged across 30 stages whose instructions differ. Our normaliser is
+right (`input + read + written`); the gateway reports the whole prompt as
+`input_tokens` *and* again as a cache read. Settled without a probe, by
+measuring what the request can possibly contain: the executor's whole payload
+is ~21,300 tokens, so 36,420 is more than the prompt that exists. Every
+Messages-wire prompt figure we have recorded is inflated about 2x.
+
+**A check that exists as a side effect of something else disappears when that
+thing moves.** The executor's credentials were never checked at preflight — it
+had `GET /models`, which proves an endpoint exists and nothing about whether we
+may call it. What made the gap invisible was `resolve_policy` making a real
+authenticated completion whose line printed among the preflight output, and
+only when the configured model was a routing policy. Moving that probe to stage
+start took the accident with it. Ask of each check what it is *made of*, not
+what it appears beside.
+
+**Measured, and worth not re-deriving.** The executor's request is ~85,300
+characters: **88% identical stage to stage** — system block 9.4k, tool schemas
+20.0k (17 tools, 80% prose), the target repo's `AGENTS.md` whole at 47.5k — and
+7.8k of per-stage Task, constraints, file lists and excerpts. Cross-stage cache
+carryover is therefore worth **under 1%** of an attempt, because a first
+attempt spends ~1.97M prompt tokens re-sending the conversation every turn;
+within-attempt caching runs 84-95% and is untouched by changing model between
+stages. Cost per landed stage, all three roles: **$5.94** on
+`gemini-3.7-flash`, of which the executor is $0.79 and derivation $3.47.
+
 ## Where things live
 
 `nodes.py` holds the loop's decisions — which failures route to the executor,
