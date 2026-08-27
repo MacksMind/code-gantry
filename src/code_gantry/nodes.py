@@ -831,6 +831,11 @@ def precheck(state: RunState, rt: Runtime) -> dict:
     # served by a different model reads nothing of the prefix the others built.
     # Measured on the artifacts — 2 attempts of 468 had two models in one
     # conversation, one of them a single foreign turn inside 32.
+    #
+    # "Only when unset" is what makes a revision keep the stage's model, and it
+    # relies on `fresh_stage_fields` clearing it when a stage begins or lands.
+    # Without that half it locks the first stage's answer for the whole run,
+    # which is what it shipped as: 042 resolved and 043 never asked.
     if not state.get("stage_executor_model"):
         update["stage_executor_model"] = resolve_policy(
             rt.cfg.executor, log=rt.log

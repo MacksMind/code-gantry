@@ -392,6 +392,14 @@ def fresh_stage_fields() -> dict:
     """
     return {
         "stage_branch": None,
+        # A new stage asks the router again; a revision of the same stage does
+        # not. This is the right home for both halves rather than a guard in
+        # `precheck` alone: the two nodes that spread these fields are the
+        # derive path and the landing, and a revision takes neither. Left out
+        # of here, `precheck`'s "ask only when unset" held the first stage's
+        # model for the whole run — the per-run locking this change existed to
+        # remove, keyed on whichever stage happened to be first.
+        "stage_executor_model": "",
         "stage_start_sha": "",
         "stage_started_at": 0.0,
         "verify_attempt": 0,

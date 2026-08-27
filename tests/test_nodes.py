@@ -3795,6 +3795,38 @@ class TestTheModelIsChosenPerStage:
         assert asked == [1], "the stage was re-routed part-way through"
         assert "stage_executor_model" not in again
 
+    def test_a_new_stage_asks_again(self):
+        # The bug this class did not catch on its first draft: the field was
+        # set once and never cleared, so `if not state.get(...)` held the first
+        # stage's model for the whole run — per-run locking again, keyed on
+        # whichever stage happened to be first. Observed live: stage 042
+        # resolved, stage 043 cut its branch and never asked.
+        from code_gantry.state import fresh_stage_fields
+
+        assert fresh_stage_fields()["stage_executor_model"] == ""
+
+    def test_a_revision_keeps_the_stage_s_model(self, repo, tmp_path, monkeypatch):
+        # And the other half, which is why the reset belongs where it is rather
+        # than in `precheck`: the two nodes that spread `fresh_stage_fields`
+        # are the derive path and the landing, and a revision takes neither.
+        # A revision is the same stage, so it keeps the model it was given.
+        asked = []
+        cfg, rt, state = make(repo, tmp_path)
+        monkeypatch.setattr(
+            nodes, "resolve_policy",
+            lambda c, log=None: asked.append(1) or c.model_copy(
+                update={"model": f"vendor/pick-{len(asked)}"}),
+        )
+        state["current"] = planned_stage()
+        state.update(nodes.precheck(state, rt))
+
+        state["revision"] = 1
+        state["stage_branch"] = None
+        state.update(nodes.precheck(state, rt))
+
+        assert asked == [1]
+        assert state["stage_executor_model"] == "vendor/pick-1"
+
     def test_the_choice_reaches_the_attempt(self, repo, tmp_path):
         # The journey, not its endpoints: this value is set by one node, kept
         # in state, and read by another. Four defects in this codebase have
