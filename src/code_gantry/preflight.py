@@ -931,10 +931,24 @@ def _model_names(body: str) -> set[str] | None:
 
 def _model_checks(cfg: ProjectConfig) -> list[Check]:
     checks = []
+    # All three, and the executor was the one missing. It had `GET /models`,
+    # which proves the endpoint exists and nothing about whether we may call
+    # it — while `resolve_policy` happened to make a real authenticated
+    # completion whose line printed among these, so the gap read as covered.
+    # That probe fired only for a routing policy, never for a concrete model,
+    # and it belongs to a stage now. Finding a dead key at stage one costs a
+    # derivation and a cut branch before anything says why.
     for label, env_var, builder in (
         ("planner", cfg.planner.api_key_env, _build_planner),
         ("reviewer", cfg.reviewer.api_key_env, _build_reviewer),
+        ("executor", cfg.executor.api_key_env, _build_executor),
     ):
+        if not env_var:
+            # Only the executor can say it needs no key, and a local endpoint
+            # that needs none has nothing to prove here — `GET /models` already
+            # establishes that it answers. The planner and reviewer both carry
+            # a default, so this can never skip them.
+            continue
         if env_var not in os.environ:
             checks.append(
                 Check(f"{env_var} is set", False, f"the {label} cannot be called without it")
@@ -1002,6 +1016,18 @@ def _ping(client) -> None:
         model=model, max_completion_tokens=16,
         messages=[{"role": "user", "content": "."}],
     )
+
+
+def _build_executor(cfg: ProjectConfig):
+    """The executor's client, built the way an attempt builds it.
+
+    Through `OpenAIExecutorModel` rather than a client of preflight's own: the
+    dialect decides which SDK this is, and a check that picks its own would be
+    proving a key against an endpoint the run does not use.
+    """
+    from code_gantry.executorclient import OpenAIExecutorModel
+
+    return OpenAIExecutorModel(cfg.executor)
 
 
 def _build_planner(cfg: ProjectConfig):

@@ -794,3 +794,59 @@ class TestTheRunLogExistsBeforePreflight:
         run_dir.mkdir(parents=True)
         RunLog(run_dir / "run.log", echo=None).close()
         assert not (run_dir / "run.json").exists()
+
+
+def _with_executor_key(cfg, env_var: str = "OPENROUTER_API_KEY"):
+    """The same config with the executor naming a key of its own."""
+    return cfg.model_copy(
+        update={"executor": cfg.executor.model_copy(update={"api_key_env": env_var})}
+    )
+
+
+class TestEveryRoleProvesItsKey:
+    """The executor's credentials were never checked, and looked as if they were.
+
+    The planner and the reviewer each make a real authenticated call at
+    preflight. The executor got an unauthenticated `GET /models` — the endpoint
+    answers and the model id is offered — which proves the endpoint exists and
+    nothing about whether we may call it.
+
+    It looked covered because of an accident: `resolve_policy` made a real
+    completion on the executor's endpoint, and its line printed among the
+    preflight output. But it fired only when the configured model was a
+    *routing policy*; a concrete model returned early without probing, so those
+    configs never had the check at all. Moving that probe to stage start took
+    the accident with it, which is the right time to notice it was load-bearing.
+
+    Finding out at stage one is expensive in a way preflight exists to prevent:
+    the plan derives, a branch is cut, and the first attempt dies on auth.
+    """
+
+    def test_all_three_roles_are_checked(self, monkeypatch):
+        from code_gantry import preflight
+
+        monkeypatch.setattr(preflight, "_build_planner", lambda cfg: object())
+        monkeypatch.setattr(preflight, "_build_reviewer", lambda cfg: object())
+        monkeypatch.setattr(preflight, "_build_executor", lambda cfg: object())
+        monkeypatch.setattr(preflight, "_ping", lambda client: None)
+        for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"):
+            monkeypatch.setenv(var, "k")
+
+        cfg = _with_executor_key(cfg_for("openrouter/pareto-code", ""))
+        names = [c.name for c in preflight._model_checks(cfg)]
+        for role in ("planner", "reviewer", "executor"):
+            assert f"{role} credentials work" in names, f"{role} proves nothing"
+
+    def test_a_missing_executor_key_is_named_before_anything_runs(self, monkeypatch):
+        from code_gantry import preflight
+
+        monkeypatch.setattr(preflight, "_build_planner", lambda cfg: object())
+        monkeypatch.setattr(preflight, "_build_reviewer", lambda cfg: object())
+        monkeypatch.setattr(preflight, "_ping", lambda client: None)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        monkeypatch.setenv("OPENAI_API_KEY", "k")
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+        cfg = _with_executor_key(cfg_for("openrouter/pareto-code", ""))
+        failed = [c for c in preflight._model_checks(cfg) if not c.ok]
+        assert any("OPENROUTER_API_KEY" in c.name for c in failed)
