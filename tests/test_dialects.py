@@ -498,3 +498,172 @@ class TestEachWireNamesItsOwnSdksFailures:
 
         for name, wire in _BY_NAME.items():
             assert wire.transport_errors(), f"{name} names no failures to retry"
+
+
+class _Obj(dict):
+    """Read by attribute like an SDK object, built like a dict. Both happen."""
+
+    def __getattr__(self, key):
+        try:
+            return self[key]
+        except KeyError:
+            raise AttributeError(key) from None
+
+
+def _reply(stop_reason="end_turn", text="", tool_calls=0):
+    """A Messages response, in the shape the SDK returns."""
+    content = [
+        _Obj(type="tool_use", id=f"toolu_{i}", name="read_file", input={})
+        for i in range(tool_calls)
+    ]
+    if text:
+        content.append(_Obj(type="text", text=text))
+    return _Obj(content=content, stop_reason=stop_reason)
+
+
+def _responses_reply(status="completed", text="", tool_calls=0, incomplete=None):
+    """A Responses response, carrying the two fields nothing used to read."""
+    output = [
+        _Obj(type="function_call", call_id=f"call_{i}", name="read_file", arguments="{}")
+        for i in range(tool_calls)
+    ]
+    if text:
+        output.append(_Obj(type="message", content=[_Obj(type="output_text", text=text)]))
+    return _Obj(
+        output=output,
+        status=status,
+        incomplete_details=_Obj(reason=incomplete) if incomplete else None,
+    )
+
+
+class TestHowATurnEnded:
+    """One question, asked the same way on both wires.
+
+    Every role needs to know how a turn ended and no two asked it alike.
+    `_messages_stopped` consulted `stop_reason`; `_responses_stopped` consulted
+    *nothing* — it inferred stopping from the absence of tool calls, so on that
+    wire a turn that ended abnormally was indistinguishable from one that
+    finished, by construction, while `status` and `incomplete_details` sat on
+    the response unread. The planner compared `stop_reason` against two string
+    literals and discarded it; the reviewer never looked.
+
+    Measured: a planner call returned no verdict after 27 reads over 426
+    seconds and blocked on a message covering at least three different bugs,
+    with nothing in the artifact able to narrow it.
+
+    The facts are recorded and the label is derived from them, never the other
+    way round: `empty` is not a provider's word, it is a reason plus no
+    content, and a record holding only the label cannot answer a question
+    nobody has thought of yet. An unrecognised reason is kept verbatim rather
+    than bucketed, which is the half that would have made that block legible.
+    """
+
+    def test_messages_reads_the_stop_reason(self):
+        end = MESSAGES.turn_end(_reply(stop_reason="end_turn", text="done"))
+        assert end.reason == "end_turn"
+        assert end.has_content is True
+        assert end.abnormal is False
+        assert end.label == "finished"
+
+    def test_messages_tool_use_is_not_an_ending(self):
+        end = MESSAGES.turn_end(_reply(stop_reason="tool_use", tool_calls=1))
+        assert end.label == "tool_use"
+        assert end.abnormal is False
+
+    def test_an_end_turn_carrying_nothing_is_the_shape_that_reads_as_success(self):
+        # The failure the executor already counts as `empty_finishes`, named
+        # here so every role can see it. Finishing and giving up render
+        # identically on the wire; only the absence of content separates them.
+        end = MESSAGES.turn_end(_reply(stop_reason="end_turn"))
+        assert end.label == "empty"
+        assert end.abnormal is True
+
+    def test_a_truncation_is_abnormal(self):
+        end = MESSAGES.turn_end(_reply(stop_reason="max_tokens", text="half an ans"))
+        assert end.label == "max_tokens"
+        assert end.abnormal is True
+
+    def test_responses_reads_the_status_it_had_been_ignoring(self):
+        end = RESPONSES.turn_end(_responses_reply(status="completed", text="done"))
+        assert end.reason == "completed"
+        assert end.abnormal is False
+
+    def test_responses_reads_incomplete_details(self):
+        end = RESPONSES.turn_end(
+            _responses_reply(status="incomplete", incomplete="max_output_tokens")
+        )
+        assert end.reason == "max_output_tokens"
+        assert end.abnormal is True
+
+    def test_an_unrecognised_reason_is_kept_verbatim(self):
+        # The half that makes a new failure legible instead of bucketed. A
+        # reason nobody has classified is abnormal *and* still says its name.
+        end = MESSAGES.turn_end(_reply(stop_reason="some_new_thing", text="x"))
+        assert end.reason == "some_new_thing"
+        assert end.label == "unknown"
+        assert end.abnormal is True
+
+    def test_the_record_carries_the_facts_not_only_the_label(self):
+        end = MESSAGES.turn_end(_reply(stop_reason="end_turn"))
+        record = end.as_record()
+        assert record["reason"] == "end_turn"
+        assert record["has_content"] is False
+        assert record["has_tool_calls"] is False
+        assert record["label"] == "empty"
+
+    def test_stopped_is_the_same_reading(self):
+        # Not a second, independent look at the response: both wires' existing
+        # rules are preserved exactly, computed from the one captured answer.
+        assert MESSAGES.stopped(_reply(stop_reason="tool_use", tool_calls=1)) is False
+        assert MESSAGES.stopped(_reply(stop_reason="end_turn", text="done")) is True
+        assert RESPONSES.stopped(_responses_reply(status="completed", text="d")) is True
+        assert RESPONSES.stopped(_responses_reply(status="completed", tool_calls=1)) is False
+
+
+class TestAllThreeRolesRecordItTheSameWay:
+    """One event, one key, one shape — in every role's artifact.
+
+    The value of doing this at all is uniformity: a turn ending abnormally
+    used to present as `parsed_output is None` in the planner, an empty
+    content list in the executor, and nothing at all in the reviewer, so
+    nobody comparing two runs could tell they were looking at the same thing.
+    A shared reader is only half of that; the other half is that all three
+    write it down under the same name.
+    """
+
+    FIELDS = {"reason", "has_content", "has_tool_calls", "label", "abnormal"}
+
+    def test_the_record_shape_is_fixed(self):
+        from code_gantry.dialects import TurnEnd
+
+        assert set(TurnEnd("end_turn", False, False).as_record()) == self.FIELDS
+
+    def test_every_role_declares_the_field(self):
+        # Named on each role's own record rather than bolted on by whoever
+        # writes the artifact, so a role cannot quietly stop carrying it.
+        from dataclasses import fields
+
+        from code_gantry.executor import ExecutionResult
+        from code_gantry.planner import PlannerOutcome
+        from code_gantry.reviewer import ReviewOutcome
+
+        for kind in (PlannerOutcome, ReviewOutcome, ExecutionResult):
+            names = {f.name for f in fields(kind)}
+            assert "turn_end" in names, f"{kind.__name__} does not record how a turn ended"
+
+    def test_the_reviewer_writes_it_even_when_null(self):
+        # An absent key and "it ended normally" are different answers. This
+        # project has already reported a zero that was really a missing field.
+        from code_gantry.reviewer import ReviewOutcome
+
+        assert "turn_end" in ReviewOutcome(verdict="approved", summary="s").as_dict()
+
+    def test_one_describer_serves_every_role(self):
+        from code_gantry.dialects import TurnEnd, describe_end
+
+        empty = TurnEnd("end_turn", False, False)
+        for role in ("planner", "reviewer", "executor"):
+            said = describe_end(role, empty)
+            assert said.startswith(f"the {role} ")
+            assert "ended its turn without answering" in said
+            assert "'end_turn'" in said, "the raw reason must survive the label"

@@ -173,6 +173,11 @@ class ReviewOutcome:
     # `executor-loop.json` keeps the attempt's peak: a sum cannot be
     # decomposed afterwards.
     turn_usage: list[dict] = field(default_factory=list)
+    # How the model's last turn ended, facts first. Same key, same shape, in
+    # all three roles' artifacts: one event that used to present as
+    # `parsed_output is None` here, an empty content list in the executor, and
+    # nothing at all in between.
+    turn_end: dict | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -194,6 +199,9 @@ class ReviewOutcome:
             # The series, so a later reader can see where a cached prefix
             # stopped matching. `usage` below is the sum and cannot answer it.
             "turn_usage": list(self.turn_usage),
+            # Always present, null included: an absent key and "it ended
+            # normally" are different answers and must not render alike.
+            "turn_end": self.turn_end,
             # Every field, walked off the dataclass. The hand-written list
             # this replaces named four of five and dropped
             # `peak_prompt_tokens`, so eleven records on one run carried a
@@ -500,8 +508,14 @@ class OpenAIReviewer:
         if parsed is None:
             # Reached the turn ceiling still asking for tools, or answered with
             # nothing parsable. Either way there is no verdict, and a review
-            # that ran out of turns must say so rather than look like a refusal.
-            outcome = _blocked("The reviewer returned no parsable verdict.")
+            # that ran out of turns must say so rather than look like a refusal
+            # — which is why the reason is read rather than guessed at. This
+            # module calls `responses.parse`, so the wire is not in question.
+            from code_gantry.dialects import RESPONSES, describe_end
+
+            end = RESPONSES.turn_end(response)
+            outcome = _blocked(describe_end("reviewer", end) + ".")
+            outcome.turn_end = end.as_record()
             _record_usage(outcome, usage, outcome_turns)
             outcome.tool_calls = self._looked_at()
             outcome.tool_counts = self._tool_counts()

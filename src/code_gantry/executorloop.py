@@ -132,6 +132,7 @@ def run_loop(
         # Read at last. Its own comment said the loop must not treat this as
         # finished, and the loop did exactly that because nothing consulted it.
         out.turns_exhausted = not turn.stopped
+        out.turn_end = turn.turn_end
         out.empty_finishes += turn.empty_finishes
 
         if turn.replan_kind:

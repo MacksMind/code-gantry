@@ -43,6 +43,93 @@ from typing import Callable
 _TEXT_TYPES = ("input_text", "output_text", "text")
 
 
+def describe_end(role: str, end: "TurnEnd") -> str:
+    """Why a role has no answer, in one sentence, named the same way everywhere.
+
+    One function rather than a sentence per role, because three roles writing
+    their own produced three vocabularies for one event: the planner called it
+    "no parsable verdict", the reviewer "no parsable verdict." with a full
+    stop, and the executor counted it as an empty finish without saying so.
+    The raw reason is always quoted — a label nobody has seen before is worth
+    more to whoever reads it than the bucket it fell into.
+    """
+    what = {
+        "refusal": "refused to answer",
+        "max_tokens": "ran out of room, so its answer is truncated and cannot be trusted",
+        "empty": "ended its turn without answering",
+        "tool_use": "was still asking for tools",
+        "unknown": "ended for a reason this code does not recognise",
+    }.get(end.label, "returned nothing usable")
+    reason = f" (stop reason {end.reason!r})" if end.reason else ""
+    return f"the {role} {what}{reason}"
+
+
+# The stop reasons that mean the model was interrupted rather than done. Named
+# once, per wire's vocabulary, because two of them are spelled differently on
+# the two endpoints and a role comparing string literals is how the planner
+# came to check for exactly two of them.
+_CUT_SHORT = ("max_tokens", "max_output_tokens", "length", "content_filter")
+_REFUSED = ("refusal",)
+_FINISHED = ("end_turn", "stop", "completed", "stop_sequence")
+_ASKED = ("tool_use", "function_call", "tool_calls")
+
+
+@dataclass(frozen=True)
+class TurnEnd:
+    """How one turn ended, as facts plus a label derived from them.
+
+    The facts are what the wire said and what came back with it; `label` and
+    `abnormal` are computed. That order matters. `empty` is not a provider's
+    word — it is a reason plus no content — and a record holding only the
+    label cannot answer a question nobody has thought of yet. Recording the
+    derivation's *input* is what lets a later reader disagree with the
+    derivation.
+
+    An unrecognised reason keeps its own name and counts as abnormal. That is
+    the half that makes a new failure legible: a planner call once blocked on
+    a message covering three different bugs, and nothing in the artifact could
+    narrow it because the code checked two known values and bucketed the rest.
+    """
+
+    reason: str
+    has_content: bool
+    has_tool_calls: bool
+
+    @property
+    def label(self) -> str:
+        if self.has_tool_calls or self.reason in _ASKED:
+            return "tool_use"
+        if self.reason in _REFUSED:
+            return "refusal"
+        if self.reason in _CUT_SHORT:
+            return "max_tokens"
+        if self.reason in _FINISHED:
+            return "finished" if self.has_content else "empty"
+        return "unknown"
+
+    @property
+    def abnormal(self) -> bool:
+        """Whether this ending needs explaining to somebody.
+
+        `empty` is here because finishing and giving up render identically on
+        the wire — a model that returns a terminal reason carrying nothing is,
+        to a loop, a model that has finished. Only the absence of content
+        separates them, and until the executor grew `empty_finishes` nothing
+        looked.
+        """
+        return self.label in ("refusal", "max_tokens", "empty", "unknown")
+
+    def as_record(self) -> dict:
+        """What an artifact stores: the facts first, the label beside them."""
+        return {
+            "reason": self.reason,
+            "has_content": self.has_content,
+            "has_tool_calls": self.has_tool_calls,
+            "label": self.label,
+            "abnormal": self.abnormal,
+        }
+
+
 @dataclass(frozen=True)
 class Dialect:
     """One provider's spelling of the same handful of request decisions."""
@@ -84,6 +171,8 @@ class Dialect:
     # dataclass, like `_cache_key_param` above and for the same reason: a new
     # field in the middle silently reassigns every positional caller.
     _transport_errors: Callable[[], tuple] | None = None
+    # How a turn ended, read per wire. Last, for the reason above.
+    _turn_end: Callable[[object], "TurnEnd"] | None = None
 
     def structured(self, schema) -> dict:
         """The schema argument, when the caller wants a parsed answer."""
@@ -238,6 +327,16 @@ class Dialect:
             # marks carry their own lifetime.
             out[self._cache_key] = self._cache_marker(None)
         return out
+
+    def turn_end(self, response) -> TurnEnd:
+        """How this turn ended, read from the wire's own answer.
+
+        Beside `stopped`, which is now the same reading narrowed to a bool
+        rather than a second, independent look at the response. Each wire's
+        existing rule is preserved exactly — this adds what was being thrown
+        away, and changes no loop's behaviour.
+        """
+        return self._turn_end(response)
 
     def transport_errors(self) -> tuple[type[BaseException], ...]:
         """The exception types a retry on this wire must be told to catch.
@@ -396,8 +495,34 @@ def _responses_tool_calls(response) -> list[dict]:
     return out
 
 
+def _responses_text_present(response) -> bool:
+    for item in getattr(response, "output", None) or []:
+        for part in _get(item, "content") or []:
+            if _get(part, "type") in _TEXT_TYPES and (_get(part, "text") or "").strip():
+                return True
+    return False
+
+
+def _responses_turn_end(response) -> TurnEnd:
+    """This wire's answer, which nothing used to read.
+
+    `status` and `incomplete_details` are on every Responses object and
+    `_responses_stopped` consulted neither — it inferred stopping from the
+    absence of tool calls, so an interrupted turn and a finished one were the
+    same observation.
+    """
+    detail = getattr(response, "incomplete_details", None)
+    reason = _get(detail, "reason") if detail else None
+    return TurnEnd(
+        reason=str(reason or getattr(response, "status", "") or ""),
+        has_content=_responses_text_present(response),
+        has_tool_calls=bool(_responses_tool_calls(response)),
+    )
+
+
 def _responses_stopped(response) -> bool:
-    return not _responses_tool_calls(response)
+    # The rule this wire always used, over the one captured reading.
+    return not _responses_turn_end(response).has_tool_calls
 
 
 def _responses_append_model_turn(conversation: list, response) -> None:
@@ -450,8 +575,25 @@ def _messages_tool_calls(response) -> list[dict]:
     return out
 
 
+def _messages_turn_end(response) -> TurnEnd:
+    text = False
+    calls = False
+    for block in getattr(response, "content", None) or []:
+        kind = _get(block, "type")
+        if kind == "text" and (_get(block, "text") or "").strip():
+            text = True
+        elif kind == "tool_use":
+            calls = True
+    return TurnEnd(
+        reason=str(getattr(response, "stop_reason", "") or ""),
+        has_content=text,
+        has_tool_calls=calls,
+    )
+
+
 def _messages_stopped(response) -> bool:
-    return getattr(response, "stop_reason", None) != "tool_use"
+    # The rule this wire always used, over the one captured reading.
+    return _messages_turn_end(response).reason != "tool_use"
 
 
 def _messages_append_model_turn(conversation: list, response) -> None:
@@ -699,6 +841,7 @@ RESPONSES = Dialect(
     _request_cache_options={"prompt_cache_options": {"mode": "explicit"}},
     _cache_key_param="prompt_cache_key",
     _transport_errors=_responses_transport_errors,
+    _turn_end=_responses_turn_end,
     _usage=_responses_usage,
     _tool_calls=_responses_tool_calls,
     _stopped=_responses_stopped,
@@ -720,6 +863,7 @@ MESSAGES = Dialect(
     _text_type="text",
     _cache_key="cache_control",
     _transport_errors=_messages_transport_errors,
+    _turn_end=_messages_turn_end,
     _cache_marker=lambda ttl: {"type": "ephemeral", **({"ttl": ttl} if ttl else {})},
     _request_cache_options={},
     _translates_blocks=True,

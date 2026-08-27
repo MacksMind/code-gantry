@@ -116,6 +116,12 @@ class ExecutionResult:
     # Accumulated rather than assigned, for the reason `cost_usd` gives: what
     # is worth recording is the attempt's, not the last cycle's.
     empty_finishes: int = 0
+    # How the attempt's last turn ended, as the wire said rather than as the
+    # loop inferred. `turns_exhausted` and `empty_finishes` above are both
+    # consequences of it, and both were added after an incident that this
+    # would have named on sight. Written to `executor-loop.json` for free,
+    # since that artifact walks `dataclasses.fields`.
+    turn_end: dict | None = None
     # Set when the model called `request_replan`: "unsatisfiable" or
     # "incomplete", and what it said. Read by `execute`, which routes to the
     # planner instead of the gates. Recorded in `executor-loop.json` without

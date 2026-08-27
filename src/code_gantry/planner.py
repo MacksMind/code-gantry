@@ -519,6 +519,12 @@ class PlannerOutcome:
     # answer to keep, and inventing an empty one would read like a malformed
     # response.
     raw: dict | None = None
+    # How the model's last turn ended, facts first. Same key, same shape, in
+    # all three roles' artifacts: one event that used to present as
+    # `parsed_output is None` here, an empty content list in the executor, and
+    # nothing at all in between.
+    turn_end: dict | None = None
+
 
 
 class PlannerClient(Protocol):
@@ -957,23 +963,28 @@ class AnthropicPlanner:
         if response is None:  # pragma: no cover - loop always runs once
             return _blocked("the planner produced no response"), None, usage
 
-        # A refusal or a truncation is not a plan. Check before reading output.
-        stop_reason = getattr(response, "stop_reason", None)
-        if stop_reason == "refusal":
-            return _blocked("the planner refused to answer"), None, usage
-        if stop_reason == "max_tokens":
-            return (
-                _blocked(
-                    "the planner's response was truncated, so its verdict "
-                    "cannot be trusted"
-                ),
-                None,
-                usage,
-            )
+        # How the turn ended, read once from the wire's own answer rather than
+        # compared against string literals here. This module calls
+        # `messages.parse` directly, so the wire is not in question.
+        from code_gantry.dialects import MESSAGES, describe_end
+
+        end = MESSAGES.turn_end(response)
 
         parsed = getattr(response, "parsed_output", None)
-        if parsed is None:
-            return _blocked("the planner returned no parsable verdict"), None, usage
+        # An answer we got is an answer, whatever the ending was called — the
+        # two labels below are the exception, because a refusal is not a plan
+        # and an answer cut off mid-generation cannot be trusted even when the
+        # fragment happens to parse. Blocking on `abnormal` alone was wrong and
+        # the suite said so: a stop reason we do not recognise is worth
+        # *recording*, not worth discarding a verdict over.
+        if parsed is None or end.label in ("refusal", "max_tokens"):
+            # The record carries what the response actually was, on the branch
+            # whose name describes it. `rejected_answer` used to be written
+            # only where nothing had been rejected, so a block read `null` for
+            # the one field that could have explained it.
+            outcome = _blocked(describe_end("planner", end))
+            outcome.turn_end = end.as_record()
+            return outcome, None, usage
 
         return None, parsed, usage
 

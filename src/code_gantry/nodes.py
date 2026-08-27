@@ -454,6 +454,10 @@ def plan(state: RunState, rt: Runtime) -> dict:
                 # Null for a refusal or a transport failure, where the verdict
                 # above is the whole of what happened.
                 "rejected_answer": outcome.raw,
+                # Always present, null included, and the same shape the other
+                # two roles write. A block used to say only that there was no
+                # verdict; this says what came back instead.
+                "turn_end": outcome.turn_end,
             },
             indent=2,
         ),

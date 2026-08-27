@@ -76,6 +76,11 @@ class ExecutorTurn:
         # wire renders those identically — `stop_reason` is the same either
         # way, and the only difference is that one response carries content.
         self.empty_finishes: int = 0
+        # How the last turn of this cycle ended, as the wire described it.
+        # The counter above is the *consequence* — this is the cause, and
+        # until it was recorded the executor could say a turn had ended and
+        # not why. Same shape the planner and reviewer write.
+        self.turn_end: dict | None = None
         # The first turn of a cycle, kept apart from the total. Summed
         # usage cannot answer whether the static prefix survived from the
         # previous stage: within one attempt the conversation grows and
@@ -400,6 +405,7 @@ class OpenAIExecutorModel:
                     return out
 
             out.turns += 1
+            out.turn_end = _dialect(self.cfg).turn_end(response).as_record()
             # Through the wire it arrived on. This was `extract_usage`,
             # OpenAI's reader, applied to every response — so a
             # Messages attempt lost `cache_read_input_tokens` and

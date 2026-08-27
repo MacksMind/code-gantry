@@ -226,3 +226,63 @@ What decides it is not the refusal rate. It is whether a wrong-place patch is
 worse than a refused edit — and given that a refusal is visible in the tool log
 while a misapplied hunk is visible only if a test happens to cover the line, the
 answer is probably yes, which argues for the second option over the fourth.
+
+## A response is born in three places, and each one reads it differently
+
+Every role ends up asking the same question — *how did this turn end* — and no
+two of them ask it the same way:
+
+```
+planner.py         self._client.messages.parse(...)      Anthropic SDK, Messages
+reviewer.py        self._client.responses.parse(...)     OpenAI SDK, Responses
+executorclient.py  wire.send(...) -> create()            either wire, via the dialect
+```
+
+The planner and the reviewer call `.parse()`, which populates `parsed_output`;
+the executor calls `.create()` and reads content blocks. So one event — a model
+ending a turn without producing what was asked for — presents as
+`parsed_output is None` in one role and as an empty content list in another,
+and there is nothing in the code that says those are the same thing.
+
+The readings underneath are worse than merely duplicated. `_messages_stopped`
+consults `stop_reason`. `_responses_stopped` consults *nothing*: it infers that
+the model stopped from the absence of tool calls, so on that wire a turn that
+ended abnormally is indistinguishable from one that finished, by construction —
+`status` and `incomplete_details` are on the response and no code path reads
+them. The planner compares `stop_reason` against two string literals and then
+discards the value. The reviewer never looks at it.
+
+**Measured.** A planner call returned no structured verdict after 27 reads over
+426 seconds, and the run blocked on `the planner returned no parsable verdict`
+— a message that covers at least three different bugs. The artifact could not
+narrow it: `planner.json` carries a `rejected_answer` key whose only writer is
+the *success* path, so it read `null` on the one branch its name describes.
+Whether the model had returned prose instead of a verdict, returned an empty
+turn, or stopped for a reason the code does not check was unrecoverable an hour
+later.
+
+The narrow half of that has been fixed — the dialect now reads its wire's own
+answer, the classification is derived from the recorded facts rather than
+replacing them, and all three roles record the same thing under the same key.
+That leaves the call sites: three of them, one line each.
+
+**The decision is whether to go further and put the three producers behind one
+send.** The argument for is the one this codebase has already paid for
+elsewhere: a record that has to be *remembered* at each call site is the shape
+of thing that goes quietly missing between two correct changes, and the answer
+that worked for the executor transcript was to make the recording a property of
+the only operation that can produce the thing. Three producers means three
+chances to forget, and a fourth role would inherit the omission rather than the
+behaviour.
+
+The argument against is that it is not a tidy-up. Unifying means reconciling
+`.parse()` against `.create()` across two SDKs, and the structured-output path
+is where two separate outages have come from — a keyword one endpoint does not
+take, and a parameter a gateway accepts and ignores. Against that, the value on
+offer is preventive: it stops a future omission rather than fixing a present
+defect, and the present defect is already closed.
+
+What would settle it is a count nobody has taken: how many *other* facts about a
+response are read in one role and dropped in the others. If the answer is one,
+this is not worth a refactor. If turn usage, refusals and stop reasons are all
+in the same state, the seam is missing rather than the fields.
