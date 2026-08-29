@@ -149,6 +149,17 @@ class ExecutionResult:
     # the same command again would ask a question already answered. Not trust
     # — two facts compared, and any of them moving means it runs.
     gate_records: dict[str, dict] = field(default_factory=dict)
+    # Set when the attempt was stopped for asking the same thing over and
+    # over — the tool, the count, and that we stopped it. Last in the class
+    # because this one is built positionally in places, and a field inserted
+    # in the middle silently reassigns every such caller.
+    #
+    # It exists for the same reason `turns_exhausted` and `replan_kind` do:
+    # without it the attempt arrives at the scope gate as "produced no
+    # changes", which is true, uninformative, and reads as a badly drawn
+    # stage. Recorded in `executor-loop.json` for free, since that artifact
+    # walks `dataclasses.fields`.
+    repeated_call: str = ""
 
 
 

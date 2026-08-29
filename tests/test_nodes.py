@@ -85,6 +85,7 @@ class StubExecutor:
     log: str = "executor log"
     edits_applied: int = 0
     dropped_reads: list = field(default_factory=list)
+    repeated_call: str = ""
 
     def run_agent_stage(
         self, stage, prompt, history_dir=None, since_sha="",
@@ -103,6 +104,7 @@ class StubExecutor:
             ok=self.ok, log=self.log, timed_out=self.timed_out,
             edits_applied=self.edits_applied,
             dropped_reads=list(self.dropped_reads),
+            repeated_call=self.repeated_call,
         )
 
     def run_script_stage(self, stage):
@@ -907,6 +909,31 @@ class TestExecute:
         out = nodes.execute(state, rt)
         assert out["next_hop"] == "verify"
         assert "executor_note" not in out
+
+    def test_a_repeat_abort_is_reported_even_on_a_first_attempt(
+        self, repo, tmp_path
+    ):
+        """The one stop the scope gate's sentence describes wrongly.
+
+        `cumulative_diff` is the right question for a *voluntary* stop: with
+        nothing on the branch to have left alone, "the attempt produced no
+        changes" is true and belongs to one place. A model stopped for asking
+        the same question ten times has not decided anything, and that sentence
+        sends the planner to redraw a stage that was never the problem —
+        measured on one run, three attempts ended exactly this way, one of them
+        a first attempt with 590 calls and a single edit.
+        """
+        ex = StubExecutor(
+            repo=repo,
+            log="the model called `read_file` 10 times in a row",
+            repeated_call="the model called `read_file` 10 times in a row",
+        )
+        cfg, rt, state = make(repo, tmp_path, executor=ex)
+        state = with_stage(state, rt)
+        out = nodes.execute(state, rt)
+        # Routing is still the gates'. What changes is what they are told.
+        assert out["next_hop"] == "verify"
+        assert "10 times in a row" in out["executor_note"]
 
     def test_an_attempt_that_edited_does_not_record_one(self, repo, tmp_path):
         ex = StubExecutor(repo=repo, edits=[("app.py", "new\n")], edits_applied=3,

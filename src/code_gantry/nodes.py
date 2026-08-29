@@ -1191,7 +1191,22 @@ def execute(state: RunState, rt: Runtime) -> dict:
         # question is whether there is prior work to have left alone, and the
         # tree answers that. A first attempt with no edits is the scope gate's
         # sentence and not this one.
-        if not result.edits_applied and cumulative_diff and result.log:
+        #
+        # Except when the attempt was stopped for repeating itself, which is
+        # the one stop that sentence describes wrongly. The others here are
+        # decisions — a model that says the files it needs are out of scope has
+        # concluded something, and on a first attempt "produced no changes" is
+        # a fair summary of it. A model cut off after ten identical calls has
+        # concluded nothing, and letting the gate speak for it sends the
+        # planner to redraw a stage that was never the problem. Measured on one
+        # run: three attempts ended this way, and one of them was a first
+        # attempt that made 590 calls and applied a single edit.
+        stopped_for_repeating = bool(getattr(result, "repeated_call", ""))
+        if (
+            not result.edits_applied
+            and result.log
+            and (cumulative_diff or stopped_for_repeating)
+        ):
             return {
                 "next_hop": "verify",
                 **measured,

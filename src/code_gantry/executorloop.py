@@ -134,6 +134,16 @@ def run_loop(
         out.turns_exhausted = not turn.stopped
         out.turn_end = turn.turn_end
         out.empty_finishes += turn.empty_finishes
+        # Assigned rather than accumulated: the question this answers is why
+        # the attempt is over, and only the cycle that ended it has an answer.
+        out.repeated_call = turn.repeated_call or out.repeated_call
+        if turn.repeated_call and not out.log:
+            # Only when the model left no account of its own. An attempt that
+            # said something before it started going in circles has already
+            # said the more useful thing; an attempt that did not would
+            # otherwise reach the planner as the scope gate's "produced no
+            # changes", which is the misdiagnosis this field exists to end.
+            out.log = turn.repeated_call
 
         if turn.replan_kind:
             # Before the no-changes check below, because the two shapes overlap

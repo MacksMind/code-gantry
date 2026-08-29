@@ -25,6 +25,7 @@ gates decide which happened. Prefer the fact to the label.
 
 from __future__ import annotations
 
+import json
 import os
 
 from code_gantry.config import ExecutorConfig
@@ -96,6 +97,12 @@ class ExecutorTurn:
         # on it, which is exactly the uninteresting answer that makes the
         # interesting one legible.
         self.served_models: dict[str, int] = {}
+        # Why the turn ended, when it ended because the model would not stop
+        # asking the same question. Its own field rather than `failure`,
+        # because nothing broke — the calls all succeeded — and rather than
+        # `stopped` alone, because a model that has finished and a model going
+        # in circles both stop asking for things.
+        self.repeated_call: str = ""
 
     def note_served(self, model) -> None:
         """Record which model answered a turn.
@@ -107,6 +114,53 @@ class ExecutorTurn:
         if not model:
             return
         self.served_models[model] = self.served_models.get(model, 0) + 1
+
+
+# Consecutive calls with byte-identical arguments. Measured over one run:
+# 9,337 tool calls, 699 of them — 7.5% — inside three bursts of 259, 239 and
+# 190 identical calls, ~3.3s apart, every one of them *succeeding*. Forty
+# minutes of wall clock, and each burst ended its attempt having edited
+# nothing.
+#
+# Three is drawn from the same measurement rather than from taste: only five
+# runs of consecutive-identical calls reached three at all across those 9,337,
+# and all five were pathological. So the nudge costs nothing legitimate.
+#
+# Ten rather than "eventually", because the alternative bound is the request
+# timeout — which ends the attempt as silence, and silence is the one thing
+# the loop cannot tell apart from finishing.
+REPEAT_NUDGE_AT = 3
+REPEAT_ABORT_AT = 10
+
+
+def repeat_nudge(name: str, count: int) -> str:
+    """What the model is handed instead of an answer it already has.
+
+    Instead of, not alongside. The model has by now been given the correct
+    result twice and asked again, so a warning prepended to a third copy is a
+    warning under sixty lines of file — and re-sending the payload is also
+    most of what the loop is paying for.
+    """
+    return (
+        f"You have now called `{name}` {count} times in a row with identical "
+        "arguments. The answer has not changed and is already above; this "
+        "result is withheld rather than repeated. Use what you have, ask "
+        "something different, or say what is blocking you."
+    )
+
+
+def _signature(args) -> str:
+    """A call's arguments, canonically, for comparing one call to the next.
+
+    Sorted keys, because two dicts that differ only in key order are the same
+    request and a model is free to emit either. `default=str` so an argument
+    shape nobody anticipated degrades to a comparison that is merely coarse
+    rather than raising inside the dispatch loop.
+    """
+    try:
+        return json.dumps(args, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return repr(args)
 
 
 EMPTY_FINISH_PROMPT = (
@@ -378,6 +432,13 @@ class OpenAIExecutorModel:
         # rejection once per turn.
         cold = False
 
+        # The last call's signature and how many times it has arrived in a
+        # row. Across turns, not within one: the loop asks for one thing a
+        # turn most of the time, so a counter scoped to a turn would never see
+        # a repeat at all.
+        last_signature: tuple[str, str] | None = None
+        repeats = 0
+
         for _ in range(self._max_turns()):
             try:
                 response = self._send(conversation, tools, extra)
@@ -504,6 +565,31 @@ class OpenAIExecutorModel:
                 if name == REPLAN_TOOL["name"]:
                     out.replan_kind = str(args.get("kind") or "")
                     out.replan_reason = str(args.get("reason") or "")
+
+                signature = (name, _signature(args))
+                if signature == last_signature:
+                    repeats += 1
+                else:
+                    last_signature, repeats = signature, 1
+
+                if repeats >= REPEAT_ABORT_AT:
+                    # Answered rather than dropped, and the remaining requests
+                    # in this batch with it, because a declared call with no
+                    # result leaves the conversation malformed — and there is
+                    # a next request whenever the attempt had already edited
+                    # something, since the loop appends gate feedback and runs
+                    # another cycle over this same conversation.
+                    out.repeated_call = (
+                        f"the model called `{name}` {repeats} times in a row "
+                        "with identical arguments, so the attempt was stopped"
+                    )
+                    answers.append((req["id"], out.repeated_call))
+                    continue
+
+                if repeats >= REPEAT_NUDGE_AT:
+                    answers.append((req["id"], repeat_nudge(name, repeats)))
+                    continue
+
                 answers.append(
                     (
                         req["id"],
@@ -526,6 +612,18 @@ class OpenAIExecutorModel:
                 ttl=getattr(self.cfg, "cache_ttl", None),
             )
             logged = self._log_new_calls(reader, editor, logged)
+
+            if out.repeated_call:
+                # `stopped` in the sense the loop reads it — finished asking
+                # for things — with the reason travelling beside it rather
+                # than being inferred from an absence, exactly as `replan_kind`
+                # does below. Inferred, this arrives at the scope gate as "the
+                # attempt produced no changes" and sends the planner to redraw
+                # a stage that was never the problem.
+                out.stopped = True
+                if self.log:
+                    self.log(out.repeated_call)
+                return out
 
             # The model has handed the stage back, so there is nothing further
             # to ask it. `stopped` is true in the sense the loop reads it —
