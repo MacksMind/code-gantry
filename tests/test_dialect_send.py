@@ -12,8 +12,30 @@ import pytest
 from code_gantry.dialects import MESSAGES, RESPONSES
 
 
+# A variable this file owns, for the same reason the missing-key test names
+# `DEFINITELY_NOT_SET_ANYWHERE`: a test that borrows a real credential's name
+# is asking about the shell it was run from. `CLAUDE.md` records that rule in
+# the other direction — a test asserting a variable was *absent* failed for
+# anyone who had configured the tool — and this is the same defect pointed the
+# other way, failing for anyone who has not. A fresh clone is the first thing a
+# new contributor runs.
+KEY_VAR = "CG_TEST_API_KEY"
+
+
+@pytest.fixture(autouse=True)
+def _api_key(monkeypatch):
+    """A key for every client this file builds, and only for this file.
+
+    `monkeypatch` rather than `os.environ.setdefault`, which is what this
+    replaced: an unscoped write with no cleanup made the base-URL tests pass or
+    fail on whether they shared an xdist worker with the test that did it. Two
+    machines running the same commit reported four failures and two.
+    """
+    monkeypatch.setenv(KEY_VAR, "test-key")
+
+
 class _Cfg:
-    def __init__(self, base=None, key="OPENROUTER_API_KEY"):
+    def __init__(self, base=None, key=KEY_VAR):
         self.model = "m"
         self.api_base = base
         self.api_key_env = key
@@ -63,8 +85,6 @@ class TestClients:
         import anthropic
         from openai import OpenAI
 
-        import os
-        os.environ.setdefault("OPENROUTER_API_KEY", "test-key")
         assert isinstance(RESPONSES.client(_Cfg()), OpenAI)
         assert isinstance(MESSAGES.client(_Cfg()), anthropic.Anthropic)
 
