@@ -456,6 +456,16 @@ the recording a property of the only operation that can change the thing.
   gets `Route.HUMAN`. An attempt spent 42 minutes being told its work was wrong
   by an environment that was not there. 128+N is too narrow a definition of a
   signal.
+- **And it happened again because preflight proved the wrong set.**
+  `_environment_checks` ran `setup_command` and both test commands and never the
+  `checks`, so a host-side entry was first invoked by stage 000 — routed to the
+  executor as a defect, for two planner revisions. What hid it is that all three
+  proven commands went through `docker compose`: **proving a command in the
+  container says nothing about the host.** Preflight runs the declared list now,
+  and runs it *in full*, because the gate's break-on-first-failure had also left
+  the second entry unproven for the life of the run. The general form: **the set
+  preflight proves must be the set the loop runs**, and a new executable field
+  in config is a new thing for preflight to prove.
 - **A check may write, and only the child branch should carry it.** Useful checks
   often fix as well as report, and nothing else in the loop commits what they
   changed — left uncommitted it is swept up silently when the stage lands, and

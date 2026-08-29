@@ -3,14 +3,16 @@
 Config validation covers everything checkable from the file alone. These need a
 real target repo, a working environment, and a network — is the tree clean, does
 the test command actually pass, is `setup_command` genuinely idempotent, does
-are both models reachable.
+every declared `checks` entry run, are both models reachable.
 
 All of it runs at the start of `run` as well as under `validate`. Failing fast
 beats failing on stage 30.
 
-**These commands are host-specific.** `setup_command`, `test_command`, and
-`full_test_command` assume a particular machine's Docker, runtime, and paths, so
-this validates *this host* — not the config in the abstract.
+**These commands are host-specific.** `setup_command`, `test_command`,
+`full_test_command` and every `stage_defaults.checks` entry assume a particular
+machine's Docker, runtime, and paths, so this validates *this host* — not the
+config in the abstract. The `checks` were missing from that list for as long as
+they were missing from this file, which is the same omission written twice.
 """
 
 from __future__ import annotations
@@ -476,6 +478,74 @@ def _plan_checks(cfg: ProjectConfig, git: Git) -> list[Check]:
     return checks
 
 
+def _declared_checks(cfg: ProjectConfig, runner: CommandRunner) -> list[Check]:
+    """Every `stage_defaults.checks` entry, run here rather than by stage 000.
+
+    These are operator-declared host commands exactly as `setup_command` is,
+    and until this existed nothing proved one could start. What hid the gap is
+    that the three commands this function already ran — setup and both test
+    commands — all went through `docker compose` on the project it was found
+    on, so a `checks` entry that runs on the *host* was first invoked by the
+    first stage of the run. `bin/rubocop` could not materialise its bundle on
+    a newly-provisioned machine and exited 1 in a fifth of a second;
+    `_layer_checks` routes an ordinary non-zero back to the executor as "a
+    required check failed", so two planner revisions and three attempts were
+    spent telling a model its work was wrong by an environment that was never
+    there. `CLAUDE.md` states the rule this breaks — a guard belongs where its
+    question can first be answered — and it did not catch this one because a
+    rule is checked against new work and nothing re-reads what predates it.
+
+    Run in full, unlike `CommandRunner.run_all`, which stops at the first
+    failure because for a stage the rest cannot change the verdict. Here the
+    verdict is not the point: an operator repairing a machine wants every
+    broken entry named in one pass, and in that same incident the second entry
+    sat behind the first and went unproven for the life of the run.
+
+    Not skipped by `--skip-preflight-tests`. That flag buys back minutes of
+    suite; these are seconds, and the question they answer is about the host,
+    which is not what the flag offers to skip.
+    """
+    commands = cfg.stage_defaults.checks
+    if not commands:
+        return []
+
+    git = Git(cfg.target_repo)
+    # Snapshotted rather than assumed. `working tree is clean` is blocking and
+    # already ran, but `setup_command` has run since, so dirt found afterwards
+    # is only attributable to the checks if they inherited a clean tree.
+    was_clean = git.is_clean()
+
+    checks: list[Check] = []
+    for command in commands:
+        one_line = " ".join(command.split())
+        label = one_line if len(one_line) <= 60 else one_line[:57] + "..."
+        result = runner.run(command)
+        checks.append(
+            Check(
+                f"check runs: {label}",
+                result.ok,
+                "" if result.ok else _excerpt(result.output),
+            )
+        )
+
+    if was_clean and not git.is_clean():
+        dirtied = git.diff_names(git.head_sha())
+        listed = ", ".join(dirtied[:8]) or "(unknown)"
+        checks.append(
+            Check(
+                "checks leave the tree clean",
+                False,
+                f"the checks rewrote: {listed}\n"
+                "an autocorrecting check found work to do on a tree no stage "
+                "has touched yet. Starting now would carry those bytes into "
+                "the first stage's diff with nothing to attribute them to. "
+                "Commit them or revert them, then start again",
+            )
+        )
+
+    return checks
+
+
 def _environment_checks(
     cfg: ProjectConfig, runner: CommandRunner, *, run_tests: bool, project_dir=None
 ) -> list[Check]:
@@ -503,6 +573,22 @@ def _environment_checks(
         )
         if not second.ok:
             return checks
+
+    checks.extend(_declared_checks(cfg, runner))
+    if any(c.blocking for c in checks):
+        # Said out loud rather than quietly omitted, for the reason the
+        # top-level skip is: a check that renders as nothing is
+        # indistinguishable from one that passed. Every caller exits on a
+        # blocking check, so the suites would be paid for and thrown away.
+        checks.append(
+            Check(
+                "the test suites",
+                False,
+                "not run: a declared check above already stops this command",
+                fatal=False,
+            )
+        )
+        return checks
 
     if not run_tests:
         checks.append(

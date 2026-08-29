@@ -850,3 +850,120 @@ class TestEveryRoleProvesItsKey:
         cfg = _with_executor_key(cfg_for("openrouter/pareto-code", ""))
         failed = [c for c in preflight._model_checks(cfg) if not c.ok]
         assert any("OPENROUTER_API_KEY" in c.name for c in failed)
+
+
+class TestDeclaredChecksRunAtPreflight:
+    """`stage_defaults.checks` are host commands, and nothing proved one ran.
+
+    `_environment_checks` covered `setup_command` and the two test commands.
+    On the project this was found on all three went through `docker compose`,
+    so a `checks` entry running on the *host* was first invoked by stage 000:
+    `bin/rubocop` could not materialise its bundle on a newly-provisioned
+    machine and exited 1 in a fifth of a second, and because `_layer_checks`
+    routes an ordinary non-zero back to the executor as "a required check
+    failed", two planner revisions and three attempts were spent telling a
+    model its work was wrong by an environment that was never there.
+
+    The second entry never ran at all, for the whole life of the run, because
+    the gate stops at the first failure. That is why these assert the whole
+    list rather than the verdict.
+    """
+
+    def _cfg(self, repo, *, checks, suite_marker):
+        return parse_config(
+            {
+                "target_repo": str(repo),
+                "base_ref": "main",
+                "project_branch": "proj",
+                "plan_root": "PLAN.md",
+                "test_command": f"echo suite >> {suite_marker}",
+                "full_test_command": f"echo suite >> {suite_marker}",
+                "stage_defaults": {"checks": checks},
+                "executor": {"model": "m"},
+                "planner": {"model": "claude-opus-5"},
+                "reviewer": {"model": "gpt-5.6-sol"},
+            }
+        )
+
+    def _run(self, repo, *, checks, suite_marker, run_tests=True):
+        _commit_a_plan(repo)
+        return run_preflight(
+            self._cfg(repo, checks=checks, suite_marker=suite_marker),
+            check_models=False,
+            check_approval=False,
+            check_endpoint=False,
+            run_tests=run_tests,
+        )
+
+    def test_a_declared_check_is_run(self, repo):
+        # The gap itself. Before this, nothing here invoked the entry at all.
+        ran = repo / "ran.txt"
+        self._run(repo, checks=[f"echo a >> {ran}"], suite_marker=repo / "suite.txt")
+        assert ran.exists(), "preflight must invoke the declared checks"
+
+    def test_every_entry_runs_even_once_one_has_failed(self, repo):
+        # The half that stayed invisible. `CommandRunner.run_all` stops at the
+        # first failure, which is right for a stage and wrong here: an operator
+        # repairing a machine wants every broken entry in one pass.
+        ran = repo / "ran.txt"
+        checks = self._run(
+            repo,
+            checks=["exit 1", f"echo second >> {ran}"],
+            suite_marker=repo / "suite.txt",
+        )
+        assert ran.exists(), "a later entry must still be proven"
+        names = [c.name for c in checks if c.name.startswith("check runs:")]
+        assert len(names) == 2, names
+
+    def test_a_failing_check_blocks_and_costs_no_suite(self, repo):
+        suite = repo / "suite.txt"
+        checks = self._run(repo, checks=["exit 1"], suite_marker=suite)
+
+        failed = [c for c in checks if c.name.startswith("check runs:")]
+        assert failed and failed[0].blocking
+        assert not suite.exists(), "no suite may run once a check blocks"
+
+        # Said out loud: a check that renders as nothing reads like a pass.
+        skipped = [c for c in checks if c.name == "the test suites"]
+        assert len(skipped) == 1
+        assert not skipped[0].ok and not skipped[0].blocking
+        assert "not run" in skipped[0].detail
+
+    def test_skipping_the_suites_does_not_skip_the_checks(self, repo):
+        # `--skip-preflight-tests` buys back minutes of suite. These are
+        # seconds, and they answer a question about the host, which is not
+        # what that flag offers to skip.
+        ran = repo / "ran.txt"
+        self._run(
+            repo,
+            checks=[f"echo a >> {ran}"],
+            suite_marker=repo / "suite.txt",
+            run_tests=False,
+        )
+        assert ran.exists()
+
+    def test_an_autocorrecting_check_is_caught_and_attributed(self, repo):
+        # Useful checks often fix as well as report. Rewriting a tree no stage
+        # has touched would carry those bytes into the first stage's diff with
+        # nothing to attribute them to.
+        checks = self._run(
+            repo, checks=["echo x >> app.py"], suite_marker=repo / "suite.txt"
+        )
+        dirty = [c for c in checks if c.name == "checks leave the tree clean"]
+        assert len(dirty) == 1
+        assert dirty[0].blocking
+        assert "app.py" in dirty[0].detail
+
+    def test_a_clean_check_leaves_no_such_complaint(self, repo):
+        # The other direction: the tidiness check must not fire on a check
+        # that merely wrote outside the repo.
+        checks = self._run(
+            repo,
+            checks=[f"echo a >> {repo.parent / 'outside.txt'}"],
+            suite_marker=repo / "suite.txt",
+        )
+        assert not [c for c in checks if c.name == "checks leave the tree clean"]
+
+    def test_no_declared_checks_says_nothing(self, repo):
+        checks = self._run(repo, checks=[], suite_marker=repo / "suite.txt")
+        assert not [c for c in checks if c.name.startswith("check runs:")]
