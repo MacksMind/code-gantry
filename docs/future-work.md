@@ -286,3 +286,56 @@ What would settle it is a count nobody has taken: how many *other* facts about a
 response are read in one role and dropped in the others. If the answer is one,
 this is not worth a refactor. If turn usage, refusals and stop reasons are all
 in the same state, the seam is missing rather than the fields.
+
+## Whether `git grep` should come back as a fallback for `rg`
+
+`search` shells to ripgrep, and `ripgrep is installed` is a *blocking* preflight
+check — its own docstring says why: "the only external command the pipeline
+itself requires that the operator did not name in config, so it is the only one
+that has to be checked rather than simply run." A host without `rg` cannot start
+a run at all, while `git` is a hard dependency already present everywhere the
+tool can work. A fallback would remove the one install step that is ours rather
+than the project's, which matters most on a machine nobody has set up yet.
+
+**The reasons for the swap are all still true, and a fallback has to carry every
+one of them.** A pathspec is not a glob: git lets `*` cross `/` and needs `**/`
+to consume a directory component, so `app/**/*` never sees a file sitting
+directly in `app`. Replayed over one run's tool log at the sha it was taken at —
+337 searches, 76 empty, and **27 of the 76 had matches**. That is 8% of every
+search and 36% of every empty answer, wrong. Beyond globs: `\s` is not valid in
+POSIX ERE, so `git grep -E` silently matches nothing where ripgrep's
+`--engine auto` retries under PCRE2; ripgrep skips dotfiles and git grep does
+not, so the dialects disagree about whether a `.rubocop.yml` exists; and the
+tracked-only boundary is ripgrep's ignore handling in one and git's index in the
+other, which land in the same place for the case that matters but are not the
+same rule.
+
+**Why this is a decision rather than a task.** A fallback is by definition
+invisible to its caller, and these two tools disagree in exactly the way that
+this codebase has already paid for: *an empty answer gets believed*. A model
+treats "no results" as a fact about the repository and reasons forward from it —
+the executor that hit a run of false empties abandoned `search` and asked
+`semantic_search` the same question ten times in 74 seconds. So a fallback that
+quietly answers differently does not degrade gracefully; it reintroduces the
+original defect on precisely the hosts nobody is watching.
+
+Four shapes, and they are genuinely different products:
+
+- **Translate.** Convert globset to pathspec and dialect-shift the pattern.
+  Closest to a real fallback and the only one where the caller need not know —
+  and the translation is not total, so the residue is silent.
+- **Answer, and say which tool answered.** Degraded behaviour, declared in the
+  tool result, on the standing rule that anything the machinery does is the
+  tool's to state rather than the operator's to work around.
+- **Refuse rather than differ.** `search` reports itself unavailable and the
+  model falls back to `read_file`, `list_files` and semantic search. This is the
+  only option that cannot produce a false empty, because it produces no answer
+  at all.
+- **Remove the dependency instead.** Ship or fetch a ripgrep binary, so the
+  question does not arise. Trades a config-time install for a supply-chain
+  decision.
+
+What would settle it is a measurement nobody has taken: replay one run's
+searches through a `git grep` translation and count the disagreements. If the
+answer is that translated globs and dialect-shifted patterns agree on all but a
+handful, the first option is real. If it is another 8%, only the third is honest.
