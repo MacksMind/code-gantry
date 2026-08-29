@@ -522,6 +522,16 @@ calls at each site — and the duplication it replaced, `_clip` written twice in
 `nodes.py` and `verify.py`, is how the decision got made twice in the first
 place.
 
+**And the run log is not where a failing suite's failures are.** The same
+head-and-tail truncation applies to command output in `last-run.out`, and a
+test runner puts its progress dots at the head and its container teardown at
+the tail, so the summary naming the failed examples is the middle and is the
+part dropped. Preflight writes no artifact of its own when it refuses, either.
+Re-run the suite to find out what failed rather than mining the log for it —
+and grep its verdicts case-sensitively as `[FAIL]`, since `[ok  ]` and
+`[warn]` are lower case and a pattern written for those reports a clean
+preflight over a failing one.
+
 **A reading is worth taking when a decision depends on the answer.**
 Executor spend is $3.30 across 152 recorded stages, median $0.0079, against
 $199.15 of planner spend on one run. A perfect cache discount there saves about
@@ -816,6 +826,14 @@ loop's own command line, so a run that had exited read as alive. Both failures
 look like the run misbehaving and are the instrument describing itself. Anchor
 to the tail, or to a line count taken at the start.
 
+**And that applies to reading it, not only to watching it.** The same file is
+the obvious place to look up which stage a timestamp belongs to, and an
+unanchored grep answers from whichever run happens to match — the timestamps
+repeat daily and the stage numbers restart every run, so the wrong answer is
+well-formed and plausible. Take the line number of the run's own header first
+and read forward from it. Per-run directories under `runs/` carry no such
+ambiguity and are the better source whenever they hold what you need.
+
 **Hiding a tool's own churn from the gate hides it from everyone.** The editor
 normalises line endings on every write, the rule above says the machinery must
 declare that rather than let each planner rediscover it, and `gitops`'
@@ -915,6 +933,18 @@ by the new call cap and was wrong before it shipped, because a ceiling exists
 precisely so the cases above the middle are not cut off. And a limit is only
 measurable once something records being refused by it, which is why the
 reviewer's ledger had to be fixed before its cap could be tuned at all.
+
+**The uncapped case is the one where a distribution can set the threshold.**
+The rule above forbids reading a ceiling off a distribution the ceiling
+produced; its converse is that a behaviour nothing has ever bounded gives you
+the real shape, and the number to look for is not the median but the gap. Set
+a threshold where legitimate use stops rather than where pathological use
+begins, and state the separation in the code — `REPEAT_NUDGE_AT = 3` is
+defensible because across 9,337 unbounded tool calls only five runs of
+consecutive-identical calls reached three at all and every one was
+pathological, so nothing legitimate pays for it. Re-measure before moving such
+a number; once the guard ships, the distribution under it can no longer answer
+the question.
 
 **A value written in three places and read in none.** `ExecutorTurn.stopped`
 carried the comment "the loop must not treat this as 'finished'" and nothing
@@ -1259,9 +1289,18 @@ comes back inside `verify`. What it found was HEAD on the project branch where
 it expected the stage branch, which is the branch-identity escalation, nine
 minutes and a planner call after the fix that was supposed to make it possible.
 "Delete the stage branch and resume" buys a fresh cut on a fresh *run*; on a
-resume it buys a stop. Before predicting what a resume will do, find the node
-it stopped at and read what runs there — the graph entry point is a property of
-the checkpoint, not of the command.
+resume it buys a stop.
+
+**Read `resume_entry_point` to say where a resume will land; do not read the
+checkpoint's `next_hop`.** `resume_fields` clears that field to `""`, so the
+node the run was heading for when it stopped is not where it comes back. The
+entry is computed from `failure_layer` — `PLANNING_FAILURES` to `plan`,
+`REPO_STATE_FAILURES` to `verify`, `paused_before` to the stage it was holding
+— and otherwise from `stage_has_work`, which the caller sets from whether the
+stage branch carries commits. `review` is in `REPO_STATE_FAILURES`, so a stage
+interrupted after a rework verdict re-runs `verify` and the reviewer against
+the work already on the branch rather than the executor. Both facts are one
+function; predicting from anything else is a guess that reads as a reading.
 
 **And "nothing landed" is a claim about the project branch that says nothing
 about the stage.** The same mistake one file over. The quarantine means a
@@ -2303,6 +2342,20 @@ keyword the executor's call carries. It is one function because two outages
 were a keyword the endpoint does not take, and both were then pinned by a test
 that rebuilt the dict by hand — a copy of an assembly is not a check on it. An
 AST test asserts the loop adds nothing beside it.
+
+`executorclient` also holds `REPEAT_NUDGE_AT` and `REPEAT_ABORT_AT`, which
+bound consecutive tool calls carrying byte-identical arguments. At the nudge
+the answer is *replaced* by a sentence naming the tool and the count, because
+a model that has ignored a payload twice will ignore it under a warning, and
+re-sending it is most of what the turn costs. At the abort the turn ends with
+`repeated_call` set, which travels to `ExecutionResult`, into
+`executor-loop.json`, and through `nodes.execute` into `executor_note` — the
+one stop for which that note is published on a first attempt, because every
+other stop on that branch is a decision the scope gate can fairly summarise as
+"produced no changes" and this one is not. **When an attempt reports no
+changes, read `repeated_call` before believing the stage was badly drawn.**
+The guard is on the executor only: the reviewer has not shown this behaviour,
+and a ceiling added where nothing is hitting it is a policy nobody chose.
 
 `gates.py` is the layer shared by the executor's loop and `verify.py` — patterns,
 residue, new tests, checks, tests — so the two cannot select different test
