@@ -97,7 +97,38 @@ def _config_argument(value: Path | None) -> Path:
 
 def _project_for(config_path: Path) -> tuple[ProjectConfig, ProjectPaths]:
     cfg = _load(config_path)
+    _apply_env_file(cfg, config_path)
     return cfg, ProjectPaths(cfg.work_dir)
+
+
+def _apply_env_file(cfg: ProjectConfig, config_path: Path) -> None:
+    """Load the credentials the config points at, before anything needs them.
+
+    Here rather than in `parse_config`, which must stay a reader: a config that
+    *names* a credentials file is data, and loading it is an action a caller
+    takes deliberately. `load_state` created its table before reading and
+    destroyed the evidence it was about to look for; a parser with a side
+    effect on the process environment is the same shape.
+
+    And here rather than in each command, because there are six of them and the
+    seventh would be the one that forgot — the reason the transcript is a
+    `list` subclass and the price map memoises inside its loader.
+    """
+    from code_gantry.envfile import apply_env_file
+
+    if cfg.env_file is None:
+        return
+    try:
+        applied = apply_env_file(cfg.env_file)
+    except ConfigError as e:
+        click.echo(f"config problems in {config_path}:\n{e}", err=True)
+        sys.exit(EXIT_FAILED)
+    if applied:
+        # What it contributed, not what it contained — the shell wins, so a
+        # line built from the file's contents would claim credit for a
+        # variable it never set. Names only; a credential must not be one
+        # `code-gantry status` away from a terminal transcript.
+        click.echo(f"env_file supplied {', '.join(applied)}", err=True)
 
 
 def _resolve_run_id(project: ProjectPaths, run_id: str | None) -> str:

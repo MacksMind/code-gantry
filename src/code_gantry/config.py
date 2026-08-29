@@ -894,6 +894,21 @@ class ProjectConfig(_Strict):
     # run that writes its whole record somewhere unintended is worse than one
     # that refuses to start.
     work_dir: Path | None = None
+    # A `KEY=value` file holding the credentials `api_key_env` names, resolved
+    # against this config's own directory so the answer does not depend on the
+    # cwd a run was launched from. A path, never a value: this file is tracked
+    # in the repository it describes, and the rule is `hold the path, not the
+    # copy` — which for a secret is not an efficiency but the only permissible
+    # shape.
+    #
+    # It belongs under `work_dir`, the one directory preflight refuses to run
+    # without having proved is git-ignored. Parsed rather than sourced, and
+    # applied with `setdefault` so the shell wins; see `envfile`.
+    #
+    # Optional. Without it credentials come from the launching shell, which is
+    # a property of how a run was started that appears in no config, no log
+    # and no artifact.
+    env_file: Path | None = None
     # Repo-relative path of this config, when it was read from inside the
     # target repo. What `_is_plan_document` matches against; `None` when the
     # config lives elsewhere, which is the case every test builds.
@@ -1321,7 +1336,7 @@ def parse_config(data: dict, source: Path | str | None = None) -> ProjectConfig:
         raise ConfigError(["config must be a YAML mapping"])
 
     data = dict(data)
-    for field in ("target_repo", "work_dir"):
+    for field in ("target_repo", "work_dir", "env_file"):
         if data.get(field) is not None:
             data[field] = _expanded(data[field], field)
     # The enclosing git repository, found by walking up. Not a fixed depth:
@@ -1336,6 +1351,14 @@ def parse_config(data: dict, source: Path | str | None = None) -> ProjectConfig:
         repo = data.get("target_repo")
         if repo is not None and source.is_relative_to(Path(repo).resolve()):
             data.setdefault("config_rel_path", str(source.relative_to(Path(repo).resolve())))
+        # Against the config's directory, not the cwd. A relative path decided
+        # by the launch command appears in no config, no log and no artifact —
+        # which is how a 1.76MB rate table landed in a tracked directory and
+        # took a run's prompt past its ceiling.
+        if data.get("env_file") is not None:
+            declared = Path(data["env_file"])
+            if not declared.is_absolute():
+                data["env_file"] = source.parent / declared
     if data.get("target_repo") is None:
         raise ConfigError(
             ["target_repo is not set and the config was not read from a file, "
