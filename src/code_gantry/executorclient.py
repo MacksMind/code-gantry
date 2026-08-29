@@ -34,6 +34,7 @@ from code_gantry.gateway import gateway_body, gateway_effort_body
 from code_gantry.executortools import REPLAN_TOOL, dispatch, openai_tool_schemas
 from code_gantry.openaiclient import (
     TokenUsage,
+    call_detail,
     describe_call,
     extract_usage,
     merge_usage,
@@ -572,22 +573,36 @@ class OpenAIExecutorModel:
                 else:
                     last_signature, repeats = signature, 1
 
-                if repeats >= REPEAT_ABORT_AT:
-                    # Answered rather than dropped, and the remaining requests
-                    # in this batch with it, because a declared call with no
-                    # result leaves the conversation malformed — and there is
-                    # a next request whenever the attempt had already edited
-                    # something, since the loop appends gate feedback and runs
-                    # another cycle over this same conversation.
-                    out.repeated_call = (
-                        f"the model called `{name}` {repeats} times in a row "
-                        "with identical arguments, so the attempt was stopped"
-                    )
-                    answers.append((req["id"], out.repeated_call))
-                    continue
-
                 if repeats >= REPEAT_NUDGE_AT:
-                    answers.append((req["id"], repeat_nudge(name, repeats)))
+                    if repeats >= REPEAT_ABORT_AT:
+                        out.repeated_call = (
+                            f"the model called `{name}` {repeats} times in a "
+                            "row with identical arguments, so the attempt was "
+                            "stopped"
+                        )
+                        reply = out.repeated_call
+                    else:
+                        reply = repeat_nudge(name, repeats)
+                    # A withheld call is still a call, and `tools.log`,
+                    # `tool_counts` and `refusal_counts` are built from these
+                    # ledgers — which only `dispatch` writes to. Recorded here
+                    # or a burst shows as two calls and then silence, and the
+                    # guard hides the thing it exists to catch.
+                    # `record_refusal`'s own docstring makes the argument: a
+                    # cap whose binding cannot be observed cannot be tuned.
+                    # `kind` rather than the message, because a bucket
+                    # recovered by matching prose is a classifier over
+                    # rendered text.
+                    reader.record_refusal(
+                        name, call_detail(args), reply, kind="repeated"
+                    )
+                    # Answered rather than dropped, the aborting batch
+                    # included, because a declared call with no result leaves
+                    # the conversation malformed — and there is a next request
+                    # whenever the attempt had already edited something, since
+                    # the loop appends gate feedback and runs another cycle
+                    # over this same conversation.
+                    answers.append((req["id"], reply))
                     continue
 
                 answers.append(

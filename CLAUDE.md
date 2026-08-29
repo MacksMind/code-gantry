@@ -2357,6 +2357,13 @@ changes, read `repeated_call` before believing the stage was badly drawn.**
 The guard is on the executor only: the reviewer has not shown this behaviour,
 and a ceiling added where nothing is hitting it is a policy nobody chose.
 
+A withheld call goes on the reader's ledger through `record_refusal` with
+`kind="repeated"`, because `tools.log`, `tool_counts` and `refusal_counts` are
+built from those ledgers and only `dispatch` writes to them. **Anything that
+answers a tool call without dispatching it owes the ledger an entry**, or the
+guard renders as two calls and then silence and hides exactly what it was
+added to catch.
+
 `gates.py` is the layer shared by the executor's loop and `verify.py` — patterns,
 residue, new tests, checks, tests — so the two cannot select different test
 paths, which they had done, correctly, for five separately-incident-shaped

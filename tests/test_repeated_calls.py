@@ -260,3 +260,52 @@ class TestItReachesTheResult:
         # this stop even on a first attempt, which is the exception
         # `test_a_repeat_abort_is_reported_even_on_a_first_attempt` pins.
         assert "read_file" in out.log
+
+
+class TestItStaysVisible:
+    """A withheld call must still reach a ledger.
+
+    `tools.log`, `tool_counts` and `refusal_counts` are all built from the
+    reader's and editor's ledgers, and only `dispatch` writes to those. So a
+    call answered by the nudge would appear in none of them, and the guard
+    would make a burst *less* legible than it was before it existed — two
+    calls, then silence, in the one record an operator watches live.
+
+    `record_refusal` is the right instrument and says so in its own docstring:
+    a cap whose binding cannot be observed cannot be tuned. `refusal_kind`
+    rather than the message, because a bucket recovered by matching prose is a
+    classifier over rendered text.
+    """
+
+    def _burst(self, parts, n):
+        editor, reader = parts
+        m = model([response([call("read_file", READ)]) for _ in range(n)]
+                  + [response([finished()])])
+        m.run([], reader=reader, editor=editor)
+        return reader
+
+    def test_a_nudged_call_is_recorded(self, parts):
+        reader = self._burst(parts, REPEAT_NUDGE_AT)
+        withheld = [c for c in reader.calls if c.refusal_kind == "repeated"]
+        assert len(withheld) == 1
+        assert withheld[0].tool == "read_file"
+        # The question, not the content: there is no content to describe it by.
+        assert "app/a.rb" in withheld[0].detail
+
+    def test_every_withheld_call_of_a_burst_is_recorded(self, parts):
+        reader = self._burst(parts, REPEAT_ABORT_AT)
+        withheld = [c for c in reader.calls if c.refusal_kind == "repeated"]
+        answered = [c for c in reader.calls if not c.refusal]
+        # Two answered before the threshold, then one per turn to the abort.
+        assert len(answered) == REPEAT_NUDGE_AT - 1
+        assert len(withheld) == REPEAT_ABORT_AT - REPEAT_NUDGE_AT + 1
+
+    def test_the_counts_and_the_log_see_them(self, parts):
+        from code_gantry.repotools import count_calls, count_refusals
+
+        editor, reader = parts
+        reader = self._burst(parts, REPEAT_ABORT_AT)
+        assert count_calls(reader)["read_file"] == REPEAT_ABORT_AT
+        assert count_refusals(reader)["repeated"] == (
+            REPEAT_ABORT_AT - REPEAT_NUDGE_AT + 1
+        )
