@@ -363,6 +363,257 @@ def apply_edits(
     return text
 
 
+# What a successful write hands back. Enough of the result to see whether the
+# change landed where it was meant to, and no more: this is the file *after*
+# the write, so it is authoritative in a way nothing else in the conversation
+# is, and a model that trusts it instead of re-reading is right to.
+ECHO_CONTEXT_LINES = 4
+# A cap rather than a budget. It is not charged to the read budget — a
+# consequence of a write is not a read, and an edit refused for having no
+# reading budget left would be a ceiling nobody chose — so the cap is the only
+# thing bounding it, and the loop re-sends every turn.
+ECHO_MAX_LINES = 60
+
+
+def changed_windows(before: str, after: str) -> str:
+    """The regions a write changed, as the file's own bytes, numbered.
+
+    **Why a write answers with text at all.** A tool result of "applied 1
+    edit(s)" leaves the model holding a *prediction* of what the file now says,
+    and this codebase already knows what that costs on the other side of the
+    same seam: a check that rewrites a file after the model stops leaves its
+    context stale, and the fix there was to hand back the diff and attribute
+    it. This is the same fact one step earlier. The model's own edit is the
+    first thing to make its picture of the file wrong, and it is the one change
+    nobody was telling it about.
+
+    Measured on the attempt that prompted it: an edit replaced the head of a
+    multi-line block and left the tail — `).once` followed by the orphaned
+    remains of a regex literal — and the model was told "applied 1 edit(s) to
+    <path>". It spent 96 further calls discovering what four lines of context
+    would have shown it immediately.
+
+    Numbered through `number_lines`, so these bytes are quotable straight back
+    into the next `old_string` without a `read_file` in between. That is the
+    point: the shortest path from "I changed something" to "I can quote what is
+    there now" should not leave the tool.
+
+    Regions are found with `difflib` against the before-text rather than from
+    what the caller *asked* for, because the two differ exactly when it
+    matters. An edit that matched somewhere unintended reports where it
+    actually landed.
+    """
+    import difflib
+
+    old = before.split("\n")
+    new = after.split("\n")
+    spans: list[tuple[int, int]] = []
+    for tag, _i1, _i2, j1, j2 in difflib.SequenceMatcher(
+        None, old, new, autojunk=False
+    ).get_opcodes():
+        if tag == "equal":
+            continue
+        # A deletion has j1 == j2, and a zero-width span would render nothing
+        # at all — which is the one outcome that must not look like "no
+        # change". Widen it to the seam so the join is visible.
+        start = max(0, j1 - ECHO_CONTEXT_LINES)
+        end = min(len(new), max(j2, j1 + 1) + ECHO_CONTEXT_LINES)
+        if spans and start <= spans[-1][1]:
+            spans[-1] = (spans[-1][0], max(spans[-1][1], end))
+        else:
+            spans.append((start, end))
+
+    if not spans:
+        return ""
+
+    total = sum(end - start for start, end in spans)
+    if total > ECHO_MAX_LINES:
+        return (
+            f"The change spans {total} lines, too many to quote back. "
+            "`read_file` the range you need before quoting it."
+        )
+
+    parts = [number_lines(new[start:end], start + 1) for start, end in spans]
+    return "\n\n".join(parts)
+
+
+@dataclass(frozen=True)
+class Hunk:
+    """One V4A hunk: where to look, what must be there, what replaces it.
+
+    `scopes` are the `@@` headers above the hunk, outermost first. They are the
+    format's answer to the ambiguity that `old_string` can only answer by
+    quoting more — and the reason this tool exists beside `edit` rather than
+    instead of it.
+    """
+
+    scopes: tuple[str, ...]
+    before: tuple[str, ...]
+    after: tuple[str, ...]
+
+
+def parse_v4a(diff: str) -> list[Hunk]:
+    """A V4A patch body into hunks, or `ToolError`.
+
+    The format is OpenAI's, and the shape is taken from the installed SDK
+    rather than from a docs page: `ResponseApplyPatchToolCall.OperationUpdateFile`
+    is `{type, path, diff}`, so `diff` is the hunk body alone and the file's
+    name arrives beside it. That is why nothing here parses `*** Begin Patch`
+    or `*** Update File:` — those belong to the envelope the hosted tool wraps
+    around this, and we are not using the hosted tool.
+
+    **A line's first character is its whole meaning, and an empty line has
+    none.** Models routinely emit a bare `` for a context line that is blank,
+    because trailing whitespace is invisible and editors strip it. Refusing
+    those would make the format unusable for any file with a blank line in it,
+    so an empty line is context. The cost is that a patch cannot express
+    "remove a blank line" as its only change without a `-` and a space, which
+    it can.
+    """
+    hunks: list[Hunk] = []
+    scopes: list[str] = []
+    before: list[str] = []
+    after: list[str] = []
+
+    def flush() -> None:
+        if before or after:
+            hunks.append(
+                Hunk(tuple(scopes), tuple(before), tuple(after))
+            )
+            before.clear()
+            after.clear()
+
+    lines = diff.split("\n")
+    # The terminator, not a line. A patch almost always ends with a newline,
+    # and `split` turns that into a trailing empty element — which the rule
+    # below would read as a blank *context* line and require the file to have
+    # one in the same place. Every hunk would then fail to match for a reason
+    # invisible in the payload. A genuine trailing blank context line arrives
+    # as a space, so exactly one empty element goes.
+    if lines and lines[-1] == "":
+        lines.pop()
+
+    for raw in lines:
+        if raw.startswith("@@"):
+            # A header after a body starts a new hunk; consecutive headers
+            # nest, which is how the format expresses "the method inside this
+            # class" without line numbers.
+            if before or after:
+                flush()
+                scopes.clear()
+            text = raw[2:].strip()
+            if text:
+                scopes.append(text)
+            continue
+        if raw.startswith("***"):
+            raise ToolError(
+                f"{raw.strip()!r} is patch-envelope syntax. `diff` carries the "
+                "hunks only — the path is the `path` argument and the "
+                "operation is `type`."
+            )
+        if raw.startswith("-"):
+            before.append(raw[1:])
+        elif raw.startswith("+"):
+            after.append(raw[1:])
+        elif raw.startswith(" ") or not raw:
+            line = raw[1:] if raw else raw
+            before.append(line)
+            after.append(line)
+        else:
+            raise ToolError(
+                f"line {raw[:40]!r} starts with {raw[0]!r}. Every line in a "
+                "hunk must begin with a space, `-` or `+`, or be a `@@` "
+                "header — an unprefixed line cannot be told apart from "
+                "context that lost its space."
+            )
+    flush()
+
+    if not hunks:
+        raise ToolError("the patch contains no hunks.")
+    for hunk in hunks:
+        if hunk.before == hunk.after:
+            raise ToolError(
+                "a hunk has no `-` or `+` lines, so it asks for no change. "
+                "Quote what must go with `-` and what replaces it with `+`."
+            )
+    return hunks
+
+
+def _scope_bounds(lines: list[str], scopes: tuple[str, ...]) -> list[tuple[int, int]]:
+    """Where each `@@` header could be pointing, narrowing as they nest.
+
+    Returns every surviving candidate rather than picking one. A header that
+    matches twice is not an error here: the hunk body may still be unique
+    inside exactly one of them, and refusing early would make the model widen
+    a scope that was doing its job.
+    """
+    windows = [(0, len(lines))]
+    for scope in scopes:
+        nxt: list[tuple[int, int]] = []
+        for start, end in windows:
+            for i in range(start, end):
+                if lines[i].strip() == scope:
+                    nxt.append((i + 1, end))
+        if not nxt:
+            raise ToolError(
+                f"no line in the file reads {scope!r}, so the `@@ {scope}` "
+                "header names a place that is not there. Read the file and "
+                "quote a line that exists, or drop the header."
+            )
+        windows = nxt
+    return windows
+
+
+def apply_v4a(text: str, hunks: list[Hunk]) -> str:
+    """Every hunk, in order, against one buffer — or none of them.
+
+    Same all-or-nothing contract as `apply_edits`, for the same reason, and
+    matched **exactly**: every context and `-` line must equal the file's line
+    byte for byte. No whitespace tolerance, no fuzz, no nearest-match fallback.
+
+    That is the whole reason this is worth having and it is the thing to
+    protect. A context diff's ordinary failure mode is a hunk landing somewhere
+    plausible and wrong, which commits, tests, and sometimes passes — the class
+    of failure the rest of this system spends its gates on. Refusing loudly
+    costs one tool call. The format's advantage over `old_string` is not
+    tolerance; it is that **every removed line is named**, so a replacement
+    cannot silently strand the tail of the construct it was replacing, which
+    is the corruption this was written after.
+    """
+    for index, hunk in enumerate(hunks, start=1):
+        lines = text.split("\n")
+        windows = _scope_bounds(lines, hunk.scopes)
+        want = list(hunk.before)
+
+        hits: list[int] = []
+        for start, end in windows:
+            for i in range(start, max(start, end - len(want) + 1)):
+                if lines[i : i + len(want)] == want:
+                    if i not in hits:
+                        hits.append(i)
+
+        if not hits:
+            raise ToolError(
+                f"hunk {index}: its context and `-` lines do not appear in the "
+                "file as written. Every one of them must match byte for byte, "
+                "indentation included. `read_file` the range and rebuild the "
+                "hunk from what is there.",
+                kind="patch not found",
+            )
+        if len(hits) > 1:
+            raise ToolError(
+                f"hunk {index}: its lines appear in {len(hits)} places, so it "
+                "does not identify one. Add a `@@` header naming the enclosing "
+                "definition, or include more context lines — nothing has been "
+                "changed.",
+                kind="patch ambiguous",
+            )
+
+        at = hits[0]
+        text = "\n".join(lines[:at] + list(hunk.after) + lines[at + len(want) :])
+    return text
+
+
 @dataclass
 class FileEditor:
     """Applies changes within the stage's declared scope, or refuses.
@@ -475,6 +726,21 @@ class FileEditor:
             )
         )
 
+    def _applied(self, headline: str, before: str, after: str) -> str:
+        """A successful write, with what the file now says at the places it
+        changed.
+
+        On both writing tools rather than one, deliberately. They are two ways
+        to state the same operation and a model choosing between them should
+        not also be choosing between two success contracts — the pair is
+        already the thing most likely to be confused, which is why their
+        descriptions now point at each other.
+        """
+        window = changed_windows(before, after)
+        if not window:
+            return headline
+        return f"{headline}. It now reads:\n\n{window}"
+
     # --- tools ----------------------------------------------------------
 
     def edit(self, path: str, edits: list[Edit]) -> str:
@@ -495,7 +761,71 @@ class FileEditor:
         atomic_write(full, after)
         self.touched.add(rel)
         self._record("edit", rel, len(edits))
-        return f"applied {len(edits)} edit(s) to {rel}"
+        return self._applied(f"applied {len(edits)} edit(s) to {rel}", before, after)
+
+    def apply_patch(self, path: str, kind: str, diff: str) -> str:
+        """The same three operations, stated as a patch instead of a quote.
+
+        Shares `_resolve_writable`, `normalise` and `atomic_write` with `edit`,
+        so scope, the plan-document guard, `no_direct_edit` and the stale-stat
+        fix are one implementation rather than two. The safety story guards the
+        *path*, and the payload's shape does not reach it.
+
+        `kind` mirrors the operation names in the installed SDK
+        (`create_file` / `update_file` / `delete_file`) so a model that has seen
+        the hosted tool emits what it already knows. It is not the hosted tool:
+        that one is `{"type": "apply_patch"}` on the Responses wire only, and
+        this executor's model is a routing policy whose wire is not knowable
+        until it resolves — 85% of measured turns came back on Messages, where
+        the type does not exist.
+        """
+        if kind == "delete_file":
+            return self.delete_file(path)
+
+        rel, full = self._resolve_writable(path)
+        hunks = parse_v4a(diff)
+
+        if kind == "create_file":
+            if full.is_file() and full.read_text(
+                encoding="utf-8", errors="replace"
+            ).strip():
+                raise ToolError(
+                    f"{rel!r} already exists and is not empty. Use "
+                    "`update_file` to change it."
+                )
+            for hunk in hunks:
+                if hunk.before:
+                    raise ToolError(
+                        "a create_file patch may only add lines. Every line "
+                        "must begin with `+`; there is nothing yet for a "
+                        "context or `-` line to match."
+                    )
+            before = ""
+            after = normalise("\n".join(l for h in hunks for l in h.after))
+            full.parent.mkdir(parents=True, exist_ok=True)
+        elif kind == "update_file":
+            if not full.is_file():
+                raise ToolError(
+                    f"{rel!r} does not exist. Use `create_file` to write a new "
+                    "file."
+                )
+            try:
+                before = full.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as e:
+                raise ToolError(f"{rel!r} could not be read as text: {e}") from e
+            after = normalise(apply_v4a(before, hunks))
+        else:
+            raise ToolError(
+                f"{kind!r} is not an operation. Use `create_file`, "
+                "`update_file` or `delete_file`."
+            )
+
+        atomic_write(full, after)
+        self.touched.add(rel)
+        self._record("apply_patch", rel, len(hunks))
+        return self._applied(
+            f"applied {len(hunks)} hunk(s) to {rel}", before, after
+        )
 
     def create_file(self, path: str, content: str) -> str:
         rel, full = self._resolve_writable(path)

@@ -368,7 +368,12 @@ class OpenAIReviewer:
         }
 
         tools = (
-            openai_tool_schemas(self.semantic, self.project_tools, "reviewer")
+            openai_tool_schemas(
+                self.semantic,
+                self.project_tools,
+                "reviewer",
+                getattr(self.reader, "budget", None),
+            )
             if self.reader
             else []
         )

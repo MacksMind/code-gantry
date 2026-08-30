@@ -98,12 +98,19 @@ class ExecutorTurn:
         # on it, which is exactly the uninteresting answer that makes the
         # interesting one legible.
         self.served_models: dict[str, int] = {}
-        # Why the turn ended, when it ended because the model would not stop
-        # asking the same question. Its own field rather than `failure`,
-        # because nothing broke — the calls all succeeded — and rather than
-        # `stopped` alone, because a model that has finished and a model going
-        # in circles both stop asking for things.
-        self.repeated_call: str = ""
+        # Why the turn ended, when it ended because the attempt was going
+        # nowhere. Two shapes reach it: the same call with identical arguments
+        # over and over, and a run of calls that each differed and none of
+        # which changed anything. One field rather than one per shape, and
+        # named for the meaning rather than either mechanism — `nodes` asks a
+        # single question of it, and a third shape added later inherits that
+        # answer instead of needing a reader nobody remembers to update.
+        #
+        # Its own field rather than `failure`, because nothing broke — the
+        # calls were answered — and rather than `stopped` alone, because a
+        # model that has finished and a model going in circles both stop
+        # asking for things.
+        self.unproductive_stop: str = ""
 
     def note_served(self, model) -> None:
         """Record which model answered a turn.
@@ -132,6 +139,74 @@ class ExecutorTurn:
 # the loop cannot tell apart from finishing.
 REPEAT_NUDGE_AT = 3
 REPEAT_ABORT_AT = 10
+
+
+# The same guard drawn around the meaning rather than the mechanism. Identical
+# arguments are one shape a stalled attempt takes; the shape that cost two
+# hours was a *search*, where every call differed by a character and none of
+# them changed anything. `repeats` saw a maximum run of 1 across that attempt,
+# so the guard above was unreachable for it by construction.
+#
+# "Fruitless" is deliberately narrow: a call that was refused, or a search that
+# matched nothing. Both are answers — an empty search is evidence — so one is
+# never a problem and the streak is the whole signal.
+#
+# Measured over 879 recorded attempts, longest fruitless streak per attempt:
+# 97% end at 3 or below, p95 is 3, and above 5 the histogram is singletons
+# (7, 8, 9, 11, 12, 13, 15, 67). So 4 is where legitimate use stops rather
+# than where pathological use begins, which is the side of the gap a ceiling
+# belongs on.
+FRUITLESS_NUDGE_AT = 4
+# Exceeded by 3 of those 879. On the attempt this was written for it fires at
+# call 65 of 139 — the nudge lands at call 40, three calls before that model
+# began writing marker strings into the source file to find out what was in
+# it. A backstop that only fires near the end saves nothing, so where it
+# *first* fires is the number that had to be checked, not how rare it is.
+FRUITLESS_ABORT_AT = 12
+
+
+def _is_fruitless(name: str, result: str) -> bool:
+    """Whether a tool result left the model no better off than before it asked.
+
+    Read off the rendered result rather than carried on the call, which is the
+    thing this codebase warns against — a classifier over rendered text cannot
+    separate classes the text renders identically. It is sound here only
+    because the distinction being drawn is coarser than the renderings: every
+    refusal from every tool starts with `cannot do that:` because `dispatch`
+    writes that prefix and nothing else does, and `(no matches)` is
+    `search`'s own empty answer. Nothing needs to know *why* a call was
+    refused, only that it was.
+
+    The moment either of those facts stops holding — a tool that refuses with
+    its own wording, a second tool that can answer "nothing" — this needs a
+    field on the result instead. `ToolError.kind` already exists to carry one.
+    """
+    return result.startswith("cannot do that:") or (
+        name == "search" and result.startswith("(no matches)")
+    )
+
+
+def fruitless_nudge(count: int) -> str:
+    """Appended to a refusal, never substituted for it.
+
+    The opposite of `repeat_nudge`, and for a reason worth stating: there the
+    model already has the answer and the payload is waste, so it is withheld.
+    Here the payload is a *refusal*, which is the only actionable thing in the
+    exchange — the nearest-text window especially — so removing it would take
+    away the one input that could end the streak.
+
+    Names the remedy rather than the fault. The attempt this was written for
+    made 59 edits against 12 reads and quoted from memory throughout; being
+    told it was failing would not have told it what to do instead.
+    """
+    return (
+        f"\n\n---\n\nThat is {count} calls in a row that changed nothing. "
+        "Stop and read before quoting again: `read_file` the exact range you "
+        "are about to quote, and quote from what comes back rather than from "
+        "what you expect to be there. If a block is long or appears more than "
+        "once, `apply_patch` states the change as context and `-`/`+` lines "
+        "instead of one quoted span, which is what an `edit` cannot express."
+    )
 
 
 def repeat_nudge(name: str, count: int) -> str:
@@ -364,17 +439,22 @@ class OpenAIExecutorModel:
         """
         return max(getattr(self.cfg, "max_model_turns", 20), 1)
 
-    def _tools(self, semantic) -> list:
+    def _tools(self, semantic, budget=None) -> list:
         """The menu actually sent to the provider.
 
         Its own method so a test can assert what is sent rather than what is
         held — this seam has broken twice, both times with the constructor
         taking the argument and nothing carrying it further.
+
+        `budget` is the reader's own, not a copy built from config: the
+        descriptions state the ceilings the model will actually be refused by,
+        and an assembly rebuilt here would be a second statement of them rather
+        than a reading of the first.
         """
         from code_gantry.executortools import tool_schemas
 
         return _dialect(self.cfg).tool_schemas(
-            tool_schemas(semantic, self.project_tools)
+            tool_schemas(semantic, self.project_tools, budget)
         )
 
     def _send(self, conversation, tools, extra):
@@ -420,7 +500,7 @@ class OpenAIExecutorModel:
         attempt.
         """
         out = ExecutorTurn()
-        tools = self._tools(semantic)
+        tools = self._tools(semantic, getattr(reader, "budget", None))
         # Both ledgers, cumulative across the turns of one attempt — and one
         # watermark each, because they grow independently.
         logged = self._watermark(reader, editor)
@@ -439,6 +519,12 @@ class OpenAIExecutorModel:
         # a repeat at all.
         last_signature: tuple[str, str] | None = None
         repeats = 0
+        # Across turns for the same reason, and across the *batch* too: a turn
+        # asking for four things that are all refused is four fruitless calls,
+        # not one. Reset by any call that answered, including one in the same
+        # batch as a refusal — a model that read a file and mis-quoted it in
+        # one turn is working, not stalled.
+        fruitless = 0
 
         for _ in range(self._max_turns()):
             try:
@@ -575,12 +661,12 @@ class OpenAIExecutorModel:
 
                 if repeats >= REPEAT_NUDGE_AT:
                     if repeats >= REPEAT_ABORT_AT:
-                        out.repeated_call = (
+                        out.unproductive_stop = (
                             f"the model called `{name}` {repeats} times in a "
                             "row with identical arguments, so the attempt was "
                             "stopped"
                         )
-                        reply = out.repeated_call
+                        reply = out.unproductive_stop
                     else:
                         reply = repeat_nudge(name, repeats)
                     # A withheld call is still a call, and `tools.log`,
@@ -605,20 +691,47 @@ class OpenAIExecutorModel:
                     answers.append((req["id"], reply))
                     continue
 
-                answers.append(
-                    (
-                        req["id"],
-                        dispatch(
-                            name,
-                            args,
-                            reader,
-                            editor,
-                            semantic,
-                            project_tools=self.project_tools,
-                            runner=self.runner,
-                        ),
-                    )
+                result = dispatch(
+                    name,
+                    args,
+                    reader,
+                    editor,
+                    semantic,
+                    project_tools=self.project_tools,
+                    runner=self.runner,
                 )
+
+                # Counted after the call rather than before it, because unlike
+                # the repeat guard this cannot be known from the arguments —
+                # whether a call was fruitless is a property of what came back.
+                # So the streak is always one behind: the nudge rides on the
+                # result of the call that reached the threshold rather than
+                # replacing it, which is what `fruitless_nudge` is shaped for.
+                if _is_fruitless(name, result):
+                    fruitless += 1
+                else:
+                    fruitless = 0
+
+                if fruitless >= FRUITLESS_NUDGE_AT:
+                    if fruitless >= FRUITLESS_ABORT_AT:
+                        out.unproductive_stop = (
+                            f"{fruitless} tool calls in a row changed nothing "
+                            "— every one refused or matched nothing — so the "
+                            "attempt was stopped"
+                        )
+                        result += f"\n\n---\n\n{out.unproductive_stop}"
+                    else:
+                        result += fruitless_nudge(fruitless)
+                    # Not on a ledger. `dispatch` has already recorded this
+                    # call — as a refusal, or as the search it was — so an
+                    # entry here would double-count the very calls the guard
+                    # exists to make countable. That is the opposite of the
+                    # repeat guard's situation, where the call is *withheld*
+                    # and `dispatch` never sees it, and the difference is
+                    # worth stating because the two sit ten lines apart and
+                    # look like they should behave the same way.
+
+                answers.append((req["id"], result))
             # Marked, so the cached prefix follows the conversation: on
             # Responses marks accumulate and every turn extends it; on Messages
             # only the last one counts, so it moves.
@@ -628,7 +741,7 @@ class OpenAIExecutorModel:
             )
             logged = self._log_new_calls(reader, editor, logged)
 
-            if out.repeated_call:
+            if out.unproductive_stop:
                 # `stopped` in the sense the loop reads it — finished asking
                 # for things — with the reason travelling beside it rather
                 # than being inferred from an absence, exactly as `replan_kind`
@@ -637,7 +750,7 @@ class OpenAIExecutorModel:
                 # a stage that was never the problem.
                 out.stopped = True
                 if self.log:
-                    self.log(out.repeated_call)
+                    self.log(out.unproductive_stop)
                 return out
 
             # The model has handed the stage back, so there is nothing further

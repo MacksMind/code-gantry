@@ -152,80 +152,67 @@ and the two drafts compared on ecosystems the chains already cover. If the
 model wins there, that is evidence; the version where it obviously wins on Go
 is a story, because nothing currently competes.
 
-## Whether the executor should edit through `apply_patch` and V4A diffs
+## Whether an edit refusal should hand back a window more often
 
-OpenAI ships a first-class editing tool. It is declared as
-`{"type": "apply_patch"}` on Responses, Chat Completions and Assistants; the
-model emits an `apply_patch_call` naming one of `create_file`, `update_file`
-or `delete_file`, and for an update the payload is a **V4A diff** — a unified
-diff with context lines and `@@` hunk headers. The host applies it and returns
-an `apply_patch_call_output` carrying the `call_id` and a `completed` or
-`failed` status. So this is not a hosted editor: OpenAI defines the schema and
-the format, and `edittools.py` would still do the writing.
+`nearest_text` folds a read into the refusal that made it necessary: on a
+not-found `old_string` it returns the file's real bytes around where the model
+seems to have meant, numbered as `read_file` numbers them, and the model
+re-quotes from there. When it fires it works — five times in one measured
+attempt, and each time the next quote was correct.
 
-Our `edit` is exact-string replacement — the model quotes an `old_string` that
-must appear once. **Measured over the two most recent runs: 412 edit calls, 17
-refused, 4.1%.** Thirteen were "that text does not appear in the file" and four
-were "that text appears N times, so it does not identify one place." The second
-class is precisely what a `@@` header exists for, and there is no way to
-express it in our schema — a model that has found the right line inside the
-wrong-shaped file has nothing to say except quote more text and hope.
+**It fired five times out of twenty-eight.** The other twenty-three refusals
+carried no window at all.
 
-**The reason to distrust that 4.1% is the history behind it.** It used to be
-worse and the cause was ours: `read_file` numbered with a two-space separator
-that indentation could not be told apart from, and 74 of 117 refused
-`old_string`s — 63% — matched the file exactly once two spaces were stripped
-from every line. The rate is what it is now *because* an instrument bug was
-fixed, which is exactly the state in which adopting somebody else's format
-looks more attractive than it is. Before treating 4.1% as a defect, read the
-seventeen: an executor that quotes badly is a prompt problem, and this
-repository has already mistaken one for a format problem once.
+The cause is in its anchor. It takes the first non-blank line of `old_string`,
+strips it, and looks for a file line that is *equal* to it; failing that it
+falls back to a `difflib` similarity scan and then to the semantic index. Its
+docstring says it was measured on two real misses, and both were whole-line
+quotes from a routes file — which the whole-line anchor is exactly right for.
+The misses that arrive in bulk are not that shape. They are sub-line fragments:
+`"raised\sat"`, `"StandardError"`, `").once\s\(raised"` — a model narrowing
+its quote after an ambiguity refusal, which is the move the refusal text asks
+for. No whole-line equality can match a fragment, and the similarity fallback
+then fails its ratio.
 
-**The real trade is which way the failures fail.** Exact matching refuses
-loudly and cheaply — the model is told the text is absent or ambiguous, and the
-next cycle costs one tool call. A context diff is applied by *matching*, and
-its failure mode is a hunk that lands somewhere plausible and wrong. That is a
-silent bad edit inside a stage that then commits, tests and possibly passes,
-which is the class of failure this codebase spends most of its gates on. The
-fallbacks we already carry are the same hazard in miniature and were built
-deliberately narrow: `Nearest` tries an anchor derived from the model's own
-first line and then a semantic window, and both hand back a *suggestion* the
-model must re-quote rather than writing anything.
+Two things have to be established before this is a decision, and one of them is
+an instrument problem.
 
-**It also welds the executor to a provider.** `edit` is our schema, and the
-role's client could be pointed anywhere. `apply_patch` is an OpenAI tool type,
-so adopting it makes the executor's editing capability a property of who is
-serving it — and that is a live question this week rather than a hypothetical,
-with Bedrock evaluated and rejected on structured outputs and OpenRouter still
-open. The safety story survives either way, which is the first thing anyone
-will ask: a host-applied patch still resolves through `_resolve_writable` and
-still meets `no_direct_edit`, because those guard the path rather than the
-payload.
+**The route is unrecoverable from a killed attempt.** `ToolError.kind` carries
+which fallback answered — `anchor`, `ambiguous`, `semantic`, `none` — and it
+reaches `refusal_counts` in `executor-loop.json`, which is one write at the end.
+So on the attempt that prompted this, the counts do not exist. `tools.log` is
+live and appends, but it records the rendered *message*, and every route renders
+the same sentence: a classifier over rendered text cannot separate classes the
+text renders identically, which is the fault `kind` exists to avoid. **The
+distinction is being made and then thrown away at the only place it could be
+read.** Whatever else changes here, the live ledger should carry the kind.
 
-One fact has to be established before any of this is a decision. The tool is
-documented as supported on **GPT-5.1 through GPT-5.5**, and the executor runs
-`gpt-5.6-luna`. That is either a stale docs page or a real gap, and it is
-answerable with one call rather than by reading.
+**And the fragment case may not want a window at all.** A fragment that appears
+nowhere is usually a fragment the model invented from memory, and the right
+answer to it might be the ambiguity refusal's answer — quote more, not less —
+rather than a window somewhere plausible. `NEAREST_MIN_RATIO` exists because a
+confidently wrong location invites an edit the model never meant. Widening the
+anchor to substrings makes that failure more likely, not less.
 
-Candidate answers, in increasing order of how much they change:
+Candidate answers:
 
-- Do nothing. 4.1% is not a cost anyone has felt, and no stage has been traced
-  to it.
-- Give our own `edit` the thing V4A has and we lack: an optional enclosing
-  context — a `within` argument naming a surrounding line or block — so an
-  ambiguous quote can be scoped without adopting a diff format. This targets
-  four of the seventeen and nothing else.
-- Offer `apply_patch` alongside `edit` and let the model choose, then count
-  which it reaches for and what each costs. Note that this cannot be read as a
-  preference between formats until the descriptions are comparable, because a
-  tool's description decides how often it is called and its results decide
-  nothing.
-- Adopt it as the executor's only editing tool.
+- Do nothing. `apply_patch` now takes the case that produced most of these:
+  a model narrowing a quote to a fragment is working around a limit of
+  `old_string`, and a hunk with a `@@` header expresses what it was reaching
+  for. Re-measure the refusal mix after a run or two before changing anything
+  here — the distribution that produced "23 of 28" was measured under a tool
+  set that no longer exists.
+- Record `refusal_kind` on `tools.log` so the question is answerable at all,
+  and change nothing else yet. Cheap, and it is a precondition for every other
+  option.
+- Anchor on the longest line of `old_string` rather than the first, which is
+  the one most likely to be a whole line even when the quote is a fragment.
+- Let a fragment anchor on a *substring* match, and raise the ratio it must
+  clear, so the window is only offered where the location is not a guess.
 
-What decides it is not the refusal rate. It is whether a wrong-place patch is
-worse than a refused edit — and given that a refusal is visible in the tool log
-while a misapplied hunk is visible only if a test happens to cover the line, the
-answer is probably yes, which argues for the second option over the fourth.
+What decides it is not the miss rate. It is whether a window offered for a
+fragment lands somewhere the model then edits — and that is measurable only
+once the route reaches a ledger that survives the attempt.
 
 ## A response is born in three places, and each one reads it differently
 

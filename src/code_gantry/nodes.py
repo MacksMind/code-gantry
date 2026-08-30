@@ -1201,11 +1201,11 @@ def execute(state: RunState, rt: Runtime) -> dict:
         # planner to redraw a stage that was never the problem. Measured on one
         # run: three attempts ended this way, and one of them was a first
         # attempt that made 590 calls and applied a single edit.
-        stopped_for_repeating = bool(getattr(result, "repeated_call", ""))
+        stopped_unproductive = bool(getattr(result, "unproductive_stop", ""))
         if (
             not result.edits_applied
             and result.log
-            and (cumulative_diff or stopped_for_repeating)
+            and (cumulative_diff or stopped_unproductive)
         ):
             return {
                 "next_hop": "verify",

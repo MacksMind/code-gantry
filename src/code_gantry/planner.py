@@ -857,7 +857,15 @@ class AnthropicPlanner:
         to be checked for contradictions the schema cannot express.
         """
         tools = (
-            tool_schemas(self.semantic, self.project_tools, "planner")
+            tool_schemas(
+                self.semantic,
+                self.project_tools,
+                "planner",
+                # `getattr` because a stub reader in a test has no budget and
+                # should get the undecorated descriptions. Production always
+                # has a `RepoReader`, whose `budget` is a dataclass field.
+                getattr(self.reader, "budget", None),
+            )
             if self.reader
             else []
         )

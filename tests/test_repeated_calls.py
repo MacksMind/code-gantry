@@ -190,8 +190,8 @@ class TestTheAbort:
 
         assert out.turns == REPEAT_ABORT_AT
         assert out.stopped is True
-        assert "read_file" in out.repeated_call
-        assert str(REPEAT_ABORT_AT) in out.repeated_call
+        assert "read_file" in out.unproductive_stop
+        assert str(REPEAT_ABORT_AT) in out.unproductive_stop
 
     def test_the_abandoned_turn_leaves_a_well_formed_conversation(self, parts):
         # Every declared call needs an answer or the next request is malformed
@@ -223,7 +223,7 @@ class TestTheAbort:
 class TestItReachesTheResult:
     """The journey, not the endpoints.
 
-    `repeated_call` is computed in the client and read by whoever reads
+    `unproductive_stop` is computed in the client and read by whoever reads
     `ExecutionResult`. Four defects in this codebase have been values that
     were correct on both sides and lost in transit, so the test drives the
     loop rather than asserting the field exists.
@@ -255,7 +255,7 @@ class TestItReachesTheResult:
             since_sha=git.rev_parse("HEAD"),
         )
 
-        assert "read_file" in out.repeated_call
+        assert "read_file" in out.unproductive_stop
         # And in `log`, which `nodes.execute` clips into `executor_note` — for
         # this stop even on a first attempt, which is the exception
         # `test_a_repeat_abort_is_reported_even_on_a_first_attempt` pins.
