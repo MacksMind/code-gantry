@@ -343,6 +343,45 @@ class TestScopedTestGuidance:
         assert "whole suite" in lowered or "full suite" in lowered
 
 
+class TestTheZeroDiffHandoff:
+    """The prompt names a heading `nodes` builds, so the two have to agree.
+
+    `_consume_executor_note` folds the executor's closing words into the
+    failure detail under a heading of its own, and the "produced no changes"
+    bullet tells the planner to read it by that name. Two maintained
+    statements of one string: reword the note and the prompt is pointing at a
+    heading nothing produces.
+    """
+
+    def test_the_heading_the_prompt_names_is_the_one_nodes_builds(self):
+        from code_gantry.nodes import _consume_executor_note
+        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
+
+        detail, _ = _consume_executor_note({"executor_note": "NOTE"}, "DETAIL")
+        heading = "what the executor said when it stopped"
+        assert heading in detail.lower()
+        assert heading in " ".join(PLANNER_SYSTEM_PROMPT.lower().split())
+
+
+class TestThePlannerPromptCarriesNoProjectVocabulary:
+    """The rule the reviewer's and executor's prompts already have a guard for.
+
+    Only the static string is checked. The capability paragraphs are
+    substituted from `project_tools` and are supposed to name one project's
+    vocabulary; this is about the contract they are substituted into.
+    """
+
+    def test_it_names_no_framework_or_layout(self):
+        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
+
+        lowered = PLANNER_SYSTEM_PROMPT.lower()
+        for word in (
+            "rails", "ruby", "rspec", "gemfile", "django", "npm",
+            "spec/", "app/", "src/", ".rb", ".py",
+        ):
+            assert word not in lowered, f"{word!r} is one project's vocabulary"
+
+
 class TestReviewerCacheBreakpoint:
     """GPT-5.6 caches at an explicit breakpoint, not at the longest prefix.
 

@@ -1277,6 +1277,15 @@ stage, an environment problem.
   A required literal is not an exception — an identifier that has to match
   something elsewhere, a value another caller depends on. Name the value and
   say what it must agree with. That is a property. The code around it is not.
+- **Ask for behaviour to assert, not for a value to predict.** An assertion on
+  a value nobody has observed — the text a routine assembles, a generated
+  identifier — asks the executor to **guess**. It will not stop and ask: it
+  writes something plausible and finds out from the suite, and the cheapest
+  way to go green is to move the expectation to whatever the code already
+  produces. That passes and **asserts nothing**. Ask for the property instead
+  — derived from the given input, agreeing with the declaration it is built
+  from. Where a literal genuinely is the point it must be one you know: quote
+  it with `read_excerpts`, or state it and say what it must agree with.
 - **Name the specs that cover it.** `test_paths` is how a stage's tests get
   scoped to the specs it affects. Files the stage edits are picked up
   automatically; this is for the ones that exercise the changed code *without*
@@ -1331,6 +1340,15 @@ You are told which gate failed and why. Choose deliberately:
   inserting a predecessor stage via `next_stage`, is usually better than
   restating the same instruction.
 - **The reviewer blocked it.** The instruction itself was wrong. Revise it.
+- **The attempt produced no changes.** The branch is unchanged and you are
+  given **what the executor said when it stopped**, under that heading. Read
+  it first, because the causes want opposite answers. It may name the fix —
+  files it needed outside the declared scope, work already there. It may have
+  been stopped for repeating one call with identical arguments, which is about
+  the attempt and **not about the stage**, so the same instruction deserves
+  another attempt. Or the instruction asserted something it could **falsify**
+  by reading, and then the premise is what to check; rephrasing a false
+  premise fails the same way.
 
 `revision_mode` matters. `extend` keeps the child branch, so partial work
 survives — right when scope was merely too narrow. `restart` discards it —
