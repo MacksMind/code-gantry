@@ -21,6 +21,7 @@ import pytest
 
 from code_gantry.config import ConfigError, parse_config
 from code_gantry.envfile import apply_env_file, parse_env_file
+from test_config import as_test_tools, SCOPED_TOOL_YAML
 
 
 class TestParsing:
@@ -105,7 +106,7 @@ class TestTheConfigField:
             "reviewer": {"model": "gpt-5.5"},
         }
         data.update(over)
-        return data
+        return as_test_tools(data)
 
     def test_it_resolves_against_the_config_directory(self, tmp_path):
         # The same rule `target_repo` and `config_rel_path` already follow, so
@@ -192,6 +193,7 @@ class TestItReachesTheProcess:
             "executor: {model: m}\n"
             "planner: {model: claude-opus-5}\n"
             "reviewer: {model: gpt-5.5}\n"
+            + SCOPED_TOOL_YAML
         )
 
         _project_for(source)

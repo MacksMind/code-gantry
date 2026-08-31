@@ -609,7 +609,7 @@ def _layer_tests(ctx: _Context, outcome: VerifyOutcome):
 def _record_full_suite(ctx: _Context, outcome: VerifyOutcome, command: str) -> None:
     """Remember a green full suite so the merge gate need not repeat it.
 
-    Only when the command *is* `full_test_command`. `test_command` may be the
+    Only when the command *is* the full selection. A stage command may be the
     same string on some projects and a cheaper unscoped run on others, and the
     gate's contract is about the full suite specifically — so this compares the
     command rather than inferring from `unscoped_tests`.

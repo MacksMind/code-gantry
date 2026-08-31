@@ -11,6 +11,8 @@ import subprocess
 import time
 
 import pytest
+
+from test_config import runner_script, as_test_tools
 from dataclasses import dataclass, field
 
 from code_gantry import nodes
@@ -134,7 +136,7 @@ def make(repo, tmp_path, planner=None, reviewer=None, executor=None, **cfg_over)
         "reviewer": {"model": "gpt-5.5"},
     }
     data.update(cfg_over)
-    cfg = parse_config(data)
+    cfg = parse_config(as_test_tools(data))
 
     project = ProjectPaths(tmp_path / "projects" / "proj-slug")
     project.ensure()
@@ -1311,7 +1313,10 @@ class TestPlanDocumentsFollowTheProjectBranch:
                 "echo \"Failed examples:\"; "
                 "echo \"rspec './spec/requests/checkout_spec.rb[1:1]' # c\"; exit 1"
             ),
-            scoped_test_command=f"echo {{paths}} >> {log}",
+            scoped_test_command=(
+                runner_script(log.parent, f'echo "$@" >> {log}', "log_runner")
+                + " {paths}"
+            ),
             failed_file_pattern=RSPEC_PATTERN,
         )
         state = with_stage(state, rt)
@@ -1721,7 +1726,10 @@ class TestAFailureThatPredatesTheStage:
             repo, tmp_path,
             full_test_command=self.FAILED,
             # Green at the base, red at the tip: the stage committed the file.
-            scoped_test_command="echo {paths} >/dev/null; test ! -f broke.txt",
+            scoped_test_command=(
+                runner_script(repo.parent, "test ! -f broke.txt", "broke_runner")
+                + " {paths}"
+            ),
             failed_file_pattern=RSPEC_PATTERN,
         )
         state = with_stage(state, rt)

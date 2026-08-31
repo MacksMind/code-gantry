@@ -10,6 +10,8 @@ fails here rather than in a run.
 
 import pytest
 
+from test_config import runner_script, as_test_tools
+
 from code_gantry.config import ConfigError, Stage, parse_config
 from code_gantry.gates import resolve_test_command, resolve_test_paths
 from code_gantry.gitops import Git
@@ -27,7 +29,7 @@ def build(repo, stage_overrides=None, **cfg_overrides):
         "reviewer": {"model": "gpt-5.5"},
     }
     data.update(cfg_overrides)
-    cfg = parse_config(data)
+    cfg = parse_config(as_test_tools(data))
 
     fields = {"id": "s1", "instruction": "do it", "edit_files": ["app.py", "src/**"]}
     fields.update(stage_overrides or {})
@@ -357,7 +359,10 @@ class TestTheLoopDoesNotDoubleTheSuite:
         cfg, stage = build(
             repo,
             {"test_paths": ["app.py"]},
-            scoped_test_command=f"printf x >> {counter}; false # {{paths}}",
+            scoped_test_command=(
+                runner_script(counter.parent, f'printf x >> {counter}\nexit 1', "count_runner")
+                + " {paths}"
+            ),
         )
         (repo / "app.py").write_text("x\n")
         Git(repo).commit_all("app")
@@ -376,7 +381,10 @@ class TestTheLoopDoesNotDoubleTheSuite:
         cfg, stage = build(
             repo,
             {"test_paths": ["app.py"]},
-            scoped_test_command=f"printf x >> {counter}; false # {{paths}}",
+            scoped_test_command=(
+                runner_script(counter.parent, f'printf x >> {counter}\nexit 1', "count_runner")
+                + " {paths}"
+            ),
         )
         (repo / "app.py").write_text("x\n")
         Git(repo).commit_all("app")

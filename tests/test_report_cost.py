@@ -17,6 +17,8 @@ import json
 
 import pytest
 
+from test_config import as_test_tools
+
 from code_gantry.config import parse_config
 from code_gantry.report import build_report
 
@@ -47,7 +49,7 @@ def cfg_with(**over):
         "reviewer": {"model": "gpt-5.6-sol", "effort": "max"},
     }
     data.update(over)
-    return parse_config(data)
+    return parse_config(as_test_tools(data))
 
 
 def state_with(**usage):
@@ -185,13 +187,13 @@ class TestTheBudgetProjectionDoesNotDemandAChange:
         from code_gantry.config import parse_config
         from code_gantry.report import build_report
 
-        cfg = parse_config({
+        cfg = parse_config(as_test_tools({
             "target_repo": str(tmp_path), "base_ref": "main",
             "project_branch": "p", "plan_root": "PLAN.md", "full_test_command": "true",
             "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.6-sol"},
             "limits": {"wall_clock_hours": budget, "max_stages": max_stages},
-        })
+        }))
         state = {
             "status": "complete", "run_id": "r", "session_seconds": 3600.0,
             "completed": [

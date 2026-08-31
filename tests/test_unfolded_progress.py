@@ -25,17 +25,19 @@ import subprocess
 
 import pytest
 
+from test_config import as_test_tools
+
 from code_gantry.config import parse_config
 
 
 def _cfg(repo, addendum="docs/progress_log.md"):
-    return parse_config({
+    return parse_config(as_test_tools({
         "target_repo": str(repo), "base_ref": "main", "project_branch": "p",
         "plan_root": "docs/PLAN.md", "full_test_command": "true",
         "plan_addendum_path": addendum,
         "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
         "reviewer": {"model": "gpt-5.6-sol"},
-    })
+    }))
 
 
 @pytest.fixture
@@ -69,12 +71,12 @@ class TestWhenThereIsNothingToFold:
     def test_no_addendum_configured_is_not_a_warning(self, repo):
         from code_gantry.preflight import _unfolded_progress_check
 
-        cfg = parse_config({
+        cfg = parse_config(as_test_tools({
             "target_repo": str(repo), "base_ref": "main", "project_branch": "p",
             "plan_root": "docs/PLAN.md", "full_test_command": "true",
             "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.6-sol"},
-        })
+        }))
         check = _unfolded_progress_check(cfg)
         assert check.ok
 

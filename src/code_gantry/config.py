@@ -960,15 +960,31 @@ class ProjectConfig(_Strict):
     plan_root: str
 
     setup_command: str | None = None
-    # The whole suite, taking no selection. Run by the merge gate on every
-    # landed stage, and by the gate as its fallback when nothing scopes.
-    #
-    # There is one everything-command, not two. `test_command` was a second
-    # name for this string — the same selection, differing only in which
-    # caller reached for it — and the caller already knows which it is. Two
-    # everything-commands let a stage pass one and fail the other having been
-    # judged by two harnesses, with nothing in the record saying so.
+    # The whole suite, taking no selection. A command rather than a declared
+    # tool, and the difference is who calls it: no role ever runs the full
+    # suite. The executor has no notion of `edit_files`, so faced with a red
+    # spec outside the stage it will edit that spec, and a full run gives it
+    # minutes per pass in which to do so. With no model in the path there is
+    # nothing model-supplied to keep out of a shell, so this stays a string and
+    # an operator's `a && b` keeps working.
     full_test_command: str | None = None
+    # The same suite, taking a selection — named as an entry in
+    # `project_tools`, because this one *is* called by a model.
+    #
+    # A name rather than a command, for the reason `plan_root` is a path rather
+    # than a copy: which runner this project uses is the project's to say, and
+    # a name in code would be one ecosystem's vocabulary shipped to every
+    # other. Name it after what it is. `rspec` reads well in a Ruby project and
+    # gives the model something better than a description: RSpec prints
+    # `rspec ./spec/a_spec.rb:79` in its own failure output, so with a tool of
+    # that name the printed line *is* the call — a name on the left and a
+    # `paths` value on the right, nothing to translate.
+    #
+    # One declaration, two callers: the executor calls it to re-run the example
+    # it was just shown, and the gate calls it to judge the stage. Both go
+    # through `build_argv`, because a suite invoked one way in the loop and
+    # another at the gate is how an exit code stops describing the artifacts.
+    scoped_test_tool: str | None = None
     # Where the planner's append-only record of what git history shows was done
     # is kept. Commonly a subdirectory of the plan directory, so a later pass —
     # a human, or a tool outside this loop — can fold it into the plan
@@ -1003,16 +1019,6 @@ class ProjectConfig(_Strict):
     # conventions from must not be editable by the executor those conventions
     # govern.
     agent_context: list[str] | None = None
-    # The same suite, taking a selection. `{paths}` is filled by CodeGantry
-    # from the stage diff, and this is what both the gate and the executor's
-    # inner loop run whenever anything scopes.
-    #
-    # `auto_test_command` was a third command, a quieter spelling for the loop
-    # because the loop's output lands in a model's context where the gate's
-    # lands in a parser. That is a property of how the output is *read*, not of
-    # which tests to run, and it belongs to whatever clips a report rather than
-    # to a second copy of the command. One selection, one string.
-    scoped_test_command: str | None = None
 
     full_suite_on_approval: bool = True
 
@@ -1261,6 +1267,46 @@ class ProjectConfig(_Strict):
         while remaining a legal ref.
         """
         return f"{self.project_branch}-stage"
+
+    def _test_tool(self, name: str | None) -> ProjectTool | None:
+        """The declared tool a test-tool field names, or None.
+
+        Resolved by lookup rather than by position or convention, so a name
+        that matches nothing is a startup failure in `validate` instead of a
+        stage that quietly runs everything.
+        """
+        if not name:
+            return None
+        return next((t for t in self.project_tools if t.name == name), None)
+
+    def scoped_test_argv(self, paths: list[str]) -> list[str] | None:
+        """The same suite, taking these.
+
+        Built through `build_argv`, which is the path the executor's own tool
+        call takes. One builder, so the string the gate records and the string
+        the model caused are the same string whenever the selection is.
+        """
+        tool = self._test_tool(self.scoped_test_tool)
+        if tool is None or not paths:
+            return None
+        from code_gantry.projecttools import build_argv
+
+        slot = next((a.name for a in tool.arguments if a.repeated), None)
+        if slot is None:
+            return None
+        return build_argv(tool, {slot: list(paths)})
+
+    @property
+    def scoped_test_command(self) -> str | None:
+        """The scoped selection as a template, for logs and for `validate`.
+
+        The placeholder is left where the operator put it, which is what makes
+        this readable as "the same runner, taking these". Nothing runs it: the
+        argv builder is the only path to an actual invocation, so this cannot
+        drift into being a second way to spell the command.
+        """
+        tool = self._test_tool(self.scoped_test_tool)
+        return " ".join(tool.command) if tool else None
 
     def stage_branch(self, index: int, stage_id: str) -> str:
         return f"{self.stage_branch_namespace}/{index:03d}-{stage_id}"
@@ -1611,13 +1657,7 @@ def _structural_problems(cfg: ProjectConfig) -> list[str]:
                     "reproduce it, which is the thing this exists to prevent"
                 )
 
-    if not cfg.full_test_command and not cfg.stage_defaults.checks:
-        problems.append(
-            "a project needs full_test_command, or checks in stage_defaults, "
-            "or nothing will verify its stages. scoped_test_command alone is "
-            "not enough: a stage whose diff scopes to no test would run "
-            "nothing at all"
-        )
+    problems.extend(_test_tool_problems(cfg))
 
     for pattern in cfg.test_file_patterns:
         if not pattern:
@@ -1707,4 +1747,50 @@ def _tool_name_problems(tools: list[ProjectTool]) -> list[str]:
         if tool.name in seen:
             problems.append(f"project_tools: {tool.name!r} is declared twice")
         seen.add(tool.name)
+    return problems
+
+
+def _test_tool_problems(cfg: ProjectConfig) -> list[str]:
+    """The two test selections, resolved against the declared tools.
+
+    A reference rather than a command, so the failure modes are a reference's:
+    a name matching nothing, and a tool whose shape cannot serve the role. Both
+    are startup failures here rather than a stage discovering them, because the
+    symptom otherwise is a command that runs everything or runs nothing and
+    says neither.
+    """
+    problems: list[str] = []
+    by_name = {t.name: t for t in cfg.project_tools}
+    for field, name in (("scoped_test_tool", cfg.scoped_test_tool),):
+        if not name:
+            problems.append(
+                "scoped_test_tool is not set. Without it every attempt of "
+                "every stage runs the whole suite, which on a large project "
+                "is the most expensive mistake this config can make"
+            )
+        elif name not in by_name:
+            problems.append(
+                f"{field} names {name!r}, which is not a declared project "
+                f"tool. Declared: {', '.join(sorted(by_name)) or '(none)'}"
+            )
+
+    scoped = by_name.get(cfg.scoped_test_tool or "")
+    if scoped is not None:
+        if not any(a.repeated for a in scoped.arguments):
+            problems.append(
+                f"scoped_test_tool {scoped.name!r} declares no repeated "
+                "argument, so there is nowhere to put the selection. That is "
+                "what separates it from the full suite"
+            )
+        # No placeholder check here: `_tool_problems` already refuses an
+        # argument the command never uses, with a better message, and a
+        # repeated argument is required above — so a scoped tool without a
+        # slot cannot be built. A second guard would be one nothing can reach.
+
+    if not cfg.full_test_command and not cfg.stage_defaults.checks:
+        problems.append(
+            "a project needs full_test_command, or checks in stage_defaults, "
+            "or nothing will verify its stages. scoped_test_tool alone is not "
+            "enough: a stage whose diff scopes to no test would run nothing"
+        )
     return problems

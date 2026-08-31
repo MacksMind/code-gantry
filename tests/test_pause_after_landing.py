@@ -24,6 +24,8 @@ landed.
 
 import pytest
 
+from test_config import as_test_tools
+
 
 def _cfg(source=None):
     """A config, because the message has to name the file to resume from.
@@ -35,12 +37,12 @@ def _cfg(source=None):
     from code_gantry.config import parse_config
 
     return parse_config(
-        {
+        as_test_tools({
             "target_repo": "/tmp", "base_ref": "main", "project_branch": "p",
             "plan_root": "PLAN.md", "full_test_command": "true",
             "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.6-sol"},
-        },
+        }),
         source=source,
     )
 

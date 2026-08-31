@@ -28,6 +28,8 @@ from pathlib import Path
 
 import pytest
 
+from test_config import as_test_tools
+
 from code_gantry.addendum import append_findings, append_notes
 
 
@@ -150,7 +152,7 @@ class TestFindingsFile:
         from code_gantry.config import parse_config
 
         cfg = parse_config(
-            {
+            as_test_tools({
                 "target_repo": str(tmp_path),
                 "base_ref": "main",
                 "project_branch": "proj",
@@ -160,7 +162,7 @@ class TestFindingsFile:
                 "executor": {"model": "m"},
                 "planner": {"model": "claude-opus-5"},
                 "reviewer": {"model": "gpt-5.6-sol"},
-            }
+            })
         )
         assert Path(cfg.work_dir).is_relative_to(cfg.target_repo)
         assert "findings.md" not in str(cfg.plan_addendum_path)

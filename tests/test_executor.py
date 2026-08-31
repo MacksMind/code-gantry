@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from test_config import as_test_tools
+
 from code_gantry.commands import CommandRunner
 from code_gantry.config import Stage, parse_config
 from code_gantry.executor import (
@@ -43,7 +45,7 @@ def cfg_with(stage_overrides=None, **cfg_overrides):
         "reviewer": {"model": "gpt-5.5"},
     }
     data.update(cfg_overrides)
-    return parse_config(data), Stage(**stage)
+    return parse_config(as_test_tools(data)), Stage(**stage)
 
 
 

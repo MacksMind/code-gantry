@@ -49,11 +49,21 @@ def cfg_with(*tools, **overrides):
 class TestDeclaration:
     def test_a_tool_with_no_arguments_parses(self):
         cfg = cfg_with(a_tool())
-        assert [t.name for t in cfg.project_tools] == ["sync_dependencies"]
+        assert [t.name for t in cfg.project_tools if t.name != 'scoped_suite'] == ["sync_dependencies"]
         assert cfg.project_tools[0].command == ["bundle", "install"]
 
     def test_no_tools_declared_is_the_default(self):
-        assert parse_config(minimal()).project_tools == []
+        """Asserted on the schema, because the fixture can no longer show it.
+
+        `scoped_test_tool` is required and names an entry here, so every
+        parsed config now carries at least that one. The property being
+        pinned — an operator who declares nothing gets nothing — survives as
+        the field's own default.
+        """
+        from code_gantry.config import ProjectConfig
+
+        field = ProjectConfig.model_fields["project_tools"]
+        assert (field.default_factory() if field.default_factory else field.default) == []
 
     def test_an_argument_slot_parses(self):
         cfg = cfg_with(
@@ -554,7 +564,8 @@ class TestWiring:
         except AssertionError:
             pass
 
-        assert [t.name for t in seen.get("project_tools", [])] == ["sync_dependencies"]
+        declared = [t.name for t in seen.get("project_tools", []) if t.name != "scoped_suite"]
+        assert declared == ["sync_dependencies"]
         assert seen.get("runner") is runner
 
     def test_a_declared_tool_reaches_the_schemas_the_provider_is_sent(self):

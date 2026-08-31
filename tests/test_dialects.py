@@ -27,6 +27,8 @@ automatically on every provider OpenRouter lists as automatic.
 
 import pytest
 
+from test_config import as_test_tools
+
 from code_gantry.dialects import MESSAGES, RESPONSES, dialect_for
 
 
@@ -343,7 +345,7 @@ class TestBlocksTheEndpointWillActuallyAccept:
         from code_gantry.config import Stage, parse_config
         from code_gantry.prompts import build_executor_messages
 
-        cfg = parse_config({
+        cfg = parse_config(as_test_tools({
             "target_repo": str(tmp_path),
             "base_ref": "main",
             "project_branch": "proj",
@@ -352,7 +354,7 @@ class TestBlocksTheEndpointWillActuallyAccept:
             "executor": {"model": "anthropic/claude-opus-5"},
             "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.6-sol"},
-        })
+        }))
         stage = Stage(id="s", instruction="do the thing", edit_files=["src/**"])
         conv = build_executor_messages(
             stage, cfg, "PROMPT", agent_context="CONVENTIONS",

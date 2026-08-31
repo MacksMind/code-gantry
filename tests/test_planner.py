@@ -10,6 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from test_config import as_test_tools
+
 from code_gantry.config import PLANNER_WRITABLE_FIELDS, parse_config
 from code_gantry.planner import (
     AnthropicPlanner,
@@ -24,7 +26,7 @@ def cfg(**over):
     planner = {"model": "claude-opus-5"}
     planner.update(over)
     return parse_config(
-        {
+        as_test_tools({
             "target_repo": "/tmp/x",
             "project_branch": "work",
             "plan_root": "PLAN.md",
@@ -32,7 +34,7 @@ def cfg(**over):
             "executor": {"model": "m"},
             "planner": planner,
             "reviewer": {"model": "gpt-5.5"},
-        }
+        })
     ).planner
 
 

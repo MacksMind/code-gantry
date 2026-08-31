@@ -26,6 +26,8 @@ import re
 import subprocess
 
 import pytest
+
+from test_config import SCOPED_TOOL_YAML, as_test_tools
 from click.testing import CliRunner
 
 from code_gantry import cli
@@ -36,7 +38,7 @@ from code_gantry.runtime import ProjectPaths
 def _cfg(tmp_path):
     from code_gantry.config import parse_config
 
-    return parse_config({
+    return parse_config(as_test_tools({
         "target_repo": str(tmp_path),
         "base_ref": "main",
         "project_branch": "upgrade/thing",
@@ -45,7 +47,7 @@ def _cfg(tmp_path):
         "executor": {"model": "m"},
         "planner": {"model": "claude-opus-5"},
         "reviewer": {"model": "gpt-5.6-sol"},
-    })
+    }))
 
 
 class TestItSaysWhatIsStarting:
@@ -128,6 +130,9 @@ base_ref: main
 project_branch: work
 plan_root: PLAN.md
 full_test_command: "true"
+"""
+        + SCOPED_TOOL_YAML
+        + """
 executor:
   model: m
 planner:
@@ -158,14 +163,14 @@ reviewer:
         from code_gantry.config import parse_config
 
         cfg = parse_config(
-            {
+            as_test_tools({
                 "target_repo": str(demo.parent.parent / "target"),
                 "base_ref": "main", "project_branch": "work",
                 "plan_root": "PLAN.md", "full_test_command": "true",
                 "executor": {"model": "m"},
                 "planner": {"model": "claude-opus-5"},
                 "reviewer": {"model": "gpt-5.5"},
-            }
+            })
         )
         # A run is reached through the config that owns its work dir now, so
         # there is no lookup to stub — only the state read.

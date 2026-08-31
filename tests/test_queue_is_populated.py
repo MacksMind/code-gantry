@@ -12,6 +12,8 @@ import subprocess
 
 import pytest
 
+from test_config import as_test_tools
+
 
 @pytest.fixture
 def repo(tmp_path):
@@ -44,7 +46,7 @@ class TestTheQueueIsBuiltFromTheBatch:
         from code_gantry.config import parse_config
         from code_gantry.nodes import _queue_from_batch
 
-        cfg = parse_config({
+        cfg = parse_config(as_test_tools({
             "target_repo": str(repo), "base_ref": "main", "project_branch": "p",
             "plan_root": "PLAN.md", "full_test_command": "true",
             "executor": {"model": "m"},
@@ -52,7 +54,7 @@ class TestTheQueueIsBuiltFromTheBatch:
             # 1 and turns batching off.
             "planner": {"model": "claude-opus-5", "max_batch_stages": 5},
             "reviewer": {"model": "gpt-5.6-sol"},
-        })
+        }))
         from code_gantry.gitops import Git
 
         return _queue_from_batch(
@@ -150,13 +152,13 @@ class TestARevisionRechecksTheQueue:
         from code_gantry.gitops import Git
         from code_gantry.nodes import _requeue_after_revision
 
-        cfg = parse_config({
+        cfg = parse_config(as_test_tools({
             "target_repo": str(repo), "base_ref": "main", "project_branch": "p",
             "plan_root": "PLAN.md", "full_test_command": "true",
             "executor": {"model": "m"},
             "planner": {"model": "claude-opus-5", "max_batch_stages": 5},
             "reviewer": {"model": "gpt-5.6-sol"},
-        })
+        }))
         return _requeue_after_revision(
             cfg, Git(repo), cfg.stage_from_planner(revised), queue
         )
@@ -201,24 +203,24 @@ class TestTheBatchIsCapped:
         from code_gantry.gitops import Git
         from code_gantry.nodes import _queue_from_batch
 
-        cfg = parse_config({
+        cfg = parse_config(as_test_tools({
             "target_repo": str(repo), "base_ref": "main", "project_branch": "p",
             "plan_root": "PLAN.md", "full_test_command": "true",
             "executor": {"model": "m"},
             "planner": {"model": "claude-opus-5", "max_batch_stages": cap},
             "reviewer": {"model": "gpt-5.6-sol"},
-        })
+        }))
         return _queue_from_batch(cfg, Git(repo), cfg.stage_from_planner(first), extras)
 
     def test_the_default_is_one_stage(self):
         from code_gantry.config import parse_config
 
-        cfg = parse_config({
+        cfg = parse_config(as_test_tools({
             "target_repo": ".", "base_ref": "main", "project_branch": "p",
             "plan_root": "PLAN.md", "full_test_command": "true",
             "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.6-sol"},
-        })
+        }))
         assert cfg.planner.max_batch_stages == 1
 
     def test_a_cap_of_one_queues_nothing(self, repo):

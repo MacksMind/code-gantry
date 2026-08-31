@@ -385,7 +385,30 @@ def resolve_test_paths(
     return prune_contained(paths)
 
 
-def resolve_test_command(
+@dataclass(frozen=True)
+class TestInvocation:
+    """One resolved test run: what to log, and how to spawn it.
+
+    The two selections spawn differently and that is deliberate rather than an
+    accident of history. The scoped one is a declared tool the executor also
+    calls, so it goes through argv with no shell — the same command spelled the
+    same way in both places, which is what keeps an exit code describing the
+    artifacts. The full suite is nobody's tool: no role may run it, so there is
+    no model-supplied value to keep out of a shell, and an operator's `a && b`
+    keeps working.
+
+    Carried together so a caller cannot resolve the decision twice and get two
+    answers, which is how two views of one dataset start disagreeing.
+    """
+
+    text: str
+    argv: list[str] | None = None
+
+    def run(self, runner):
+        return runner.run_argv(self.argv) if self.argv else runner.run(self.text)
+
+
+def resolve_test_invocation(
     stage: Stage,
     cfg: ProjectConfig,
     git: Git | None = None,
@@ -393,8 +416,15 @@ def resolve_test_command(
     *,
     for_loop: bool,
     allow_full_suite: bool = False,
-) -> str | None:
-    """Which test command to run, or `None` when there is nothing worth running.
+) -> TestInvocation | None:
+    """Which test command to run, or `None` when there is none.
+
+    Argv rather than a string, and both selections come from the declared tool
+    rather than from a command written twice. The executor calls the scoped
+    tool directly; this is the machinery calling the same declaration. A suite
+    invoked one way in the loop and another at the gate is how an exit code
+    stops describing the artifacts, and it is the reason a stage command still
+    goes through the shell while these do not.
 
     **Fourth divergence — the template.** The gate honours `stage.test_command`
     first, because an operator-declared per-stage command is the whole point of
@@ -416,7 +446,9 @@ def resolve_test_command(
     acts on: everything, or these.
     """
     if not for_loop and stage.test_command:
-        return stage.test_command
+        # An operator-declared per-stage command is a shell string, which is
+        # the whole point of the field: it is the operator's, not the model's.
+        return TestInvocation(stage.test_command)
 
     # What the loop does with nothing left to scope to depends on whether the
     # editor enforces scope.
@@ -432,17 +464,26 @@ def resolve_test_command(
     # not apply to it, and withholding it anyway would mean a project
     # configuring only `full_test_command` gets an executor that never runs a
     # test.
-    fallback = cfg.full_test_command if (allow_full_suite or not for_loop) else None
-
-    template_base = cfg.scoped_test_command
-    if not template_base:
-        return fallback
+    full = cfg.full_test_command if (allow_full_suite or not for_loop) else None
+    fallback = TestInvocation(full) if full else None
 
     paths = resolve_test_paths(stage, cfg, git, since_sha, for_loop=for_loop)
     if not paths:
         return fallback
+    argv = cfg.scoped_test_argv(paths)
+    return TestInvocation(" ".join(argv), argv) if argv else fallback
 
-    return template_base.format(paths=" ".join(paths))
+
+def resolve_test_command(*args, **kwargs) -> str | None:
+    """The same decision rendered as one string, for logs and comparisons.
+
+    Derived from the invocation rather than built beside it, because two views
+    of one dataset that disagree mean the derivation is wrong. `run_argv`
+    labels its result with the joined form, so a recorded command compares
+    equal to this either way.
+    """
+    chosen = resolve_test_invocation(*args, **kwargs)
+    return chosen.text if chosen else None
 
 
 # --- the layers a caller can fix by editing -------------------------------
@@ -772,14 +813,15 @@ def run_tests(
     to the full suite". That distinction is `resolve_test_command`'s, not this
     function's.
     """
-    command = resolve_test_command(
+    chosen = resolve_test_invocation(
         stage, cfg, git, since_sha,
         for_loop=for_loop, allow_full_suite=allow_full_suite,
     )
-    if not command:
+    if not chosen:
         return GateResult(ok=True, head_sha=git.head_sha())
+    command = chosen.text
 
-    result = runner.run(command)
+    result = chosen.run(runner)
     out = GateResult(
         ok=True,
         command=command,
@@ -847,7 +889,7 @@ def run_tests(
             out.flaky_seeds.update(verdict.seeds)
             out.flaky_examples.update(verdict.examples)
     else:
-        rerun = runner.run(command)
+        rerun = chosen.run(runner)
         out.results.append(rerun)
         out.test_seconds += rerun.duration_seconds
         detail = rerun.summary()

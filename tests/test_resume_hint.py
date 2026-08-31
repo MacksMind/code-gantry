@@ -21,6 +21,8 @@ import subprocess
 
 import pytest
 
+from test_config import as_test_tools
+
 from code_gantry.config import parse_config
 
 
@@ -37,12 +39,12 @@ def cfg(tmp_path):
     source = repo / "docs" / "code_gantry.yaml"
     source.write_text("x: 1\n")
     return parse_config(
-        {
+        as_test_tools({
             "target_repo": str(repo), "base_ref": "main", "project_branch": "p",
             "plan_root": "docs/PLAN.md", "full_test_command": "true",
             "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.6-sol"},
-        },
+        }),
         source=source,
     )
 
@@ -67,12 +69,12 @@ class TestTheHintItself:
         # Every test in this suite builds one of these, and so does anyone
         # constructing a config by hand. A placeholder is honest; a wrong
         # absolute path is worse than no path.
-        cfg = parse_config({
+        cfg = parse_config(as_test_tools({
             "target_repo": "/tmp", "base_ref": "main", "project_branch": "p",
             "plan_root": "PLAN.md", "full_test_command": "true",
             "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.6-sol"},
-        })
+        }))
         assert cfg.resume_command() == "code-gantry resume <config>"
 
 

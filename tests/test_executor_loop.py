@@ -13,6 +13,8 @@ import subprocess
 
 import pytest
 
+from test_config import as_test_tools
+
 from code_gantry.commands import CommandRunner
 from code_gantry.config import parse_config
 from code_gantry.edittools import FileEditor
@@ -58,7 +60,7 @@ def build(repo, stage_overrides=None, executor=None, **cfg_overrides):
         "reviewer": {"model": "gpt-5.5"},
     }
     data.update(cfg_overrides)
-    cfg = parse_config(data)
+    cfg = parse_config(as_test_tools(data))
     fields = {"id": "s1", "instruction": "do it", "edit_files": ["app/**"]}
     fields.update(stage_overrides or {})
     return cfg, Stage(**fields)

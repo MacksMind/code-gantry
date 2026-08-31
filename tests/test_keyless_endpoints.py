@@ -1,6 +1,8 @@
 import os
 import pytest
 
+from test_config import as_test_tools
+
 from code_gantry.config import parse_config
 
 
@@ -15,7 +17,7 @@ def _cfg(**over):
         "reviewer": {"model": "gpt-5.5"},
     }
     data.update(over)
-    return parse_config(data)
+    return parse_config(as_test_tools(data))
 
 
 class TestAKeylessEndpointIsExpressibleInEveryRole:

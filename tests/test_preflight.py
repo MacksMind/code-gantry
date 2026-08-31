@@ -18,6 +18,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
+from test_config import runner_script, as_test_tools
+
 from code_gantry.config import parse_config
 from code_gantry.flake import FLAKES_FILENAME, recent_flakes
 from code_gantry.preflight import (
@@ -76,7 +78,7 @@ def dead_port():
 
 def cfg_for(model, api_base):
     return parse_config(
-        {
+        as_test_tools({
             "target_repo": "/tmp/app",
             "base_ref": "main",
             "project_branch": "proj",
@@ -85,7 +87,7 @@ def cfg_for(model, api_base):
             "executor": {"model": model, "api_base": api_base},
             "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.5"},
-        }
+        })
     )
 
 
@@ -136,7 +138,7 @@ class TestExecutorEndpoint:
         # The env-var check reports that separately; this must not blow up.
         monkeypatch.delenv("SOME_UNSET_BASE", raising=False)
         cfg = parse_config(
-            {
+            as_test_tools({
                 "target_repo": "/tmp/app",
                 "base_ref": "main",
                 "project_branch": "proj",
@@ -145,7 +147,7 @@ class TestExecutorEndpoint:
                 "executor": {"model": "openai/m", "api_base_env": "SOME_UNSET_BASE"},
                 "planner": {"model": "claude-opus-5"},
                 "reviewer": {"model": "gpt-5.5"},
-            }
+            })
         )
         assert check_executor_endpoint(cfg) == []
 
@@ -156,7 +158,7 @@ class TestEndpointEnvironmentChecks:
         # bare tmp_path would prove nothing about the endpoint check.
         monkeypatch.delenv("SPARK_BASE", raising=False)
         cfg = parse_config(
-            {
+            as_test_tools({
                 "target_repo": str(repo),
                 "base_ref": "main",
                 "project_branch": "proj",
@@ -165,7 +167,7 @@ class TestEndpointEnvironmentChecks:
                 "executor": {"model": "openai/m", "api_base_env": "SPARK_BASE"},
                 "planner": {"model": "claude-opus-5"},
                 "reviewer": {"model": "gpt-5.5"},
-            }
+            })
         )
         checks = run_preflight(
             cfg,
@@ -194,7 +196,7 @@ class TestEndpointRedaction:
     def test_a_resolved_address_is_not_printed(self, endpoint, monkeypatch):
         monkeypatch.setenv("SECRET_BASE", endpoint)
         cfg = parse_config(
-            {
+            as_test_tools({
                 "target_repo": "/tmp/app",
                 "base_ref": "main",
                 "project_branch": "proj",
@@ -206,7 +208,7 @@ class TestEndpointRedaction:
                 },
                 "planner": {"model": "claude-opus-5"},
                 "reviewer": {"model": "gpt-5.6-sol"},
-            }
+            })
         )
         checks = check_executor_endpoint(cfg)
         rendered = "\n".join(f"{c.name} {c.detail}" for c in checks)
@@ -218,7 +220,7 @@ class TestEndpointRedaction:
         address = f"http://127.0.0.1:{dead_port}/v1"
         monkeypatch.setenv("SECRET_BASE", address)
         cfg = parse_config(
-            {
+            as_test_tools({
                 "target_repo": "/tmp/app",
                 "base_ref": "main",
                 "project_branch": "proj",
@@ -227,7 +229,7 @@ class TestEndpointRedaction:
                 "executor": {"model": "openai/m", "api_base_env": "SECRET_BASE"},
                 "planner": {"model": "claude-opus-5"},
                 "reviewer": {"model": "gpt-5.6-sol"},
-            }
+            })
         )
         checks = check_executor_endpoint(cfg)
         rendered = "\n".join(f"{c.name} {c.detail}" for c in checks)
@@ -254,7 +256,7 @@ class TestFailureOutputKeepsTheVerdict:
     def test_the_head_of_the_output_is_kept(self, repo):
         _commit_a_plan(repo)
         cfg = parse_config(
-            {
+            as_test_tools({
                 "target_repo": str(repo),
                 "base_ref": "main",
                 "project_branch": "proj",
@@ -268,7 +270,7 @@ class TestFailureOutputKeepsTheVerdict:
                 "executor": {"model": "m"},
                 "planner": {"model": "claude-opus-5"},
                 "reviewer": {"model": "gpt-5.6-sol"},
-            }
+            })
         )
         checks = run_preflight(
             cfg,
@@ -299,7 +301,7 @@ class TestPreflightExcusesAFlakeTheRunWouldExcuse:
     def _cfg(self, repo, scoped_ok: bool):
         _commit_a_plan(repo)
         return parse_config(
-            {
+            as_test_tools({
                 "target_repo": str(repo),
                 "base_ref": "main",
                 "project_branch": "proj",
@@ -309,13 +311,15 @@ class TestPreflightExcusesAFlakeTheRunWouldExcuse:
                     "echo '9 examples, 1 failure'; exit 1"
                 ),
                 "scoped_test_command": (
-                    "echo {paths}" if scoped_ok else "echo {paths}; exit 1"
+                    "true {paths}"
+                    if scoped_ok
+                    else runner_script(repo.parent, "exit 1", "red_runner") + " {paths}"
                 ),
                 "failed_file_pattern": r"^rspec \./(\S+?\.rb)",
                 "executor": {"model": "m"},
                 "planner": {"model": "claude-opus-5"},
                 "reviewer": {"model": "gpt-5.6-sol"},
-            }
+            })
         )
 
     def _check(self, repo, scoped_ok: bool):
@@ -382,8 +386,8 @@ class TestPreflightExcusesAFlakeTheRunWouldExcuse:
         # thousands of lines and this file sits beside a 14MB `last-run.out`.
         project_dir = tmp_path / "proj"
         cfg = self._cfg(repo, scoped_ok=True)
-        cfg = parse_config({**cfg.model_dump(mode="json"), "full_test_command": "true",
-                            "full_test_command": "true"})
+        cfg = parse_config(as_test_tools({**cfg.model_dump(mode="json"), "full_test_command": "true",
+                            "full_test_command": "true"}))
         run_preflight(
             cfg, project_dir=project_dir, check_models=False,
             check_approval=False, check_endpoint=False,
@@ -438,7 +442,7 @@ class TestTheSuitesGoLast:
 
     def _cfg(self, repo, marker):
         return parse_config(
-            {
+            as_test_tools({
                 "target_repo": str(repo),
                 "base_ref": "main",
                 "project_branch": "proj",
@@ -447,7 +451,7 @@ class TestTheSuitesGoLast:
                 "executor": {"model": "m"},
                 "planner": {"model": "claude-opus-5"},
                 "reviewer": {"model": "gpt-5.6-sol"},
-            }
+            })
         )
 
     def test_a_missing_credential_costs_no_suite(self, repo, monkeypatch):
@@ -529,7 +533,7 @@ class TestTheSuiteRunsOnce:
         marker = repo / "runs.txt"
         command = f"echo x >> {marker}"
         cfg = parse_config(
-            {
+            as_test_tools({
                 "target_repo": str(repo),
                 "base_ref": "main",
                 "project_branch": "proj",
@@ -538,7 +542,7 @@ class TestTheSuiteRunsOnce:
                 "executor": {"model": "m"},
                 "planner": {"model": "claude-opus-5"},
                 "reviewer": {"model": "gpt-5.6-sol"},
-            }
+            })
         )
         _commit_a_plan(repo)
         run_preflight(
@@ -560,7 +564,7 @@ class TestTheSuiteRunsOnce:
         """
         command = "echo '9 examples, 3 failures'; exit 1"
         cfg = parse_config(
-            {
+            as_test_tools({
                 "target_repo": str(repo),
                 "base_ref": "main",
                 "project_branch": "proj",
@@ -569,7 +573,7 @@ class TestTheSuiteRunsOnce:
                 "executor": {"model": "m"},
                 "planner": {"model": "claude-opus-5"},
                 "reviewer": {"model": "gpt-5.6-sol"},
-            }
+            })
         )
         _commit_a_plan(repo)
         checks = run_preflight(
@@ -670,12 +674,12 @@ class TestFilesTooLargeToEverBeReference:
         from code_gantry.gitops import Git
         from code_gantry.preflight import _read_budget_check
 
-        cfg = parse_config({
+        cfg = parse_config(as_test_tools({
             "target_repo": str(repo), "base_ref": "main", "project_branch": "proj",
             "plan_root": "PLAN.md", "full_test_command": "true",
             "executor": {"model": "m", "max_read_lines": cap},
             "planner": {"model": "claude-opus-5"}, "reviewer": {"model": "gpt-5.5"},
-        })
+        }))
         return _read_budget_check(cfg, Git(repo))
 
     def test_it_warns_without_blocking(self, tmp_path, run_git):
@@ -852,7 +856,7 @@ class TestDeclaredChecksRunAtPreflight:
 
     def _cfg(self, repo, *, checks, suite_marker):
         return parse_config(
-            {
+            as_test_tools({
                 "target_repo": str(repo),
                 "base_ref": "main",
                 "project_branch": "proj",
@@ -862,7 +866,7 @@ class TestDeclaredChecksRunAtPreflight:
                 "executor": {"model": "m"},
                 "planner": {"model": "claude-opus-5"},
                 "reviewer": {"model": "gpt-5.6-sol"},
-            }
+            })
         )
 
     def _run(self, repo, *, checks, suite_marker, run_tests=True):

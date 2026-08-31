@@ -33,6 +33,7 @@ import os
 import pytest
 
 from code_gantry.config import ConfigError, parse_config
+from test_config import as_test_tools
 
 
 def _data(**over):
@@ -45,7 +46,7 @@ def _data(**over):
         "reviewer": {"model": "gpt-5.6-sol"},
     }
     base.update(over)
-    return base
+    return as_test_tools(base)
 
 
 def _ctx(cfg):

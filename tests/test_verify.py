@@ -11,6 +11,8 @@ from code_gantry.config import parse_config
 from code_gantry.gitops import Git
 from code_gantry.verify import Layer, Route, resolve_test_command, run_verify
 
+from test_config import runner_script, as_test_tools
+
 RSPEC_PATTERN = r"^\s*rspec\s+'?\.?/?([^'\s\[:]+_spec\.rb)"
 
 
@@ -26,7 +28,7 @@ def build(repo, stage_overrides=None, **cfg_overrides):
         "reviewer": {"model": "gpt-5.5"},
     }
     data.update(cfg_overrides)
-    cfg = parse_config(data)
+    cfg = parse_config(as_test_tools(data))
 
     fields = {"id": "s1", "instruction": "do it", "edit_files": ["app.py", "src/**"]}
     fields.update(stage_overrides or {})
@@ -479,7 +481,10 @@ class TestFlakeRerun:
                 "echo \"Failed examples:\"; "
                 "echo \"rspec './spec/other_spec.rb[1:1]' # x\"; exit 1"
             ),
-            scoped_test_command=f"echo {{paths}} >> {log}",
+            scoped_test_command=(
+                runner_script(log.parent, f'echo "$@" >> {log}', "log_runner")
+                + " {paths}"
+            ),
             failed_file_pattern=RSPEC_PATTERN,
         )
         out = verify(repo, cfg, stage, sha)
@@ -498,7 +503,12 @@ class TestFlakeRerun:
             repo,
             {"edit_files": ["spec/**"], "test_paths": ["spec/app_spec.rb"]},
             scoped_test_command=(
-                f"if [ -f {flag} ]; then exit 0; else touch {flag}; exit 1; fi # {{paths}}"
+                runner_script(
+                    flag.parent,
+                    f"if [ -f {flag} ]; then exit 0; else touch {flag}; exit 1; fi",
+                    "flaky_runner",
+                )
+                + " {paths}"
             ),
         )
         out = verify(repo, cfg, stage, sha)

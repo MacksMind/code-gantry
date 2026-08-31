@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from test_config import as_test_tools
+
 from code_gantry.config import parse_config
 from code_gantry.planner import AnthropicPlanner
 from code_gantry.reviewer import OpenAIReviewer
@@ -20,7 +22,7 @@ from code_gantry.runtime import ProjectPaths, RunPaths, build_runtime
 
 def a_config(repo):
     return parse_config(
-        {
+        as_test_tools({
             "target_repo": str(repo),
             "project_branch": "work",
             "plan_root": "PLAN.md",
@@ -28,7 +30,7 @@ def a_config(repo):
             "executor": {"model": "m"},
             "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.6-sol"},
-        }
+        })
     )
 
 
