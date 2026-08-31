@@ -26,6 +26,8 @@ from pathlib import Path
 
 import pytest
 
+from test_config import runner_script, as_test_tools
+
 from code_gantry.commands import CommandRunner
 from code_gantry.config import ConfigError, parse_config
 from code_gantry.flake import (
@@ -68,16 +70,18 @@ def config(repo, **over):
         "base_ref": "main",
         "project_branch": "proj",
         "plan_root": "PLAN.md",
-        "test_command": "true",
         "full_test_command": "true",
-        "scoped_test_command": "rspec-stub {paths}",
+        # A real program that fails, which is what `rspec-stub` was standing
+        # in for. Under a shell a missing binary exited 127; a declared
+        # tool spawns it directly, so it has to exist.
+        "scoped_test_command": "false {paths}",
         "failed_file_pattern": RSPEC_PATTERN,
         "executor": {"model": "m"},
         "planner": {"model": "claude-opus-5"},
         "reviewer": {"model": "gpt-5.5"},
     }
     data.update(over)
-    return parse_config(data)
+    return parse_config(as_test_tools(data))
 
 
 def judge(repo, output, cfg=None, command="full-suite"):
@@ -190,7 +194,8 @@ class TestTheFlakeVerdict:
         the same question and is what "this file is green" has to mean.
         """
         log = repo.parent / "reran.txt"
-        cfg = config(repo, scoped_test_command=f"echo {{paths}} >> {log}")
+        script = runner_script(repo.parent, f'echo "$@" >> {log}', "reran_runner")
+        cfg = config(repo, scoped_test_command=f"{script} {{paths}}")
         judge(repo, RSPEC_OUTPUT, cfg)
         assert log.read_text().strip() == "spec/requests/checkout_spec.rb"
 
@@ -204,7 +209,8 @@ class TestTheFlakeVerdict:
         property of the suite, and cleaning that up is separate work.
         """
         log = repo.parent / "owned-reran.txt"
-        cfg = config(repo, scoped_test_command=f"true {{paths}} && echo ok >> {log}")
+        script = runner_script(repo.parent, f'echo ok >> {log}', "owned_runner")
+        cfg = config(repo, scoped_test_command=f"{script} {{paths}}")
         out = judge(repo, RSPEC_OUTPUT, cfg)
         assert out.flaked
         assert log.exists(), "an owned file is re-run like any other"
@@ -215,14 +221,25 @@ class TestTheFlakeVerdict:
             "rspec ./spec/a_spec.rb:1 # a\n"
             "rspec ./spec/b_spec.rb:1 # b\n"
         )
-        cfg = config(repo, scoped_test_command="grep -q b_spec <<< '{paths}' && exit 1; true")
+        script = runner_script(
+            repo.parent, 'case "$*" in *b_spec*) exit 1;; esac; exit 0', "picky_runner"
+        )
+        cfg = config(repo, scoped_test_command=f"{script} {{paths}}")
         out = judge(repo, text, cfg)
         assert not out.flaked
 
-    def test_the_paths_are_quoted_for_the_shell(self, repo):
-        # Bracket locators are glob expressions; a file path can contain spaces.
+    def test_each_path_arrives_as_its_own_argument(self, repo):
+        """No shell, so nothing to quote for.
+
+        This asked whether the paths were quoted, back when the command was a
+        string a shell expanded — where a bracket locator is a glob and a space
+        splits an argument. The scoped command is a declared tool now: each
+        path is one argv element and nothing interprets it, which is the same
+        protection with no escaping rule to get wrong.
+        """
         log = repo.parent / "quoted.txt"
-        cfg = config(repo, scoped_test_command=f"printf '%s' {{paths}} > {log}")
+        script = runner_script(repo.parent, f'printf "%s" "$@" > {log}', "arg_runner")
+        cfg = config(repo, scoped_test_command=f"{script} {{paths}}")
         out = judge(repo, RSPEC_OUTPUT, cfg)
         assert out.flaked
         assert log.read_text() == "spec/requests/checkout_spec.rb"
@@ -248,7 +265,8 @@ class TestWhenNotToAdjudicate:
         # The pre-existing behaviour, unchanged: projects whose test runner does
         # not print a failed-example block keep the re-run-once rule.
         log = repo.parent / "which-ran.txt"
-        cfg = config(repo, scoped_test_command=f"echo scoped {{paths}} >> {log}")
+        script = runner_script(repo.parent, f'echo scoped "$@" >> {log}', "scoped_runner")
+        cfg = config(repo, scoped_test_command=f"{script} {{paths}}")
         out = judge(repo, "no locators here", cfg, command=f"echo whole >> {log}")
         assert out.flaked
         assert out.files == []
@@ -258,11 +276,18 @@ class TestWhenNotToAdjudicate:
         out = judge(repo, "no locators here", config(repo), command="exit 1")
         assert not out.flaked
 
-    def test_no_scoped_command_means_no_way_to_re_run_one_file(self, repo):
-        # Without an operator-supplied template there is nothing to substitute
-        # the paths into, and CodeGantry will not invent shell.
-        cfg = config(repo, scoped_test_command=None)
-        out = judge(repo, RSPEC_OUTPUT, cfg, command="exit 1")
+    def test_nothing_to_re_run_falls_back_to_the_whole_suite(self, repo):
+        """No selection means no isolated re-run, so no excusal.
+
+        This used to say "no scoped command", which was reachable when the
+        scoped selection was optional. `scoped_test_tool` is required now — a
+        project without one runs the whole suite on every attempt of every
+        stage, which is the most expensive mistake its config can make — so
+        the reachable trigger is an output that names no failing file. Same
+        branch, and one that a config can still produce.
+        """
+        cfg = config(repo, scoped_test_command="true {paths}")
+        out = judge(repo, "nothing here names a spec\n", cfg, command="exit 1")
         assert not out.flaked
         assert out.files == []
 
@@ -339,17 +364,24 @@ class TestThreeStrikes:
     """
 
     def counting_command(self, repo, name, fail_times):
-        # Fails the first `fail_times` invocations, then passes.
+        # Fails the first `fail_times` invocations, then passes. A script,
+        # because the scoped command is a declared tool and there is no shell
+        # to hold a multi-statement body.
         counter = repo.parent / name
-        return (
-            f"n=$(cat {counter} 2>/dev/null || echo 0); n=$((n+1)); echo $n > {counter}; "
-            f"test $n -gt {fail_times}"
+        script = runner_script(
+            repo.parent,
+            f"n=$(cat {counter} 2>/dev/null || echo 0)\n"
+            f"n=$((n+1))\n"
+            f"echo $n > {counter}\n"
+            f"test $n -gt {fail_times}",
+            f"counting_{name}",
         )
+        return script
 
     def test_a_file_that_passes_on_the_second_isolated_run_is_a_flake(self, repo):
         cfg = config(
             repo,
-            scoped_test_command=self.counting_command(repo, "c1", 1) + " # {paths}",
+            scoped_test_command=self.counting_command(repo, "c1", 1) + " {paths}",
         )
         out = judge(repo, RSPEC_OUTPUT, cfg)
         assert out.flaked
@@ -364,7 +396,8 @@ class TestThreeStrikes:
     def test_passing_first_time_costs_only_one_run(self, repo):
         # No point paying for a second run to confirm a pass.
         log = repo.parent / "once.txt"
-        cfg = config(repo, scoped_test_command=f"echo x >> {log} # {{paths}}")
+        script = runner_script(repo.parent, f'echo x >> {log}', "noisy_runner")
+        cfg = config(repo, scoped_test_command=f"{script} {{paths}}")
         out = judge(repo, RSPEC_OUTPUT, cfg)
         assert out.flaked
         assert log.read_text().count("x") == 1
@@ -373,7 +406,7 @@ class TestThreeStrikes:
         cfg = config(
             repo,
             flake_rerun_attempts=1,
-            scoped_test_command=self.counting_command(repo, "c2", 1) + " # {paths}",
+            scoped_test_command=self.counting_command(repo, "c2", 1) + " {paths}",
         )
         out = judge(repo, RSPEC_OUTPUT, cfg)
         assert not out.flaked, "one attempt means one strike in isolation"
@@ -698,7 +731,7 @@ class TestTheLocatorSurvivesTheJourney:
 
         cfg = config(
             repo,
-            test_command=(
+            full_test_command=(
                 "echo 'Failed examples:'; "
                 "echo \"rspec ./spec/models/user_spec.rb:531 # User does a thing\"; "
                 "echo 'Randomized with seed 4845'; exit 1"

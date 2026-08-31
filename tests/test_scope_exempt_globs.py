@@ -25,20 +25,22 @@ to widen either.
 
 import pytest
 
+from test_config import as_test_tools
+
 
 def _ctx(tmp_path, edit_files, exempt=()):
     from types import SimpleNamespace
 
     from code_gantry.config import Stage, parse_config
 
-    cfg = parse_config({
+    cfg = parse_config(as_test_tools({
         "target_repo": str(tmp_path), "base_ref": "main", "project_branch": "p",
-        "plan_root": "docs/PLAN.md", "test_command": "true",
+        "plan_root": "docs/PLAN.md", "full_test_command": "true",
         "scope_exempt_globs": list(exempt),
         "executor": {"model": "m"},
         "planner": {"model": "claude-opus-5"},
         "reviewer": {"model": "gpt-5.6-sol"},
-    })
+    }))
     return SimpleNamespace(
         cfg=cfg,
         stage=Stage(id="s", instruction="do it", edit_files=list(edit_files)),

@@ -347,7 +347,7 @@ def _is_plan_document(path: str, ctx: _Context) -> bool:
         return True
 
     # The config itself, which now lives inside the repository it describes.
-    # `checks`, `test_command` and `setup_command` are arbitrary operator shell
+    # `checks`, the test commands and `setup_command` are arbitrary operator shell
     # that runs unattended; before the move they sat in a repository no stage
     # could reach, and after it they are one `edit_files` glob away. The same
     # sentence as the agent-context documents below, with the most force it
@@ -534,7 +534,7 @@ def _layer_tests(ctx: _Context, outcome: VerifyOutcome):
         return None
 
     outcome.unscoped_tests = bool(ctx.cfg.scoped_test_command) and (
-        command == ctx.cfg.test_command
+        command == ctx.cfg.full_test_command
     )
 
     if outcome.unscoped_tests and ctx.stage.require_scoped_tests:
@@ -609,7 +609,7 @@ def _layer_tests(ctx: _Context, outcome: VerifyOutcome):
 def _record_full_suite(ctx: _Context, outcome: VerifyOutcome, command: str) -> None:
     """Remember a green full suite so the merge gate need not repeat it.
 
-    Only when the command *is* `full_test_command`. `test_command` may be the
+    Only when the command *is* the full selection. A stage command may be the
     same string on some projects and a cheaper unscoped run on others, and the
     gate's contract is about the full suite specifically — so this compares the
     command rather than inferring from `unscoped_tests`.

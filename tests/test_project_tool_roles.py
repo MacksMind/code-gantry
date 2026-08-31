@@ -652,4 +652,5 @@ class TestItIsWiredForReal:
         ]
         assert [
             t.name for t in for_role("executor", assembled.planner.project_tools)
+            if t.name != "scoped_suite"
         ] == ["bundle_install"]

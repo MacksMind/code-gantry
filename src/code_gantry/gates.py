@@ -92,6 +92,43 @@ def is_glob(path: str) -> bool:
     return any(ch in path for ch in "*?[")
 
 
+def split_locator(entry: str, repo: Path) -> tuple[str, str] | None:
+    """A declared entry as (the file it names, the whole token), or None.
+
+    A test runner that can narrow to one example says so in its own failure
+    output, and the shortest correct thing a planner can do with that output
+    is copy it. What it copies is a path with something appended — a line
+    number, a bracketed id, a doubled colon and a test name — and the spelling
+    belongs to the runner.
+
+    So the split is by **existence, not by syntax**: the longest prefix of the
+    token that names a file in the tree is the file, and whatever follows is
+    the runner's business. `spec/a_spec.rb:79`, `spec/a_spec.rb[1:6:1:3]` and
+    `test_a.py::test_b` all fall out of one rule, and none of their spellings
+    appears here. A rule written from the three shapes we have seen would be
+    the fourth project's defect.
+
+    Bounded to the final segment, because a locator never contains a
+    separator, and because walking every prefix of a long path is a stat per
+    character for nothing.
+
+    Surrounding quotes and a leading `./` are stripped first: a runner that
+    prints `rspec './spec/a_spec.rb[1:6:1:3]'` quotes it because brackets are
+    shell globs, and asking a model to strip that before pasting is asking it
+    to edit what we told it to copy.
+    """
+    token = entry.strip().strip("'\"")
+    if token.startswith("./"):
+        token = token[2:]
+    if not token:
+        return None
+    floor = token.rfind("/") + 2
+    for i in range(len(token), max(floor, 1) - 1, -1):
+        if (repo / token[:i]).is_file():
+            return token[:i], token
+    return None
+
+
 def runnable(path: str, stage: Stage, cfg: ProjectConfig) -> bool:
     """Is this declared path worth putting in front of the inner loop?
 
@@ -314,13 +351,18 @@ def resolve_test_paths(
         path = (raw or "").strip()
         if not path:
             continue
-        if is_glob(path):
-            resolved = expand_globs(path, cfg.target_repo)
+        # Before the glob branch, because a bracketed example id is glob-shaped
+        # to `is_glob` and would be expanded into nothing.
+        located = split_locator(path, cfg.target_repo)
+        if located is not None:
+            file_part, whole = located
+            paths.append(whole if whole != file_part else file_part)
+        elif is_glob(path):
+            paths.extend(expand_globs(path, cfg.target_repo))
         elif for_loop:
-            resolved = [path] if runnable(path, stage, cfg) else []
+            paths.extend([path] if runnable(path, stage, cfg) else [])
         else:
-            resolved = [path] if (cfg.target_repo / path).exists() else []
-        paths.extend(resolved)
+            paths.extend([path] if (cfg.target_repo / path).exists() else [])
 
     if for_loop:
         paths.extend(tests_the_stage_may_edit(stage, cfg))
@@ -343,7 +385,30 @@ def resolve_test_paths(
     return prune_contained(paths)
 
 
-def resolve_test_command(
+@dataclass(frozen=True)
+class TestInvocation:
+    """One resolved test run: what to log, and how to spawn it.
+
+    The two selections spawn differently and that is deliberate rather than an
+    accident of history. The scoped one is a declared tool the executor also
+    calls, so it goes through argv with no shell — the same command spelled the
+    same way in both places, which is what keeps an exit code describing the
+    artifacts. The full suite is nobody's tool: no role may run it, so there is
+    no model-supplied value to keep out of a shell, and an operator's `a && b`
+    keeps working.
+
+    Carried together so a caller cannot resolve the decision twice and get two
+    answers, which is how two views of one dataset start disagreeing.
+    """
+
+    text: str
+    argv: list[str] | None = None
+
+    def run(self, runner):
+        return runner.run_argv(self.argv) if self.argv else runner.run(self.text)
+
+
+def resolve_test_invocation(
     stage: Stage,
     cfg: ProjectConfig,
     git: Git | None = None,
@@ -351,28 +416,39 @@ def resolve_test_command(
     *,
     for_loop: bool,
     allow_full_suite: bool = False,
-) -> str | None:
-    """Which test command to run, or `None` when there is nothing worth running.
+) -> TestInvocation | None:
+    """Which test command to run, or `None` when there is none.
+
+    Argv rather than a string, and both selections come from the declared tool
+    rather than from a command written twice. The executor calls the scoped
+    tool directly; this is the machinery calling the same declaration. A suite
+    invoked one way in the loop and another at the gate is how an exit code
+    stops describing the artifacts, and it is the reason a stage command still
+    goes through the shell while these do not.
 
     **Fourth divergence — the template.** The gate honours `stage.test_command`
     first, because an operator-declared per-stage command is the whole point of
-    the field; then `scoped_test_command`. The loop uses `auto_test_command` if
-    the operator set one, else `scoped_test_command`, and never the project's
-    full suite: the executor has no notion of `edit_files`, so faced with a red
-    spec outside the stage it will edit that spec, and a full suite gives it
-    minutes per pass in which to do so.
+    the field; then `scoped_test_command`, which both callers share. The loop
+    never reaches the project's full suite: the executor has no notion of
+    `edit_files`, so faced with a red spec outside the stage it will edit that
+    spec, and a full suite gives it minutes per pass in which to do so.
 
     **Fifth — what happens when nothing resolves.** The gate falls back to the
     full command, which is slow but true. The loop returns `None` and runs no
     inner loop at all, because a command that can never pass is worse than no
     command: the attempt ends believing it succeeded.
 
-    There is no third template. `directory_test_command` chose a second
-    command when the selection held a directory; a runner that scales down
-    removes the reason, and two names for one string drift apart.
+    There are two templates and there have been four. `directory_test_command`
+    chose a third when the selection held a directory; `auto_test_command`
+    chose a quieter fourth for the loop; `test_command` was a second spelling
+    of the full suite. Each was a second name for one string, and two names for
+    one string drift apart. What is left is the only distinction the machinery
+    acts on: everything, or these.
     """
     if not for_loop and stage.test_command:
-        return stage.test_command
+        # An operator-declared per-stage command is a shell string, which is
+        # the whole point of the field: it is the operator's, not the model's.
+        return TestInvocation(stage.test_command)
 
     # What the loop does with nothing left to scope to depends on whether the
     # editor enforces scope.
@@ -386,22 +462,28 @@ def resolve_test_command(
     # The in-process editor refuses an out-of-scope write at the tool, so it
     # physically cannot wander. The reasoning that withheld the full suite does
     # not apply to it, and withholding it anyway would mean a project
-    # configuring only `test_command` gets an executor that never runs a test.
-    fallback = cfg.test_command if (allow_full_suite or not for_loop) else None
-
-    template_base = (
-        (cfg.auto_test_command or cfg.scoped_test_command)
-        if for_loop
-        else cfg.scoped_test_command
-    )
-    if not template_base:
-        return fallback
+    # configuring only `full_test_command` gets an executor that never runs a
+    # test.
+    full = cfg.full_test_command if (allow_full_suite or not for_loop) else None
+    fallback = TestInvocation(full) if full else None
 
     paths = resolve_test_paths(stage, cfg, git, since_sha, for_loop=for_loop)
     if not paths:
         return fallback
+    argv = cfg.scoped_test_argv(paths)
+    return TestInvocation(" ".join(argv), argv) if argv else fallback
 
-    return template_base.format(paths=" ".join(paths))
+
+def resolve_test_command(*args, **kwargs) -> str | None:
+    """The same decision rendered as one string, for logs and comparisons.
+
+    Derived from the invocation rather than built beside it, because two views
+    of one dataset that disagree mean the derivation is wrong. `run_argv`
+    labels its result with the joined form, so a recorded command compares
+    equal to this either way.
+    """
+    chosen = resolve_test_invocation(*args, **kwargs)
+    return chosen.text if chosen else None
 
 
 # --- the layers a caller can fix by editing -------------------------------
@@ -731,14 +813,15 @@ def run_tests(
     to the full suite". That distinction is `resolve_test_command`'s, not this
     function's.
     """
-    command = resolve_test_command(
+    chosen = resolve_test_invocation(
         stage, cfg, git, since_sha,
         for_loop=for_loop, allow_full_suite=allow_full_suite,
     )
-    if not command:
+    if not chosen:
         return GateResult(ok=True, head_sha=git.head_sha())
+    command = chosen.text
 
-    result = runner.run(command)
+    result = chosen.run(runner)
     out = GateResult(
         ok=True,
         command=command,
@@ -789,7 +872,9 @@ def run_tests(
 
     # One re-run before consuming a retry. Browser-driven and timing-sensitive
     # suites would otherwise spend the whole retry budget on noise.
-    broad = command in (cfg.test_command, cfg.full_test_command)
+    # One field, so one comparison. This read two because the full suite had
+    # two names, and every question anyone asked of them had to union both.
+    broad = command == cfg.full_test_command
     if broad:
         verdict = adjudicate(
             output=result.output, command=command, cfg=cfg, runner=runner
@@ -804,7 +889,7 @@ def run_tests(
             out.flaky_seeds.update(verdict.seeds)
             out.flaky_examples.update(verdict.examples)
     else:
-        rerun = runner.run(command)
+        rerun = chosen.run(runner)
         out.results.append(rerun)
         out.test_seconds += rerun.duration_seconds
         detail = rerun.summary()

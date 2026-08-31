@@ -111,11 +111,26 @@ def tool_schema(tool: ProjectTool) -> dict[str, Any]:
     properties: dict[str, Any] = {}
     for argument in tool.arguments:
         if argument.repeated:
+            # The ceiling is stated twice on purpose. `maxItems` is the
+            # machine-readable half and a provider may or may not enforce it;
+            # the sentence is what the model actually reads, and it is
+            # generated from the value rather than written beside it, because
+            # a literal in a description is wrong the first time an operator
+            # changes the number.
+            described = argument.description
+            if argument.max_values is not None:
+                described = (
+                    f"{described.rstrip()}\n\nAt most {argument.max_values} "
+                    "value(s) per call. Ask for the ones you are working on; "
+                    "this is not a way to run everything."
+                )
             properties[argument.name] = {
                 "type": "array",
-                "description": argument.description,
+                "description": described,
                 "items": {"type": "string"},
             }
+            if argument.max_values is not None:
+                properties[argument.name]["maxItems"] = argument.max_values
         else:
             properties[argument.name] = {
                 "type": "string",
@@ -155,6 +170,22 @@ def build_argv(tool: ProjectTool, args: dict) -> list[str]:
                 raise ToolError(
                     f"{tool.name}: every value in {argument.name!r} must be a "
                     "non-empty string"
+                )
+            # Enforced here rather than left to the schema. A filter over what
+            # is advertised is not a constraint on what is dispatched, and a
+            # model can send a list longer than `maxItems` — the cap exists so
+            # that declining to offer a wider command means something, and a
+            # boundary made only of a schema hint is made of nothing.
+            if (
+                argument.max_values is not None
+                and len(supplied) > argument.max_values
+            ):
+                raise ToolError(
+                    f"{tool.name} takes at most {argument.max_values} "
+                    f"value(s) for {argument.name!r} and was given "
+                    f"{len(supplied)}. Nothing was run. Ask for the ones you "
+                    "are working on now; a wider run is the pipeline's to "
+                    "make, not this call's."
                 )
             values[argument.name] = list(supplied)
         else:

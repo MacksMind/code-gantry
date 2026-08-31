@@ -43,6 +43,8 @@ import subprocess
 
 import pytest
 
+from test_config import as_test_tools
+
 from code_gantry.config import Stage, parse_config
 from code_gantry.gitops import Git
 
@@ -100,12 +102,12 @@ class TestTheLintersDiffIsIsolated:
 
 class TestItReachesTheModel:
     def _cfg(self, repo):
-        return parse_config({
+        return parse_config(as_test_tools({
             "target_repo": str(repo), "base_ref": "main", "project_branch": "p",
-            "plan_root": "PLAN.md", "test_command": "true",
+            "plan_root": "PLAN.md", "full_test_command": "true",
             "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.6-sol"},
-        })
+        }))
 
     def test_the_rewrite_is_appended_to_the_failure(self, repo):
         from code_gantry.executorloop import _with_lint_rewrite

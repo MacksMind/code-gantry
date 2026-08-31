@@ -25,6 +25,8 @@ from pathlib import Path
 
 import pytest
 
+from test_config import as_test_tools
+
 from code_gantry.config import parse_config
 from code_gantry.gitops import Git
 from code_gantry.preflight import _plan_unmoved
@@ -47,13 +49,13 @@ def cfg_for(repo, **over):
         "project_branch": "proj",
         "plan_root": "docs/plan.md",
         "plan_addendum_path": "docs/progress.md",
-        "test_command": "true",
+        "full_test_command": "true",
         "executor": {"model": "m"},
         "planner": {"model": "claude-opus-5"},
         "reviewer": {"model": "gpt-5.6-sol"},
     }
     data.update(over)
-    return parse_config(data)
+    return parse_config(as_test_tools(data))
 
 
 @pytest.fixture
@@ -210,16 +212,16 @@ class TestWiring:
         config_path = Path(repo) / "docs" / "code_gantry.yaml"
         config_path.write_text(
             yaml.safe_dump(
-                {
+                as_test_tools({
                     "base_ref": "main",
                     "project_branch": "proj",
                     "plan_root": "docs/plan.md",
                     "plan_addendum_path": "docs/progress.md",
-                    "test_command": "true",
+                    "full_test_command": "true",
                     "executor": {"model": "m"},
                     "planner": {"model": "claude-opus-5"},
                     "reviewer": {"model": "gpt-5.6-sol"},
-                }
+                })
             )
         )
 

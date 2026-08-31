@@ -8,7 +8,11 @@ and where possible in the same test, so that changing one and not the other
 fails here rather than in a run.
 """
 
-from code_gantry.config import Stage, parse_config
+import pytest
+
+from test_config import runner_script, as_test_tools
+
+from code_gantry.config import ConfigError, Stage, parse_config
 from code_gantry.gates import resolve_test_command, resolve_test_paths
 from code_gantry.gitops import Git
 
@@ -19,13 +23,13 @@ def build(repo, stage_overrides=None, **cfg_overrides):
         "base_ref": "main",
         "project_branch": "proj",
         "plan_root": "PLAN.md",
-        "test_command": "full-suite",
+        "full_test_command": "full-suite",
         "executor": {"model": "m"},
         "planner": {"model": "claude-opus-5"},
         "reviewer": {"model": "gpt-5.5"},
     }
     data.update(cfg_overrides)
-    cfg = parse_config(data)
+    cfg = parse_config(as_test_tools(data))
 
     fields = {"id": "s1", "instruction": "do it", "edit_files": ["app.py", "src/**"]}
     fields.update(stage_overrides or {})
@@ -149,8 +153,20 @@ class TestWhatBothDoIdentically:
             == "rspec spec/models"
         )
 
-    def test_an_operator_named_loop_command_is_used(self, repo):
-        # An operator who named the loop's command meant that command.
+    def test_there_is_no_separate_command_for_the_loop(self, repo):
+        """The loop and the gate reach for the same string.
+
+        `auto_test_command` was a fourth field: a quieter spelling of the
+        scoped command, because the loop's output lands in a model's context
+        where the gate's lands in a parser. That is a property of how the
+        output is *read*, and it belongs to whatever clips a report rather
+        than to a second copy of the command — two names for one string drift
+        apart, which is what took `directory_test_command` out before it.
+
+        Declaring it is now an error rather than a second command, so a config
+        carrying one is refused instead of quietly selecting a different
+        runner in one of the two places.
+        """
         (repo / "spec" / "models").mkdir(parents=True, exist_ok=True)
         (repo / "spec" / "models" / "keep_spec.rb").write_text("x\n")
         Git(repo).commit_all("specs")
@@ -158,11 +174,17 @@ class TestWhatBothDoIdentically:
         cfg, stage = build(
             repo,
             {"test_paths": ["spec/models"], "edit_files": ["spec/models"]},
-            auto_test_command="loop-cmd {paths}",
             scoped_test_command="rspec {paths}",
         )
 
-        assert resolve_test_command(stage, cfg, for_loop=True) == "loop-cmd spec/models"
+        assert resolve_test_command(stage, cfg, for_loop=True) == "rspec spec/models"
+        assert resolve_test_command(
+            stage, cfg, Git(repo), Git(repo).head_sha(), for_loop=False
+        ) == "rspec spec/models"
+
+        with pytest.raises(ConfigError) as e:
+            build(repo, {}, auto_test_command="loop-cmd {paths}")
+        assert "auto_test_command" in str(e.value)
 
 
 class TestTheMovedLayersAgreeWithTheGate:
@@ -192,7 +214,7 @@ class TestTheMovedLayersAgreeWithTheGate:
 
         sha = Git(repo).head_sha()
         (repo / "app.py").write_text("import pdb; pdb.set_trace()\n")
-        cfg, stage = build(repo, {"forbidden_patterns": ["pdb"]}, test_command="true")
+        cfg, stage = build(repo, {"forbidden_patterns": ["pdb"]}, full_test_command="true")
 
         found = check_patterns(stage, cfg, Git(repo), sha)
         outcome = self._verify(repo, cfg, stage, sha)
@@ -208,7 +230,7 @@ class TestTheMovedLayersAgreeWithTheGate:
 
         sha = Git(repo).head_sha()
         (repo / "app.py").write_text("before_filter :x\nchanged\n")
-        cfg, stage = build(repo, {"must_not_remain": ["before_filter"]}, test_command="true")
+        cfg, stage = build(repo, {"must_not_remain": ["before_filter"]}, full_test_command="true")
 
         found = check_residue(stage, cfg, Git(repo))
         outcome = self._verify(repo, cfg, stage, sha)
@@ -224,7 +246,7 @@ class TestTheMovedLayersAgreeWithTheGate:
 
         sha = Git(repo).head_sha()
         (repo / "app.py").write_text("changed\n")
-        cfg, stage = build(repo, {"require_new_tests": True}, test_command="true")
+        cfg, stage = build(repo, {"require_new_tests": True}, full_test_command="true")
 
         found = check_new_tests(stage, cfg, Git(repo), sha)
         outcome = self._verify(repo, cfg, stage, sha)
@@ -241,7 +263,7 @@ class TestTheMovedLayersAgreeWithTheGate:
 
         sha = Git(repo).head_sha()
         (repo / "app.py").write_text("changed\n")
-        cfg, stage = build(repo, {"checks": ["false"]}, test_command="true")
+        cfg, stage = build(repo, {"checks": ["false"]}, full_test_command="true")
 
         found = run_checks(stage, CommandRunner(cwd=repo, timeout=60))
         outcome = self._verify(repo, cfg, stage, sha)
@@ -260,7 +282,7 @@ class TestTheMovedLayersAgreeWithTheGate:
 
         sha = Git(repo).head_sha()
         (repo / "app.py").write_text("changed\n")
-        cfg, stage = build(repo, test_command="echo 'app/models/order.rb:12 failed'; false")
+        cfg, stage = build(repo, full_test_command="echo 'app/models/order.rb:12 failed'; false")
 
         found = run_tests(
             stage, cfg, Git(repo), CommandRunner(cwd=repo, timeout=60), sha,
@@ -337,7 +359,10 @@ class TestTheLoopDoesNotDoubleTheSuite:
         cfg, stage = build(
             repo,
             {"test_paths": ["app.py"]},
-            scoped_test_command=f"printf x >> {counter}; false # {{paths}}",
+            scoped_test_command=(
+                runner_script(counter.parent, f'printf x >> {counter}\nexit 1', "count_runner")
+                + " {paths}"
+            ),
         )
         (repo / "app.py").write_text("x\n")
         Git(repo).commit_all("app")
@@ -356,7 +381,10 @@ class TestTheLoopDoesNotDoubleTheSuite:
         cfg, stage = build(
             repo,
             {"test_paths": ["app.py"]},
-            scoped_test_command=f"printf x >> {counter}; false # {{paths}}",
+            scoped_test_command=(
+                runner_script(counter.parent, f'printf x >> {counter}\nexit 1', "count_runner")
+                + " {paths}"
+            ),
         )
         (repo / "app.py").write_text("x\n")
         Git(repo).commit_all("app")

@@ -10,6 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from test_config import as_test_tools
+
 from code_gantry.config import parse_config
 from code_gantry.reviewer import (
     Issue,
@@ -24,15 +26,15 @@ def cfg_with(**reviewer_overrides):
     reviewer = {"model": "gpt-5.5"}
     reviewer.update(reviewer_overrides)
     return parse_config(
-        {
+        as_test_tools({
             "target_repo": "/tmp/x",
             "project_branch": "work",
             "plan_root": "PLAN.md",
-            "test_command": "pytest",
+            "full_test_command": "pytest",
             "executor": {"model": "m"},
             "planner": {"model": "claude-opus-5"},
             "reviewer": reviewer,
-        }
+        })
     )
 
 

@@ -214,7 +214,14 @@ class PlannedStage(BaseModel):
         description=(
             "Test files you expect this stage to affect beyond those it edits "
             "— specs that exercise the changed code without being changed "
-            "themselves. Paths only; the operator owns the test command."
+            "themselves.\n\n"
+            "An entry is a path, and it may carry whatever the test runner "
+            "appends to a path to name something *inside* the file. If a "
+            "failure you were shown gives you a way to name the one example "
+            "that failed, copy that whole token here verbatim rather than "
+            "trimming it back to the file — the narrower selection is the "
+            "cheaper run, and it is the runner's spelling, not ours. You still "
+            "do not write the command: the operator owns that."
         ),
     )
     require_new_tests: bool = Field(
@@ -1301,6 +1308,12 @@ stage, an environment problem.
   it empty on a stage that edits no spec means there is nothing to scope to and
   the whole suite runs instead, on every attempt and every retry. On a large
   project that is the single most expensive mistake you can make here.
+- **And name them as narrowly as the runner lets you.** When you are redrawing
+  a stage whose tests failed, the failure output in front of you is the best
+  source there is: if it hands you a token that names the single failing
+  example, put that token in `test_paths` exactly as it appears. Copying is
+  the point — retyping it as a bare filename widens the run back out to the
+  whole file for nothing.
 - **Constraints as reject-criteria.** If the work is only valid under some
   condition — a platform version, an ordering requirement — say so in
   `constraints`. The reviewer enforces it. Where the condition can be written

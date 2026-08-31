@@ -42,7 +42,7 @@ def repo(tmp_path):
     for pair in (("user.email", "t@e.com"), ("user.name", "T"),
                  ("commit.gpgsign", "false")):
         git(path, "config", *pair)
-    (path / "docs" / "code_gantry.yaml").write_text("test_command: true\n")
+    (path / "docs" / "code_gantry.yaml").write_text("full_test_command: true\n")
     git(path, "add", "-A")
     git(path, "commit", "-qm", "config")
     return path
@@ -71,7 +71,7 @@ class TestStarting:
 
     def test_an_uncommitted_edit_refuses(self, repo):
         cfg = repo / "docs" / "code_gantry.yaml"
-        cfg.write_text("test_command: false\n")
+        cfg.write_text("full_test_command: false\n")
         problem = problem_starting(cfg, repo, "main")
         assert "uncommitted" in problem
         # Both shas named, so the operator can see which is which rather than
@@ -80,7 +80,7 @@ class TestStarting:
 
     def test_a_config_the_branch_has_never_seen_refuses(self, repo):
         cfg = repo / "docs" / "other.yaml"
-        cfg.write_text("test_command: true\n")
+        cfg.write_text("full_test_command: true\n")
         problem = problem_starting(cfg, repo, "main")
         assert "not committed" in problem
 
@@ -88,7 +88,7 @@ class TestStarting:
         # There is no commit to cite, so there is no version. Reported as the
         # same class of problem rather than passing silently.
         outside = tmp_path / "loose.yaml"
-        outside.write_text("test_command: true\n")
+        outside.write_text("full_test_command: true\n")
         assert problem_starting(outside, repo, "main") != ""
 
 
@@ -100,7 +100,7 @@ class TestResuming:
     def test_a_changed_config_refuses(self, repo):
         cfg = repo / "docs" / "code_gantry.yaml"
         was = blob_sha(cfg)
-        cfg.write_text("test_command: false\n")
+        cfg.write_text("full_test_command: false\n")
         problem = problem_resuming(cfg, was)
         assert "changed since this run started" in problem
         # And says what to do, with the reason it is safe: the work is not in
@@ -113,7 +113,7 @@ class TestResuming:
         # the case approval could not catch, because re-approving made it legal.
         cfg = repo / "docs" / "code_gantry.yaml"
         was = blob_sha(cfg)
-        cfg.write_text("test_command: false\n")
+        cfg.write_text("full_test_command: false\n")
         git(repo, "add", "-A")
         git(repo, "commit", "-qm", "change the suite")
         assert problem_resuming(cfg, was) != ""

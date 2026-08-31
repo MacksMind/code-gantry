@@ -25,6 +25,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from test_config import as_test_tools
+
 from code_gantry.config import ExecutorConfig
 from code_gantry.edittools import FileEditor
 from code_gantry.executorclient import (
@@ -236,16 +238,16 @@ class TestItReachesTheResult:
 
         editor, reader = parts
         repo = editor.repo
-        cfg = parse_config({
+        cfg = parse_config(as_test_tools({
             "target_repo": str(repo),
             "base_ref": "main",
             "project_branch": "proj",
             "plan_root": "PLAN.md",
-            "test_command": "true",
+            "full_test_command": "true",
             "executor": {"model": "m"},
             "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.5"},
-        })
+        }))
         stage = Stage(id="s1", instruction="do it", edit_files=["app/**"])
         git = Git(repo)
         m = model([response([call("read_file", READ)]) for _ in range(20)])

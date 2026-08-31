@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 from code_gantry.plandoc import PlanDocument, PlanTree
 from code_gantry.prompts import build_planner_messages, build_review_messages
+from test_config import as_test_tools
 
 
 def a_plan(text="do the thing"):
@@ -1100,15 +1101,15 @@ class TestReviewerToolGuidance:
         from code_gantry.config import parse_config
 
         return parse_config(
-            {
+            as_test_tools({
                 "target_repo": "/tmp/x",
                 "project_branch": "work",
                 "plan_root": "PLAN.md",
-                "test_command": "pytest",
+                "full_test_command": "pytest",
                 "executor": {"model": "m"},
                 "planner": {"model": "claude-opus-5"},
                 "reviewer": {"model": "gpt-5.6-sol", "repo_access": repo_access},
-            }
+            })
         )
 
     def _system(self, repo_access):
@@ -1236,12 +1237,12 @@ class TestEveryParticipantSeesTheRepositoryConventions:
         from code_gantry.prompts import build_executor_prompt
 
         cfg = parse_config(
-            {
+            as_test_tools({
                 "target_repo": ".", "base_ref": "main", "project_branch": "p",
-                "plan_root": "PLAN.md", "test_command": "true",
+                "plan_root": "PLAN.md", "full_test_command": "true",
                 "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
                 "reviewer": {"model": "gpt-5.6-sol"},
-            }
+            })
         )
         stage = Stage(id="s", instruction="do it", edit_files=["a"])
         assert "conventions" not in build_executor_prompt(stage, cfg).lower()
@@ -1280,16 +1281,16 @@ class TestThePlannerIsToldWhatTheChecksWillDo:
         from code_gantry.config import parse_config
 
         return parse_config(
-            {
+            as_test_tools({
                 "target_repo": "/tmp/x",
                 "project_branch": "work",
                 "plan_root": "PLAN.md",
-                "test_command": "t",
+                "full_test_command": "t",
                 "planner": {"model": "m"},
                 "executor": {"model": "m"},
                 "reviewer": {"model": "m"},
                 "stage_defaults": {"checks": checks},
-            }
+            })
         )
 
     def _text(self, checks):
@@ -1457,16 +1458,16 @@ class TestExecutorPromptCarriesNoProjectVocabulary:
         from code_gantry.prompts import build_executor_prompt
 
         cfg = parse_config(
-            {
+            as_test_tools({
                 "target_repo": ".",
                 "base_ref": "main",
                 "project_branch": "proj",
                 "plan_root": "PLAN.md",
-                "test_command": "true",
+                "full_test_command": "true",
                 "executor": {"model": "m"},
                 "planner": {"model": "claude-opus-5"},
                 "reviewer": {"model": "gpt-5.6-sol"},
-            }
+            })
         )
         stage = Stage(
             id="s",
@@ -1525,6 +1526,7 @@ class TestTheExecutorSystemPrompt:
     def test_a_named_file_that_cannot_be_read_raises(self, tmp_path):
         import pytest
 
+
         from code_gantry.prompts import _executor_system_prompt
 
         cfg = _exec_cfg(tmp_path, system_prompt_file="missing.md")
@@ -1561,16 +1563,16 @@ def _exec_cfg(tmp_path, **executor_over):
 
     executor = {"model": "m"}
     executor.update(executor_over)
-    return parse_config({
+    return parse_config(as_test_tools({
         "target_repo": str(tmp_path),
         "base_ref": "main",
         "project_branch": "proj",
         "plan_root": "PLAN.md",
-        "test_command": "true",
+        "full_test_command": "true",
         "executor": executor,
         "planner": {"model": "claude-opus-5"},
         "reviewer": {"model": "gpt-5.5"},
-    })
+    }))
 
 
 class TestTheConventionsAreFramedForWhoReadsThem:

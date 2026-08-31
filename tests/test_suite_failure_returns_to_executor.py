@@ -29,6 +29,8 @@ import subprocess
 
 import pytest
 
+from test_config import as_test_tools
+
 from code_gantry.config import Stage
 
 
@@ -52,15 +54,15 @@ def repo(tmp_path):
 def _cfg(repo):
     from code_gantry.config import parse_config
 
-    return parse_config({
+    return parse_config(as_test_tools({
         "target_repo": str(repo), "base_ref": "main", "project_branch": "p",
-        "plan_root": "PLAN.md", "test_command": "rspec",
+        "plan_root": "PLAN.md", "full_test_command": "rspec",
         "scoped_test_command": "rspec {paths}",
         "test_file_patterns": ["spec/**/*_spec.rb"],
         "executor": {"model": "m"},
         "planner": {"model": "claude-opus-5"},
         "reviewer": {"model": "gpt-5.6-sol"},
-    })
+    }))
 
 
 class TestTheFailingSpecReachesTheInnerLoop:

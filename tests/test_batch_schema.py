@@ -16,6 +16,8 @@ first, or the partition this whole design rests on would have a second door:
 
 import pytest
 
+from test_config import as_test_tools
+
 
 def _fields(sid="s", **over):
     base = {
@@ -165,12 +167,12 @@ class TestTheAllowlistAppliesToEveryStage:
         """
         from code_gantry.config import parse_config
 
-        cfg = parse_config({
+        cfg = parse_config(as_test_tools({
             "target_repo": ".", "base_ref": "main", "project_branch": "p",
-            "plan_root": "PLAN.md", "test_command": "true",
+            "plan_root": "PLAN.md", "full_test_command": "true",
             "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.6-sol"},
-        })
+        }))
         smuggled = _fields("two", checks=["rm -rf /"])
         built = cfg.stage_from_planner(smuggled)
         assert built.checks == [], "an executable field crossed the boundary"

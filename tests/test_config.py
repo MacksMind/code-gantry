@@ -22,19 +22,98 @@ from code_gantry.config import (
 )
 
 
+# The same declaration as `as_test_tools` builds, for fixtures that write
+# config as YAML text and so never pass through it.
+SCOPED_TOOL_YAML = (
+    "scoped_test_tool: scoped_suite\n"
+    "project_tools:\n"
+    "  - name: scoped_suite\n"
+    "    description: The suite, taking a selection.\n"
+    "    command: ['true', '{paths}']\n"
+    "    arguments:\n"
+    "      - {name: paths, description: Files or examples., repeated: true}\n"
+    "    roles: ['executor']\n"
+)
+
+
+def runner_script(directory, body: str, name: str = "fake_runner") -> str:
+    """Write a fake test runner and return its path.
+
+    A declared tool is argv and may not start with `sh` — the rule that keeps a
+    multi-program body in a file the scope gate can see rather than inline in
+    config where nothing looks at it. So a fixture that used to be
+    `echo a; echo b; exit 1` becomes a script, which is exactly what an
+    operator has to do. The shebang is not the banned thing; `sh` as argv[0] is.
+    """
+    import os
+    from pathlib import Path
+
+    path = Path(directory) / name
+    path.write_text("#!/bin/sh\n" + body.strip() + "\n")
+    path.chmod(0o755)
+    return str(path)
+
+
 def minimal(**overrides):
     base = {
         "target_repo": "/tmp/some-app",
         "base_ref": "main",
         "project_branch": "upgrade/rails-5",
         "plan_root": "docs/plan.md",
-        "test_command": "pytest",
         "executor": {"model": "openai/local"},
         "planner": {"model": "claude-opus-5"},
         "reviewer": {"model": "gpt-5.5"},
     }
+    base.setdefault("full_test_command", "pytest")
     base.update(overrides)
-    return base
+    # Required now, so a fixture that names none still gets one. A test that
+    # wants the full-suite fallback expresses it by resolving no paths, which
+    # is the reachable state — a project with no scoped selection is not one
+    # `validate` will build.
+    return as_test_tools(base)
+
+
+def as_test_tools(data: dict) -> dict:
+    """Turn a fixture's `scoped_test_command` into a declared tool.
+
+    Only the scoped selection is a tool: the executor calls it, so it is argv
+    with no shell. `full_test_command` stays exactly what it was — a shell
+    string nobody but the machinery runs — which is why a fixture may still
+    write `echo a; exit 1` there and not here.
+
+    A `{paths}` placeholder marks where the selection goes; everything else
+    splits on whitespace into argv.
+    """
+    data = dict(data)
+    # Defaulted here rather than at each call site: `scoped_test_tool` is
+    # required, so every fixture needs one, and a default that lives in one
+    # place cannot be the one somebody forgot.
+    if data.get("scoped_test_tool"):
+        data.pop("scoped_test_command", None)
+        return data
+    scoped = data.pop("scoped_test_command", None) or "true {paths}"
+    parts = scoped.split()
+    if any(ch in scoped for ch in "&|;><$`"):
+        raise AssertionError(
+            f"scoped fixture {scoped!r} needs a shell. The scoped command is a "
+            "declared tool, which is argv and may not start with `sh` — the "
+            "rule that keeps a multi-program body in a file the scope gate can "
+            "see. Write it as a script and name that, which is what an "
+            "operator has to do."
+        )
+    tools = list(data.get("project_tools") or [])
+    tools.append({
+        "name": "scoped_suite",
+        "description": "The suite, taking a selection.",
+        "command": parts,
+        "arguments": [
+            {"name": "paths", "description": "Files or examples.", "repeated": True}
+        ],
+        "roles": ["executor"],
+    })
+    data["project_tools"] = tools
+    data["scoped_test_tool"] = "scoped_suite"
+    return data
 
 
 def a_stage(**overrides):
@@ -108,7 +187,7 @@ class TestPlanRoot:
         cfg = minimal()
         del cfg["plan_root"]
         with pytest.raises(ConfigError):
-            parse_config(cfg)
+            parse_config(as_test_tools(cfg))
 
     def test_directory_plan_root_rejected(self):
         # Pointing at docs/ sweeps every runbook and ADR into every review
@@ -132,12 +211,15 @@ class TestPlanRoot:
 
 class TestScopedTestCommand:
     def test_requires_a_paths_placeholder(self):
-        # Without the slot there is nowhere for CodeGantry to inject the
-        # stage's changed files, and the "planner supplies arguments, not
-        # commands" mechanism silently does nothing.
+        """Without the slot there is nowhere to inject the stage's files.
+
+        The scoped selection is a declared tool now, so the refusal comes from
+        the tool's own validator and names the argument that reaches nothing —
+        which is the more useful half of the same complaint.
+        """
         with pytest.raises(ConfigError) as e:
             parse_config(minimal(scoped_test_command="rspec"))
-        assert "{paths}" in str(e.value)
+        assert "the command never uses it" in str(e.value)
 
     def test_accepts_a_placeholder(self):
         cfg = parse_config(minimal(scoped_test_command="rspec {paths}"))
@@ -147,15 +229,15 @@ class TestScopedTestCommand:
 class TestVerifiability:
     def test_project_with_no_test_command_and_no_checks_rejected(self):
         cfg = minimal()
-        del cfg["test_command"]
+        del cfg["full_test_command"]
         with pytest.raises(ConfigError) as e:
-            parse_config(cfg)
+            parse_config(as_test_tools(cfg))
         assert "verify" in str(e.value)
 
     def test_checks_in_stage_defaults_suffice(self):
         cfg = minimal(stage_defaults={"checks": ["true"]})
-        del cfg["test_command"]
-        assert parse_config(cfg).stage_defaults.checks == ["true"]
+        del cfg["full_test_command"]
+        assert parse_config(as_test_tools(cfg)).stage_defaults.checks == ["true"]
 
 
 class TestDenylist:
@@ -173,7 +255,7 @@ class TestDenylist:
 
     def test_git_merge_rejected(self):
         with pytest.raises(ConfigError):
-            parse_config(minimal(test_command="git merge main"))
+            parse_config(minimal(full_test_command="git merge main"))
 
     def test_git_reset_rejected(self):
         # Would destroy the baseline the scope guard measures against.
@@ -216,7 +298,7 @@ class TestDenylist:
         # stop being covered.
         cfg = parse_config(minimal(scoped_test_command="rspec {paths}"))
         labels = {label for label, _ in cfg.all_commands()}
-        assert {"setup_command", "test_command", "scoped_test_command"} <= labels | {
+        assert {"setup_command", "full_test_command", "scoped_test_command"} <= labels | {
             "setup_command"
         }
 
@@ -265,7 +347,7 @@ class TestPlannerPartition:
             "preconditions",
             "context_commands",
             "setup_command",
-            "test_command",
+            "full_test_command",
             "checks",
         ):
             assert field not in PLANNER_WRITABLE_FIELDS
@@ -463,7 +545,7 @@ class TestValidateStage:
 
     def test_unverifiable_stage_rejected(self):
         cfg = minimal()
-        del cfg["test_command"]
+        del cfg["full_test_command"]
         cfg = parse_config({**cfg, "stage_defaults": {"checks": ["true"]}})
         problems = validate_stage(a_stage(checks=[]), cfg)
         assert any("verifies it" in p for p in problems)
@@ -472,7 +554,7 @@ class TestValidateStage:
         """The check `stage.command` used to carry, now that it is gone.
 
         A stage's executable fields — `checks`, `preconditions`,
-        `context_commands`, `setup_command`, `test_command` — are all populated
+        `context_commands`, `setup_command`, `full_test_command` — are all populated
         from `stage_defaults`, so every string a stage can run comes from the
         config and is covered by `all_commands()` at load. `stage.command` was
         the one exception, which is why it needed its own pass; deleting it
@@ -569,7 +651,7 @@ class TestLoadFromFile:
                 target_repo: /tmp/some-app
                 project_branch: upgrade/rails-5
                 plan_root: docs/plan.md
-                test_command: pytest
+                full_test_command: pytest
                 executor:
                   model: openai/local
                 planner:
@@ -578,6 +660,7 @@ class TestLoadFromFile:
                   model: gpt-5.5
                 """
             )
+            + SCOPED_TOOL_YAML
         )
         assert load_config(path).plan_root == "docs/plan.md"
 
@@ -660,13 +743,13 @@ class TestAgentContextDocuments:
             "target_repo": "/tmp/x",
             "project_branch": "work",
             "plan_root": "PLAN.md",
-            "test_command": "pytest",
+            "full_test_command": "pytest",
             "executor": {"model": "m"},
             "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.6"},
         }
         data.update(over)
-        return parse_config(data)
+        return parse_config(as_test_tools(data))
 
     def test_unset_defaults_to_the_conventional_names(self):
         assert self._cfg().effective_agent_context == ["AGENTS.md", "CLAUDE.md"]
@@ -700,12 +783,12 @@ class TestThePlannerOutputBudgetIsASetting:
 
         base = {"model": "claude-opus-5"}
         base.update(planner)
-        return parse_config({
+        return parse_config(as_test_tools({
             "target_repo": ".", "base_ref": "main", "project_branch": "p",
-            "plan_root": "PLAN.md", "test_command": "true",
+            "plan_root": "PLAN.md", "full_test_command": "true",
             "executor": {"model": "m"}, "planner": base,
             "reviewer": {"model": "gpt-5.6-sol"},
-        })
+        }))
 
     def test_the_default_is_generous_because_it_is_a_ceiling(self):
         # Was 32,000, which was the hardcoded value this setting replaced. A

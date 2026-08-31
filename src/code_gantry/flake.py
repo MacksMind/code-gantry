@@ -207,7 +207,7 @@ def adjudicate(
         if cfg.flake_rerun_failed_files
         else []
     )
-    if not files or not cfg.scoped_test_command:
+    if not files or not cfg.scoped_test_tool:
         return _whole_suite_rerun(command, runner)
 
     if len(files) > cfg.flake_rerun_max_files:
@@ -220,8 +220,13 @@ def adjudicate(
             ),
         )
 
-    paths = " ".join(shlex.quote(f) for f in files)
-    command_text = cfg.scoped_test_command.format(paths=paths)
+    # Through the declared tool, which is argv — so `shlex.quote` is gone with
+    # the shell that needed it. A filename is one element and nothing
+    # interprets it.
+    argv = cfg.scoped_test_argv(list(files))
+    if not argv:
+        return _whole_suite_rerun(command, runner)
+    command_text = " ".join(argv)
     listed = ", ".join(files)
     seeds = seeds_by_file(output, cfg.failed_file_pattern, cfg.seed_pattern)
     examples = failing_examples(output, cfg.failed_file_pattern)
@@ -233,7 +238,7 @@ def adjudicate(
     # confirming one.
     results: list[CommandResult] = []
     for _ in range(max(cfg.flake_rerun_attempts, 1)):
-        rerun = runner.run(command_text)
+        rerun = runner.run_argv(argv)
         results.append(rerun)
         if rerun.ok:
             break
@@ -346,7 +351,7 @@ def predates_stage(
     If setup cannot be made to work at the base, the question goes unanswered
     rather than being answered wrongly.
     """
-    if not files or not cfg.scoped_test_command or not base_sha:
+    if not files or not cfg.scoped_test_tool or not base_sha:
         return BaselineVerdict(summary="no baseline comparison available")
 
     try:
@@ -361,21 +366,32 @@ def predates_stage(
     except Exception:  # pragma: no cover - a broken repo fails louder elsewhere
         return BaselineVerdict(summary="could not read HEAD to compare a baseline")
 
-    paths = " ".join(shlex.quote(f) for f in files)
-    command_text = cfg.scoped_test_command.format(paths=paths)
+    # Through the declared tool, which is argv — so `shlex.quote` is gone with
+    # the shell that needed it. A filename is one element and nothing
+    # interprets it.
+    argv = cfg.scoped_test_argv(list(files))
+    if not argv:
+        return BaselineVerdict(
+            summary="the scoped test tool cannot take a selection; not compared"
+        )
+    command_text = " ".join(argv)
     listed = ", ".join(files)
 
     spent = [0.0]
 
-    def timed(command: str):
-        outcome = runner.run(command)
+    def timed(command):
+        outcome = (
+            runner.run_argv(command)
+            if isinstance(command, list)
+            else runner.run(command)
+        )
         spent[0] += outcome.duration_seconds
         return outcome
 
     git.reset_hard(base_sha)
     try:
         setup = timed(setup_command) if setup_command else None
-        result = timed(command_text) if setup is None or setup.ok else None
+        result = timed(argv) if setup is None or setup.ok else None
     finally:
         git.reset_hard(restore_sha)
         if setup_command:

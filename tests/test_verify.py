@@ -11,6 +11,8 @@ from code_gantry.config import parse_config
 from code_gantry.gitops import Git
 from code_gantry.verify import Layer, Route, resolve_test_command, run_verify
 
+from test_config import runner_script, as_test_tools
+
 RSPEC_PATTERN = r"^\s*rspec\s+'?\.?/?([^'\s\[:]+_spec\.rb)"
 
 
@@ -20,13 +22,13 @@ def build(repo, stage_overrides=None, **cfg_overrides):
         "base_ref": "main",
         "project_branch": "proj",
         "plan_root": "PLAN.md",
-        "test_command": "true",
+        "full_test_command": "true",
         "executor": {"model": "m"},
         "planner": {"model": "claude-opus-5"},
         "reviewer": {"model": "gpt-5.5"},
     }
     data.update(cfg_overrides)
-    cfg = parse_config(data)
+    cfg = parse_config(as_test_tools(data))
 
     fields = {"id": "s1", "instruction": "do it", "edit_files": ["app.py", "src/**"]}
     fields.update(stage_overrides or {})
@@ -79,7 +81,7 @@ class TestSetupLayer:
         edit(repo)
         marker = repo.parent / "setup-ran"
         cfg, stage = build(
-            repo, setup_command=f"touch {marker}", test_command=f"test -f {marker}"
+            repo, setup_command=f"touch {marker}", full_test_command=f"test -f {marker}"
         )
         assert verify(repo, cfg, stage, sha).passed
 
@@ -217,7 +219,7 @@ class TestForbiddenPatterns:
         sha = Git(repo).head_sha()
         edit(repo, "app.py", "optional: true\n")
         cfg, stage = build(
-            repo, {"forbidden_patterns": ["optional: true"]}, test_command="exit 1"
+            repo, {"forbidden_patterns": ["optional: true"]}, full_test_command="exit 1"
         )
         assert verify(repo, cfg, stage, sha).failed_layer is Layer.PATTERNS
 
@@ -387,7 +389,7 @@ class TestResidue:
         sha = self.seed(repo, {"app/a.rb": "render text: 'x'\n"})
         (repo / "app" / "a.rb").write_text("render text: 'x'\nedited\n")
         cfg, stage = self.build_stage(
-            repo, [r"render\s+text:"], test_command="exit 1"
+            repo, [r"render\s+text:"], full_test_command="exit 1"
         )
         assert verify(repo, cfg, stage, sha).failed_layer is Layer.RESIDUE
 
@@ -415,7 +417,7 @@ class TestTests:
     def test_failure_goes_back_to_the_executor(self, repo):
         sha = Git(repo).head_sha()
         edit(repo)
-        cfg, stage = build(repo, test_command="exit 1")
+        cfg, stage = build(repo, full_test_command="exit 1")
         out = verify(repo, cfg, stage, sha)
         assert out.failed_layer is Layer.TESTS
         assert out.route is Route.EXECUTOR
@@ -423,7 +425,7 @@ class TestTests:
     def test_feedback_includes_output(self, repo):
         sha = Git(repo).head_sha()
         edit(repo)
-        cfg, stage = build(repo, test_command="echo DISTINCTIVE; exit 1")
+        cfg, stage = build(repo, full_test_command="echo DISTINCTIVE; exit 1")
         assert "DISTINCTIVE" in verify(repo, cfg, stage, sha).feedback
 
     def test_extracts_failing_paths_for_the_planner(self, repo):
@@ -432,7 +434,7 @@ class TestTests:
         sha = Git(repo).head_sha()
         edit(repo)
         cfg, stage = build(
-            repo, test_command="echo 'spec/models/order_spec.rb:14 failed'; exit 1"
+            repo, full_test_command="echo 'spec/models/order_spec.rb:14 failed'; exit 1"
         )
         out = verify(repo, cfg, stage, sha)
         assert "spec/models/order_spec.rb" in out.failing_paths
@@ -440,7 +442,7 @@ class TestTests:
     def test_absent_test_command_skips_the_layer(self, repo):
         sha = Git(repo).head_sha()
         edit(repo)
-        cfg, stage = build(repo, {"checks": ["true"]}, test_command=None,
+        cfg, stage = build(repo, {"checks": ["true"]}, full_test_command=None,
                            stage_defaults={"checks": ["true"]})
         assert verify(repo, cfg, stage, sha).passed
 
@@ -452,7 +454,7 @@ class TestFlakeRerun:
         flag = repo.parent / "flake-flag"
         cfg, stage = build(
             repo,
-            test_command=f"if [ -f {flag} ]; then exit 0; else touch {flag}; exit 1; fi",
+            full_test_command=f"if [ -f {flag} ]; then exit 0; else touch {flag}; exit 1; fi",
         )
         out = verify(repo, cfg, stage, sha)
         assert out.passed
@@ -461,7 +463,7 @@ class TestFlakeRerun:
     def test_a_consistent_failure_still_fails(self, repo):
         sha = Git(repo).head_sha()
         edit(repo)
-        cfg, stage = build(repo, test_command="exit 1")
+        cfg, stage = build(repo, full_test_command="exit 1")
         out = verify(repo, cfg, stage, sha)
         assert not out.passed
         assert out.flake_reruns == 0
@@ -475,11 +477,14 @@ class TestFlakeRerun:
         edit(repo)
         cfg, stage = build(
             repo,
-            test_command=(
+            full_test_command=(
                 "echo \"Failed examples:\"; "
                 "echo \"rspec './spec/other_spec.rb[1:1]' # x\"; exit 1"
             ),
-            scoped_test_command=f"echo {{paths}} >> {log}",
+            scoped_test_command=(
+                runner_script(log.parent, f'echo "$@" >> {log}', "log_runner")
+                + " {paths}"
+            ),
             failed_file_pattern=RSPEC_PATTERN,
         )
         out = verify(repo, cfg, stage, sha)
@@ -498,7 +503,12 @@ class TestFlakeRerun:
             repo,
             {"edit_files": ["spec/**"], "test_paths": ["spec/app_spec.rb"]},
             scoped_test_command=(
-                f"if [ -f {flag} ]; then exit 0; else touch {flag}; exit 1; fi # {{paths}}"
+                runner_script(
+                    flag.parent,
+                    f"if [ -f {flag} ]; then exit 0; else touch {flag}; exit 1; fi",
+                    "flaky_runner",
+                )
+                + " {paths}"
             ),
         )
         out = verify(repo, cfg, stage, sha)
@@ -509,7 +519,7 @@ class TestFlakeRerun:
         sha = Git(repo).head_sha()
         edit(repo)
         counter = repo.parent / "runs.txt"
-        cfg, stage = build(repo, test_command=f"echo run >> {counter}")
+        cfg, stage = build(repo, full_test_command=f"echo run >> {counter}")
         assert verify(repo, cfg, stage, sha).passed
         assert counter.read_text().count("run") == 1
 
@@ -613,7 +623,7 @@ class TestScopedTestCommand:
         # running everything.
         sha = Git(repo).head_sha()
         edit(repo, "app.py")
-        cfg, stage = build(repo, scoped_test_command="rspec {paths}", test_command="rspec")
+        cfg, stage = build(repo, scoped_test_command="rspec {paths}", full_test_command="rspec")
         assert resolve_test_command(stage, cfg, Git(repo), sha) == "rspec"
 
     def test_an_explicit_stage_command_wins(self, repo):
@@ -657,7 +667,7 @@ class TestChecks:
         """
         sha = Git(repo).head_sha()
         edit(repo)
-        cfg, stage = build(repo, {"checks": ["false"]}, test_command="exit 1")
+        cfg, stage = build(repo, {"checks": ["false"]}, full_test_command="exit 1")
         assert verify(repo, cfg, stage, sha).failed_layer is Layer.CHECKS
 
     def test_a_check_that_rewrites_is_seen_by_the_suite(self, repo):
@@ -668,7 +678,7 @@ class TestChecks:
         cfg, stage = build(
             repo,
             {"checks": ["printf 'fixed\\n' > app.py"]},
-            test_command="grep -q fixed app.py",
+            full_test_command="grep -q fixed app.py",
         )
         assert verify(repo, cfg, stage, sha).passed
 
@@ -901,7 +911,7 @@ class TestSignalledTestRuns:
     def test_a_signalled_suite_goes_to_a_human(self, repo):
         sha = Git(repo).head_sha()
         edit(repo)
-        cfg, stage = build(repo, test_command="kill -9 $$")
+        cfg, stage = build(repo, full_test_command="kill -9 $$")
         out = verify(repo, cfg, stage, sha)
         assert out.failed_layer is Layer.TESTS
         assert out.route is Route.HUMAN
@@ -914,7 +924,7 @@ class TestSignalledTestRuns:
         sha = Git(repo).head_sha()
         edit(repo)
         cfg, stage = build(
-            repo, test_command=f"echo run >> {counter}; kill -9 $$"
+            repo, full_test_command=f"echo run >> {counter}; kill -9 $$"
         )
         out = verify(repo, cfg, stage, sha)
         assert not out.passed
@@ -923,7 +933,7 @@ class TestSignalledTestRuns:
     def test_an_ordinary_failure_still_goes_to_the_executor(self, repo):
         sha = Git(repo).head_sha()
         edit(repo)
-        cfg, stage = build(repo, test_command="exit 1")
+        cfg, stage = build(repo, full_test_command="exit 1")
         out = verify(repo, cfg, stage, sha)
         assert out.route is Route.EXECUTOR
 
@@ -1027,7 +1037,7 @@ class TestDeclaredTestPathsAreResolved:
             repo,
             {"test_paths": ["spec/**/*nothing_here*"]},
             scoped_test_command="rspec {paths}",
-            test_command="rspec-all",
+            full_test_command="rspec-all",
         )
         # Nothing identifiable to scope to, so the full command rather than a
         # command that will die on a literal asterisk.
@@ -1040,7 +1050,7 @@ class TestDeclaredTestPathsAreResolved:
             repo,
             {"test_paths": ["spec/imagined_spec.rb"]},
             scoped_test_command="rspec {paths}",
-            test_command="rspec-all",
+            full_test_command="rspec-all",
         )
         assert resolve_test_command(stage, cfg, Git(repo), sha) == "rspec-all"
 
@@ -1326,7 +1336,7 @@ class TestTheGateDoesNotRepeatTheLoop:
     def test_a_recorded_pass_skips_the_run(self, repo):
         sha = Git(repo).head_sha()
         edit(repo)
-        cfg, stage = build(repo, test_command="exit 1", trust_executor_gates=["tests"])
+        cfg, stage = build(repo, full_test_command="exit 1", trust_executor_gates=["tests"])
         out = verify(
             repo, cfg, stage, sha,
             green_records=self._record(repo, "exit 1"),
@@ -1336,7 +1346,7 @@ class TestTheGateDoesNotRepeatTheLoop:
     def test_a_recorded_failure_is_adopted_rather_than_repeated(self, repo):
         sha = Git(repo).head_sha()
         edit(repo)
-        cfg, stage = build(repo, test_command="exit 0", trust_executor_gates=["tests"])
+        cfg, stage = build(repo, full_test_command="exit 0", trust_executor_gates=["tests"])
         out = verify(
             repo, cfg, stage, sha,
             green_records=self._record(
@@ -1357,7 +1367,7 @@ class TestTheGateDoesNotRepeatTheLoop:
         # a resume moves HEAD, so their work is always tested.
         sha = Git(repo).head_sha()
         edit(repo)
-        cfg, stage = build(repo, test_command="exit 1", trust_executor_gates=["tests"])
+        cfg, stage = build(repo, full_test_command="exit 1", trust_executor_gates=["tests"])
         stale = {"tests": {"command": "exit 1", "head_sha": "0" * 40}}
         out = verify(repo, cfg, stage, sha, green_records=stale)
         assert not out.passed
@@ -1366,7 +1376,7 @@ class TestTheGateDoesNotRepeatTheLoop:
     def test_a_record_for_a_different_command_is_ignored(self, repo):
         sha = Git(repo).head_sha()
         edit(repo)
-        cfg, stage = build(repo, test_command="exit 1", trust_executor_gates=["tests"])
+        cfg, stage = build(repo, full_test_command="exit 1", trust_executor_gates=["tests"])
         out = verify(
             repo, cfg, stage, sha,
             green_records=self._record(repo, "some other command"),
@@ -1391,7 +1401,7 @@ class TestTheGateDoesNotRepeatTheLoop:
         """
         sha = Git(repo).head_sha()
         edit(repo)
-        cfg, stage = build(repo, test_command="exit 1", trust_executor_gates=["checks"])
+        cfg, stage = build(repo, full_test_command="exit 1", trust_executor_gates=["checks"])
         out = verify(
             repo, cfg, stage, sha,
             green_records=self._record(repo, "exit 1"),
@@ -1405,7 +1415,7 @@ class TestTheGateDoesNotRepeatTheLoop:
         edit(repo)
         cfg, stage = build(
             repo, {"checks": ["exit 1"]},
-            test_command="exit 0", trust_executor_gates=["checks"],
+            full_test_command="exit 0", trust_executor_gates=["checks"],
         )
         out = verify(
             repo, cfg, stage, sha,
@@ -1463,7 +1473,7 @@ class TestTheGateDoesNotRepeatTheLoop:
     def test_naming_no_layers_trusts_none_of_them(self, repo):
         sha = Git(repo).head_sha()
         edit(repo)
-        cfg, stage = build(repo, test_command="exit 1", trust_executor_gates=[])
+        cfg, stage = build(repo, full_test_command="exit 1", trust_executor_gates=[])
         out = verify(
             repo, cfg, stage, sha,
             green_records=self._record(repo, "exit 1"),
@@ -1481,7 +1491,7 @@ class TestTheGateDoesNotRepeatTheLoop:
         """
         sha = Git(repo).head_sha()
         edit(repo)
-        cfg, stage = build(repo, test_command="exit 1")
+        cfg, stage = build(repo, full_test_command="exit 1")
         out = verify(
             repo, cfg, stage, sha,
             green_records=self._record(repo, "exit 1"),

@@ -20,6 +20,7 @@ from click.testing import CliRunner
 
 from code_gantry import cli
 from code_gantry.planner import PlannerOutcome
+from test_config import SCOPED_TOOL_YAML
 
 
 @pytest.fixture
@@ -52,7 +53,7 @@ base_ref: main
 project_branch: work
 plan_root: docs/plan.md
 plan_addendum_path: docs/addendum
-test_command: "true"
+full_test_command: "true"
 executor:
   model: m
 planner:
@@ -60,6 +61,14 @@ planner:
   repo_access: true
 reviewer:
   model: gpt-5.5
+scoped_test_tool: scoped_suite
+project_tools:
+  - name: scoped_suite
+    description: The suite, taking a selection.
+    command: ['true', '{{paths}}']
+    arguments:
+      - {{name: paths, description: Files or examples., repeated: true}}
+    roles: ['executor']
 """
     )
     # PROJECTS_ROOT is a relative path bound as a default argument at import
@@ -164,9 +173,10 @@ class TestTheDiffIsAgainstBaseRef:
         (projects / "demo" / "config.yaml").write_text(
             f"target_repo: {repo}\nbase_ref: develop\nproject_branch: work\n"
             "plan_root: docs/plan.md\nplan_addendum_path: docs/addendum\n"
-            'test_command: "true"\nexecutor:\n  model: m\n'
+            'full_test_command: "true"\nexecutor:\n  model: m\n'
             "planner:\n  model: claude-opus-5\n  repo_access: true\n"
             "reviewer:\n  model: gpt-5.5\n"
+            + SCOPED_TOOL_YAML
         )
         monkeypatch.chdir(tmp_path)
 
