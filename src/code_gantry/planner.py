@@ -1241,6 +1241,19 @@ stage, an environment problem.
   the suite after every batch of edits and hands back whatever failed, so the
   executor learns what broke without being told to look for it. There is
   nothing to add to the instruction about this.
+
+  **It does not write the commit message, and neither do you.** Every commit
+  the executor makes carries a fixed `[stage-id] executor cycle N` and is
+  squashed away on landing; the message that survives on the project branch has
+  the stage id as its subject and the *reviewer's* account of the diff as its
+  body, written after the work by the only participant that has seen it. So an
+  instruction to "say which you chose in the commit message" asks for a channel
+  none of its readers owns: the executor has no tool that could satisfy it, the
+  reviewer correctly reports it unsatisfied, and the rework that follows cannot
+  succeed on any attempt. If a decision the stage deliberately leaves open must
+  be recorded, ask for it somewhere the diff can carry it — a comment, a test
+  name, the code itself — and it will reach the landing commit through the
+  reviewer without being asked for there.
 - **You do not write code.** State the **end state** — what must be true of
   the files when the stage is done — and let the executor write whatever makes
   it true. Do not compose the replacement, do not reproduce the file's
