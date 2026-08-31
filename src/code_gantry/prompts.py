@@ -513,12 +513,40 @@ def _plan_block(plan: PlanTree, addendum_path: str | None = None) -> tuple[str, 
     what the work has *become*. Naming it is driven by `plan_addendum_path`, so
     it stays a property of the project's configuration rather than prose an
     operator has to remember to keep writing.
+
+    **Both documents are told they have no later version, and only one of them
+    used to be.** The frozen documents said they "are the plan as it stood
+    then" — true, and its implicature false: nothing in a run can edit a plan
+    document, so there is no later version to have stood differently. The
+    reassurance was attached instead to the log, which is the one document
+    whose payload copy and `read_file` answer are both the live worktree, so
+    fetching it was harmless anyway. Measured across the recorded runs, the
+    planner re-read the two frozen documents 20 times against the log's 7, and
+    23 of the 27 were ranged — the shape of fetching a span already located
+    rather than of looking for content. The counts followed the instruction,
+    not the need.
+
+    A claim about the *run* rather than about the file, deliberately. A human
+    editing a plan document from another session is still possible and
+    preflight only catches it on a resume, so "nothing in this run changes
+    them" stays true where "this file has not moved" would be a promise this
+    cannot keep — and a planner that does find a difference has found a real
+    signal instead of a broken guarantee.
     """
     intro = (
         "## The plan\n\n"
         "This is the authority for the project. A stage instruction is a "
         "pointer into it, not a substitute for it."
     )
+    if not addendum_path:
+        # Same fact, for a project that keeps no log. Without it the only
+        # thing said about these documents is that they are the authority,
+        # and a planner with a read tool has no reason not to check them.
+        intro += (
+            "\n\nThese were read once, when this run started, and **nothing "
+            "in this run changes them**: no stage may edit a plan document. "
+            "What is printed here is what reading those paths would return."
+        )
     if addendum_path:
         intro += (
             "\n\nThese documents say what the work **is**. They do not say what "
@@ -527,9 +555,14 @@ def _plan_block(plan: PlanTree, addendum_path: str | None = None) -> tuple[str, 
             "appended as each stage lands. When the two disagree about whether "
             "something is outstanding, the log is later.\n\n"
             "The other documents here were read once, when this run started, "
-            "and are the plan as it stood then. The log is not: it is included "
-            "as it stands now, with every entry written up to this call. There "
-            "is no later version to go and fetch.\n\n"
+            "and **nothing in this run changes them**: no stage may edit a "
+            "plan document, and what the work has become is recorded in the "
+            "log instead. So they are not a historical copy — what is printed "
+            "here is what reading those paths would return, and fetching one "
+            "again buys nothing. The log is the other way round: it is "
+            "included as it stands now, with every entry written up to this "
+            "call, and it grows as stages land. Neither has a later version "
+            "to go and fetch.\n\n"
             "It is still not a substitute for looking at the code. A count in "
             "a document is a claim about when someone wrote it down."
         )

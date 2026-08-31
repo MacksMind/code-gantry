@@ -145,6 +145,27 @@ the recording a property of the only operation that can change the thing.
   prompt.
 - **Both were found by a human reading a prompt, which is the only thing that
   finds this class.** No gate compares two sections of one document.
+- **A true sentence can carry a false implicature, and the model acts on the
+  implicature.** The plan block told the planner its frozen documents "are the
+  plan as it stood then" — true, and it reads as *there is a later version*,
+  when no stage can edit a plan document and there is none. The reassurance
+  "there is no later version to go and fetch" was attached instead to the
+  progress log, the one document whose payload copy and `read_file` answer are
+  both the live worktree. Measured: 20 re-reads of the two frozen documents
+  against 7 of the log, 23 of the 27 ranged. **The read counts followed the
+  instruction rather than the need**, which is also how you tell the instruction
+  is doing the work.
+- **And phrase such a claim about the run, not the file.** "Nothing in this run
+  changes them" survives a human editing from another session; "this file has
+  not moved" is a promise the prompt cannot keep, and preflight only checks it
+  on a resume.
+- **A docstring about a *neighbouring* component is held true by nothing.**
+  `runtime.plan` and `plandoc`'s header both said the planner's revisions "land
+  in the live documents and show up as divergence in `status.md`". The planner
+  revises no plan document and `status.md` is read by nothing — two dead halves,
+  maintained in parallel in two files, and believed and reasoned from here
+  before they were checked. The code beneath a docstring checks it; the module
+  next door does not.
 - **A phantom constraint is the expensive direction.** A missing capability
   produces a stage the gates catch; a constraint that does not exist makes work
   read as *blocked*, and a stage never drawn leaves no artifact. Same reasoning

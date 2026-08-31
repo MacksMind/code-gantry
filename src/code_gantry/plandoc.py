@@ -13,8 +13,18 @@ off disk into a payload pasted verbatim into every paid call.
 **The tree is read at the run's base sha, not the working tree**, so a
 concurrent edit on `main` cannot change what a run thinks it was asked to do.
 And it is snapshotted once per run, so the reviewer judges against the plan as
-it stood when the run began while the planner's revisions land in the live
-documents and show up as divergence in `status.md`.
+it stood when the run began.
+
+This once continued "while the planner's revisions land in the live documents
+and show up as divergence in `status.md`". Neither half is true: the planner
+revises no plan document — `verify._is_plan_document` makes the whole resolved
+tree unwritable by any stage, and the planner's own findings go to the
+addendum — and `status.md` is written and read back by nothing. The snapshot
+therefore differs from the working tree only when a human edits a plan document
+from outside the run. Left as a correction rather than deleted, because the
+sentence was maintained in two files and was read, believed, and reasoned from
+before it was checked: a docstring is held true by the code beneath it, and one
+describing a *neighbouring* component is held true by nothing.
 """
 
 from __future__ import annotations

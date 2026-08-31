@@ -135,3 +135,56 @@ class TestItReachesTheModel:
         out = _with_lint_rewrite(failure, "+line\n" * 20_000)
         assert len(out.feedback) < 20_000
         assert "the patterns gate failed" in out.feedback
+
+
+class TestAcheckThatCorrectedNothing:
+    """An autocorrecting check that fails having changed no file.
+
+    `rubocop -A` fixes what it can and reports what it cannot, and both arrive
+    in one run. When the offence it reports has no autocorrection — this
+    project's conventions name the case, a cop flagging a strong-parameter
+    permit list — the check exits non-zero and rewrites nothing, and
+    `_layer_checks` routes that to the executor as "a required check failed".
+
+    Told nothing more, the model cannot tell that from a check that fixed
+    nothing because something was broken. That distinction has cost this
+    project 42 minutes of an attempt being told its work was wrong by an
+    environment that was not there.
+    """
+
+    def test_the_model_is_told_the_checks_changed_nothing(self, repo):
+        from code_gantry.executorloop import _note_uncorrectable
+
+        failure = type("F", (), {"feedback": "A required check failed.\nrubocop"})()
+        out = _note_uncorrectable(failure, "")
+        assert "changed no file" in out.feedback
+        assert "not something they can correct for you" in out.feedback
+
+    def test_it_says_nothing_when_the_checks_did_rewrite(self, repo):
+        # There the diff is the message, and `_with_lint_rewrite` carries it.
+        from code_gantry.executorloop import _note_uncorrectable
+
+        failure = type("F", (), {"feedback": "A required check failed."})()
+        out = _note_uncorrectable(failure, "--- a/x.rb\n+++ b/x.rb\n-a\n+b\n")
+        assert out.feedback == "A required check failed."
+
+    def test_it_is_not_applied_to_a_test_failure(self, repo):
+        # The defect a test caught. `_with_lint_rewrite` runs on every gate
+        # failure in the cycle, so putting this inside it would tell a stage
+        # whose *tests* failed that the checks changed no file — true,
+        # irrelevant, and about a gate that passed.
+        import ast
+        import pathlib
+
+        src = pathlib.Path("src/code_gantry/executorloop.py").read_text()
+        tree = ast.parse(src)
+        calls = [
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Name)
+            and n.func.id == "_note_uncorrectable"
+        ]
+        assert len(calls) == 1, "it must be applied on exactly one branch"
+        # And that branch is the one guarded by the checks result.
+        line = src.splitlines()[calls[0].lineno - 2]
+        assert "gate_records.pop(\"checks\"" in line

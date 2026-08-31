@@ -308,6 +308,41 @@ def _with_lint_rewrite(failure, diff: str):
     return failure
 
 
+def _note_uncorrectable(failure, diff: str):
+    """A check that failed having rewritten nothing is reporting your work.
+
+    The complement of `_with_lint_rewrite`, and only ever applied where that
+    one has nothing to say. An autocorrecting linter — `rubocop -A` and its
+    kin — that exits non-zero having changed no file is reporting an offence
+    it *cannot* fix; this project's own conventions document names the shape,
+    a cop with no autocorrection on a strong-parameter permit list. Silence
+    leaves that indistinguishable from a check that fixed nothing because
+    something is broken, and `_layer_checks` routes an ordinary non-zero to
+    the executor either way — which is how an environment failure once spent
+    42 minutes being reported to a model as its own defect.
+
+    **On the checks branch alone**, which is the whole of why this is not
+    inside `_with_lint_rewrite`. That helper runs on every gate failure in the
+    cycle, so a *test* failure with clean checks would otherwise be told the
+    checks changed no file — true, irrelevant, and about a gate that passed.
+    A test pinned that and caught it.
+
+    States what was observed rather than what it means. Whether a given entry
+    autocorrects at all is operator knowledge that reaches no field here, so
+    the conclusion is left to the reader who can see the offence above it.
+    """
+    if diff.strip():
+        return failure
+    failure.feedback = (
+        f"{failure.feedback}\n\nThe project's `checks` ran after you stopped "
+        "editing and **changed no file**. Whatever they report above is not "
+        "something they can correct for you, so it has to be dealt with in "
+        "the code — fixed, or suppressed the way this project suppresses it, "
+        "or reported as impossible if it is neither."
+    )
+    return failure
+
+
 def _gate_cycle(stage, cfg, git, runner, out: ExecutionResult, since_sha, log=None):
     """Commit, lint, commit the rewrite, then the gates — in that order.
 
@@ -342,7 +377,7 @@ def _gate_cycle(stage, cfg, git, runner, out: ExecutionResult, since_sha, log=No
         log(f"[execute] checks rewrote files; committed as {rewrote[:12]}")
     if not lint.ok:
         out.gate_records.pop("checks", None)
-        return _with_lint_rewrite(lint, rewritten)
+        return _with_lint_rewrite(_note_uncorrectable(lint, rewritten), rewritten)
 
     # The checks passed on the tree as it stands *after* their own rewrites
     # were committed, which is the tree the gate will see.

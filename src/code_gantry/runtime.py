@@ -166,10 +166,20 @@ class Runtime:
     def plan(self) -> PlanTree:
         """The run's plan snapshot, read once and held.
 
-        The reviewer and planner judge against the plan as it stood when the run
-        began; the planner's own revisions land in the live documents and show up
-        as divergence in status.md. Nothing is silently substituted underneath
-        them mid-run.
+        The reviewer and planner judge against the plan as it stood when the
+        run began, and nothing is silently substituted underneath them mid-run.
+
+        It is a freeze against *outside* edits, not against the run's own. No
+        stage can write a plan document — `verify._is_plan_document` covers the
+        whole resolved tree — and the planner's findings go to the addendum, so
+        the only way this snapshot and the working tree diverge is a human
+        editing from another session, which preflight catches on a resume.
+
+        An earlier version of this said "the planner's own revisions land in
+        the live documents and show up as divergence in status.md", which
+        described neither a revision that happens nor an artifact anything
+        reads. See `plandoc`'s header, where the same sentence was maintained
+        in parallel.
         """
         if self._plan is None:
             self._plan = load_snapshot(self.paths.project.plan_snapshot)
