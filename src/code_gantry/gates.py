@@ -27,7 +27,7 @@ from pathlib import Path
 from code_gantry.commands import (
     CommandResult,
     CommandRunner,
-    clip_for_model,
+    clip_report_for_model,
     collapse_progress_runs,
 )
 from code_gantry.config import ProjectConfig, Stage
@@ -529,7 +529,12 @@ _PATH_HINT = re.compile(r"([\w./-]+\.(?:rb|py|js|ts|tsx|go))")
 
 
 def clip(text: str) -> str:
-    return clip_for_model(text, FEEDBACK_OUTPUT_CHARS)
+    """Runner output, tail-weighted — see `clip_report_for_model`.
+
+    Everything clipped here is a check's or a suite's own report, which is the
+    one shape whose answer is at the end.
+    """
+    return clip_report_for_model(text, FEEDBACK_OUTPUT_CHARS)
 
 
 def path_hints(output: str) -> list[str]:

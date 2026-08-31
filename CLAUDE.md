@@ -441,6 +441,24 @@ the recording a property of the only operation that can change the thing.
 - **And the diff a revision prompt carries has no ceiling.** `max_chars_per_call`
   bounds what the planner *reads*; one stray large file in the tree has overrun
   the window through the other channel.
+- **Weight the budget toward the end for a runner's report.** `truncate_middle`
+  splits evenly because "output is informative at both ends" — true of a command
+  that fails at the top, false of a linter or a test runner, which both report
+  last. Measured over 495 test-failure feedbacks actually handed to an executor:
+  96% truncated, 53% still carrying `N examples, M failures`, and **20%** still
+  carrying `Failed examples:`, the rerun commands and the most actionable thing
+  RSpec prints. `clip_report_for_model` is the tail-weighted sibling; the head
+  allowance is one line, because the text before the first offence measures 143
+  characters at the median. **The same defect was fixed once already at the
+  layer above** — a 334k suite put that block 146k from the end and the even
+  split dropped it — by moving *where* truncation happens and leaving *how it
+  weights* alone. Ask of a fix whether it addressed the mechanism or one of its
+  two halves.
+- **And say what the fix does not buy.** Tail-weighting fits no more RuboCop
+  offences into 4,000 characters than the even split did — a block is a median
+  257 bytes, so about fifteen either way. It buys the summary line and one
+  unbroken run instead of two halves with a hole. A change sold on the number it
+  does not move is one nobody can check later.
 - **Collapse before you truncate.** `truncate_middle` keeps head and tail because
   command output is informative at both ends — false of a progress reporter,
   which puts its dots first and its findings after. Hence `clip_for_model` rather

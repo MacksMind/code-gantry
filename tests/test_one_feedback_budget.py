@@ -63,12 +63,26 @@ class TestOneDefinition:
         and are allowed — a lint diff and a one-line reviewer note are not the
         same decision as a failure handed to a model — but `FEEDBACK_OUTPUT_CHARS`
         must be spent exactly once.
+
+        Found with a parser rather than a substring, after the substring
+        version failed on a correct change. It looked for `clip_for_model(` on
+        a line with the budget, so renaming the clipper to
+        `clip_report_for_model` — a real decision about the content's shape —
+        made it match zero lines and report the budget applied nowhere. A test
+        that pins a spelling is not a test that pins a decision, which is the
+        distinction this file exists to draw.
         """
         applied = []
         for path in sorted(SRC.glob("*.py")):
-            for i, line in enumerate(path.read_text().splitlines(), 1):
-                if "clip_for_model(" in line and "FEEDBACK_OUTPUT_CHARS" in line:
-                    applied.append(f"{path.stem}:{i}")
+            tree = ast.parse(path.read_text())
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                names = {
+                    a.id for a in ast.walk(node) if isinstance(a, ast.Name)
+                }
+                if "FEEDBACK_OUTPUT_CHARS" in names:
+                    applied.append(f"{path.stem}:{node.lineno}")
         assert len(applied) == 1, f"the feedback budget is applied at {applied}"
         assert applied[0].startswith("gates:"), applied
 

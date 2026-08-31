@@ -80,6 +80,87 @@ def clip_for_model(text: str, max_chars: int) -> str:
     return truncate_middle(collapse_progress_runs(text), max_chars)
 
 
+def clip_report_for_model(text: str, max_chars: int) -> str:
+    """A *runner's report* made fit to hand to a model.
+
+    The sibling of `clip_for_model`, and the difference is the content's shape
+    rather than a preference. A reviewer's note is prose and its head is its
+    point; a linter's or a test runner's output ends with what to do about it.
+    Two functions rather than a flag at each call site, because which of the
+    two a caller has is a property of what it is holding and not a decision to
+    re-make: `gates` hands over runner output and nothing else does.
+
+    The collapse still happens first, and for the reason it always did — a
+    progress run truncated rather than collapsed spends the budget on dots.
+    """
+    return truncate_to_tail(collapse_progress_runs(text), max_chars)
+
+
+# What survives from the front of a report: enough for the first line, which is
+# the runner naming what it is about to do. Measured over 255 complete RuboCop
+# listings, the text before the first offence — the `Inspecting N files` line
+# and the collapsed progress run — is 143 characters at the median and 229 at
+# the worst. So the head is nearly free, and everything else belongs to the end.
+REPORT_HEAD_CHARS = 240
+
+
+def truncate_to_tail(text: str, max_chars: int, head_chars: int = REPORT_HEAD_CHARS) -> str:
+    """Keep a glimpse of the head and spend the rest of the budget on the tail.
+
+    For output whose *answer is at the end*. `truncate_middle` splits the
+    budget evenly because "command output is informative at both ends", which
+    is true of a command that fails at the top and false of a runner that
+    reports at the bottom — and both of this project's runners report at the
+    bottom.
+
+    Measured on 495 test-failure feedbacks actually handed to an executor: 96%
+    were truncated, only 53% still carried `N examples, M failures`, and only
+    **20%** still carried the `Failed examples:` list — the rerun commands,
+    which are the most actionable thing RSpec prints and sit in the last few
+    hundred bytes. The same defect is already recorded one layer up, where a
+    334,143-character suite put that block 146,285 characters from the end and
+    the even split dropped it; that was fixed by moving truncation to the point
+    of use and left the *weighting* alone.
+
+    RuboCop gains less, and the reason is worth stating so nobody expects more
+    from this than it gives: its offence blocks are a median 257 bytes, so a
+    4,000-character budget holds about fifteen of them however they are
+    arranged. Splitting seven-and-seven or taking fifteen contiguously from the
+    end shows the same number. What the tail buys there is the
+    `N offenses detected` summary and an unbroken run rather than two halves
+    with a hole between them.
+
+    The tail is cut at a line boundary. Starting mid-line hands the model a
+    fragment that looks like a line and is not, which is the same class of
+    fault as a delimiter drawn from the content's own alphabet.
+    """
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+
+    marker_template = "\n... [{dropped} characters truncated] ...\n"
+    reserve = len(marker_template.format(dropped=len(text)))
+    keep = max(max_chars - reserve, 0)
+
+    head_len = min(head_chars, keep)
+    head = text[:head_len]
+    # Not past the first newline: the allowance is a ceiling on one line, not a
+    # licence to take several.
+    if "\n" in head:
+        head = head[: head.index("\n")]
+
+    tail_len = keep - len(head)
+    tail = text[len(text) - tail_len :] if tail_len > 0 else ""
+    # Forward to the next line start, so the tail opens on a whole line. Only
+    # when that costs little — a tail with no newline in its first stretch is
+    # one long line, and half of it beats none of it.
+    cut = tail.find("\n")
+    if 0 <= cut < len(tail) // 4:
+        tail = tail[cut + 1 :]
+
+    dropped = len(text) - len(head) - len(tail)
+    return head + marker_template.format(dropped=dropped) + tail
+
+
 def truncate_middle(text: str, max_chars: int) -> str:
     """Keep the head and tail, drop the middle.
 
