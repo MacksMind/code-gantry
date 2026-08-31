@@ -496,29 +496,30 @@ the recording a property of the only operation that can change the thing.
   unbroken run instead of two halves with a hole. A change sold on the number it
   does not move is one nobody can check later.
 - **And the tail of a runner's output is the *other stream*.** `CommandResult
-  .output` appends stderr after stdout unconditionally, and every test command
-  here goes out through `docker compose exec`, so compose's teardown chatter is
-  structurally the last thing in the buffer — the scoped runs end on Ruby
-  deprecation warnings instead, a different noise by the same mechanism.
-  Measured over the 376 recorded `full-suite.log` files carrying a rerun block:
-  the aggregate report region is a median **1,722** characters, p75 2,672, so it
-  fits a 4,000-character budget with room to spare — and it begins a median
-  **35,544** characters from EOF, with more than 4,000 characters of trailing
-  noise after it in **100%** of them. A tail-weighted budget therefore captures
-  none of the report in every recorded case; the even split caught it only when
-  the log was small enough that the head reached it. **This was never a budget
-  problem, and both halves of the previous fix were about the budget.** The
-  report is an anchored *region* — the last `^Failures:$` forward — and the two
-  bullets above tuned a weighting on the assumption it was a suffix. Ask what
-  the thing you are trying to keep is *delimited by* before deciding which end
-  of the buffer to spend on.
-- **And `parallel_rspec` prints the report once per worker and then again as an
-  aggregate**, so the first `Failures:` in the file is one worker's and the one
-  that matters is the last. A `search` for a heading the format repeats returns
-  the wrong instance and reads as a plausible measurement: the first cut of this
-  measurement put the last `Failure/Error:` a median 352k from EOF, which is the
-  *first* worker's, near the top of the file. The same bet as `str.index()` on a
-  repeated heading, already written down here, and I made it anyway.
+  .output` appends stderr after stdout unconditionally, and the test commands go
+  out through `docker compose exec`, so compose's container chatter can be the
+  literal last thing in the buffer. Seen in a feedback a model actually
+  received: the whole tail was `Container acme_app-chromium2-1 Created`
+  and eleven more like it, with the report above the window. The scoped runs
+  end on Ruby deprecation warnings instead — a different noise by the same
+  mechanism — and carry far less of it, about 900 characters against the full
+  suite's tens of thousands, which is why the same budget behaves oppositely on
+  the two runners. **A weighting cannot fix this; only an anchor can.** The
+  aggregate report region is a median 1,722 characters over the 376 recorded
+  `full-suite.log` files, so it fits a 4,000-character budget several times
+  over — it is simply not at either end. `^Failures:$` forward is the region.
+- **And measuring the artifact is not measuring what the model was handed.** I
+  measured the distance from EOF to the report in `full-suite.log` and wrote
+  down rates for what a tail budget captures. Wrong population twice over:
+  those files are the merge gate's runs, not the in-loop test command, and none
+  of them are the *clipped* string that reaches a model. The population is the
+  feedback turns in `executor-conversation.jsonl`. Under the even split, 607 of
+  them carry `Failure/Error` 93% of the time and the rerun list 14% — the
+  numbers the bullet above was already written from. **Under tail-weighting
+  there are six, of mixed content, and six answers no question at all**: the
+  rate I reported from them was a reading about the sample. The rule I had just
+  written into this file that afternoon was *render the string the model
+  receives*.
 - **Collapse before you truncate.** `truncate_middle` keeps head and tail because
   command output is informative at both ends — false of a progress reporter,
   which puts its dots first and its findings after. Hence `clip_for_model` rather
