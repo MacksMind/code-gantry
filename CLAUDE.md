@@ -165,6 +165,26 @@ the recording a property of the only operation that can change the thing.
   right, but every depth-2 link here was a cross-reference or a document another
   channel supplied — and transitivity costs the property that reading the root
   tells you the whole payload.
+- **An undescribed argument is where the refusals are.** A sweep for tool
+  properties carrying no `description` returned exactly five, all on `git_show`
+  and `git_diff` — and those two tools accounted for every argument-shaped
+  refusal in the recorded runs. Not a coincidence to check case by case: run the
+  sweep, because the property nobody described is the one nobody thought about.
+- **A required-and-nullable field is answered with the word.** `as_strict_tool`
+  rewrites an optional property as `["string","null"]` *and required*, which is
+  how strict mode spells "may be omitted" — so the model must emit something and
+  JSON `null` is the only spelling for nothing. Measured over 431 `git_diff`
+  calls: four sent the *string* `"null"`, and two independently invented
+  `working_tree` and `WORKTREE` for a working-tree comparison the description
+  never mentioned. Each went to git as a revision. The fix is to describe what
+  absent *means* and to read the spellings back — a denylist of what was
+  observed, scoped to the arguments where it cannot eat a real value, because a
+  `search` pattern of `null` is an ordinary thing to look for.
+- **A default that answers where a refusal would have asked is the wrong
+  trade.** Defaulting `git_diff`'s `ref` to `HEAD` covered none of the twelve
+  failures and made one worse: `ref` empty with `HEAD` in `other` becomes
+  `diff HEAD HEAD` and returns *empty*, in the tool whose whole job is to say
+  what changed. Ask of any default what the call it rescues will now answer.
 - **Two tools whose main argument is "some text" owe each other a sentence.**
   `search` takes a regular expression and `edit` takes literal bytes, and
   neither description said so or mentioned the other. A model spent most of a

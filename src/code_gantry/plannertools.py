@@ -264,8 +264,21 @@ READ_TOOLS: list[dict[str, Any]] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "ref": {"type": "string"},
-                "path": {"type": "string"},
+                "ref": {
+                    "type": "string",
+                    "description": (
+                        "The commit to read at: a sha, a branch, a tag, or "
+                        "`HEAD`. Required — there is no default."
+                    ),
+                },
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Repository-relative path for the file form. Null for "
+                        "the commit form, which answers with the message and "
+                        "a per-file line count."
+                    ),
+                },
             },
             "required": ["ref"],
         },
@@ -275,13 +288,38 @@ READ_TOOLS: list[dict[str, Any]] = [
         "description": (
             "What changed between refs, optionally for one path. Use it to see "
             "what earlier stages actually did rather than what they claimed."
+            "\n\n**To compare a ref against the working tree, give `ref` and "
+            "leave `other` null.** That is the common case and there is no "
+            "other way to spell it: `other` is not a place to name the working "
+            "tree, and neither side of the comparison is ever assumed for you."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "ref": {"type": "string"},
-                "other": {"type": "string"},
-                "path": {"type": "string"},
+                "ref": {
+                    "type": "string",
+                    "description": (
+                        "The commit to compare *from*: a sha, a branch, a tag, "
+                        "or `HEAD`. Required, and never defaulted — a diff "
+                        "with no `ref` is refused rather than guessed at."
+                    ),
+                },
+                "other": {
+                    "type": ["string", "null"],
+                    "description": (
+                        "The commit to compare *to*. **Null compares `ref` "
+                        "against the working tree as it stands**, which is "
+                        "usually what you want. Pass a second sha, branch or "
+                        "tag only to compare two commits with each other."
+                    ),
+                },
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Repository-relative path to narrow the diff to. Null "
+                        "for every file that changed."
+                    ),
+                },
             },
             "required": ["ref"],
         },

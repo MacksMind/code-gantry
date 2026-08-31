@@ -857,6 +857,10 @@ class RepoReader:
         touch. Confinement does not apply: there is no path to escape with.
         """
         self._charge_call("git_show")
+        # Same reading as `git_diff`: under strict mode `path` is required and
+        # nullable, and a model that means the pathless form has been observed
+        # sending the string `"null"` for it.
+        path = _absent(path)
         rel = None
         if path is not None:
             rel = self._relative(self._resolve(path))
@@ -876,8 +880,24 @@ class RepoReader:
     def git_diff(
         self, ref: str, other: str | None = None, path: str | None = None
     ) -> str:
-        """What changed between two points, optionally for one path."""
+        """What changed between two points, optionally for one path.
+
+        Neither side is ever assumed. A missing `ref` refuses rather than
+        defaulting to `HEAD`, because the one failure shape a default would
+        cover — `ref` empty with `HEAD` in `other` — becomes `diff HEAD HEAD`
+        and answers *empty*, and an empty diff reads as "nothing changed"
+        rather than as a malformed call.
+        """
         self._charge_call("git_diff")
+        ref = _absent(ref)
+        if not ref:
+            raise ToolError(
+                "no ref given. `ref` is the commit to compare from — pass "
+                "`HEAD` to compare the last commit against the working tree. "
+                "It is never assumed."
+            )
+        other = _absent(other)
+        path = _absent(path)
         args = ["diff", ref]
         if other:
             args.append(other)
@@ -890,6 +910,29 @@ class RepoReader:
         lines, clipped = self._clip(proc.stdout.splitlines())
         text = "\n".join(lines) + ("\n... truncated" if clipped else "")
         return self._spend("git_diff", " ".join(args[1:]), text)
+
+
+# What a model emits when it means "no value" and the schema will not let it
+# say so. Strict mode rewrites an optional property as nullable *and required*,
+# so `other` has to be present on every `git_diff` call and JSON `null` is the
+# only spelling for absent. Measured over 431 calls: four sent the string
+# `"null"`, two invented `working_tree` and `WORKTREE`, and the tool passed
+# each straight to git as a revision.
+#
+# Deliberately a denylist of the spellings actually observed, and deliberately
+# scoped to the two git tools rather than applied to every string argument: a
+# `search` pattern of `null` is an ordinary thing to look for, and a filter
+# written over every argument would eat it. A ref or a path named `null` is
+# not a case anyone has, and the reading it costs is one a model can correct;
+# the reading it saves is a revision that does not exist.
+_MEANS_ABSENT = frozenset({"", "null", "none", "nil", "working_tree", "worktree"})
+
+
+def _absent(value: str | None) -> str | None:
+    """A model-supplied optional argument, or `None` if it meant nothing."""
+    if value is None:
+        return None
+    return None if value.strip().lower() in _MEANS_ABSENT else value
 
 
 def count_calls(*ledgers) -> dict[str, int]:
