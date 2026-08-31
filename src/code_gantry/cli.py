@@ -525,6 +525,48 @@ def pause(config_path: Path | None, run_id: str | None, note: str) -> None:
 @main.command()
 @click.argument("config_path", required=False, type=click.Path(path_type=Path))
 @click.argument("run_id", required=False)
+def unpause(config_path: Path | None, run_id: str | None) -> None:
+    """Withdraw a pause from a run that is still going.
+
+    `pause` only writes a flag, and the run reads it at a stage boundary, so a
+    pause regretted before that boundary can be taken back and the run never
+    knows. This deletes the flag and nothing else — it starts no process and
+    touches neither the tree nor the checkpoint.
+
+    `resume` clears the same flag on its way in, which is why this did not
+    exist. But resume is for a run that has *stopped*: run it against a live
+    one and there are two processes on the repository, which is a five-minute
+    window rather than a crash and is not survivable when the second reaches
+    the tree. Whether a run is still going cannot be settled from here without
+    a race, so both cases are named in the output rather than guessed at.
+
+    Idempotent: no flag is not an error, because "make sure this run is not
+    paused" is the thing a caller actually wants.
+    """
+    config_path = _config_argument(config_path)
+    cfg, project = _project_for(config_path)
+    run_id = _resolve_run_id(project, run_id)
+    paths = RunPaths(project, run_id)
+    if not paths.run_dir.is_dir():
+        click.echo(f"no such run: {run_id}", err=True)
+        sys.exit(EXIT_FAILED)
+
+    if not paths.pause_flag.exists():
+        click.echo(f"no pause was set on {run_id}; nothing to withdraw.")
+        return
+
+    paths.pause_flag.unlink(missing_ok=True)
+    click.echo(
+        f"pause withdrawn from {run_id}.\n"
+        "A run still going will carry on to the next stage and never see it. "
+        "A run that already stopped is not restarted by this — "
+        f"{cfg.resume_command(run_id)} is what continues it."
+    )
+
+
+@main.command()
+@click.argument("config_path", required=False, type=click.Path(path_type=Path))
+@click.argument("run_id", required=False)
 @click.option(
     "--reset-progress-budget",
     is_flag=True,
