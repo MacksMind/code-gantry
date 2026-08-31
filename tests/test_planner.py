@@ -28,7 +28,7 @@ def cfg(**over):
             "target_repo": "/tmp/x",
             "project_branch": "work",
             "plan_root": "PLAN.md",
-            "test_command": "pytest",
+            "full_test_command": "pytest",
             "executor": {"model": "m"},
             "planner": planner,
             "reviewer": {"model": "gpt-5.5"},
@@ -94,7 +94,7 @@ class TestSchemaExcludesExecutableFields:
             "preconditions",
             "context_commands",
             "setup_command",
-            "test_command",
+            "full_test_command",
         ):
             assert field not in PlannedStage.model_fields, field
 

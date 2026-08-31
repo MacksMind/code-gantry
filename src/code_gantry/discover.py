@@ -8,7 +8,8 @@ the runtime, `bin/` and CI config for the canonical test invocation,
 
 Every discovered field carries a provenance comment, so reviewing the draft is a
 check of reasoning rather than a check of values — the operator can see *why*
-`test_command` says what it says and judge whether the inference was right.
+`full_test_command` says what it says and judge whether the inference was
+right.
 
 Nothing here writes a config the operator has not read: `init` emits a draft,
 `approve` records that a human read it.
@@ -98,17 +99,17 @@ def draft_config(repo: Path, plan_rel: str) -> tuple[str, list[str]]:
     lines.append("")
 
     test, test_note = _discover_test(repo)
-    lines.append(f'test_command: "{test}"')
-    lines.append(f"# ^ {test_note}")
     lines.append(f'full_test_command: "{test}"')
-    lines.append("# ^ same by default. If the project has a faster subset for")
-    lines.append("#   iteration, put that in test_command and leave the whole suite")
-    lines.append("#   here — full_test_command gates every merge.")
-    notes.append(f"test_command inferred from {test_note}")
+    lines.append(f"# ^ {test_note}")
+    lines.append("# The whole suite, taking no selection. It gates every merge, and")
+    lines.append("# it is what runs when a stage scopes to nothing.")
+    notes.append(f"full_test_command inferred from {test_note}")
     lines.append("")
-    lines.append("# Optional. When set, per-stage iteration runs only the specs the")
-    lines.append("# stage touched. {paths} is filled from the stage diff — this is how")
-    lines.append("# the planner influences the test run without authoring shell.")
+    lines.append("# The same suite, taking a selection: per-stage iteration runs only")
+    lines.append("# the specs the stage touched. {paths} is filled from the stage diff,")
+    lines.append("# which is how the planner influences the test run without authoring")
+    lines.append("# shell. Optional, and strongly worth setting — without it every")
+    lines.append("# attempt of every stage runs everything.")
     lines.append(f'# scoped_test_command: "{test} {{paths}}"')
     lines.append("")
     lines.append("full_suite_on_approval: true")

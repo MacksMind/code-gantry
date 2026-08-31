@@ -41,7 +41,7 @@ def cfg_with(**over):
         "target_repo": "/tmp/x",
         "project_branch": "work",
         "plan_root": "PLAN.md",
-        "test_command": "pytest -q",
+        "full_test_command": "pytest -q",
         "planner": {"model": "claude-opus-5", "effort": "xhigh"},
         "executor": {"model": "openai/gpt-5.6-luna", "reasoning_effort": "max"},
         "reviewer": {"model": "gpt-5.6-sol", "effort": "max"},
@@ -187,7 +187,7 @@ class TestTheBudgetProjectionDoesNotDemandAChange:
 
         cfg = parse_config({
             "target_repo": str(tmp_path), "base_ref": "main",
-            "project_branch": "p", "plan_root": "PLAN.md", "test_command": "true",
+            "project_branch": "p", "plan_root": "PLAN.md", "full_test_command": "true",
             "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.6-sol"},
             "limits": {"wall_clock_hours": budget, "max_stages": max_stages},

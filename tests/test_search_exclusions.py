@@ -86,7 +86,7 @@ class TestItIsProjectKnowledge:
 
         cfg = parse_config({
             "target_repo": ".", "base_ref": "main", "project_branch": "p",
-            "plan_root": "PLAN.md", "test_command": "true",
+            "plan_root": "PLAN.md", "full_test_command": "true",
             "executor": {"model": "m"},
             "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.6-sol"},

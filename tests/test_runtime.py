@@ -24,7 +24,7 @@ def a_config(repo):
             "target_repo": str(repo),
             "project_branch": "work",
             "plan_root": "PLAN.md",
-            "test_command": "pytest",
+            "full_test_command": "pytest",
             "executor": {"model": "m"},
             "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.6-sol"},

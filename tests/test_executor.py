@@ -35,7 +35,7 @@ def cfg_with(stage_overrides=None, **cfg_overrides):
         "project_branch": "work",
         "plan_root": "PLAN.md",
         "planner": {"model": "claude-opus-5"},
-        "test_command": "pytest -q",
+        "full_test_command": "pytest -q",
         "executor": {
             "model": "openai/local-model",
             "api_base": "http://spark:8080/v1",

@@ -99,7 +99,7 @@ class TestTheConfigField:
             "base_ref": "main",
             "project_branch": "proj",
             "plan_root": "PLAN.md",
-            "test_command": "true",
+            "full_test_command": "true",
             "executor": {"model": "m"},
             "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.5"},
@@ -187,7 +187,7 @@ class TestItReachesTheProcess:
             "base_ref: main\n"
             "project_branch: proj\n"
             "plan_root: docs/PLAN.md\n"
-            "test_command: 'true'\n"
+            "full_test_command: 'true'\n"
             "env_file: .code_gantry/env\n"
             "executor: {model: m}\n"
             "planner: {model: claude-opus-5}\n"

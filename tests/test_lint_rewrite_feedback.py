@@ -102,7 +102,7 @@ class TestItReachesTheModel:
     def _cfg(self, repo):
         return parse_config({
             "target_repo": str(repo), "base_ref": "main", "project_branch": "p",
-            "plan_root": "PLAN.md", "test_command": "true",
+            "plan_root": "PLAN.md", "full_test_command": "true",
             "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.6-sol"},
         })

@@ -126,7 +126,6 @@ def drive(repo, tmp_path, planner=None, reviewer=None, state=None, run_id="r1", 
         "base_ref": "main",
         "project_branch": "proj",
         "plan_root": "PLAN.md",
-        "test_command": "true",
         "full_test_command": "true",
         "executor": {"model": "openai/local"},
         "planner": {"model": "claude-opus-5"},
@@ -446,7 +445,7 @@ class TestPlannerInterventionLoop:
             PlannerOutcome("blocked", "the tests cannot pass as specified", "e"),
         ])
         cfg, project, paths, final = drive(
-            repo, tmp_path, planner=planner, test_command="exit 1"
+            repo, tmp_path, planner=planner, full_test_command="exit 1"
         )
         assert final["status"] == "escalated"
         assert planner.calls == 2
@@ -483,7 +482,7 @@ class TestEscalationPaths:
             ]
         )
         cfg, project, paths, final = drive(
-            repo, tmp_path, planner=planner, test_command="exit 1",
+            repo, tmp_path, planner=planner, full_test_command="exit 1",
             limits={"max_planner_interventions": 2, "max_test_retries": 1},
         )
         assert final["status"] == "escalated"

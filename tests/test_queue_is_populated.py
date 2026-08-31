@@ -46,7 +46,7 @@ class TestTheQueueIsBuiltFromTheBatch:
 
         cfg = parse_config({
             "target_repo": str(repo), "base_ref": "main", "project_branch": "p",
-            "plan_root": "PLAN.md", "test_command": "true",
+            "plan_root": "PLAN.md", "full_test_command": "true",
             "executor": {"model": "m"},
             # Opted in, as a project using this feature must be. The default is
             # 1 and turns batching off.
@@ -152,7 +152,7 @@ class TestARevisionRechecksTheQueue:
 
         cfg = parse_config({
             "target_repo": str(repo), "base_ref": "main", "project_branch": "p",
-            "plan_root": "PLAN.md", "test_command": "true",
+            "plan_root": "PLAN.md", "full_test_command": "true",
             "executor": {"model": "m"},
             "planner": {"model": "claude-opus-5", "max_batch_stages": 5},
             "reviewer": {"model": "gpt-5.6-sol"},
@@ -203,7 +203,7 @@ class TestTheBatchIsCapped:
 
         cfg = parse_config({
             "target_repo": str(repo), "base_ref": "main", "project_branch": "p",
-            "plan_root": "PLAN.md", "test_command": "true",
+            "plan_root": "PLAN.md", "full_test_command": "true",
             "executor": {"model": "m"},
             "planner": {"model": "claude-opus-5", "max_batch_stages": cap},
             "reviewer": {"model": "gpt-5.6-sol"},
@@ -215,7 +215,7 @@ class TestTheBatchIsCapped:
 
         cfg = parse_config({
             "target_repo": ".", "base_ref": "main", "project_branch": "p",
-            "plan_root": "PLAN.md", "test_command": "true",
+            "plan_root": "PLAN.md", "full_test_command": "true",
             "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.6-sol"},
         })

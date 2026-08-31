@@ -14,7 +14,7 @@ the single place runs, logs, the flake ledger, the cost ledger and the approval
 record live, so CodeGantry repository holds code and nothing else.
 
 The relocation creates one hazard and closes it twice. Arbitrary shell —
-`checks`, `test_command`, `setup_command` — is now a file inside the tree the
+`checks`, `full_test_command`, `setup_command` — is now a file inside the tree the
 executor edits, where before it was in a repository the executor could not
 reach. `_is_plan_document` covers the config for the reason its own docstring
 gives about agent-context documents: "a stage able to edit one could retire its
@@ -39,7 +39,7 @@ def _data(**over):
     base = {
         "project_branch": "p",
         "plan_root": "PLAN.md",
-        "test_command": "true",
+        "full_test_command": "true",
         "executor": {"model": "m"},
         "planner": {"model": "claude-opus-5"},
         "reviewer": {"model": "gpt-5.6-sol"},
@@ -138,7 +138,7 @@ class TestTheExecutorCannotEditIt:
     def test_the_config_is_a_plan_document(self, repo):
         """Arbitrary shell is now inside the tree the executor edits.
 
-        `checks`, `test_command` and `setup_command` are operator-authored
+        `checks`, `full_test_command` and `setup_command` are operator-authored
         commands that run unattended. Before the move they sat in a repository
         no stage could reach; after it they are one `edit_files` glob away.
         """

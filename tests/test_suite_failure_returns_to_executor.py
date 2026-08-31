@@ -54,7 +54,7 @@ def _cfg(repo):
 
     return parse_config({
         "target_repo": str(repo), "base_ref": "main", "project_branch": "p",
-        "plan_root": "PLAN.md", "test_command": "rspec",
+        "plan_root": "PLAN.md", "full_test_command": "rspec",
         "scoped_test_command": "rspec {paths}",
         "test_file_patterns": ["spec/**/*_spec.rb"],
         "executor": {"model": "m"},

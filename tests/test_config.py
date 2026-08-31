@@ -28,7 +28,7 @@ def minimal(**overrides):
         "base_ref": "main",
         "project_branch": "upgrade/rails-5",
         "plan_root": "docs/plan.md",
-        "test_command": "pytest",
+        "full_test_command": "pytest",
         "executor": {"model": "openai/local"},
         "planner": {"model": "claude-opus-5"},
         "reviewer": {"model": "gpt-5.5"},
@@ -147,14 +147,14 @@ class TestScopedTestCommand:
 class TestVerifiability:
     def test_project_with_no_test_command_and_no_checks_rejected(self):
         cfg = minimal()
-        del cfg["test_command"]
+        del cfg["full_test_command"]
         with pytest.raises(ConfigError) as e:
             parse_config(cfg)
         assert "verify" in str(e.value)
 
     def test_checks_in_stage_defaults_suffice(self):
         cfg = minimal(stage_defaults={"checks": ["true"]})
-        del cfg["test_command"]
+        del cfg["full_test_command"]
         assert parse_config(cfg).stage_defaults.checks == ["true"]
 
 
@@ -173,7 +173,7 @@ class TestDenylist:
 
     def test_git_merge_rejected(self):
         with pytest.raises(ConfigError):
-            parse_config(minimal(test_command="git merge main"))
+            parse_config(minimal(full_test_command="git merge main"))
 
     def test_git_reset_rejected(self):
         # Would destroy the baseline the scope guard measures against.
@@ -216,7 +216,7 @@ class TestDenylist:
         # stop being covered.
         cfg = parse_config(minimal(scoped_test_command="rspec {paths}"))
         labels = {label for label, _ in cfg.all_commands()}
-        assert {"setup_command", "test_command", "scoped_test_command"} <= labels | {
+        assert {"setup_command", "full_test_command", "scoped_test_command"} <= labels | {
             "setup_command"
         }
 
@@ -265,7 +265,7 @@ class TestPlannerPartition:
             "preconditions",
             "context_commands",
             "setup_command",
-            "test_command",
+            "full_test_command",
             "checks",
         ):
             assert field not in PLANNER_WRITABLE_FIELDS
@@ -463,7 +463,7 @@ class TestValidateStage:
 
     def test_unverifiable_stage_rejected(self):
         cfg = minimal()
-        del cfg["test_command"]
+        del cfg["full_test_command"]
         cfg = parse_config({**cfg, "stage_defaults": {"checks": ["true"]}})
         problems = validate_stage(a_stage(checks=[]), cfg)
         assert any("verifies it" in p for p in problems)
@@ -472,7 +472,7 @@ class TestValidateStage:
         """The check `stage.command` used to carry, now that it is gone.
 
         A stage's executable fields — `checks`, `preconditions`,
-        `context_commands`, `setup_command`, `test_command` — are all populated
+        `context_commands`, `setup_command`, `full_test_command` — are all populated
         from `stage_defaults`, so every string a stage can run comes from the
         config and is covered by `all_commands()` at load. `stage.command` was
         the one exception, which is why it needed its own pass; deleting it
@@ -569,7 +569,7 @@ class TestLoadFromFile:
                 target_repo: /tmp/some-app
                 project_branch: upgrade/rails-5
                 plan_root: docs/plan.md
-                test_command: pytest
+                full_test_command: pytest
                 executor:
                   model: openai/local
                 planner:
@@ -660,7 +660,7 @@ class TestAgentContextDocuments:
             "target_repo": "/tmp/x",
             "project_branch": "work",
             "plan_root": "PLAN.md",
-            "test_command": "pytest",
+            "full_test_command": "pytest",
             "executor": {"model": "m"},
             "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.6"},
@@ -702,7 +702,7 @@ class TestThePlannerOutputBudgetIsASetting:
         base.update(planner)
         return parse_config({
             "target_repo": ".", "base_ref": "main", "project_branch": "p",
-            "plan_root": "PLAN.md", "test_command": "true",
+            "plan_root": "PLAN.md", "full_test_command": "true",
             "executor": {"model": "m"}, "planner": base,
             "reviewer": {"model": "gpt-5.6-sol"},
         })

@@ -39,7 +39,7 @@ def cfg(tmp_path):
     return parse_config(
         {
             "target_repo": str(repo), "base_ref": "main", "project_branch": "p",
-            "plan_root": "docs/PLAN.md", "test_command": "true",
+            "plan_root": "docs/PLAN.md", "full_test_command": "true",
             "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.6-sol"},
         },
@@ -69,7 +69,7 @@ class TestTheHintItself:
         # absolute path is worse than no path.
         cfg = parse_config({
             "target_repo": "/tmp", "base_ref": "main", "project_branch": "p",
-            "plan_root": "PLAN.md", "test_command": "true",
+            "plan_root": "PLAN.md", "full_test_command": "true",
             "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.6-sol"},
         })

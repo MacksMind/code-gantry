@@ -9,8 +9,10 @@ transient failure arrives as.
 Kept apart because the alternative was measured elsewhere in this codebase and
 found expensive. `_clip` was written twice, in `nodes.py` and `verify.py`, and
 the decision about what to keep when output is too long got made twice and
-differently; `verify._resolve_declared` and `executor._auto_test_command` both
-select test paths and disagree about a path that does not exist yet. Two copies
+differently; `verify._resolve_declared` and `executor._auto_test_command` each
+selected test paths and disagreed about a path that did not exist yet. Both of
+those are gone — the selection is `gates.resolve_test_paths` now, and
+`auto_test_command` went with the field it was named for. Two copies
 of a reading do not stay one reading. This module exists so the second OpenAI
 client cannot fork the first.
 

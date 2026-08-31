@@ -657,7 +657,7 @@ class Stage(_Strict):
     full_suite_on_approval: bool | None = None
 
     def effective_test_command(self, cfg: ProjectConfig) -> str | None:
-        return self.test_command or cfg.test_command
+        return self.test_command or cfg.full_test_command
 
     def effective_setup_command(self, cfg: ProjectConfig) -> str | None:
         return self.setup_command or cfg.setup_command
@@ -719,6 +719,23 @@ class ToolArgument(_Strict):
     name: str
     description: str
     repeated: bool = False
+    # A ceiling on how many values a repeated argument may carry.
+    #
+    # This is what makes withholding a tool mean something. An operator who
+    # declines to offer the full suite has decided the model must not run
+    # everything; an uncapped repeated argument hands it back, because
+    # enumerating every spec file is the same action spelled differently. Ask
+    # what a stated boundary is made of.
+    #
+    # Set it from where legitimate use stops. Measured over 375 recorded suite
+    # runs that named failing examples: median 2, p95 4, and 97.1% at five or
+    # fewer — then a near-empty band before the mass-failure runs of 21 and up,
+    # which are precisely the ones a model should not be answering one path at
+    # a time.
+    #
+    # Disclosed to the model rather than enforced silently: a ceiling it cannot
+    # see is one it can only discover by spending.
+    max_values: int | None = None
 
 
 class ProjectTool(_Strict):
@@ -825,6 +842,22 @@ def _tool_problems(tool: ProjectTool) -> list[str]:
     if len(set(declared)) != len(declared):
         problems.append(f"project_tools.{tool.name}: two arguments share a name")
 
+    for argument in tool.arguments:
+        if argument.max_values is None:
+            continue
+        if not argument.repeated:
+            problems.append(
+                f"project_tools.{tool.name}: {argument.name!r} sets max_values "
+                "but is not repeated. A single value has nothing to cap, so "
+                "this reads as a limit and enforces nothing"
+            )
+        elif argument.max_values < 1:
+            problems.append(
+                f"project_tools.{tool.name}: {argument.name!r} sets "
+                f"max_values {argument.max_values}, which no call can satisfy "
+                "— a repeated argument already refuses an empty list"
+            )
+
     used = []
     for element in tool.command:
         match = _PLACEHOLDER.match(element)
@@ -927,7 +960,14 @@ class ProjectConfig(_Strict):
     plan_root: str
 
     setup_command: str | None = None
-    test_command: str | None = None
+    # The whole suite, taking no selection. Run by the merge gate on every
+    # landed stage, and by the gate as its fallback when nothing scopes.
+    #
+    # There is one everything-command, not two. `test_command` was a second
+    # name for this string — the same selection, differing only in which
+    # caller reached for it — and the caller already knows which it is. Two
+    # everything-commands let a stage pass one and fail the other having been
+    # judged by two harnesses, with nothing in the record saying so.
     full_test_command: str | None = None
     # Where the planner's append-only record of what git history shows was done
     # is kept. Commonly a subdirectory of the plan directory, so a later pass —
@@ -963,22 +1003,16 @@ class ProjectConfig(_Strict):
     # conventions from must not be editable by the executor those conventions
     # govern.
     agent_context: list[str] | None = None
-    # Optional. `{paths}` is filled by CodeGantry from the stage diff.
+    # The same suite, taking a selection. `{paths}` is filled by CodeGantry
+    # from the stage diff, and this is what both the gate and the executor's
+    # inner loop run whenever anything scopes.
+    #
+    # `auto_test_command` was a third command, a quieter spelling for the loop
+    # because the loop's output lands in a model's context where the gate's
+    # lands in a parser. That is a property of how the output is *read*, not of
+    # which tests to run, and it belongs to whatever clips a report rather than
+    # to a second copy of the command. One selection, one string.
     scoped_test_command: str | None = None
-    # What the executor runs inside its own edit loop.
-    # Separate from the above because the two have opposite needs from the same
-    # runner: verify *parses* the output to find which files failed, so it needs
-    # the full failed-examples block, while the loop's output lands in the model's
-    # context — a directory-scoped run put 138k-152k tokens into a single
-    # request, most of it passing-example lines, a profile and a deprecation
-    # tally. Quiet it here, not there.
-    #
-    # Keep the failure detail. Our parsers want only filenames, but the model
-    # cannot fix a failure it cannot see. Drop the noise around the traces, not
-    # the traces.
-    #
-    # Falls back to `scoped_test_command` when unset.
-    auto_test_command: str | None = None
 
     full_suite_on_approval: bool = True
 
@@ -1241,10 +1275,8 @@ class ProjectConfig(_Strict):
         out: list[tuple[str, str]] = []
         for label, command in (
             ("setup_command", self.setup_command),
-            ("test_command", self.test_command),
             ("full_test_command", self.full_test_command),
             ("scoped_test_command", self.scoped_test_command),
-            ("auto_test_command", self.auto_test_command),
         ):
             if command:
                 out.append((label, command))
@@ -1543,10 +1575,7 @@ def _structural_problems(cfg: ProjectConfig) -> list[str]:
             "ADR beside it into every review prompt"
         )
 
-    for label in (
-        "scoped_test_command",
-        "auto_test_command",
-    ):
+    for label in ("scoped_test_command",):
         command = getattr(cfg, label)
         if command and "{paths}" not in command:
             problems.append(
@@ -1582,10 +1611,12 @@ def _structural_problems(cfg: ProjectConfig) -> list[str]:
                     "reproduce it, which is the thing this exists to prevent"
                 )
 
-    if not cfg.test_command and not cfg.stage_defaults.checks:
+    if not cfg.full_test_command and not cfg.stage_defaults.checks:
         problems.append(
-            "a project needs test_command, or checks in stage_defaults, or "
-            "nothing will verify its stages"
+            "a project needs full_test_command, or checks in stage_defaults, "
+            "or nothing will verify its stages. scoped_test_command alone is "
+            "not enough: a stage whose diff scopes to no test would run "
+            "nothing at all"
         )
 
     for pattern in cfg.test_file_patterns:

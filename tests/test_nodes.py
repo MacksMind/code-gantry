@@ -128,7 +128,6 @@ def make(repo, tmp_path, planner=None, reviewer=None, executor=None, **cfg_over)
         "base_ref": "main",
         "project_branch": "proj",
         "plan_root": "PLAN.md",
-        "test_command": "true",
         "full_test_command": "true",
         "executor": {"model": "m"},
         "planner": {"model": "claude-opus-5"},
@@ -1135,7 +1134,7 @@ class TestVerifyRouting:
         assert out["failure_layer"] == "branch"
 
     def test_failing_tests_retry_then_go_to_the_planner(self, repo, tmp_path):
-        cfg, rt, state = make(repo, tmp_path, test_command="exit 1")
+        cfg, rt, state = make(repo, tmp_path, full_test_command="exit 1")
         state = with_stage(state, rt)
         (repo / "app.py").write_text("changed\n")
         assert nodes.verify(state, rt)["next_hop"] == "execute"
@@ -1191,7 +1190,6 @@ class TestReviewGate:
         marker = tmp_path / "suite-ran"
         cfg, rt, state = make(
             repo, tmp_path,
-            test_command=f"touch {marker}",
             full_test_command=f"touch {marker}",
             scoped_test_command=None,
         )
@@ -1618,27 +1616,38 @@ class TestProgressGuardAfterAFlakyMergeGate:
     diff — through the nodes, because that is where it silently would not work.
     """
 
-    def test_a_merge_gate_failure_is_recorded_as_full_suite(self, repo, tmp_path):
+    def _green_scoped_red_full(self, repo, tmp_path):
+        """Scoped tests pass, the whole suite does not — the real shape.
+
+        This used to lean on `test_command` and `full_test_command` holding
+        different strings: nothing scoped, so the gate fell back to a passing
+        `test_command` while the merge gate ran a failing `full_test_command`.
+        With one everything-command that fixture cannot exist, and it was
+        never the situation being tested. The stage now declares a spec, so
+        the gate runs the scoped command and the merge gate runs the suite —
+        which is what "approved, then red for reasons elsewhere" actually is.
+        """
+        (repo / "spec").mkdir(exist_ok=True)
+        (repo / "spec" / "a_spec.rb").write_text("x\n")
+        Git(repo).commit_all("a spec")
         cfg, rt, state = make(
             repo, tmp_path,
             full_test_command="exit 1",
-            scoped_test_command="false {paths}",
+            scoped_test_command="true {paths}",
         )
-        state = with_stage(state, rt)
+        state = with_stage(state, rt, test_paths=["spec/a_spec.rb"])
         (repo / "app.py").write_text("changed\n")
+        return cfg, rt, state
+
+    def test_a_merge_gate_failure_is_recorded_as_full_suite(self, repo, tmp_path):
+        cfg, rt, state = self._green_scoped_red_full(repo, tmp_path)
         out = nodes.review(state, rt)
         assert out["failure_layer"] == "full_suite"
 
     def test_the_identical_redo_then_survives_verify(self, repo, tmp_path):
         # The whole point: the reviewer approved this diff, the suite was red
         # for reasons elsewhere, and doing it again is the correct answer.
-        cfg, rt, state = make(
-            repo, tmp_path,
-            full_test_command="exit 1",
-            scoped_test_command="false {paths}",
-        )
-        state = with_stage(state, rt)
-        (repo / "app.py").write_text("changed\n")
+        cfg, rt, state = self._green_scoped_red_full(repo, tmp_path)
 
         first = nodes.verify(state, rt)
         state = {**state, **first}

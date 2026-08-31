@@ -8,8 +8,8 @@ every declared `checks` entry run, are both models reachable.
 All of it runs at the start of `run` as well as under `validate`. Failing fast
 beats failing on stage 30.
 
-**These commands are host-specific.** `setup_command`, `test_command`,
-`full_test_command` and every `stage_defaults.checks` entry assume a particular
+**These commands are host-specific.** `setup_command`, `full_test_command`
+and every `stage_defaults.checks` entry assume a particular
 machine's Docker, runtime, and paths, so this validates *this host* — not the
 config in the abstract. The `checks` were missing from that list for as long as
 they were missing from this file, which is the same omission written twice.
@@ -596,39 +596,26 @@ def _environment_checks(
         )
         return checks
 
-    # Deduplicated by command, not by label: when a project points both at the
-    # same script — which is the sensible default — running it twice proves
-    # nothing and costs a full suite. On the first real project that is 23
-    # minutes to learn one thing.
-    # The saving is the second *run*, not the second verdict: a command that
-    # came back red is red under both labels, and reporting the twin as a pass
-    # would manufacture evidence of green from a run that failed.
-    already_run: dict[str, CommandResult] = {}
-    excused: dict[str, FlakeVerdict] = {}
-    for label, command in (
-        ("test_command", cfg.test_command),
-        ("full_test_command", cfg.full_test_command),
-    ):
-        if not command:
-            continue
-        seen = command in already_run
-        result = already_run.get(command) or runner.run(command)
-        already_run[command] = result
+    # One everything-command, so one run. This was a loop over two labels with
+    # a cache keyed on the command text, because `test_command` and
+    # `full_test_command` were usually the same script and running a full suite
+    # twice cost 23 minutes to learn one thing. The dedup went out with the
+    # second name: there is nothing left to deduplicate against.
+    label = "full_test_command"
+    command = cfg.full_test_command
+    if command:
+        result = runner.run(command)
 
         # The same adjudication the merge gate uses, for the same reason. A
         # large legacy suite is rarely order-independent, and preflight ran the
         # whole thing with no gate at all — so it failed the run on a file the
         # pipeline would have re-run alone and forgiven. Observed on a spec that
         # had already been excused twenty-one times.
-        #
-        # Adjudicated once per command, not per label: the second label reuses
-        # the verdict for the same reason it reuses the result.
-        verdict = excused.get(command)
-        if not result.ok and verdict is None and not seen:
+        verdict = None
+        if not result.ok:
             verdict = adjudicate(
                 output=result.output, command=command, cfg=cfg, runner=runner
             )
-            excused[command] = verdict
         flaked = bool(verdict and verdict.flaked)
 
         if flaked and project_dir is not None:
@@ -686,8 +673,6 @@ def _environment_checks(
                 "the same rule, so a run started here would not have been "
                 "stopped by this."
             )
-        elif seen and result.ok:
-            detail = "same command as above; not run twice"
         elif result.ok:
             detail = ""
         else:
@@ -704,7 +689,7 @@ def _environment_checks(
                 # A flake is reported and not enforced: it is real information
                 # about the suite, and hiding it would make the next one
                 # invisible. `ok` with a detail prints as a pass that says why.
-                fatal=not (flaked or (seen and result.ok)),
+                fatal=not flaked,
             )
         )
 

@@ -156,7 +156,7 @@ class TestFindingsFile:
                 "project_branch": "proj",
                 "plan_root": "docs/plan.md",
                 "plan_addendum_path": "docs/progress.md",
-                "test_command": "true",
+                "full_test_command": "true",
                 "executor": {"model": "m"},
                 "planner": {"model": "claude-opus-5"},
                 "reviewer": {"model": "gpt-5.6-sol"},

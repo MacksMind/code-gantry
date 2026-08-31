@@ -52,7 +52,7 @@ def build(repo, stage_overrides=None, executor=None, **cfg_overrides):
         "base_ref": "main",
         "project_branch": "proj",
         "plan_root": "PLAN.md",
-        "test_command": "true",
+        "full_test_command": "true",
         "executor": executor or {"model": "m"},
         "planner": {"model": "claude-opus-5"},
         "reviewer": {"model": "gpt-5.5"},
@@ -137,7 +137,7 @@ class TestOrdering:
         marker = repo.parent / "state.txt"
         cfg, stage = build(
             repo,
-            test_command=f"git status --porcelain > {marker}",
+            full_test_command=f"git status --porcelain > {marker}",
         )
         drive(repo, cfg, stage, ScriptedModel([[edit_file("app/a.rb", "class A", "class B")]]))
 
@@ -932,7 +932,7 @@ class TestTheGatesAreEvaluatedLazily:
         cfg, stage = build(
             repo,
             {"must_not_remain": ["class B"]},
-            test_command=f"touch {marker} && true",
+            full_test_command=f"touch {marker} && true",
         )
         drive(repo, cfg, stage, ScriptedModel([
             [edit_file("app/a.rb", "class A", "class B")],

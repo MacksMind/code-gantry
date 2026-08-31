@@ -68,7 +68,6 @@ def config(repo, **over):
         "base_ref": "main",
         "project_branch": "proj",
         "plan_root": "PLAN.md",
-        "test_command": "true",
         "full_test_command": "true",
         "scoped_test_command": "rspec-stub {paths}",
         "failed_file_pattern": RSPEC_PATTERN,
@@ -698,7 +697,7 @@ class TestTheLocatorSurvivesTheJourney:
 
         cfg = config(
             repo,
-            test_command=(
+            full_test_command=(
                 "echo 'Failed examples:'; "
                 "echo \"rspec ./spec/models/user_spec.rb:531 # User does a thing\"; "
                 "echo 'Randomized with seed 4845'; exit 1"

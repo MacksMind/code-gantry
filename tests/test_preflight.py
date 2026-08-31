@@ -81,7 +81,7 @@ def cfg_for(model, api_base):
             "base_ref": "main",
             "project_branch": "proj",
             "plan_root": "docs/plan.md",
-            "test_command": "true",
+            "full_test_command": "true",
             "executor": {"model": model, "api_base": api_base},
             "planner": {"model": "claude-opus-5"},
             "reviewer": {"model": "gpt-5.5"},
@@ -141,7 +141,7 @@ class TestExecutorEndpoint:
                 "base_ref": "main",
                 "project_branch": "proj",
                 "plan_root": "docs/plan.md",
-                "test_command": "true",
+                "full_test_command": "true",
                 "executor": {"model": "openai/m", "api_base_env": "SOME_UNSET_BASE"},
                 "planner": {"model": "claude-opus-5"},
                 "reviewer": {"model": "gpt-5.5"},
@@ -161,7 +161,7 @@ class TestEndpointEnvironmentChecks:
                 "base_ref": "main",
                 "project_branch": "proj",
                 "plan_root": "PLAN.md",
-                "test_command": "true",
+                "full_test_command": "true",
                 "executor": {"model": "openai/m", "api_base_env": "SPARK_BASE"},
                 "planner": {"model": "claude-opus-5"},
                 "reviewer": {"model": "gpt-5.5"},
@@ -199,7 +199,7 @@ class TestEndpointRedaction:
                 "base_ref": "main",
                 "project_branch": "proj",
                 "plan_root": "docs/plan.md",
-                "test_command": "true",
+                "full_test_command": "true",
                 "executor": {
                     "model": "openai/qwen3-coder-next",
                     "api_base_env": "SECRET_BASE",
@@ -223,7 +223,7 @@ class TestEndpointRedaction:
                 "base_ref": "main",
                 "project_branch": "proj",
                 "plan_root": "docs/plan.md",
-                "test_command": "true",
+                "full_test_command": "true",
                 "executor": {"model": "openai/m", "api_base_env": "SECRET_BASE"},
                 "planner": {"model": "claude-opus-5"},
                 "reviewer": {"model": "gpt-5.6-sol"},
@@ -260,7 +260,7 @@ class TestFailureOutputKeepsTheVerdict:
                 "project_branch": "proj",
                 "plan_root": "PLAN.md",
                 # Prints its verdict, then 4000 characters of noise, then fails.
-                "test_command": (
+                "full_test_command": (
                     "echo '9 examples, 3 failures'; "
                     "for i in $(seq 1 200); do echo 'DEPRECATION WARNING: something'; done; "
                     "exit 1"
@@ -276,7 +276,7 @@ class TestFailureOutputKeepsTheVerdict:
             check_approval=False,
             check_endpoint=False,
         )
-        failed = [c for c in checks if not c.ok and "test_command" in c.name]
+        failed = [c for c in checks if not c.ok and "full_test_command" in c.name]
         assert failed, "the failing command should have produced a check"
         assert "9 examples, 3 failures" in failed[0].detail
 
@@ -304,7 +304,7 @@ class TestPreflightExcusesAFlakeTheRunWouldExcuse:
                 "base_ref": "main",
                 "project_branch": "proj",
                 "plan_root": "PLAN.md",
-                "test_command": (
+                "full_test_command": (
                     "echo 'rspec ./spec/features/a_spec.rb:40'; "
                     "echo '9 examples, 1 failure'; exit 1"
                 ),
@@ -324,7 +324,7 @@ class TestPreflightExcusesAFlakeTheRunWouldExcuse:
             check_models=False,
             check_approval=False, check_endpoint=False,
         )
-        return next(c for c in checks if "test_command passes" in c.name)
+        return next(c for c in checks if "full_test_command passes" in c.name)
 
     def test_a_file_that_passes_alone_does_not_block_the_run(self, repo):
         check = self._check(repo, scoped_ok=True)
@@ -344,7 +344,7 @@ class TestPreflightExcusesAFlakeTheRunWouldExcuse:
             check_models=False,
             check_approval=False, check_endpoint=False,
         )
-        assert any(c.ok for c in checks if "test_command passes" in c.name)
+        assert any(c.ok for c in checks if "full_test_command passes" in c.name)
         entry = recent_flakes(project_dir / FLAKES_FILENAME)[0]
         assert entry["file"] == "spec/features/a_spec.rb"
         # Its own field, rather than a sentinel standing in for a stage that
@@ -382,7 +382,7 @@ class TestPreflightExcusesAFlakeTheRunWouldExcuse:
         # thousands of lines and this file sits beside a 14MB `last-run.out`.
         project_dir = tmp_path / "proj"
         cfg = self._cfg(repo, scoped_ok=True)
-        cfg = parse_config({**cfg.model_dump(mode="json"), "test_command": "true",
+        cfg = parse_config({**cfg.model_dump(mode="json"), "full_test_command": "true",
                             "full_test_command": "true"})
         run_preflight(
             cfg, project_dir=project_dir, check_models=False,
@@ -424,7 +424,7 @@ class TestTheSuitesGoLast:
     """A cheap check must not be answered after an expensive one.
 
     Measured 2026-08-18: a run was launched without credentials in the shell,
-    and preflight ran `setup_command`, `test_command` and `full_test_command` —
+    and preflight ran `setup_command`, `full_test_command` and `full_test_command` —
     5m30s of green RSpec — before reaching `_model_checks`, whose first act is
     `env_var not in os.environ`. The answer was available before the function
     did anything.
@@ -443,7 +443,6 @@ class TestTheSuitesGoLast:
                 "base_ref": "main",
                 "project_branch": "proj",
                 "plan_root": "PLAN.md",
-                "test_command": f"echo ran >> {marker}",
                 "full_test_command": f"echo ran >> {marker}",
                 "executor": {"model": "m"},
                 "planner": {"model": "claude-opus-5"},
@@ -515,14 +514,18 @@ class TestTheSuitesGoLast:
         assert marker.exists(), "a green preflight runs the suites"
 
 
-class TestSuitesAreNotRunTwice:
-    """`validate` runs test_command and full_test_command.
+class TestTheSuiteRunsOnce:
+    """One everything-command, so one run.
 
-    When they are the same string that is the same suite twice, which on the
-    first real project is 23 minutes to learn one thing.
+    `validate` used to iterate two labels — `test_command` and
+    `full_test_command` — and deduplicate by command text, because a project
+    pointing both at the same script is the sensible default and running a
+    full suite twice is 23 minutes to learn one thing. The dedup went out with
+    the second name. What is still worth pinning is the property it protected:
+    preflight runs the suite exactly once, and reports what that run said.
     """
 
-    def test_an_identical_pair_runs_once(self, repo):
+    def test_the_suite_runs_once(self, repo):
         marker = repo / "runs.txt"
         command = f"echo x >> {marker}"
         cfg = parse_config(
@@ -531,7 +534,6 @@ class TestSuitesAreNotRunTwice:
                 "base_ref": "main",
                 "project_branch": "proj",
                 "plan_root": "PLAN.md",
-                "test_command": command,
                 "full_test_command": command,
                 "executor": {"model": "m"},
                 "planner": {"model": "claude-opus-5"},
@@ -545,36 +547,16 @@ class TestSuitesAreNotRunTwice:
         )
         assert marker.read_text().count("x") == 1
 
-    def test_a_differing_pair_still_runs_both(self, repo):
-        marker = repo / "runs.txt"
-        cfg = parse_config(
-            {
-                "target_repo": str(repo),
-                "base_ref": "main",
-                "project_branch": "proj",
-                "plan_root": "PLAN.md",
-                "test_command": f"echo a >> {marker}",
-                "full_test_command": f"echo b >> {marker}",
-                "executor": {"model": "m"},
-                "planner": {"model": "claude-opus-5"},
-                "reviewer": {"model": "gpt-5.6-sol"},
-            }
-        )
-        _commit_a_plan(repo)
-        run_preflight(
-            cfg, check_models=False,
-            check_approval=False, check_endpoint=False,
-        )
-        assert marker.read_text().split() == ["a", "b"]
+    def test_a_red_suite_is_reported_red_and_carries_the_output(self, repo):
+        """A verdict must come from the run it claims to describe.
 
-    def test_the_skipped_twin_inherits_the_verdict(self, repo):
-        """Not re-running is a saving, not an acquittal.
-
-        The first real `validate` printed `[FAIL] test_command` and, two lines
-        later, `[ok] full_test_command passes on a clean tree`, for one red
-        suite run once. Reporting the deduplicated twin as a pass is worse
-        than running it twice: it manufactures evidence of green from a run
-        that was red.
+        This began as a dedup bug: the first real `validate` printed
+        `[FAIL] test_command` and, two lines later,
+        `[ok] full_test_command passes on a clean tree`, for one red suite run
+        once — evidence of green manufactured from a run that failed. There is
+        no twin to inherit a verdict now, so what is left to hold is the
+        simpler half: preflight is the only gate that can wave a red
+        repository through, and its verdict carries the bytes it decided on.
         """
         command = "echo '9 examples, 3 failures'; exit 1"
         cfg = parse_config(
@@ -583,7 +565,6 @@ class TestSuitesAreNotRunTwice:
                 "base_ref": "main",
                 "project_branch": "proj",
                 "plan_root": "PLAN.md",
-                "test_command": command,
                 "full_test_command": command,
                 "executor": {"model": "m"},
                 "planner": {"model": "claude-opus-5"},
@@ -595,10 +576,10 @@ class TestSuitesAreNotRunTwice:
             cfg, check_models=False,
             check_approval=False, check_endpoint=False,
         )
-        twin = [c for c in checks if "full_test_command" in c.name]
-        assert twin, "the deduplicated twin should still be reported"
-        assert not twin[0].ok, "a red suite cannot pass under a second label"
-        assert "9 examples, 3 failures" in twin[0].detail
+        reported = [c for c in checks if "full_test_command" in c.name]
+        assert reported, "the suite's verdict should be reported"
+        assert not reported[0].ok, "a red suite cannot be reported as a pass"
+        assert "9 examples, 3 failures" in reported[0].detail
 
 
 class TestCredentialsAreActuallyTested:
@@ -691,7 +672,7 @@ class TestFilesTooLargeToEverBeReference:
 
         cfg = parse_config({
             "target_repo": str(repo), "base_ref": "main", "project_branch": "proj",
-            "plan_root": "PLAN.md", "test_command": "true",
+            "plan_root": "PLAN.md", "full_test_command": "true",
             "executor": {"model": "m", "max_read_lines": cap},
             "planner": {"model": "claude-opus-5"}, "reviewer": {"model": "gpt-5.5"},
         })
@@ -876,7 +857,6 @@ class TestDeclaredChecksRunAtPreflight:
                 "base_ref": "main",
                 "project_branch": "proj",
                 "plan_root": "PLAN.md",
-                "test_command": f"echo suite >> {suite_marker}",
                 "full_test_command": f"echo suite >> {suite_marker}",
                 "stage_defaults": {"checks": checks},
                 "executor": {"model": "m"},

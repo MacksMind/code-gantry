@@ -33,7 +33,7 @@ def _ctx(tmp_path, edit_files, exempt=()):
 
     cfg = parse_config({
         "target_repo": str(tmp_path), "base_ref": "main", "project_branch": "p",
-        "plan_root": "docs/PLAN.md", "test_command": "true",
+        "plan_root": "docs/PLAN.md", "full_test_command": "true",
         "scope_exempt_globs": list(exempt),
         "executor": {"model": "m"},
         "planner": {"model": "claude-opus-5"},

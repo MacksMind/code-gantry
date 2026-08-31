@@ -347,7 +347,7 @@ def _is_plan_document(path: str, ctx: _Context) -> bool:
         return True
 
     # The config itself, which now lives inside the repository it describes.
-    # `checks`, `test_command` and `setup_command` are arbitrary operator shell
+    # `checks`, the test commands and `setup_command` are arbitrary operator shell
     # that runs unattended; before the move they sat in a repository no stage
     # could reach, and after it they are one `edit_files` glob away. The same
     # sentence as the agent-context documents below, with the most force it
@@ -534,7 +534,7 @@ def _layer_tests(ctx: _Context, outcome: VerifyOutcome):
         return None
 
     outcome.unscoped_tests = bool(ctx.cfg.scoped_test_command) and (
-        command == ctx.cfg.test_command
+        command == ctx.cfg.full_test_command
     )
 
     if outcome.unscoped_tests and ctx.stage.require_scoped_tests:
