@@ -37,3 +37,4 @@ projects/*/*.out
 # source of truth for it — `pricing.load_price_map` falls back to whatever copy
 # is on disk only when the network is unreachable.
 model-prices.json
+scratchpad/

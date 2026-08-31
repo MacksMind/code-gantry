@@ -143,6 +143,14 @@ the recording a property of the only operation that can change the thing.
 - **And must not name a field its reader cannot see.** The rewrite cited
   `edit_files` — the planner's field name, appearing nowhere in the executor's
   prompt.
+- **Render the string the model receives; do not re-read what you typed.** The
+  `rspec` description told the executor it could paste a failure locator
+  "verbatim", quotes and all — false, because `build_argv` strips nothing and the
+  quote would have become part of the filename. Re-reading the config that
+  afternoon found nothing wrong with it. Calling `tool_schema` and printing the
+  result found it in one line, because the defect was in the gap between the
+  source and the assembled string, which is exactly where a description differs
+  from a docstring.
 - **Both were found by a human reading a prompt, which is the only thing that
   finds this class.** No gate compares two sections of one document.
 - **A true sentence can carry a false implicature, and the model acts on the
@@ -333,6 +341,13 @@ the recording a property of the only operation that can change the thing.
   had not run, two with code already drafted. The tell is that a fix arrives
   before a measurement. A remedy built on an unestablished mechanism is
   *confirming*, because it gets adopted while the real cause keeps firing.
+- **A pattern that matches in a log has not told you which row it is in.** I
+  reported all four of an attempt's `rspec` calls as firing before any edit,
+  from an `exit 0` shape, and killed the run on it. Two were post-edit and
+  correct usage; the `edit` lines sat four rows away in the same file. A tool log
+  is a table and the question was ordinal — read the *sequence*, in order, with
+  the neighbouring rows, rather than grepping for a shape and inferring position
+  from how many hits came back.
 - **A model's account of why it stopped is evidence about what it tried, not about
   what is possible.** An executor reported a permission error accurately and
   reproducibly, and the actual blocker was elsewhere both times.
@@ -480,6 +495,30 @@ the recording a property of the only operation that can change the thing.
   257 bytes, so about fifteen either way. It buys the summary line and one
   unbroken run instead of two halves with a hole. A change sold on the number it
   does not move is one nobody can check later.
+- **And the tail of a runner's output is the *other stream*.** `CommandResult
+  .output` appends stderr after stdout unconditionally, and every test command
+  here goes out through `docker compose exec`, so compose's teardown chatter is
+  structurally the last thing in the buffer — the scoped runs end on Ruby
+  deprecation warnings instead, a different noise by the same mechanism.
+  Measured over the 376 recorded `full-suite.log` files carrying a rerun block:
+  the aggregate report region is a median **1,722** characters, p75 2,672, so it
+  fits a 4,000-character budget with room to spare — and it begins a median
+  **35,544** characters from EOF, with more than 4,000 characters of trailing
+  noise after it in **100%** of them. A tail-weighted budget therefore captures
+  none of the report in every recorded case; the even split caught it only when
+  the log was small enough that the head reached it. **This was never a budget
+  problem, and both halves of the previous fix were about the budget.** The
+  report is an anchored *region* — the last `^Failures:$` forward — and the two
+  bullets above tuned a weighting on the assumption it was a suffix. Ask what
+  the thing you are trying to keep is *delimited by* before deciding which end
+  of the buffer to spend on.
+- **And `parallel_rspec` prints the report once per worker and then again as an
+  aggregate**, so the first `Failures:` in the file is one worker's and the one
+  that matters is the last. A `search` for a heading the format repeats returns
+  the wrong instance and reads as a plausible measurement: the first cut of this
+  measurement put the last `Failure/Error:` a median 352k from EOF, which is the
+  *first* worker's, near the top of the file. The same bet as `str.index()` on a
+  repeated heading, already written down here, and I made it anyway.
 - **Collapse before you truncate.** `truncate_middle` keeps head and tail because
   command output is informative at both ends — false of a progress reporter,
   which puts its dots first and its findings after. Hence `clip_for_model` rather
@@ -618,6 +657,19 @@ the recording a property of the only operation that can change the thing.
   legitimately edited many times. **And adding a tool adds a script:** a declared
   command may not start with `sh`, so any tool whose body is more than one
   program becomes a file in the repository and needs its own entry.
+- **A capability withheld from the schema can be handed back through an
+  argument.** The executor may not run the full suite — there is no tool for it —
+  and `rspec` takes a repeated `paths` argument, so enumerating every spec file
+  is running everything, spelled differently. The cap is enforced in
+  `build_argv`, not only as `maxItems`: a schema constraint is a request, and the
+  dispatcher is where a constraint becomes one. Ask of every withheld capability
+  what the *permitted* tools can be composed into.
+- **One question having to union two config fields is the tell that the fields
+  are one field.** `broad = command in (cfg.test_command, cfg.full_test_command)`
+  — a gate asking "is this the whole suite" had to name two spellings of the same
+  command, which is how three fields for two ideas survived as long as they did.
+  A predicate that ORs over a config surface is describing that surface, not the
+  world.
 - **A replan lands nothing and leaves everything.** `request_replan` skips the
   gates, so no stage lands — and the executor's edits stay committed on the stage
   branch and checked out in the tree, deliberately. On its first firing the
@@ -835,6 +887,21 @@ the recording a property of the only operation that can change the thing.
   ran without it, with no error and no test. When a payload changes shape,
   enumerate what the old shape carried; the parts with no field of their own
   vanish.
+- **A green suite cannot report the tests you deleted.** A `s.replace(s[s.index(
+  ...):], new)` slice ran to end-of-file and took 76 tests out of
+  `tests/test_config.py` with it; the suite passed, because a file with no tests
+  reports nothing and the total is a number nobody remembers. What found it was
+  counting `def test_` **per file against `HEAD`**. Run that comparison after any
+  edit that replaces a span rather than a line — and prefer a parser or an exact
+  anchor to a slice whose far end is implied, which is the same defect as an
+  `edit` identifying a span by its head alone.
+- **A falsification test must be checked for whether it *can* fail.** One
+  asserted a bracket example-id survives with no shell in the path, and passed —
+  but POSIX `sh` leaves an *unmatched* glob unchanged, so the fixture would have
+  passed through a shell too. It proves nothing about the property it names.
+  Perturbations that actually bite: a path containing a space, and a glob with a
+  matching file present. Ask of a green falsification test what it would look
+  like if the guard were removed, and then remove it.
 - **A fixture reproducing an exclusion must be checked for whether it still
   excludes.** The first force-added the ignored files, making them tracked — the
   test would have passed by making the leak legitimate.
@@ -994,6 +1061,15 @@ the recording a property of the only operation that can change the thing.
   teardown at the tail, so the summary naming failed examples is what goes.
   Preflight writes no artifact when it refuses, either. Re-run the suite — and
   grep verdicts case-sensitively as `[FAIL]`, since the other tags are lower case.
+- **`pin_modules` protects the code, not the tree.** A live run finishes on the
+  orchestrator code it started with, which reads as "edits are safe now" and is a
+  claim about one of the two repositories. Editing the *target* repo's tracked
+  config mid-run swept it into the executor's cycle commit, where the scope gate
+  correctly failed it as "the stage edited the plan it is being drawn from" and
+  the planner spent a redraw reverting it. The config is also identified by its
+  blob sha, so the edit would have refused the next resume as well. Both rules
+  were already written down — *do not measure against a tree a live run owns*,
+  and *attribute bytes by what ran between*.
 - **Two runs on one repository is a five-minute window, not a crash.** A resume
   believed killed was still live when a fresh run started a minute later; nothing
   collided only because the second was still in its planner call. `code-gantry
