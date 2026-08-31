@@ -159,7 +159,7 @@ class ExecutionResult:
     # changes", which is true, uninformative, and reads as a badly drawn
     # stage. Recorded in `executor-loop.json` for free, since that artifact
     # walks `dataclasses.fields`.
-    repeated_call: str = ""
+    unproductive_stop: str = ""
 
 
 

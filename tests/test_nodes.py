@@ -85,7 +85,7 @@ class StubExecutor:
     log: str = "executor log"
     edits_applied: int = 0
     dropped_reads: list = field(default_factory=list)
-    repeated_call: str = ""
+    unproductive_stop: str = ""
 
     def run_agent_stage(
         self, stage, prompt, history_dir=None, since_sha="",
@@ -104,7 +104,7 @@ class StubExecutor:
             ok=self.ok, log=self.log, timed_out=self.timed_out,
             edits_applied=self.edits_applied,
             dropped_reads=list(self.dropped_reads),
-            repeated_call=self.repeated_call,
+            unproductive_stop=self.unproductive_stop,
         )
 
     def run_script_stage(self, stage):
@@ -926,7 +926,7 @@ class TestExecute:
         ex = StubExecutor(
             repo=repo,
             log="the model called `read_file` 10 times in a row",
-            repeated_call="the model called `read_file` 10 times in a row",
+            unproductive_stop="the model called `read_file` 10 times in a row",
         )
         cfg, rt, state = make(repo, tmp_path, executor=ex)
         state = with_stage(state, rt)

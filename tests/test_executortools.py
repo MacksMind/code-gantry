@@ -107,6 +107,7 @@ class TestInvariants:
             "git_show",
             "git_diff",
             "edit",
+            "apply_patch",
             "create_file",
             "delete_file",
             "request_replan",

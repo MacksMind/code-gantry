@@ -90,6 +90,76 @@ had already diverged in the first commit.
 """
 
 
+def read_limits(budget) -> dict[str, str]:
+    """The ceilings a role actually reads under, as sentences for its schema.
+
+    **Generated from the object that enforces them, never written down.** The
+    three roles run under different budgets — one project here gives its
+    planner twenty thousand lines where its reviewer has ten — so a number in
+    a literal would be wrong for at least one role the day it was typed, and
+    would be project knowledge in code besides. `RepoReader.budget` is what
+    `_clip` and `_charge_call` consult, so it is the only thing entitled to
+    describe itself.
+
+    Why disclose at all. A model plans its reads against limits it cannot see:
+    it learns a range was too wide only by spending the call, and the clip
+    notice arrives after the budget is gone. Same shape as batching, where
+    nothing suppressed the behaviour — the model had not been told, and telling
+    it was one paragraph.
+
+    Two entries rather than one paragraph repeated. The per-call cap belongs on
+    each tool it binds; the shared total is one fact that would cost twice as
+    much stated twice, so `search`'s note points at `read_file` for it.
+    """
+    per_lines = getattr(budget, "max_lines_per_call", 0)
+    per_chars = getattr(budget, "max_chars_per_call", 0)
+    total_lines = getattr(budget, "max_total_lines", 0)
+    total_chars = getattr(budget, "max_total_chars", 0)
+    calls = getattr(budget, "max_calls", 0)
+    return {
+        "read_file": (
+            f"\n\n**Bounds.** One call returns at most {per_lines:,} lines or "
+            f"{per_chars:,} characters, whichever binds first, and says so on "
+            "the last line when it clipped. **A clipped read is not the "
+            "file** — narrow the range and ask again rather than reasoning "
+            "about the part you did not get.\n\n"
+            "Every read tool shares one budget for this whole step: "
+            f"{calls:,} calls, {total_lines:,} lines and {total_chars:,} "
+            "characters. Past it reads are refused rather than clipped, so "
+            "spend it on ranges you have a reason to want."
+        ),
+        "search": (
+            f"\n\n**Bounds.** Results are capped at {per_lines:,} lines or "
+            f"{per_chars:,} characters per call and spend the same budget as "
+            "`read_file`. **A capped result is a truncated one, not a "
+            "complete one** — the hits you cannot see are indistinguishable "
+            "from hits that do not exist, so narrow the pattern or the path "
+            "rather than reading the tail as absence."
+        ),
+    }
+
+
+def read_tools(budget=None) -> list[dict[str, Any]]:
+    """`READ_TOOLS`, with each role's own ceilings appended where they bind.
+
+    Appended rather than interpolated into the prose, so the shared half stays
+    one string that cannot fork between roles — the property `READ_TOOLS`
+    exists for, and the one a per-role rewrite would quietly cost. No budget
+    gives today's descriptions exactly, so a caller without a reader is
+    unaffected.
+    """
+    if budget is None:
+        return list(READ_TOOLS)
+    notes = read_limits(budget)
+    out = []
+    for spec in READ_TOOLS:
+        note = notes.get(spec["name"])
+        out.append(
+            {**spec, "description": spec["description"] + note} if note else spec
+        )
+    return out
+
+
 READ_TOOLS: list[dict[str, Any]] = [
     {
         "name": "read_file",
@@ -143,6 +213,13 @@ READ_TOOLS: list[dict[str, Any]] = [
         "description": (
             "Search tracked files for a regular expression, over the working "
             "tree as it stands. Returns path:line:text.\n\n"
+            "`pattern` is a **regular expression**, so `.`, `\\`, `(`, `[` and "
+            "`?` are syntax and a literal one has to be escaped. What comes "
+            "back is the file's own bytes, **unescaped** — a line of this "
+            "result is quoted onward exactly as printed, and **never "
+            "re-escaped** to match the pattern that found it. A tool that "
+            "takes text to *find* and a tool that takes text to *change* do "
+            "not share a language.\n\n"
             "Exact, current, and authoritative. Use it to count occurrences "
             "and to find identifiers you can already name. When a plan "
             "document states how many of something exist, that is a claim "
@@ -187,8 +264,21 @@ READ_TOOLS: list[dict[str, Any]] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "ref": {"type": "string"},
-                "path": {"type": "string"},
+                "ref": {
+                    "type": "string",
+                    "description": (
+                        "The commit to read at: a sha, a branch, a tag, or "
+                        "`HEAD`. Required — there is no default."
+                    ),
+                },
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Repository-relative path for the file form. Null for "
+                        "the commit form, which answers with the message and "
+                        "a per-file line count."
+                    ),
+                },
             },
             "required": ["ref"],
         },
@@ -198,13 +288,38 @@ READ_TOOLS: list[dict[str, Any]] = [
         "description": (
             "What changed between refs, optionally for one path. Use it to see "
             "what earlier stages actually did rather than what they claimed."
+            "\n\n**To compare a ref against the working tree, give `ref` and "
+            "leave `other` null.** That is the common case and there is no "
+            "other way to spell it: `other` is not a place to name the working "
+            "tree, and neither side of the comparison is ever assumed for you."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "ref": {"type": "string"},
-                "other": {"type": "string"},
-                "path": {"type": "string"},
+                "ref": {
+                    "type": "string",
+                    "description": (
+                        "The commit to compare *from*: a sha, a branch, a tag, "
+                        "or `HEAD`. Required, and never defaulted — a diff "
+                        "with no `ref` is refused rather than guessed at."
+                    ),
+                },
+                "other": {
+                    "type": ["string", "null"],
+                    "description": (
+                        "The commit to compare *to*. **Null compares `ref` "
+                        "against the working tree as it stands**, which is "
+                        "usually what you want. Pass a second sha, branch or "
+                        "tag only to compare two commits with each other."
+                    ),
+                },
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Repository-relative path to narrow the diff to. Null "
+                        "for every file that changed."
+                    ),
+                },
             },
             "required": ["ref"],
         },
@@ -283,7 +398,10 @@ SEMANTIC_TOOL: dict[str, Any] = {
 
 
 def tool_schemas(
-    semantic: SemanticSearch | None, project_tools=(), role: str = "planner"
+    semantic: SemanticSearch | None,
+    project_tools=(),
+    role: str = "planner",
+    budget=None,
 ) -> list[dict[str, Any]]:
     """What this project offers this role. Semantic search only when configured.
 
@@ -302,12 +420,16 @@ def tool_schemas(
     """
     from code_gantry.projecttools import for_role, tool_schema
 
-    built_in = [*READ_TOOLS, SEMANTIC_TOOL] if semantic else list(READ_TOOLS)
+    reads = read_tools(budget)
+    built_in = [*reads, SEMANTIC_TOOL] if semantic else reads
     return built_in + [tool_schema(t) for t in for_role(role, project_tools)]
 
 
 def openai_tool_schemas(
-    semantic: SemanticSearch | None, project_tools=(), role: str = "reviewer"
+    semantic: SemanticSearch | None,
+    project_tools=(),
+    role: str = "reviewer",
+    budget=None,
 ) -> list[dict[str, Any]]:
     """The same tools, in the shape the other provider's API wants.
 
@@ -333,7 +455,8 @@ def openai_tool_schemas(
     downstream can tell the difference.
     """
     return [
-        as_strict_tool(tool) for tool in tool_schemas(semantic, project_tools, role)
+        as_strict_tool(tool)
+        for tool in tool_schemas(semantic, project_tools, role, budget)
     ]
 
 

@@ -165,6 +165,40 @@ the recording a property of the only operation that can change the thing.
   right, but every depth-2 link here was a cross-reference or a document another
   channel supplied — and transitivity costs the property that reading the root
   tells you the whole payload.
+- **An undescribed argument is where the refusals are.** A sweep for tool
+  properties carrying no `description` returned exactly five, all on `git_show`
+  and `git_diff` — and those two tools accounted for every argument-shaped
+  refusal in the recorded runs. Not a coincidence to check case by case: run the
+  sweep, because the property nobody described is the one nobody thought about.
+- **A required-and-nullable field is answered with the word.** `as_strict_tool`
+  rewrites an optional property as `["string","null"]` *and required*, which is
+  how strict mode spells "may be omitted" — so the model must emit something and
+  JSON `null` is the only spelling for nothing. Measured over 431 `git_diff`
+  calls: four sent the *string* `"null"`, and two independently invented
+  `working_tree` and `WORKTREE` for a working-tree comparison the description
+  never mentioned. Each went to git as a revision. The fix is to describe what
+  absent *means* and to read the spellings back — a denylist of what was
+  observed, scoped to the arguments where it cannot eat a real value, because a
+  `search` pattern of `null` is an ordinary thing to look for.
+- **A default that answers where a refusal would have asked is the wrong
+  trade.** Defaulting `git_diff`'s `ref` to `HEAD` covered none of the twelve
+  failures and made one worse: `ref` empty with `HEAD` in `other` becomes
+  `diff HEAD HEAD` and returns *empty*, in the tool whose whole job is to say
+  what changed. Ask of any default what the call it rescues will now answer.
+- **Two tools whose main argument is "some text" owe each other a sentence.**
+  `search` takes a regular expression and `edit` takes literal bytes, and
+  neither description said so or mentioned the other. A model spent most of a
+  two-hour attempt escaping text out of one into the other — and a human reading
+  the transcript afterwards reached the same wrong conclusion, which is the tell
+  that the surface is at fault rather than the reader. A file full of regex
+  source made it worse and was not the cause.
+- **A ceiling the model cannot see is one it can only discover by spending.**
+  The read budgets were enforced and undisclosed, so a range was too wide only
+  in retrospect and the clip notice arrived after the budget was gone. The
+  sentences are generated from `RepoReader.budget` per role — three roles run
+  under three budgets, so a literal would be wrong for one of them the day it
+  was typed. Same lesson as the tool-batching one below: nothing was suppressing
+  the behaviour, the model had simply not been told.
 - **A model asks for one tool at a time unless told otherwise, and telling it is
   cheap.** Nothing suppressed batching; both wires default to permitted. A
   system-prompt section and a line per read tool moved it. Measure the *shipped*
@@ -407,6 +441,24 @@ the recording a property of the only operation that can change the thing.
 - **And the diff a revision prompt carries has no ceiling.** `max_chars_per_call`
   bounds what the planner *reads*; one stray large file in the tree has overrun
   the window through the other channel.
+- **Weight the budget toward the end for a runner's report.** `truncate_middle`
+  splits evenly because "output is informative at both ends" — true of a command
+  that fails at the top, false of a linter or a test runner, which both report
+  last. Measured over 495 test-failure feedbacks actually handed to an executor:
+  96% truncated, 53% still carrying `N examples, M failures`, and **20%** still
+  carrying `Failed examples:`, the rerun commands and the most actionable thing
+  RSpec prints. `clip_report_for_model` is the tail-weighted sibling; the head
+  allowance is one line, because the text before the first offence measures 143
+  characters at the median. **The same defect was fixed once already at the
+  layer above** — a 334k suite put that block 146k from the end and the even
+  split dropped it — by moving *where* truncation happens and leaving *how it
+  weights* alone. Ask of a fix whether it addressed the mechanism or one of its
+  two halves.
+- **And say what the fix does not buy.** Tail-weighting fits no more RuboCop
+  offences into 4,000 characters than the even split did — a block is a median
+  257 bytes, so about fifteen either way. It buys the summary line and one
+  unbroken run instead of two halves with a hole. A change sold on the number it
+  does not move is one nobody can check later.
 - **Collapse before you truncate.** `truncate_middle` keeps head and tail because
   command output is informative at both ends — false of a progress reporter,
   which puts its dots first and its findings after. Hence `clip_for_model` rather
@@ -997,18 +1049,36 @@ a keyword the endpoint does not take, and both were then pinned by a test that
 rebuilt the dict by hand — a copy of an assembly is not a check on it. An AST
 test asserts the loop adds nothing beside it.
 
-`executorclient` also holds `REPEAT_NUDGE_AT` and `REPEAT_ABORT_AT`, bounding
-consecutive tool calls with byte-identical arguments. At the nudge the answer is
-*replaced* by a sentence naming the tool and the count, because a model that has
-ignored a payload twice will ignore it under a warning and re-sending it is most
-of what the turn costs. At the abort the turn ends with `repeated_call` set,
-which travels to `ExecutionResult`, into `executor-loop.json`, and through
-`nodes.execute` into `executor_note` — the one stop for which that note is
-published on a first attempt, because every other stop on that branch is
-something the scope gate can fairly summarise as "produced no changes" and this
-one is not. **When an attempt reports no changes, read `repeated_call` before
-believing the stage was badly drawn.** The guard is on the executor only; a
-ceiling added where nothing is hitting it is a policy nobody chose.
+`executorclient` holds two guards against an attempt that is going nowhere, and
+they are two shapes of one fact. `REPEAT_NUDGE_AT`/`REPEAT_ABORT_AT` bound
+consecutive calls with byte-identical arguments; `FRUITLESS_NUDGE_AT`/
+`FRUITLESS_ABORT_AT` bound consecutive calls that *changed nothing* — refused,
+or a search that matched nothing. Both end the turn with **`unproductive_stop`**
+set, one field named for the meaning rather than either mechanism, which travels
+to `ExecutionResult`, into `executor-loop.json`, and through `nodes.execute`
+into `executor_note` — the one stop for which that note is published on a first
+attempt, because every other stop on that branch is something the scope gate can
+fairly summarise as "produced no changes" and this one is not. **When an attempt
+reports no changes, read `unproductive_stop` before believing the stage was
+badly drawn.** The guards are on the executor only.
+
+**The second guard exists because the first was unreachable for the case that
+cost the most.** An attempt ran 2h04m, made 139 calls, and its longest run of
+byte-identical calls was *one* — it was searching, so every call differed by a
+character. Identity is a property of the request; what was wrong was a property
+of the answers. The two nudges are opposite by design: the repeat nudge
+*replaces* the payload, because the model has ignored it twice and re-sending it
+is most of what the turn costs, while the fruitless nudge is *appended*, because
+there the payload is a refusal and it is the only actionable thing in the
+exchange.
+
+**A backstop is set from where it first fires, not from how rare it is.** The
+fruitless thresholds came from 879 recorded attempts — 97% never exceed a streak
+of 3, p95 is 3, and above 5 the histogram is singletons — but the number that
+decided them is that on the incident the nudge lands at call 40 of 139, three
+calls before that model began writing marker strings into a source file to find
+out what was in it. A rarity argument alone would have allowed a ceiling that
+tripped at call 130 and saved nothing.
 
 A withheld call goes on the reader's ledger through `record_refusal` with
 `kind="repeated"`, because `tools.log`, `tool_counts` and `refusal_counts` are
@@ -1029,7 +1099,32 @@ preflight` — produced it, which makes "which flake is worst" a sort rather tha
 a log scan.
 
 `edittools.py` is the write-side counterpart to `repotools.py`: no model,
-refuses with `ToolError`, records what it did. `executorloop.py` is the cycle —
+refuses with `ToolError`, records what it did. It offers two ways to state one
+change and they fail differently. `edit` identifies a span by quoting the whole
+of it — and **a span identified by its content can have the wrong far end and
+still apply.** Measured: a replacement took the head of a multi-line matcher,
+left the tail of a regex literal welded onto the new code, reported "applied 1
+edit(s)", and the attempt spent 96 further calls repairing a file it could not
+see. `apply_patch` takes a V4A hunk, where **every removed line is named**, so
+that mistake cannot be expressed. The format is OpenAI's and the matching policy
+is ours: exact, no fuzz, no nearest-match fallback, because a context diff's
+ordinary failure is a hunk landing somewhere plausible and wrong, which commits
+and sometimes passes. **Adopt a format; never adopt its tolerance.**
+
+It is declared as an ordinary *function* tool rather than the SDK's hosted
+`{"type": "apply_patch"}`, which exists only on Responses — zero files under
+`types/chat/`, zero in the Anthropic SDK — while `dialect_for` refuses to answer
+for a routing policy at all and 85% of measured executor turns came back on
+Messages. **The shareable part of somebody else's tool is the payload format,
+not the declaration mechanism**; the hosted type also has no description field,
+and a description is what decides how many calls happen.
+
+**And a write answers with what the file now says.** Both writing tools return
+the changed regions, numbered as `read_file` numbers them, so the next quote
+comes from the file rather than from the model's prediction of it. This is the
+same fact as attributing the linter's rewrite, one step earlier: the model's own
+edit is the first thing to make its picture of the file wrong, and it was the
+one change nothing was telling it about. `executorloop.py` is the cycle —
 edit until the model stops asking, lint, **commit, then test** — and
 `executortools.py` and `executorclient.py` are its schemas and its provider
 call. `repotools.number_lines` is the single renderer of numbered source; three

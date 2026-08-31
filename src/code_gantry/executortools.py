@@ -24,7 +24,7 @@ from __future__ import annotations
 from typing import Any
 
 from code_gantry.edittools import Edit, FileEditor
-from code_gantry.plannertools import READ_TOOLS, SEMANTIC_TOOL, call_detail
+from code_gantry.plannertools import SEMANTIC_TOOL, call_detail, read_tools
 from code_gantry.repotools import RepoReader, ToolError
 from code_gantry.semantic import SemanticSearch
 
@@ -93,8 +93,21 @@ EDIT_TOOLS: list[dict[str, Any]] = [
             "If any edit in the list fails, none of them are applied and the "
             "file is left exactly as it was — so a refusal never leaves you "
             "reasoning about a file that no longer exists in that form.\n\n"
+            "`old_string` is **literal text, never a pattern.** Nothing in it "
+            "is interpreted: a backslash, a bracket or a dot matches that "
+            "character and no other. This is the opposite of `search`, whose "
+            "`pattern` is a regular expression — so text copied out of a "
+            "`search` result goes into `old_string` exactly as it appears, "
+            "with no escaping added or removed. A file that contains regex "
+            "source is quoted the same way as any other file.\n\n"
             "Read before you edit. You have a read tool, the file is in front "
-            "of you, and quoting from memory is what makes an edit fail."
+            "of you, and quoting from memory is what makes an edit fail.\n\n"
+            "**When to reach for `apply_patch` instead.** This tool identifies "
+            "a span by quoting the whole of it, so a long or repeated block is "
+            "where it struggles: quote too little and the edit is ambiguous, "
+            "and get the far end wrong and you replace part of a construct and "
+            "leave the rest. `apply_patch` names every removed line "
+            "individually, so neither can happen."
         ),
         "input_schema": {
             "type": "object",
@@ -131,6 +144,58 @@ EDIT_TOOLS: list[dict[str, Any]] = [
                 },
             },
             "required": ["path", "edits"],
+        },
+    },
+    {
+        "name": "apply_patch",
+        "description": (
+            "Change a file by describing the change as a patch, rather than by "
+            "quoting the span it replaces.\n\n"
+            "`diff` is a V4A hunk body. Every line begins with one character: "
+            "a space for a line that must already be there and stays, `-` for "
+            "a line that must already be there and goes, `+` for a line to "
+            "add. A `@@` line above a hunk names an enclosing line — a `def`, "
+            "a `class`, a block opener — and scopes the search to below it, "
+            "which is how you point at one of several identical blocks.\n\n"
+            "Example, changing the second of two identical guards:\n\n"
+            "```\n"
+            "@@ def update\n"
+            "   return unless owner?\n"
+            "-  record.save\n"
+            "+  record.save!\n"
+            "```\n\n"
+            "**Every context and `-` line must match the file byte for byte, "
+            "indentation included.** Nothing is fuzzy-matched and nothing is "
+            "interpreted as a pattern; a hunk that does not match exactly once "
+            "is refused and nothing is written. Read the range first and build "
+            "the hunk from what comes back.\n\n"
+            "**Prefer this to `edit` when the change is long, when the block "
+            "appears more than once, or when you are replacing part of a "
+            "nested construct.** `edit` describes a span by its content, so "
+            "the far end can land in the wrong place and strand what follows "
+            "it; here every removed line is named, so that cannot happen."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Repository-relative path."},
+                "type": {
+                    "type": "string",
+                    "enum": ["create_file", "update_file", "delete_file"],
+                    "description": (
+                        "The operation. `delete_file` ignores `diff`; "
+                        "`create_file` takes a patch of `+` lines only."
+                    ),
+                },
+                "diff": {
+                    "type": "string",
+                    "description": (
+                        "The hunks. No `*** Begin Patch` envelope — the path "
+                        "and the operation are their own arguments."
+                    ),
+                },
+            },
+            "required": ["path", "type", "diff"],
         },
     },
     {
@@ -202,7 +267,7 @@ SEMANTIC_TOOL_FOR_EDITING: dict[str, Any] = {
 
 
 def tool_schemas(
-    semantic: SemanticSearch | None, project_tools=None
+    semantic: SemanticSearch | None, project_tools=None, budget=None
 ) -> list[dict[str, Any]]:
     """Everything the executor may call. Semantic search only when configured.
 
@@ -226,13 +291,14 @@ def tool_schemas(
     """
     from code_gantry.projecttools import for_role, tool_schema
 
-    read = [*READ_TOOLS, SEMANTIC_TOOL_FOR_EDITING] if semantic else list(READ_TOOLS)
+    reads = read_tools(budget)
+    read = [*reads, SEMANTIC_TOOL_FOR_EDITING] if semantic else reads
     declared = [tool_schema(t) for t in for_role("executor", project_tools)]
     return [*read, *EDIT_TOOLS, REPLAN_TOOL, *declared]
 
 
 def openai_tool_schemas(
-    semantic: SemanticSearch | None, project_tools=None
+    semantic: SemanticSearch | None, project_tools=None, budget=None
 ) -> list[dict[str, Any]]:
     """The same tools in the Responses API's shape.
 
@@ -249,7 +315,10 @@ def openai_tool_schemas(
     """
     from code_gantry.plannertools import as_strict_tool
 
-    return [as_strict_tool(tool) for tool in tool_schemas(semantic, project_tools)]
+    return [
+        as_strict_tool(tool)
+        for tool in tool_schemas(semantic, project_tools, budget)
+    ]
 
 
 def dispatch(
@@ -327,8 +396,14 @@ def dispatch(
                 )
             return f"cannot do that: {e}"
 
-    if name in {"edit", "create_file", "delete_file"}:
+    if name in {"edit", "apply_patch", "create_file", "delete_file"}:
         try:
+            if name == "apply_patch":
+                return editor.apply_patch(
+                    args.get("path", ""),
+                    args.get("type") or "update_file",
+                    args.get("diff") or "",
+                )
             if name == "edit":
                 edits = [
                     Edit(
