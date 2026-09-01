@@ -155,6 +155,9 @@ site goes quietly missing.
 - **A model asks for one tool at a time unless told otherwise.** Nothing
   suppresses batching. Measure the *shipped* string — a paraphrase is a
   different string.
+- **A description that names one instance is obeyed on that instance.** The
+  `apply_patch` schema said "No `*** Begin Patch` envelope"; the model omitted
+  the opener and still closed with `*** End Patch`. Name the class.
 
 ## Records, artifacts and ledgers
 
@@ -194,6 +197,12 @@ site goes quietly missing.
   no instrument behind it should be deleted rather than approximated.
 - **Do not explain the present with a component that is absent.** Before
   removing something, grep for what *cites* it.
+- **A field on the type is not a field in the artifact.** `provider_cost_usd`
+  is declared on `PlannerUsage` and read from the response, and appears in no
+  `planner.json` on either route. Grep the artifact, not the dataclass.
+- **Two types with the same field names in different order are one
+  transposition away.** `TokenUsage` and `PlannerUsage` swap `cached_tokens`
+  and `completion_tokens`, and both are built positionally.
 
 ## Measurement and diagnosis
 
@@ -292,6 +301,11 @@ site goes quietly missing.
   deteriorating thing deteriorate at full speed.** Flake excusal has no memory,
   so the sixth sighting reads like the first. The tell is a record with no
   reader.
+- **A capability list is not the request.** OpenRouter advertises `tools` on
+  every `claude-fable-5.1` endpoint and `provider.require_parameters` excludes
+  all four anyway — a 404 that reads as routing and is metadata. Reading the
+  parameter list said the swap was safe; four probes said which parameter.
+  Send the request.
 
 ## Budgets, ceilings and counters
 
@@ -562,6 +576,16 @@ site goes quietly missing.
   model string, pricing from the metadata file, each useless for the other's job.
 - **A tool reads more than you hand it.** A third-party tool's behaviour is a
   property of its source; grep the source before theorising.
+- **The model id follows the route, like the spelling.**
+  `anthropic/claude-fable-5.1` through the gateway is `claude-fable-5-1`
+  direct; the prefix is OpenRouter's routing id and the dots are its
+  convention. `dialect_for` reads the same needle either way.
+- **Anthropic reports cache writes in two buckets and we price one.**
+  `cache_creation.ephemeral_5m_input_tokens` and `ephemeral_1h_input_tokens`
+  arrive separately, `cache_creation_input_token_cost_above_1hr` is in the rate
+  table, and `_messages_usage` sums them before either can be priced. A 1h
+  write is 2x base against 5m's 1.25x, so the report drifts exactly when the
+  bill improves.
 
 ## Tests
 
@@ -623,6 +647,15 @@ site goes quietly missing.
   moment the gates came back clean, above where cost was computed, so it billed every first-time-clean attempt at zero, with green tests
   whose fixture left by a different exit. Prefer one exit; ask which the happy
   case takes — and remember a constructor is an exit.
+- **A fixture can supply what production cannot reach.** Every planner-prompt
+  test passed `SimpleNamespace(cache_ttl="1h")` while `cache_ttl` lives on
+  `PlannerConfig` and the builder is handed the `ProjectConfig`. The known
+  laxness is a fixture that *omits*; this is the inverse and it hides more.
+  Drive the real config wherever a value crosses a config boundary.
+- **`getattr(x, "f", None)` cannot tell a wrong object from an unset field.**
+  The plan block's TTL read that way for months under a comment describing the
+  same defect as already fixed. Reach through the owner and let a missing
+  *owner* raise; only the field itself may be absent.
 
 ## Data, formats and classifiers
 
@@ -806,6 +839,15 @@ mistake cannot be expressed. The format is OpenAI's; the matching policy is
 ours: exact, no fuzz, no nearest-match fallback, because a context diff's
 ordinary failure is a hunk landing somewhere plausible and wrong. **Adopt a
 format; never adopt its tolerance.**
+
+**But V4A has two canonical spellings and models emit both.** The API form is
+structured `{path, type, diff}` with hunks alone; the CLI form is one string
+fenced by `*** Begin Patch` / `*** End Patch`. `parse_v4a` strips the envelope
+— including a bare `***`, which is how the markers arrive truncated — because
+it is redundant beside `path` and `type` rather than wrong. Two things stay
+strict: a named header pointing at another file refuses, having no safe
+reading, and any other `***` refuses. Tolerating a redundant wrapper is not
+tolerating a fuzzy match.
 
 It is an ordinary *function* tool rather than the SDK's hosted
 `{"type": "apply_patch"}`, which has zero files under `types/chat/` and none in
