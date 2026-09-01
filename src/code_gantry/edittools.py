@@ -24,6 +24,7 @@ reintroduce fuzzy matching but that the refusal text is not actionable enough.
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -453,6 +454,12 @@ class Hunk:
 
 
 _ENVELOPE_BARE = ("*** begin patch", "*** end patch", "*** end of file")
+# A line of nothing but stars. Models truncate the named markers to their
+# punctuation — a bare `***` closing a patch was three of ten refusals on the
+# first run after the envelope was tolerated, all on one hunk retried verbatim.
+# It cannot collide with content: a `***` line inside a hunk carries its space,
+# `-` or `+` prefix and never reaches here.
+_ENVELOPE_STARS = re.compile(r"^\*{3,}$")
 _ENVELOPE_NAMED = (
     "*** update file:",
     "*** add file:",
@@ -472,7 +479,7 @@ def _envelope_line(raw: str, path: str) -> bool | None:
     """
     text = raw.strip()
     low = text.lower()
-    if low in _ENVELOPE_BARE:
+    if low in _ENVELOPE_BARE or _ENVELOPE_STARS.match(text):
         return True
     for marker in _ENVELOPE_NAMED:
         if low.startswith(marker):

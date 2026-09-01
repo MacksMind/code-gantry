@@ -229,6 +229,13 @@ class TestTheFormat:
         hunks = parse_v4a("-a\n+b\n*** End Patch\n", "a.rb")
         assert (hunks[0].before, hunks[0].after) == (("a",), ("b",))
 
+    def test_a_bare_star_line_is_stripped(self):
+        # Models truncate the named markers to their punctuation. Three of ten
+        # refusals on the first run after the envelope was tolerated were a
+        # lone `***` closing the patch, all on one hunk retried verbatim.
+        hunks = parse_v4a("-a\n+b\n***\n", "a.rb")
+        assert (hunks[0].before, hunks[0].after) == (("a",), ("b",))
+
     def test_an_end_of_file_marker_is_stripped(self):
         hunks = parse_v4a("-a\n+b\n*** End of File\n", "a.rb")
         assert (hunks[0].before, hunks[0].after) == (("a",), ("b",))
