@@ -452,15 +452,69 @@ class Hunk:
     after: tuple[str, ...]
 
 
-def parse_v4a(diff: str) -> list[Hunk]:
+_ENVELOPE_BARE = ("*** begin patch", "*** end patch", "*** end of file")
+_ENVELOPE_NAMED = (
+    "*** update file:",
+    "*** add file:",
+    "*** create file:",
+    "*** delete file:",
+    "*** move to:",
+)
+
+
+def _envelope_line(raw: str, path: str) -> bool | None:
+    """Is this `***` line the redundant envelope, and does it agree with `path`?
+
+    `None` means "not envelope syntax at all", which is the caller's refusal.
+    A named header whose path disagrees with the argument raises here rather
+    than returning, because a call whose two halves name different files has
+    no safe reading — see `parse_v4a`.
+    """
+    text = raw.strip()
+    low = text.lower()
+    if low in _ENVELOPE_BARE:
+        return True
+    for marker in _ENVELOPE_NAMED:
+        if low.startswith(marker):
+            named = text[len(marker):].strip()
+            if path and named and named != path:
+                raise ToolError(
+                    f"the patch envelope says {named!r} but the `path` "
+                    f"argument says {path!r}. Send one file per call and "
+                    "let `path` name it."
+                )
+            return True
+    return None
+
+
+def parse_v4a(diff: str, path: str = "") -> list[Hunk]:
     """A V4A patch body into hunks, or `ToolError`.
 
     The format is OpenAI's, and the shape is taken from the installed SDK
     rather than from a docs page: `ResponseApplyPatchToolCall.OperationUpdateFile`
     is `{type, path, diff}`, so `diff` is the hunk body alone and the file's
-    name arrives beside it. That is why nothing here parses `*** Begin Patch`
-    or `*** Update File:` — those belong to the envelope the hosted tool wraps
-    around this, and we are not using the hosted tool.
+    name arrives beside it.
+
+    **There are two canonical spellings of this format and models emit both.**
+    The API form is the structured one above. The CLI and Agents-SDK form is a
+    single freeform string fenced by `*** Begin Patch` / `*** End Patch` with
+    `*** Update File: <path>` inside it. A model trained on the second closes
+    the first with `*** End Patch` — measured at a quarter of all `apply_patch`
+    calls on the first luna run, each refusal costing about three more calls
+    while the model rebuilt a hunk that was already correct. The envelope is
+    redundant here rather than wrong, so it is stripped rather than refused.
+    That is tolerance at the payload boundary and nothing else: every hunk
+    still has to match byte for byte, which is the tolerance that matters.
+
+    The one envelope line that can carry a disagreement is the operation
+    header, because it names a path. If it names a *different* file than the
+    `path` argument, the two halves of the call contradict each other and
+    guessing which one is meant is exactly the wrong-but-plausible write this
+    tool exists to prevent — so that refuses.
+
+    `*** End of File` marks a hunk running to EOF. Nothing here anchors on it:
+    matching is exact and must succeed exactly once, so dropping the marker is
+    strictly more permissive than refusing the patch that carries it.
 
     **A line's first character is its whole meaning, and an empty line has
     none.** Models routinely emit a bare `` for a context line that is blank,
@@ -506,11 +560,14 @@ def parse_v4a(diff: str) -> list[Hunk]:
                 scopes.append(text)
             continue
         if raw.startswith("***"):
-            raise ToolError(
-                f"{raw.strip()!r} is patch-envelope syntax. `diff` carries the "
-                "hunks only — the path is the `path` argument and the "
-                "operation is `type`."
-            )
+            envelope = _envelope_line(raw, path)
+            if envelope is None:
+                raise ToolError(
+                    f"{raw.strip()!r} is not V4A. A line may begin with a "
+                    "space, `-`, `+` or `@@`; the only `***` lines recognised "
+                    "are the patch envelope's, and those are ignored."
+                )
+            continue
         if raw.startswith("-"):
             before.append(raw[1:])
         elif raw.startswith("+"):
@@ -783,7 +840,7 @@ class FileEditor:
             return self.delete_file(path)
 
         rel, full = self._resolve_writable(path)
-        hunks = parse_v4a(diff)
+        hunks = parse_v4a(diff, rel)
 
         if kind == "create_file":
             if full.is_file() and full.read_text(

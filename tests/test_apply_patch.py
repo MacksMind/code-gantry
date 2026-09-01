@@ -213,10 +213,44 @@ class TestTheFormat:
             parse_v4a("-a\nnot prefixed\n+b\n")
         assert "must begin with a space" in str(e.value)
 
-    def test_the_envelope_is_refused_with_a_reason(self):
+    def test_the_envelope_is_stripped_rather_than_refused(self):
+        # Two canonical spellings of this format exist and models emit both.
+        # The envelope is redundant beside `path` and `type`, not wrong.
+        hunks = parse_v4a(
+            "*** Begin Patch\n*** Update File: a.rb\n-a\n+b\n*** End Patch\n",
+            "a.rb",
+        )
+        assert len(hunks) == 1
+        assert (hunks[0].before, hunks[0].after) == (("a",), ("b",))
+
+    def test_a_trailing_end_patch_alone_is_stripped(self):
+        # The measured shape: the model omits `*** Begin Patch` because the
+        # description named it, and still closes with the other half.
+        hunks = parse_v4a("-a\n+b\n*** End Patch\n", "a.rb")
+        assert (hunks[0].before, hunks[0].after) == (("a",), ("b",))
+
+    def test_an_end_of_file_marker_is_stripped(self):
+        hunks = parse_v4a("-a\n+b\n*** End of File\n", "a.rb")
+        assert (hunks[0].before, hunks[0].after) == (("a",), ("b",))
+
+    def test_an_envelope_naming_another_file_is_refused(self):
+        # The one envelope line that can disagree with the arguments. Guessing
+        # which half is meant is the wrong-but-plausible write this tool exists
+        # to prevent.
         with pytest.raises(ToolError) as e:
-            parse_v4a("*** Begin Patch\n*** Update File: a.rb\n-a\n+b\n")
-        assert "patch-envelope syntax" in str(e.value)
+            parse_v4a("*** Update File: other.rb\n-a\n+b\n", "a.rb")
+        assert "other.rb" in str(e.value) and "a.rb" in str(e.value)
+
+    def test_a_non_envelope_triple_star_line_is_still_refused(self):
+        with pytest.raises(ToolError) as e:
+            parse_v4a("*** Frobnicate\n-a\n+b\n", "a.rb")
+        assert "not V4A" in str(e.value)
+
+    def test_a_context_line_beginning_with_stars_is_content(self):
+        # A real `***` line in a file arrives with its context space, so the
+        # envelope check must not reach it.
+        hunks = parse_v4a(" *** stars\n-a\n+b\n", "a.rb")
+        assert hunks[0].before == ("*** stars", "a")
 
     def test_a_hunk_that_asks_for_no_change_is_refused(self):
         with pytest.raises(ToolError) as e:

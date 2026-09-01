@@ -193,8 +193,11 @@ EDIT_TOOLS: list[dict[str, Any]] = [
                 "diff": {
                     "type": "string",
                     "description": (
-                        "The hunks. No `*** Begin Patch` envelope — the path "
-                        "and the operation are their own arguments."
+                        "The hunks, and nothing else. No `***` envelope "
+                        "lines of any kind — not `*** Begin Patch`, not "
+                        "`*** Update File:`, not `*** End Patch` — because "
+                        "the path and the operation are their own arguments. "
+                        "They are ignored if you send them anyway."
                     ),
                 },
             },
