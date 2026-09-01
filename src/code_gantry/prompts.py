@@ -1114,6 +1114,37 @@ def build_review_messages(
     return messages
 
 
+def _planner_cache_ttl(cfg) -> str | None:
+    """The planner role's configured cache lifetime.
+
+    It lives on `PlannerConfig`, and `build_planner_messages` is handed the
+    `ProjectConfig`. This site read `getattr(cfg, "cache_ttl", None)` for
+    months: the attribute is not on that type, the default answered `None`,
+    and the largest block in the request shipped a bare five-minute marker —
+    the exact defect the comment at the call site describes as already fixed.
+    A `getattr` default turned a wrong-object access into a missing value and
+    nothing could tell the two apart.
+
+    So this reaches through `planner` and does not paper over a missing role:
+    an absent `planner` means a caller built a config without one, which is a
+    shape error rather than an operator leaving a field unset. Only the field
+    itself is allowed to be absent, because it genuinely is optional.
+    """
+    if cfg is None:
+        # A supported call shape, honoured the same way the other optional
+        # lookups in this function honour it. Distinct from a config that
+        # exists and has no planner, which is the shape error below.
+        return None
+    planner = getattr(cfg, "planner", None)
+    if planner is None:
+        raise AttributeError(
+            "config has no `planner`; the planner's cache lifetime cannot be "
+            "read. `build_planner_messages` takes the ProjectConfig, and "
+            "`cache_ttl` lives on PlannerConfig."
+        )
+    return getattr(planner, "cache_ttl", None)
+
+
 def build_planner_messages(
     cfg: ProjectConfig,
     plan: PlanTree,
@@ -1236,7 +1267,7 @@ def build_planner_messages(
         {
             "type": "text",
             "text": leading,
-            "cache_control": cache_control(getattr(cfg, "cache_ttl", None)),
+            "cache_control": cache_control(_planner_cache_ttl(cfg)),
         },
         # The progress log leads this block and the history follows it, which
         # is the order the reader already saw — the log was last of the plan

@@ -29,7 +29,7 @@ def a_plan(text="do the thing"):
 
 
 def _cfg(addendum="docs/proj/progress_log.md", cache_ttl="1h"):
-    return SimpleNamespace(cache_ttl=cache_ttl, plan_addendum_path=addendum)
+    return SimpleNamespace(planner=SimpleNamespace(cache_ttl=cache_ttl), plan_addendum_path=addendum)
 
 
 def all_text(messages):
@@ -82,7 +82,7 @@ class TestCacheLifetime:
         # of planner calls while the system block, the only marker that carried
         # the configured lifetime, survived. Live over two runs: 3% cached,
         # where the 3% was the system block and nothing else.
-        cfg = SimpleNamespace(cache_ttl="1h")
+        cfg = SimpleNamespace(planner=SimpleNamespace(cache_ttl="1h"))
         messages = build_planner_messages(
             cfg=cfg, plan=a_plan(), completed=[], layout="- `src/` (1)"
         )
@@ -95,9 +95,64 @@ class TestCacheLifetime:
         # cache_ttl is optional, and a missing one must not raise on a path
         # every planner call takes.
         messages = build_planner_messages(
-            cfg=SimpleNamespace(cache_ttl=None), plan=a_plan(), completed=[]
+            cfg=SimpleNamespace(planner=SimpleNamespace(cache_ttl=None)), plan=a_plan(), completed=[]
         )
         assert messages[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+class TestThePlanBlockCarriesTheConfiguredLifetime:
+    """The regression this class exists for.
+
+    `cache_ttl` lives on `PlannerConfig` and this builder is handed the
+    `ProjectConfig`. The site read `getattr(cfg, "cache_ttl", None)`, which is
+    not on that type, so the default answered `None` and the largest block in
+    the request shipped a bare five-minute marker — while every test here
+    passed, because the fixtures were `SimpleNamespace(cache_ttl=...)`, a shape
+    production never sees. The fixture supplied what production could not
+    reach.
+
+    So this drives a real `ProjectConfig` rather than a stand-in.
+    """
+
+    def _real_cfg(self, ttl):
+        from code_gantry.config import PlannerConfig, ProjectConfig
+        import dataclasses
+        cfg = ProjectConfig.model_construct(
+            planner=PlannerConfig.model_construct(
+                model="anthropic/claude-opus-5", cache_ttl=ttl
+            )
+        )
+        return cfg
+
+    def _plan_block(self, ttl):
+        messages = build_planner_messages(
+            cfg=self._real_cfg(ttl), plan=a_plan(), completed=[]
+        )
+        blocks = messages[0]["content"]
+        marked = [b for b in blocks if b.get("cache_control")]
+        assert len(marked) == 1, "the plan block is the only marked one here"
+        return marked[0]
+
+    def test_the_configured_lifetime_reaches_the_plan_block(self):
+        assert self._plan_block("1h")["cache_control"] == {
+            "type": "ephemeral",
+            "ttl": "1h",
+        }
+
+    def test_an_unset_lifetime_leaves_a_bare_marker(self):
+        assert self._plan_block(None)["cache_control"] == {"type": "ephemeral"}
+
+    def test_a_config_without_a_planner_is_a_shape_error_not_a_default(self):
+        # The failure mode that hid this: a missing attribute answered by a
+        # default is indistinguishable from an operator leaving a field unset.
+        from types import SimpleNamespace
+        import pytest as _pytest
+
+        with _pytest.raises(AttributeError) as e:
+            build_planner_messages(
+                cfg=SimpleNamespace(), plan=a_plan(), completed=[]
+            )
+        assert "cache_ttl" in str(e.value)
 
 
 class TestPlannerCacheBreakpoint:
@@ -774,7 +829,7 @@ class TestTheBreakpointBudgetIsFullySpent:
         from code_gantry.prompts import build_planner_messages
 
         messages = build_planner_messages(
-            cfg=SimpleNamespace(cache_ttl="1h"),
+            cfg=SimpleNamespace(planner=SimpleNamespace(cache_ttl="1h")),
             plan=a_plan(),
             completed=[{"index": 0, "id": "s1", "instruction": "did it"}],
             layout="- `src/` (1)",
@@ -787,7 +842,7 @@ class TestTheBreakpointBudgetIsFullySpent:
         from code_gantry.prompts import build_planner_messages
 
         messages = build_planner_messages(
-            cfg=SimpleNamespace(cache_ttl="1h"), plan=a_plan(), completed=[]
+            cfg=SimpleNamespace(planner=SimpleNamespace(cache_ttl="1h")), plan=a_plan(), completed=[]
         )
         system = _system_blocks("1h")
         outgoing = _with_loop_breakpoint(messages)
@@ -2347,7 +2402,7 @@ class TestTheBatchBlockIsSizedByTheSetting:
         # Every existing caller in the tests passes a bare SimpleNamespace, and
         # so would any project config predating the setting.
         messages = build_planner_messages(
-            cfg=SimpleNamespace(cache_ttl=None), plan=a_plan(), completed=[]
+            cfg=SimpleNamespace(planner=SimpleNamespace(cache_ttl=None)), plan=a_plan(), completed=[]
         )
         assert messages[0]["content"][0]["text"]
 
@@ -2891,7 +2946,7 @@ class TestALandingDoesNotDisturbThePlan:
             skipped=[],
         )
         return build_planner_messages(
-            cfg=SimpleNamespace(cache_ttl="1h", plan_addendum_path="log.md"),
+            cfg=SimpleNamespace(planner=SimpleNamespace(cache_ttl="1h"), plan_addendum_path="log.md"),
             plan=plan,
             completed=[],
             layout="- `src/` (1)",
@@ -2940,7 +2995,7 @@ class TestTheTestWarningsReachThePlanner:
 
     def _messages(self, warnings):
         return build_planner_messages(
-            cfg=SimpleNamespace(cache_ttl="1h"),
+            cfg=SimpleNamespace(planner=SimpleNamespace(cache_ttl="1h")),
             plan=a_plan(),
             completed=[],
             layout="- `src/` (1)",
