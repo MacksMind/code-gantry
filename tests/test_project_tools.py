@@ -315,7 +315,7 @@ class TestTheFrameworkNamesNothing:
         said = []
         for args in ({}, {"names": []}, {"names": ["x"]}, {"names": ["x"], "one": 3}):
             try:
-                build_argv(tool, args)
+                build_argv(tool, args, capped=True)
             except ToolError as e:
                 said.append(str(e))
 

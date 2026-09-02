@@ -147,12 +147,19 @@ def tool_schema(tool: ProjectTool) -> dict[str, Any]:
     }
 
 
-def build_argv(tool: ProjectTool, args: dict) -> list[str]:
+def build_argv(tool: ProjectTool, args: dict, *, capped: bool) -> list[str]:
     """Substitute the model's values into the operator's command.
 
     Raises before anything runs. A repeated argument expands in place into as
     many elements as it has values — the only expansion with no quoting rule,
     which is why the config layer requires a placeholder to be a whole element.
+
+    `capped` says whose call this is. `max_values` bounds what a *model* may
+    ask for in one call; the pipeline's own scoped run is the wider run the
+    cap's refusal defers to, and a stage touching a dozen spec files must not
+    be refused by a ceiling written for the executor's argument — it was, and
+    the refusal ended the run. Required, with no default, so the next caller
+    has to say which it is.
     """
     repeated = {a.name for a in tool.arguments if a.repeated}
     values: dict[str, Any] = {}
@@ -177,7 +184,8 @@ def build_argv(tool: ProjectTool, args: dict) -> list[str]:
             # that declining to offer a wider command means something, and a
             # boundary made only of a schema hint is made of nothing.
             if (
-                argument.max_values is not None
+                capped
+                and argument.max_values is not None
                 and len(supplied) > argument.max_values
             ):
                 raise ToolError(
@@ -217,7 +225,7 @@ def invoke(tool: ProjectTool, args: dict, runner) -> str:
     coherent; an exception here would end the cycle instead of informing it,
     which is the outcome the tool was added to avoid.
     """
-    argv = build_argv(tool, args)
+    argv = build_argv(tool, args, capped=True)
     # `log=None` keeps the `$ command` line out of the run log. A declared tool
     # is a model's tool call and belongs in the tool log beside the others; the
     # timeline is for the loop's own commands. Measured on one run: 27 declared

@@ -1285,6 +1285,8 @@ class ProjectConfig(_Strict):
         Built through `build_argv`, which is the path the executor's own tool
         call takes. One builder, so the string the gate records and the string
         the model caused are the same string whenever the selection is.
+        Uncapped: `max_values` bounds the model's call, and this is the wider
+        run that refusal tells the model is the pipeline's to make.
         """
         tool = self._test_tool(self.scoped_test_tool)
         if tool is None or not paths:
@@ -1294,7 +1296,7 @@ class ProjectConfig(_Strict):
         slot = next((a.name for a in tool.arguments if a.repeated), None)
         if slot is None:
             return None
-        return build_argv(tool, {slot: list(paths)})
+        return build_argv(tool, {slot: list(paths)}, capped=False)
 
     @property
     def scoped_test_command(self) -> str | None:

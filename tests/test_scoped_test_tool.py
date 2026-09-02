@@ -62,13 +62,13 @@ def a_tool(**over):
 
 class TestTheCapIsEnforcedWhereItIsDispatched:
     def test_a_call_at_the_cap_runs(self):
-        argv = build_argv(a_tool(), {"paths": [f"spec/s{i}_spec.rb" for i in range(CAP)]})
+        argv = build_argv(a_tool(), {"paths": [f"spec/s{i}_spec.rb" for i in range(CAP)]}, capped=True)
         assert argv[0] == "bin/rspec"
         assert len(argv) == CAP + 1
 
     def test_one_over_the_cap_runs_nothing(self):
         with pytest.raises(ToolError) as e:
-            build_argv(a_tool(), {"paths": [f"spec/s{i}_spec.rb" for i in range(CAP + 1)]})
+            build_argv(a_tool(), {"paths": [f"spec/s{i}_spec.rb" for i in range(CAP + 1)]}, capped=True)
         assert "at most 5" in str(e.value)
         # Says what happened to the call, because "refused" and "ran a subset"
         # are the two readings and only one of them is true.
@@ -84,11 +84,11 @@ class TestTheCapIsEnforcedWhereItIsDispatched:
         tool = a_tool()
         assert tool_schema(tool)["input_schema"]["properties"]["paths"]["maxItems"] == CAP
         with pytest.raises(ToolError):
-            build_argv(tool, {"paths": ["spec/a_spec.rb"] * (CAP + 1)})
+            build_argv(tool, {"paths": ["spec/a_spec.rb"] * (CAP + 1)}, capped=True)
 
     def test_an_uncapped_argument_is_unaffected(self):
         tool = a_tool(argument={"max_values": None})
-        argv = build_argv(tool, {"paths": [f"spec/s{i}_spec.rb" for i in range(40)]})
+        argv = build_argv(tool, {"paths": [f"spec/s{i}_spec.rb" for i in range(40)]}, capped=True)
         assert len(argv) == 41
         assert "maxItems" not in tool_schema(tool)["input_schema"]["properties"]["paths"]
 
@@ -128,7 +128,7 @@ class TestALocatorSurvivesUntouched:
         ],
     )
     def test_it_reaches_argv_verbatim(self, locator):
-        assert build_argv(a_tool(), {"paths": [locator]}) == ["bin/rspec", locator]
+        assert build_argv(a_tool(), {"paths": [locator]}, capped=True) == ["bin/rspec", locator]
 
 
 class TestTheDeclarationIsChecked:
@@ -251,6 +251,21 @@ class TestTheReference:
             "bin/rspec", "spec/a_spec.rb:79"
         ]
 
+    def test_the_pipelines_own_selection_is_not_capped(self):
+        """The cap is on the model's argument; this is the wider run.
+
+        Run 20260902-002249 ended in a traceback: a stage touched twelve spec
+        files, the gate built its scoped run through the same builder the
+        model's call takes, and the ceiling written for the model refused the
+        pipeline. The refusal's own text says a wider run is the pipeline's
+        to make — so the pipeline's call must be able to make it.
+        """
+        cfg = parse_config(minimal(
+            project_tools=[scoped_runner()], scoped_test_tool="run_tests"
+        ))
+        paths = [f"spec/s{i}_spec.rb" for i in range(CAP + 7)]
+        assert cfg.scoped_test_argv(paths) == ["bin/rspec", *paths]
+
     def test_a_name_matching_nothing_is_refused(self):
         with pytest.raises(ConfigError) as e:
             self._cfg(names="no_such_tool")
@@ -330,7 +345,7 @@ class TestTheScopedRunHasNoShell:
     def _run(self, tmp_path, tool, paths):
         from code_gantry.commands import CommandRunner
 
-        CommandRunner(cwd=tmp_path, timeout=30).run_argv(build_argv(tool, {"paths": paths}))
+        CommandRunner(cwd=tmp_path, timeout=30).run_argv(build_argv(tool, {"paths": paths}, capped=True))
 
     def test_a_path_with_a_space_stays_one_argument(self, tmp_path):
         tool, seen = self._echoes_argv(tmp_path)
