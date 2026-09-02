@@ -264,6 +264,40 @@ class TestTheFormat:
             parse_v4a(" a\n b\n")
         assert "no change" in str(e.value)
 
+    def test_a_bare_header_used_as_an_elision_is_named_as_the_cause(self):
+        """The shape behind every no-op refusal on record.
+
+        A scoped hunk of pure context, then a bare `@@` meaning "skip ahead",
+        then the real change: two hunks to the format, one to the model. The
+        reference parser refuses it too. Told only that "a hunk" asked for no
+        change, a model re-sent the identical patch three times; the refusal
+        has to say which hunk and that the `@@` split it.
+        """
+        with pytest.raises(ToolError) as e:
+            parse_v4a(
+                "@@ describe '.load_item' do\n"
+                "     it 'unmarshals' do\n"
+                "       session = {}\n"
+                "@@\n"
+                "     end\n"
+                "+\n"
+                "+    it 'loads' do\n"
+                "+    end\n"
+            )
+        said = str(e.value)
+        assert "hunk 1 of 2" in said
+        assert "describe '.load_item' do" in said
+        assert "starts a new hunk" in said
+        assert "2 line(s)" in said
+
+    def test_a_lone_hunk_is_still_told_what_to_add(self):
+        # The single-hunk wording is unchanged in substance: no `@@` split it,
+        # so naming one would send the model looking for a header it did not write.
+        with pytest.raises(ToolError) as e:
+            parse_v4a(" a\n b\n")
+        assert "the hunk is context only" in str(e.value)
+        assert "starts a new hunk" not in str(e.value)
+
     def test_consecutive_headers_nest(self):
         text = "class A\n  def go\n    save\n  end\nend\nclass B\n  def go\n    save\n  end\nend\n"
         out = apply_v4a(

@@ -594,11 +594,31 @@ def parse_v4a(diff: str, path: str = "") -> list[Hunk]:
 
     if not hunks:
         raise ToolError("the patch contains no hunks.")
-    for hunk in hunks:
+    for index, hunk in enumerate(hunks, 1):
         if hunk.before == hunk.after:
+            # Names the hunk and the mechanism, not only the state. The old
+            # text said "a hunk has no `-` or `+` lines" and a model re-sent
+            # the identical patch three times, because what it had written
+            # was one hunk with a bare `@@` in the middle meaning "skip
+            # ahead" — every one of the four no-op refusals on record is that
+            # shape. The reference parser refuses it too; the message is
+            # where the calls are saved.
+            where = (
+                f"hunk {index} of {len(hunks)}"
+                + (f" (under `@@ {hunk.scopes[-1]}`)" if hunk.scopes else "")
+                if len(hunks) > 1
+                else "the hunk"
+            )
+            mechanism = (
+                " A `@@` line starts a new hunk; it does not skip lines within "
+                "one. Quote the lines between as context, or give each hunk "
+                "its own `-` and `+` lines."
+                if len(hunks) > 1
+                else " Quote what must go with `-` and what replaces it with `+`."
+            )
             raise ToolError(
-                "a hunk has no `-` or `+` lines, so it asks for no change. "
-                "Quote what must go with `-` and what replaces it with `+`."
+                f"{where} is context only — {len(hunk.before)} line(s) and no "
+                f"`-` or `+` — so it asks for no change.{mechanism}"
             )
     return hunks
 
