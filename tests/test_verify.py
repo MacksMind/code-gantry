@@ -937,6 +937,26 @@ class TestSignalledTestRuns:
         out = verify(repo, cfg, stage, sha)
         assert out.route is Route.EXECUTOR
 
+    def test_a_test_command_that_cannot_be_built_goes_to_a_human(self, repo, monkeypatch):
+        # Same family as a signal, one layer earlier: `build_argv` refusing the
+        # gate's own scoped command. Run 20260902-002249 died in a traceback
+        # here rather than escalating.
+        from code_gantry.repotools import ToolError
+
+        def refuse(tool, args, *, capped):
+            raise ToolError("rspec takes at most 5 value(s) for 'paths'")
+
+        monkeypatch.setattr("code_gantry.projecttools.build_argv", refuse)
+        edit(repo, "spec/a_spec.rb", "# spec\n")
+        Git(repo).commit_all("a spec that predates the stage")
+        sha = Git(repo).head_sha()
+        edit(repo)
+        cfg, stage = build(repo, {"test_paths": ["spec/a_spec.rb"]})
+        out = verify(repo, cfg, stage, sha)  # must not raise
+        assert out.failed_layer is Layer.TESTS
+        assert out.route is Route.HUMAN
+        assert "at most 5" in out.feedback
+
     def test_a_signalled_check_also_goes_to_a_human(self, repo):
         # Same reasoning as the suite: `checks` are operator commands running in
         # the same environment, and they die with it.

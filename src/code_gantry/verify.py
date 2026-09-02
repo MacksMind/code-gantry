@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from code_gantry import gates
+from code_gantry.repotools import ToolError
 from code_gantry.commands import CommandResult, CommandRunner
 from code_gantry.config import ProjectConfig, Stage
 from code_gantry.gitops import Git, GitError
@@ -529,6 +530,26 @@ def _layer_residue(ctx: _Context, outcome: VerifyOutcome):
 
 
 def _layer_tests(ctx: _Context, outcome: VerifyOutcome):
+    """`_tests` under a guard for the one failure it cannot route itself.
+
+    A `ToolError` here is `build_argv` refusing the gate's own scoped command
+    — raised while *resolving* it, before any suite runs, as well as inside
+    the run. A human's, like a signal: no retry and no redraw changes what the
+    config can express, and uncaught it ended run 20260902-002249 in a
+    traceback with the checkpoint still saying `running`.
+    """
+    try:
+        return _tests(ctx, outcome)
+    except ToolError as e:
+        return _fail(
+            Layer.TESTS,
+            Route.HUMAN,
+            "the test gate could not be run",
+            f"The harness refused to build the test command, so nothing ran:\n{e}",
+        )
+
+
+def _tests(ctx: _Context, outcome: VerifyOutcome):
     command = resolve_test_command(ctx.stage, ctx.cfg, ctx.git, ctx.stage_start_sha)
     if not command:
         return None

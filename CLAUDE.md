@@ -418,6 +418,14 @@ site goes quietly missing.
   downstream of the commit a hook refuses; and the hook can come from
   `core.hooksPath` set **globally**, so it is not the target repository's
   property at all.
+- **A ceiling on the model's argument is not a ceiling on the pipeline's
+  call.** `max_values` bounds one `rspec` call of the executor's; the gate's
+  scoped run through the same `build_argv` was refused at twelve files. So
+  `capped` is a required keyword — each caller says whose call it is — and
+  **a gate that cannot be built escalates rather than raises**: the
+  `ToolError` left `run_loop`, `execute` and `main` as a traceback with the
+  checkpoint still saying `running`. `gate_unrunnable` on the loop,
+  `Route.HUMAN` in `verify._layer_tests`.
 - **A gate written for the first commit does not cover the second.** A stage
   branch carries several commits per cycle.
 - **Attribute bytes by what ran between, not by whoever is nearest.** Find the

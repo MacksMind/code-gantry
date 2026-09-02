@@ -1097,6 +1097,25 @@ def execute(state: RunState, rt: Runtime) -> dict:
     if result.dropped_reads:
         measured["withheld_reads"] = list(result.dropped_reads)
 
+    if result.gate_unrunnable:
+        # The loop could not run a gate — the harness refused to build the
+        # gate's command, before anything was spawned. Above `commit_refused`
+        # because it stopped the cycle earlier: a config the pipeline cannot
+        # express is nobody's defect but the operator's, and every attempt
+        # would be refused identically.
+        return {
+            **measured,
+            **_escalate(
+                "gates",
+                f"A gate could not be run on stage {stage.id!r}. Not a failing "
+                "check and not a planning defect — the harness refused to "
+                "build the gate's command:\n"
+                f"{_clip(result.gate_unrunnable)}\n\n"
+                "The attempt's work is committed on the stage branch. Fix "
+                "what the refusal names and resume.",
+            ),
+        }
+
     if result.commit_refused:
         # The loop could not record its work. Escalated on the same grounds as
         # the setup command above — the hook will refuse the next attempt

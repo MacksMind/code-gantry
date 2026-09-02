@@ -48,6 +48,7 @@ import time
 from pathlib import Path
 
 from code_gantry import gates
+from code_gantry.repotools import ToolError
 from code_gantry.config import ProjectConfig, Stage
 from code_gantry.edittools import FileEditor
 from code_gantry.executor import ExecutionResult
@@ -173,7 +174,19 @@ def run_loop(
                 )
             break
 
-        failure = _gate_cycle(stage, cfg, git, runner, out, since_sha, log=log)
+        try:
+            failure = _gate_cycle(stage, cfg, git, runner, out, since_sha, log=log)
+        except ToolError as e:
+            # The gate could not be built, which is a different thing from the
+            # gate failing: a `ToolError` here is `build_argv` refusing the
+            # pipeline's own command, and no cycle of the model's can change
+            # what the config can express. Recorded and stopped, not raised —
+            # raised, it ended the process. `_gate_cycle` commits before it
+            # gates, so the work is on the branch for the resume.
+            if log:
+                log(f"[execute] {stage.id}: a gate could not be run: {e}")
+            out.gate_unrunnable = str(e)
+            break
         if failure is None:
             # `break`, not `return`. Returning here skipped the two statements
             # below, so the *success* path — an attempt whose gates passed

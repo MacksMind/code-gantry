@@ -1037,6 +1037,64 @@ class TestTheHookIsAskedBeforeTheCommit:
         assert out.commits and not out.commit_refused
 
 
+class TestAGateThatCannotBeBuiltStopsTheAttempt:
+    """The harness refusing the gate's command is not the gate failing.
+
+    Run 20260902-002249: a stage touched twelve spec files, the gate's own
+    scoped rspec call went through `build_argv`, and the builder raised. The
+    `ToolError` left `run_loop`, `execute` and `main`, the process died with a
+    traceback, and the checkpoint said `running`. No cycle of the model's can
+    change what the config expresses, so the attempt stops and says why.
+    """
+
+    def _refusing_builder(self, monkeypatch):
+        from code_gantry.repotools import ToolError
+
+        def refuse(tool, args, *, capped):
+            raise ToolError("rspec takes at most 5 value(s) for 'paths'")
+
+        monkeypatch.setattr("code_gantry.projecttools.build_argv", refuse)
+
+    def _spec_stage(self, repo):
+        (repo / "spec").mkdir()
+        (repo / "spec" / "a_spec.rb").write_text("# spec\n")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "spec"], cwd=repo, check=True)
+        return build(repo, {"test_paths": ["spec/a_spec.rb"]})
+
+    def test_the_refusal_is_recorded_rather_than_raised(self, repo, monkeypatch):
+        self._refusing_builder(monkeypatch)
+        cfg, stage = self._spec_stage(repo)
+        model = ScriptedModel([[edit_file("app/a.rb", "class A", "class B")]])
+        out = drive(repo, cfg, stage, model)  # must not raise
+        assert "at most 5" in out.gate_unrunnable
+        # `ok` stays True: it means the executor itself broke, and it did not.
+        # `execute` reads the field, not the flag.
+
+    def test_the_model_is_not_asked_again(self, repo, monkeypatch):
+        # A second cycle would meet the same refusal; feeding it to the model
+        # as a test failure asks it to fix the operator's config.
+        self._refusing_builder(monkeypatch)
+        cfg, stage = self._spec_stage(repo)
+        model = ScriptedModel([
+            [edit_file("app/a.rb", "class A", "class B")],
+            [edit_file("app/a.rb", "class B", "class C")],
+        ])
+        drive(repo, cfg, stage, model)
+        assert model.calls == 1
+
+    def test_the_work_is_committed_for_the_resume(self, repo, monkeypatch):
+        self._refusing_builder(monkeypatch)
+        cfg, stage = self._spec_stage(repo)
+        out = drive(repo, cfg, stage, ScriptedModel([[edit_file("app/a.rb", "class A", "class B")]]))
+        assert out.commits and Git(repo).is_clean()
+
+    def test_a_builder_that_builds_is_unaffected(self, repo):
+        cfg, stage = self._spec_stage(repo)
+        out = drive(repo, cfg, stage, ScriptedModel([[edit_file("app/a.rb", "class A", "class B")]]))
+        assert out.ok and not out.gate_unrunnable
+
+
 class TestAnEmptyFinishIsReportedAsOne:
     """An attempt that changed nothing must say which nothing it was.
 

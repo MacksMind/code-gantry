@@ -407,3 +407,45 @@ class TestTheGateLayer:
         # wrong thing.
         assert "hook" in got.feedback.lower()
         assert "commit" in got.summary.lower()
+
+
+class TestAGateThatCannotBeRunEscalates:
+    """The loop's other stop with nowhere to route: the harness refused to
+    build a gate's command. `execute` reads `gate_unrunnable` and escalates,
+    ahead of `commit_refused`, because it stopped the cycle earlier and the
+    operator is the only one who can change what the config expresses.
+    """
+
+    def _executor(self, repo):
+        from code_gantry.executor import ExecutionResult
+
+        from test_nodes import StubExecutor
+
+        class Unrunnable(StubExecutor):
+            def run_agent_stage(self, stage, prompt, history_dir=None,
+                                since_sha="", agent_context=None, feedback=None,
+                                failure_layer=None, model=""):
+                self._apply()
+                return ExecutionResult(
+                    ok=False, log="",
+                    gate_unrunnable="rspec takes at most 5 value(s) for 'paths'",
+                )
+
+        return Unrunnable(repo=repo, edits=[("app.py", "a\n")])
+
+    def test_it_escalates_with_the_refusal(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path, executor=self._executor(repo))
+        with_stage(state, rt)
+        out = nodes.execute(state, rt)
+        assert out["next_hop"] == "escalate"
+        assert out["failure_layer"] == "gates"
+        assert "at most 5" in out["escalation_reason"]
+        assert "resume" in out["escalation_reason"].lower()
+
+    def test_no_executor_retry_is_consumed(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path, executor=self._executor(repo))
+        with_stage(state, rt)
+        out = nodes.execute(state, rt)
+        assert out.get("verify_attempt", state.get("verify_attempt", 0)) == state.get(
+            "verify_attempt", 0
+        )

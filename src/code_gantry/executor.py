@@ -98,6 +98,14 @@ class ExecutionResult:
     # not report: the refusal was caught and dropped, so an attempt with
     # `commits: []` against 15 edits reported itself clean.
     commit_refused: str = ""
+    # Why a gate could not be *run*, when one could not — the harness refused
+    # to build its command, as distinct from the command failing. Empty
+    # otherwise. Run 20260902-002249 died in a traceback here: `build_argv`
+    # raised on the gate's own scoped rspec call and nothing between the loop
+    # and `main` caught it, so the checkpoint said `running` over a dead
+    # process and the reason existed only on stderr. Neither model can fix a
+    # command the operator's config cannot express, so `execute` escalates.
+    gate_unrunnable: str = ""
     # Which gate failed on which cycle, so a stage that used its whole budget
     # says what it kept failing rather than only that it ran out.
     in_loop_failures: list[str] = field(default_factory=list)
