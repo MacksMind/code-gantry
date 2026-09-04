@@ -39,12 +39,14 @@ FailureLayer = Literal[
     "full_suite",
     # Emitted by `nodes` and persisted, and absent here until a test read the
     # `_escalate` calls out of the source and compared the two. Declaring them
-    # is not routing them: all three fall to `stage_has_work` on resume, which
-    # is the fallback rather than a decision anybody made. `budget` may well
-    # belong in neither set, like `workspace`; `commit` and `gates` both leave
-    # the attempt's work committed on the stage branch and read like repo
-    # state. Left alone deliberately — changing where a resume re-enters is a
-    # separate decision from making this list true.
+    # is not routing them, and none of the three wanted routing: `budget` is
+    # handled by name in `resume_entry_point`, and `commit` and `gates` reach
+    # the fallback, which asks a sharper question than either set could. It
+    # sends a stage with work on its branch to `verify` and one without to
+    # `precheck` — right for `gates`, whose escalation says the work is
+    # committed, and right for `commit`, where the hook refused the commit and
+    # a first cycle may have left the branch empty. Membership would send that
+    # one to `verify` with nothing to verify.
     "budget",
     "commit",
     "gates",

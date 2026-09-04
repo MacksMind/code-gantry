@@ -453,12 +453,15 @@ site goes quietly missing.
   runner, not the work.
 - **A failure layer is declared in one place and routed in another.**
   `resume_entry_point` reads `failure_layer`, so an unregistered one is not a
-  type error — it is a resume falling through to `stage_has_work` and
-  re-entering where nobody chose. `budget`, `commit` and `gates` were emitted
-  and persisted for months while absent from `FailureLayer`; an AST test over
-  `nodes.py`'s `_escalate` calls found all three at once, the same idiom that
-  derives `EDGES`. **Declaring is not routing** — making the list true and
-  deciding where a resume re-enters are separate changes.
+  type error. `budget`, `commit` and `gates` were emitted and persisted while
+  absent from `FailureLayer`; an AST test over `nodes.py`'s `_escalate` calls
+  found all three at once, the same idiom that derives `EDGES`. **Declaring is
+  not routing** — and none of the three needed routing, which is only knowable
+  by reading `resume_entry_point` to the end rather than reading the two
+  frozensets and stopping. `budget` is handled by name below them, and the
+  fallback under those asks a sharper question than membership: work on the
+  stage branch goes to `verify`, none goes to `precheck`. **A set membership
+  answers unconditionally where a fallback can ask.**
 - **Every gate says why.** A reason that reaches only the planner and the
   checkpoint reaches the two places a person does not look.
 - **A guard and the reset it depends on are one decision written in two
