@@ -61,7 +61,7 @@ class TestPricingUsage:
         # 1M uncached in, 1M cache read, 1M cache write, 1M out.
         got = price_usage(
             ENTRY, prompt=3_000_000, cached=1_000_000,
-            cache_writes=1_000_000, completion=1_000_000,
+            cache_writes=1_000_000, completion=1_000_000, writes_1h=0,
         )
         assert got == pytest.approx(5.00 + 0.50 + 6.25 + 25.00)
 
@@ -71,9 +71,9 @@ class TestPricingUsage:
         # the planner by 25% of whatever it just wrote — largest on exactly the
         # calls that grow the cacheable prefix.
         writes = price_usage(ENTRY, prompt=1_000_000, cached=0,
-                             cache_writes=1_000_000, completion=0)
+                             cache_writes=1_000_000, completion=0, writes_1h=0)
         uncached = price_usage(ENTRY, prompt=1_000_000, cached=0,
-                               cache_writes=0, completion=0)
+                               cache_writes=0, completion=0, writes_1h=0)
         assert writes > uncached
 
     def test_prompt_tokens_is_the_total_not_the_remainder(self):
@@ -81,21 +81,60 @@ class TestPricingUsage:
         # writes are parts of it, not additions to it. Read the other way it
         # produced "Uncached prompt tokens: -2,438" in a real report.
         got = price_usage(ENTRY, prompt=1_000_000, cached=1_000_000,
-                          cache_writes=0, completion=0)
+                          cache_writes=0, completion=0, writes_1h=0)
         assert got == pytest.approx(0.50)
 
     def test_a_missing_rate_falls_back_to_the_base_input_rate(self):
         # A model with no cache pricing is not a model whose cache is free.
         bare = {"input_cost_per_token": 5e-06, "output_cost_per_token": 2.5e-05}
         got = price_usage(bare, prompt=1_000_000, cached=1_000_000,
-                          cache_writes=0, completion=0)
+                          cache_writes=0, completion=0, writes_1h=0)
         assert got == pytest.approx(5.00)
+
+    def test_the_one_hour_write_bucket_costs_more_than_the_five_minute_one(self):
+        # The whole reason the split is carried. Anthropic sums the two buckets
+        # into `cache_creation_input_tokens`; pricing that sum at the cheaper
+        # rate understated the planner line by 25% a derivation once the plan
+        # block started shipping a `1h` marker.
+        entry = dict(ENTRY, cache_creation_input_token_cost_above_1hr=1e-05)
+        short = price_usage(entry, prompt=1_000_000, cached=0,
+                            cache_writes=1_000_000, completion=0, writes_1h=0)
+        long = price_usage(entry, prompt=1_000_000, cached=0,
+                           cache_writes=1_000_000, completion=0,
+                           writes_1h=1_000_000)
+        assert short == pytest.approx(6.25)
+        assert long == pytest.approx(10.00)
+        # And a mixed call is billed at both rates, not at either one.
+        half = price_usage(entry, prompt=1_000_000, cached=0,
+                           cache_writes=1_000_000, completion=0,
+                           writes_1h=400_000)
+        assert half == pytest.approx(600_000 * 6.25e-06 + 400_000 * 1e-05)
+
+    def test_a_table_with_no_long_window_rate_prices_as_it_always_did(self):
+        # An unpriced distinction costs the old arithmetic exactly, rather than
+        # a guess in the expensive direction: no `above_1hr` key means the
+        # table cannot separate them, not that the long window is free.
+        assert "cache_creation_input_token_cost_above_1hr" not in ENTRY
+        got = price_usage(ENTRY, prompt=1_000_000, cached=0,
+                          cache_writes=1_000_000, completion=0,
+                          writes_1h=1_000_000)
+        assert got == pytest.approx(6.25)
+
+    def test_a_breakdown_larger_than_its_own_total_is_clamped(self):
+        # Two fields of one provider report. A breakdown exceeding the total it
+        # is part of is a reading about the wire, and pricing the remainder
+        # negative would answer it by handing money back.
+        entry = dict(ENTRY, cache_creation_input_token_cost_above_1hr=1e-05)
+        got = price_usage(entry, prompt=1_000_000, cached=0,
+                          cache_writes=1_000_000, completion=0,
+                          writes_1h=9_000_000)
+        assert got == pytest.approx(10.00)
 
     def test_an_unpriced_model_is_none_not_zero(self):
         # An accounting layer that reports 0.0 for "not priced" as often as for
         # "free", which is why a local model and a billing error looked alike.
-        assert price_usage(None, prompt=1, cached=0, cache_writes=0, completion=1) is None
-        assert price_usage({}, prompt=1, cached=0, cache_writes=0, completion=1) is None
+        assert price_usage(None, prompt=1, cached=0, cache_writes=0, completion=1, writes_1h=0) is None
+        assert price_usage({}, prompt=1, cached=0, cache_writes=0, completion=1, writes_1h=0) is None
 
 
 class TestLoadingTheMap:
@@ -224,7 +263,7 @@ class TestLoadingTheMap:
         cache = tmp_path / "model-prices.json"
         got = load_price_map(cache, ("local/llama",), fetch=self._fetch({"claude-opus-5": ENTRY}))
         assert entry_for(got, "local/llama") is None
-        assert price_usage(entry_for(got, "local/llama"), 1, 0, 0, 1) is None
+        assert price_usage(entry_for(got, "local/llama"), 1, 0, 0, 1, writes_1h=0) is None
 
     def test_with_nowhere_to_cache_it_still_prices(self, tmp_path):
         # No work dir means no project directory, so there is nowhere safe to

@@ -277,6 +277,7 @@ def _price(cfg, usage, model: str | None) -> float | None:
         getattr(usage, "cached_tokens", 0),
         getattr(usage, "cache_write_tokens", 0),
         getattr(usage, "completion_tokens", 0),
+        writes_1h=getattr(usage, "cache_write_1h_tokens", 0),
     )
 
 

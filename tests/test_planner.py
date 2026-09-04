@@ -620,6 +620,48 @@ class TestUsageNormalisation:
         assert usage.prompt_tokens == 5683
         assert usage.cached_tokens == 0
 
+    def test_the_long_window_share_of_a_write_is_carried(self):
+        # A 1h write is 2x base against a 5m write's 1.25x, and Anthropic sums
+        # them into one field. The planner is the role it was measured on: its
+        # plan block is the largest in the request and the one carrying `1h`.
+        from code_gantry.planner import _extract_usage
+
+        class U:
+            input_tokens = 1632
+            cache_read_input_tokens = 0
+            cache_creation_input_tokens = 4051
+            cache_creation = type(
+                "C", (), {
+                    "ephemeral_5m_input_tokens": 51,
+                    "ephemeral_1h_input_tokens": 4000,
+                },
+            )()
+            output_tokens = 300
+
+        usage = _extract_usage(U())
+        assert usage.cache_write_tokens == 4051
+        assert usage.cache_write_1h_tokens == 4000
+
+    def test_both_roles_read_the_wire_the_same_way(self):
+        # `PlannerUsage` and `TokenUsage` stay separate types because they
+        # transpose, but a *reader* has no field order to get wrong — so the
+        # two roles share one, and this is what says so. A rule fixed in one
+        # role's type has already failed to reach the role using the other.
+        from code_gantry.dialects import MESSAGES
+        from code_gantry.planner import _extract_usage
+
+        class U:
+            input_tokens = 40
+            output_tokens = 10
+            cache_read_input_tokens = 60
+            cache_creation_input_tokens = 100
+            cache_creation = type(
+                "C", (), {"ephemeral_1h_input_tokens": 70},
+            )()
+
+        assert _extract_usage(U()).cache_write_1h_tokens == 70
+        assert MESSAGES.usage(U()).cache_write_1h_tokens == 70
+
     def test_a_missing_field_is_zero_not_an_error(self):
         from code_gantry.planner import _extract_usage
 

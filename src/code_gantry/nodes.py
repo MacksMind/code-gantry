@@ -425,6 +425,11 @@ def plan(state: RunState, rt: Runtime) -> dict:
                     # never read back costs more than no caching at all, and the
                     # run totals average that away — per call is where it shows.
                     "cache_write_tokens": outcome.usage.cache_write_tokens,
+                    # The part of the line above that cost 2x rather than
+                    # 1.25x. Recorded beside its total because a sum of two
+                    # rates cannot be re-derived from the sum afterwards, and
+                    # this artifact is what a later cost question is asked of.
+                    "cache_write_1h_tokens": outcome.usage.cache_write_1h_tokens,
                     "completion_tokens": outcome.usage.completion_tokens,
                     # The one figure here that is not a total: the largest
                     # single call of the loop. The others say what the
@@ -2810,6 +2815,7 @@ def _stage_spend(cfg, usage: dict, executor_cost: float | None = None) -> list[d
             cost = pricing.price_usage(
                 pricing.entry_for(prices(), model),
                 prompt, cached_tokens, writes, completion,
+                writes_1h=usage.get(f"{prefix}cache_write_1h_tokens", 0),
             )
         if cost:
             row["cost_usd"] = cost

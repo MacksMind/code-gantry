@@ -460,7 +460,34 @@ def _messages_usage(raw):
         # everything else sums.
         peak_prompt_tokens=prompt,
         provider_cost_usd=getattr(raw, "cost", None),
+        cache_write_1h_tokens=cache_write_1h(raw),
     )
+
+
+def cache_write_1h(raw) -> int:
+    """How much of this call's cache write went out under a one-hour marker.
+
+    Anthropic reports the buckets under a nested `cache_creation` object and
+    the *total* at the top level, so a reader that only takes the total cannot
+    tell a 2x write from a 1.25x one — which is how `report.md` came to
+    understate the planner by a quarter while the marker it was reporting on
+    was the improvement being measured.
+
+    Shared by both extractors rather than copied into each, unlike the usage
+    types themselves: those stay apart because they transpose, and a reader has
+    no field order to get wrong.
+
+    Falls back to zero rather than to the total. An endpoint that reports no
+    breakdown is one whose writes we cannot separate, and charging all of them
+    at the higher rate would be a guess in the expensive direction — the total
+    is still priced, at base, exactly as before.
+    """
+    detail = getattr(raw, "cache_creation", None)
+    if detail is None and isinstance(raw, dict):
+        detail = raw.get("cache_creation")
+    if detail is None:
+        return 0
+    return _num(detail, "ephemeral_1h_input_tokens")
 
 
 def _num(raw, name) -> int:

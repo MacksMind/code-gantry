@@ -181,6 +181,58 @@ class TestUsage:
         # input" and "the part of it that was a cache read".
         assert (r.prompt_tokens, r.cached_tokens) == (100, 60)
         assert (m.prompt_tokens, m.cached_tokens) == (105, 60)
+        # Responses has one write rate, so its long-window figure is a true
+        # zero rather than an unread field.
+        assert (r.cache_write_tokens, r.cache_write_1h_tokens) == (5, 0)
+
+    def test_the_two_cache_write_buckets_are_kept_apart(self):
+        # `cache_creation_input_tokens` is the two summed, and the buckets are
+        # billed at 1.25x and 2x base. Read as one number the report understated
+        # the planner by 25% a call, and it started the day the plan block's
+        # `1h` marker began being sent — the report drifted exactly when the
+        # bill improved.
+        class MUsage:
+            input_tokens = 40
+            output_tokens = 10
+            cache_read_input_tokens = 60
+            cache_creation_input_tokens = 100
+            cache_creation = type(
+                "C", (), {
+                    "ephemeral_5m_input_tokens": 30,
+                    "ephemeral_1h_input_tokens": 70,
+                },
+            )()
+
+        m = MESSAGES.usage(MUsage())
+        assert m.cache_write_tokens == 100
+        assert m.cache_write_1h_tokens == 70
+        # The total keeps its meaning: the split is a component of it, so the
+        # readers that do not care about rates see no change.
+        assert m.prompt_tokens == 200
+
+    def test_a_wire_reporting_no_breakdown_says_zero_not_the_total(self):
+        # Charging an unseparable write at the higher rate would be a guess in
+        # the expensive direction. The total is still priced, at base.
+        class MUsage:
+            input_tokens = 40
+            output_tokens = 10
+            cache_read_input_tokens = 60
+            cache_creation_input_tokens = 100
+
+        assert MESSAGES.usage(MUsage()).cache_write_1h_tokens == 0
+
+    def test_the_buckets_are_read_from_a_dict_too(self):
+        # The SDK hands back objects and the recorded artifacts are dicts, and
+        # a reader that works on one shape is the reason a figure goes missing
+        # when somebody replays a saved response.
+        raw = {
+            "input_tokens": 40,
+            "output_tokens": 10,
+            "cache_read_input_tokens": 60,
+            "cache_creation_input_tokens": 100,
+            "cache_creation": {"ephemeral_1h_input_tokens": 70},
+        }
+        assert MESSAGES.usage(raw).cache_write_1h_tokens == 70
 
 
 class TestEveryKwargIsOneItsOwnSdkAccepts:

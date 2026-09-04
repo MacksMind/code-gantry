@@ -110,7 +110,7 @@ class TestPricePrefersTheReport:
 
         monkeypatch.setattr(pricing, "cached_price_map", lambda cfg: {})
         monkeypatch.setattr(pricing, "entry_for", lambda prices, model: {"x": 1})
-        monkeypatch.setattr(pricing, "price_usage", lambda *a: 1.25)
+        monkeypatch.setattr(pricing, "price_usage", lambda *a, **k: 1.25)
         usage = TokenUsage(prompt_tokens=15080)
         assert executorloop._price(None, usage, "gpt-5.6-luna") == 1.25
 

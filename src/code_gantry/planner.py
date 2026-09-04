@@ -473,6 +473,13 @@ class PlannerUsage:
     # `0.0`, the distinction `_price` exists to protect. Last, like the two
     # fields above and for the same reason.
     provider_cost_usd: float | None = None
+    # The part of `cache_write_tokens` written under a one-hour marker, billed
+    # at 2x base where the five-minute bucket is 1.25x. See the reviewer's
+    # `TokenUsage`, which carries the same field for the same reason — a rule
+    # fixed in one role's type does not reach the role using the other. This
+    # is the role it was measured on: the planner's plan block is the largest
+    # in the request and the one that ships `1h`. Last, like the fields above.
+    cache_write_1h_tokens: int = 0
 
 
 @dataclass
@@ -549,6 +556,7 @@ def _add_usage(a: PlannerUsage, b: PlannerUsage) -> PlannerUsage:
         prompt_tokens=a.prompt_tokens + b.prompt_tokens,
         cached_tokens=a.cached_tokens + b.cached_tokens,
         cache_write_tokens=a.cache_write_tokens + b.cache_write_tokens,
+        cache_write_1h_tokens=a.cache_write_1h_tokens + b.cache_write_1h_tokens,
         completion_tokens=a.completion_tokens + b.completion_tokens,
         # Not summed. Two attempts do not make a larger call than either of
         # them; the high-water mark is the high-water mark.
@@ -1068,6 +1076,7 @@ def _merge_usage(a: PlannerUsage, b: PlannerUsage) -> PlannerUsage:
         completion_tokens=a.completion_tokens + b.completion_tokens,
         cached_tokens=a.cached_tokens + b.cached_tokens,
         cache_write_tokens=a.cache_write_tokens + b.cache_write_tokens,
+        cache_write_1h_tokens=a.cache_write_1h_tokens + b.cache_write_1h_tokens,
         # See `_add_usage`: the one field here that is not a total.
         peak_prompt_tokens=max(a.peak_prompt_tokens, b.peak_prompt_tokens),
     )
@@ -1157,6 +1166,8 @@ def _extract_usage(usage) -> PlannerUsage:
     total input, and `cached_tokens` is the part of it that was a cache read —
     which makes `prompt - cached` the uncached remainder for either provider.
     """
+    from code_gantry.dialects import cache_write_1h
+
     if usage is None:
         return PlannerUsage()
     uncached = getattr(usage, "input_tokens", 0) or 0
@@ -1173,6 +1184,11 @@ def _extract_usage(usage) -> PlannerUsage:
         # the loop's peak is the largest turn rather than the last one — a
         # conversation does not only grow, a redraw can start from less.
         peak_prompt_tokens=total_in,
+        # `written` above is the two buckets summed; this is the half of it
+        # that costs 2x rather than 1.25x. Read through the same helper the
+        # Messages dialect uses, so the planner and the reviewer cannot come to
+        # disagree about what the wire said.
+        cache_write_1h_tokens=cache_write_1h(usage),
     )
 
 

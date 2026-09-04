@@ -71,6 +71,19 @@ class TokenUsage:
     # to protect: a zero has meant "no rate for this model" as often as it has
     # meant "free". And last, for the reason the two fields above say.
     provider_cost_usd: float | None = None
+    # The part of `cache_write_tokens` written under a one-hour marker, which
+    # is billed at 2x base against the five-minute bucket's 1.25x. Anthropic
+    # reports the two separately under `cache_creation` and sums them into
+    # `cache_creation_input_tokens`; pricing the sum at the cheaper rate
+    # understated the planner line by 25% for every derivation after the plan
+    # block started shipping a `1h` marker, and the report drifted exactly
+    # when the bill improved. Zero on Responses, which has no such split —
+    # a bucket the wire does not report is not a bucket that was empty, but
+    # here the wire genuinely has one rate.
+    #
+    # Last, like the three fields above and for the same reason: this type is
+    # constructed positionally.
+    cache_write_1h_tokens: int = 0
 
     @property
     def uncached_prompt_tokens(self) -> int:
@@ -150,6 +163,9 @@ def merge_usage(left: TokenUsage, right: TokenUsage) -> TokenUsage:
         completion_tokens=left.completion_tokens + right.completion_tokens,
         cached_tokens=left.cached_tokens + right.cached_tokens,
         cache_write_tokens=left.cache_write_tokens + right.cache_write_tokens,
+        cache_write_1h_tokens=(
+            left.cache_write_1h_tokens + right.cache_write_1h_tokens
+        ),
         # Not summed. Two turns do not make a larger context than either of
         # them, and keeping the *last* turn instead would be wrong in the
         # common shape: a loop ends with a short call, because the model has

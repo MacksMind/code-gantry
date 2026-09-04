@@ -255,7 +255,13 @@ def _wall_clock_lines(state: RunState, cfg: ProjectConfig) -> list[str]:
 
 
 def _dollars(
-    prices: dict, model: str, prompt: int, cached: int, writes: int, completion: int
+    prices: dict,
+    model: str,
+    prompt: int,
+    cached: int,
+    writes: int,
+    completion: int,
+    writes_1h: int,
 ) -> str:
     """A figure, or the reason there isn't one.
 
@@ -264,7 +270,10 @@ def _dollars(
     settle an argument about effort, so a number that might mean two things is
     worse than no number.
     """
-    cost = price_usage(entry_for(prices, model), prompt, cached, writes, completion)
+    cost = price_usage(
+        entry_for(prices, model), prompt, cached, writes, completion,
+        writes_1h=writes_1h,
+    )
     if cost is None:
         return f"not priced (no rate for `{model}`)"
     return f"${cost:,.2f}"
@@ -287,6 +296,10 @@ def _cost_section(state: RunState, cfg: ProjectConfig) -> list[str]:
 
     cache_writes = run_usage.get("cache_write_tokens", 0)
     planner_writes = run_usage.get("planner_cache_write_tokens", 0)
+    # Beside each total, because the two write buckets are billed at different
+    # rates and only the split can tell them apart.
+    cache_writes_1h = run_usage.get("cache_write_1h_tokens", 0)
+    planner_writes_1h = run_usage.get("planner_cache_write_1h_tokens", 0)
     prices = cached_price_map(cfg)
 
     lines = [
@@ -298,7 +311,10 @@ def _cost_section(state: RunState, cfg: ProjectConfig) -> list[str]:
         f"- Uncached prompt tokens: {prompt - cached:,}",
         f"- Completion tokens: {completion:,}",
         f"- Estimated cost: "
-        + _dollars(prices, cfg.reviewer.model, prompt, cached, cache_writes, completion),
+        + _dollars(
+            prices, cfg.reviewer.model, prompt, cached, cache_writes, completion,
+            cache_writes_1h,
+        ),
         "",
         f"**Planner** ({cfg.planner.model}, effort {cfg.planner.effort})",
         "",
@@ -311,7 +327,7 @@ def _cost_section(state: RunState, cfg: ProjectConfig) -> list[str]:
         f"- Estimated cost: "
         + _dollars(
             prices, cfg.planner.model, planner_prompt, planner_cached,
-            planner_writes, planner_completion,
+            planner_writes, planner_completion, planner_writes_1h,
         ),
         "",
     ]
@@ -320,6 +336,7 @@ def _cost_section(state: RunState, cfg: ProjectConfig) -> list[str]:
     if exec_prompt:
         exec_cached = run_usage.get("executor_cached_tokens", 0)
         exec_writes = run_usage.get("executor_cache_write_tokens", 0)
+        exec_writes_1h = run_usage.get("executor_cache_write_1h_tokens", 0)
         exec_completion = run_usage.get("executor_completion_tokens", 0)
         exec_pct = exec_cached / exec_prompt * 100
         lines += [
@@ -333,7 +350,7 @@ def _cost_section(state: RunState, cfg: ProjectConfig) -> list[str]:
             "- Estimated cost: "
             + _dollars(
                 prices, cfg.executor.model, exec_prompt, exec_cached,
-                exec_writes, exec_completion,
+                exec_writes, exec_completion, exec_writes_1h,
             ),
             "",
         ]

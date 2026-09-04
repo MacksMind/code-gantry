@@ -588,12 +588,26 @@ site goes quietly missing.
   `anthropic/claude-fable-5.1` through the gateway is `claude-fable-5-1`
   direct; the prefix is OpenRouter's routing id and the dots are its
   convention. `dialect_for` reads the same needle either way.
-- **Anthropic reports cache writes in two buckets and we price one.**
-  `cache_creation.ephemeral_5m_input_tokens` and `ephemeral_1h_input_tokens`
-  arrive separately, `cache_creation_input_token_cost_above_1hr` is in the rate
-  table, and `_messages_usage` sums them before either can be priced. A 1h
-  write is 2x base against 5m's 1.25x, so the report drifts exactly when the
-  bill improves.
+- **Anthropic reports cache writes in two buckets, and a sum cannot be
+  decomposed later.** `cache_creation.ephemeral_5m_input_tokens` and
+  `ephemeral_1h_input_tokens` arrive separately and
+  `cache_creation_input_tokens` is their total; a 1h write is 2x base against
+  5m's 1.25x. Pricing the total at the cheaper rate understated the planner by
+  25% a derivation — $2.60 reported against $3.24 — starting the day the plan
+  block's TTL began being read correctly, so **the report drifted exactly when
+  the bill improved**. `cache_write_1h_tokens` is a *component* of
+  `cache_write_tokens`, so every reader that does not care about rates is
+  unchanged, and `price_usage`'s `writes_1h` is **required and keyword-only**
+  because a caller holding the breakdown and forgetting it reproduces the
+  defect in silence. A rate table with no `above_1hr` key cannot separate them
+  and falls back to base: an unpriced distinction should cost the old
+  arithmetic, not a guess in the expensive direction.
+- **A test that pins the last field stops saying the rule when a field is
+  added.** `TokenUsage` and `PlannerUsage` are built positionally, so the rule
+  is *new fields append*; asserting `names[-1] == "provider_cost_usd"` merely
+  described where the growing edge happened to be. Pin the prefix instead —
+  which also writes down the transposition, since the two orders differ at
+  positions 1 and 2.
 
 ## Tests
 

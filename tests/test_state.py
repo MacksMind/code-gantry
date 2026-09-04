@@ -149,6 +149,12 @@ class TestUsageAccumulation:
             "completion_tokens", "planner_prompt_tokens",
             "planner_cached_tokens", "planner_cache_write_tokens",
             "planner_completion_tokens",
+            # A component of the write total rather than an addition to it:
+            # a 1h write costs 2x base against a 5m write's 1.25x, and the
+            # provider reports the two separately and sums them into one
+            # field. Priced as one bucket the planner line understated by 25%.
+            "cache_write_1h_tokens", "planner_cache_write_1h_tokens",
+            "executor_cache_write_1h_tokens",
             # The executor had none of these while it was a subprocess whose
             # usage was scraped from a console line. In-process it reports
             # real counts, and without a home here the cache hit rate is

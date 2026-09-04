@@ -45,12 +45,73 @@ class TestCostComesHome:
     from a rate table is a second arithmetic over the same tokens, and the
     second is the one that drifts."""
 
-    def test_both_usage_types_carry_it_last(self):
+    def test_both_usage_types_only_ever_grow_at_the_end(self):
         """Both are constructed positionally, so a field in the middle would
-        silently reassign every caller."""
-        for kind in (TokenUsage, PlannerUsage):
-            names = list(kind.__dataclass_fields__)
-            assert names[-1] == "provider_cost_usd", kind.__name__
+        silently reassign every caller. Pinning the prefix rather than the last
+        name says the actual rule — new fields append — and keeps saying it
+        after the next one lands. It also writes down the transposition: these
+        two carry the same names in a different order at positions 1 and 2, and
+        both are built positionally."""
+        assert list(TokenUsage.__dataclass_fields__)[:6] == [
+            "prompt_tokens", "completion_tokens", "cached_tokens",
+            "cache_write_tokens", "peak_prompt_tokens", "provider_cost_usd",
+        ]
+        assert list(PlannerUsage.__dataclass_fields__)[:6] == [
+            "prompt_tokens", "cached_tokens", "completion_tokens",
+            "cache_write_tokens", "peak_prompt_tokens", "provider_cost_usd",
+        ]
+
+    def test_the_long_window_write_reaches_the_run_totals_and_the_bill(self):
+        """Tested the way the values that were lost crossing these schemas were
+        not: extractor to `run_usage` to a priced figure, with the arithmetic
+        checked at the far end rather than the near one. No ordinal claimed —
+        the count is spelled differently in two places already."""
+        from code_gantry.pricing import price_usage
+        from code_gantry.planner import _extract_usage
+
+        class U:
+            input_tokens = 0
+            output_tokens = 0
+            cache_read_input_tokens = 0
+            cache_creation_input_tokens = 1_000_000
+            cache_creation = type(
+                "C", (), {"ephemeral_1h_input_tokens": 400_000},
+            )()
+
+        totals = accumulate_usage(None, **usage_deltas("planner_", _extract_usage(U())))
+        assert totals["planner_cache_write_tokens"] == 1_000_000
+        assert totals["planner_cache_write_1h_tokens"] == 400_000
+        # And it is a component, so two calls sum like any other total.
+        twice = accumulate_usage(totals, **usage_deltas("planner_", _extract_usage(U())))
+        assert twice["planner_cache_write_1h_tokens"] == 800_000
+
+        entry = {
+            "input_cost_per_token": 1e-05,
+            "output_cost_per_token": 5e-05,
+            "cache_read_input_token_cost": 2.5e-07,
+            "cache_creation_input_token_cost": 1.25e-05,
+            "cache_creation_input_token_cost_above_1hr": 2e-05,
+        }
+        billed = price_usage(
+            entry,
+            totals["planner_prompt_tokens"],
+            totals["planner_cached_tokens"],
+            totals["planner_cache_write_tokens"],
+            totals["planner_completion_tokens"],
+            writes_1h=totals["planner_cache_write_1h_tokens"],
+        )
+        assert billed == pytest.approx(600_000 * 1.25e-05 + 400_000 * 2e-05)
+        # What it cost before the split, which is the size of the defect.
+        blind = price_usage(
+            entry,
+            totals["planner_prompt_tokens"],
+            totals["planner_cached_tokens"],
+            totals["planner_cache_write_tokens"],
+            totals["planner_completion_tokens"],
+            writes_1h=0,
+        )
+        assert blind == pytest.approx(12.50)
+        assert billed > blind
 
     def test_deltas_are_walked_not_enumerated(self):
         """Four call sites named these by hand, and this codebase has already

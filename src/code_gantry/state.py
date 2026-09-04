@@ -95,10 +95,12 @@ class StageResult(TypedDict, total=False):
     prompt_tokens: int
     cached_tokens: int
     cache_write_tokens: int
+    cache_write_1h_tokens: int
     completion_tokens: int
     planner_prompt_tokens: int
     planner_cached_tokens: int
     planner_cache_write_tokens: int
+    planner_cache_write_1h_tokens: int
     planner_completion_tokens: int
 
 
@@ -347,6 +349,11 @@ def zero_usage() -> dict[str, int]:
         # for it, which is the fourth value to be computed correctly, written
         # correctly, and lost crossing a schema.
         "cache_write_tokens": 0,
+        # The part of the line above written under a one-hour marker: 2x base
+        # against the five-minute bucket's 1.25x. It is a *component* of the
+        # total rather than an addition to it, which is why the total keeps its
+        # meaning and every reader that does not care about rates is unchanged.
+        "cache_write_1h_tokens": 0,
         "completion_tokens": 0,
         "planner_prompt_tokens": 0,
         # Not a total; see `accumulate_usage`. The largest single call of a
@@ -355,6 +362,7 @@ def zero_usage() -> dict[str, int]:
         "planner_peak_prompt_tokens": 0,
         "planner_cached_tokens": 0,
         "planner_cache_write_tokens": 0,
+        "planner_cache_write_1h_tokens": 0,
         "planner_completion_tokens": 0,
         # The executor had no keys here at all while it was a subprocess:
         # its usage was scraped from a console line that omitted reasoning
@@ -366,6 +374,7 @@ def zero_usage() -> dict[str, int]:
         "executor_prompt_tokens": 0,
         "executor_cached_tokens": 0,
         "executor_cache_write_tokens": 0,
+        "executor_cache_write_1h_tokens": 0,
         "executor_completion_tokens": 0,
     }
 

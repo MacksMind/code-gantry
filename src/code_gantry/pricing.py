@@ -217,6 +217,8 @@ def price_usage(
     cached: int,
     cache_writes: int,
     completion: int,
+    *,
+    writes_1h: int,
 ) -> float | None:
     """What one role's token counts cost, or None when the model is unpriced.
 
@@ -234,6 +236,21 @@ def price_usage(
     understates by 25% of whatever was just written, which is worst on exactly
     the calls that grow the cacheable prefix — the ones a prompt-ordering
     change is meant to be judged on.
+
+    And there are *two* such buckets, which is the same lesson one level down.
+    A five-minute write is 1.25x base and a one-hour write is 2x; Anthropic
+    reports them separately and sums them into one field, so pricing that sum
+    at the cheaper rate understates by 60% of whatever went out under a `1h`
+    marker. Measured on eleven planner derivations: $2.60 a call reported
+    against $3.24 actual, and it appeared the day the plan block's TTL started
+    being read correctly — the report drifted exactly when the bill improved.
+
+    `writes_1h` is keyword-only and required for that reason. A caller that
+    holds the breakdown and forgets to pass it reproduces the defect silently,
+    and an optional keyword does not reach the call sites that predate it; a
+    required one makes every caller say what it knows. Zero is the honest
+    answer for a wire with one write rate, and the Responses extractor gives
+    exactly that.
     """
     if not entry:
         return None
@@ -248,11 +265,23 @@ def price_usage(
     # A model with no cache pricing is not a model whose cache is free.
     read_rate = in_rate if read_rate is None else read_rate
     write_rate = in_rate if write_rate is None else write_rate
+    # A table with no long-window rate is a table that cannot separate them,
+    # not a provider giving the long window away. Falling back to the base
+    # write rate reproduces the old arithmetic exactly, which is what an
+    # unpriced distinction should cost.
+    long_rate = entry.get("cache_creation_input_token_cost_above_1hr")
+    long_rate = write_rate if long_rate is None else long_rate
 
+    # Clamped rather than trusted. The buckets come from one provider's report
+    # and the total from another field of it; a breakdown larger than its own
+    # total is a reading about the wire, and pricing negative tokens would
+    # answer it by handing back money.
+    long_writes = min(max(writes_1h, 0), max(cache_writes, 0))
     uncached = max(prompt - cached - cache_writes, 0)
     return (
         uncached * in_rate
         + cached * read_rate
-        + cache_writes * write_rate
+        + (cache_writes - long_writes) * write_rate
+        + long_writes * long_rate
         + completion * out_rate
     )
