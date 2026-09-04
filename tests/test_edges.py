@@ -84,6 +84,37 @@ def _hops_each_node_can_return() -> dict[str, set[str]]:
 
 
 class TestTheTableMatchesTheNodes:
+    def test_every_layer_a_node_escalates_with_is_a_declared_one(self):
+        """`resume_entry_point` routes on `failure_layer`, so an unregistered
+        one is not a type error — it is a resume that silently falls through to
+        `stage_has_work` and re-enters somewhere nobody chose. Derived from the
+        source for the same reason `EDGES` is: two statements of one thing with
+        nothing comparing them is how `execute`'s escalation went unlisted for
+        as long as it existed. Caught this test's own author adding
+        `branch_moved` and `tree_dirty` to `finalize` and to neither set."""
+        import ast
+        import pathlib as _p
+        import typing
+
+        from code_gantry.state import FailureLayer
+
+        tree = ast.parse((_p.Path(__file__).resolve().parents[1]
+                          / "src" / "code_gantry" / "nodes.py").read_text())
+        used = {
+            n.args[0].value
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Name)
+            and n.func.id == "_escalate"
+            and n.args
+            and isinstance(n.args[0], ast.Constant)
+            and isinstance(n.args[0].value, str)
+        }
+        assert used, "the parse found no _escalate call, so it is not testing anything"
+        assert used <= set(typing.get_args(FailureLayer)), sorted(
+            used - set(typing.get_args(FailureLayer))
+        )
+
     def test_no_node_can_return_a_hop_the_table_forbids(self):
         hops = _hops_each_node_can_return()
         illegal = {

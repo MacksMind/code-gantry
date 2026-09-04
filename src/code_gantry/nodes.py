@@ -2114,22 +2114,62 @@ def held_hop(landed: dict) -> str:
 
 
 def finalize(state: RunState, rt: Runtime) -> dict:
-    command = rt.cfg.full_test_command
-    if not command:
+    """Check the tip is the commit the gates approved, and stop.
+
+    This ran the full suite until it was measured. On the only path that
+    reaches here the tree is the one the last landing's review gate ran that
+    same command on: verified on run 20260904-120923, where the tip was
+    `05e65fc5ba44` — the commit `advance` had just produced — with nothing
+    between the two runs but a planner derivation, which touches no file. So a
+    second run could only discover nondeterminism in the suite.
+
+    And it scored that second sample harder than the first. A red suite at the
+    review gate goes through `flake.adjudicate`: rerun the file whole and
+    alone, excuse it, record it to `flakes.jsonl`. Here there was none of that,
+    so 22 stages that each landed on a green-or-excused suite were ended by one
+    failure in 6,139 examples on a commit already tested. **A second sample
+    scored more harshly than the first is not a second check**, and the
+    escalation clipped its own diagnosis: the `Failure/Error:` block was in the
+    6,427 characters `_clip` dropped from the middle, and finalize writes no
+    `full-suite.log`, so the run cost three minutes and reported a failure
+    nobody could read.
+
+    What is left is the part the suite could not answer anyway, and it costs
+    two git commands. `pin_modules` pins *our* code for the length of a run and
+    says nothing about the target repository, so a human editing it mid-run and
+    anything landing on the branch from outside the pipeline are both live —
+    and both are invisible to a suite, which would pass on the edited tree.
+    """
+    completed = state.get("completed") or []
+    if not completed:
+        # Nothing landed, so there is no approved commit to compare against and
+        # the tip belongs to whatever ran before this session.
         return {"status": "complete", "next_hop": "end", **_session_elapsed(state)}
 
-    rt.log("[finalize] running the full suite on the project branch tip")
-    result = rt.runner.run(command)
-    if result.ok:
-        return {"status": "complete", "next_hop": "end", **_session_elapsed(state)}
-
-    return {
-        **_escalate(
-            "full_suite",
-            "Every stage passed on its own, but the full suite failed on the "
-            f"project branch tip:\n{result.summary()}\n{_clip(result.output)}",
-        )
-    }
+    approved = (completed[-1] or {}).get("merge_sha") or ""
+    head = rt.git.head_sha()
+    if approved and head != approved:
+        return {
+            **_escalate(
+                "branch_moved",
+                f"The project branch tip is {head}, and the last stage this run "
+                f"landed produced {approved}. Something outside the pipeline "
+                "committed to the branch: every gate's verdict describes a tree "
+                "that is no longer what the branch points at.",
+            )
+        }
+    if not rt.git.is_clean():
+        return {
+            **_escalate(
+                "tree_dirty",
+                "Every stage landed, but the working tree has changes no stage "
+                "made. The gates read the tree, so their verdicts are about "
+                "content that is not what is committed:\n"
+                + "\n".join(rt.git.uncommitted()),
+            )
+        }
+    rt.log(f"[finalize] tip is {approved}, the commit the last stage landed; tree clean")
+    return {"status": "complete", "next_hop": "end", **_session_elapsed(state)}
 
 
 # --- escalate ------------------------------------------------------------

@@ -1520,15 +1520,52 @@ class TestAdvance:
 
 
 class TestFinalize:
-    def test_green_suite_completes(self, repo, tmp_path):
-        cfg, rt, state = make(repo, tmp_path)
+    """It no longer runs the suite. On the path that reaches here the tree is
+    the one the last landing's review gate already ran it on, so a second run
+    could only resample the suite's own nondeterminism — and did it without the
+    flake adjudication the review gate applies to the same command."""
+
+    def test_the_suite_is_not_run_again(self, repo, tmp_path):
+        # The whole change, asserted where it can fail: a command that would
+        # fail loudly if anything still invoked it.
+        cfg, rt, state = make(repo, tmp_path, full_test_command="exit 1")
+        state["completed"] = [{"merge_sha": rt.git.head_sha()}]
         assert nodes.finalize(state, rt)["status"] == "complete"
 
-    def test_red_suite_escalates(self, repo, tmp_path):
-        cfg, rt, state = make(repo, tmp_path, full_test_command="exit 1")
+    def test_an_approved_tip_completes(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        state["completed"] = [{"merge_sha": rt.git.head_sha()}]
+        out = nodes.finalize(state, rt)
+        assert out["status"] == "complete"
+        assert out["next_hop"] == "end"
+
+    def test_a_branch_moved_under_us_escalates(self, repo, tmp_path):
+        # What the suite could not have answered: it would have passed on the
+        # new commit, because a suite reads the tree and not the history.
+        cfg, rt, state = make(repo, tmp_path)
+        state["completed"] = [{"merge_sha": "0" * 40}]
         out = nodes.finalize(state, rt)
         assert out["next_hop"] == "escalate"
-        assert "project branch tip" in out["escalation_reason"]
+        assert out["failure_layer"] == "branch_moved"
+        assert rt.git.head_sha() in out["escalation_reason"]
+
+    def test_a_dirty_tree_escalates_and_names_the_files(self, repo, tmp_path):
+        # `pin_modules` pins our code for the length of a run and says nothing
+        # about the target repository, so a human editing it mid-run is live.
+        cfg, rt, state = make(repo, tmp_path)
+        state["completed"] = [{"merge_sha": rt.git.head_sha()}]
+        (repo / "app.py").write_text("edited by a human mid-run\n")
+        out = nodes.finalize(state, rt)
+        assert out["next_hop"] == "escalate"
+        assert out["failure_layer"] == "tree_dirty"
+        assert "app.py" in out["escalation_reason"]
+
+    def test_a_run_that_landed_nothing_has_nothing_to_compare(self, repo, tmp_path):
+        # The tip belongs to whatever ran before this session, so there is no
+        # approved commit and no claim to make about it.
+        cfg, rt, state = make(repo, tmp_path, full_test_command="exit 1")
+        state["completed"] = []
+        assert nodes.finalize(state, rt)["status"] == "complete"
 
 
 class TestEscalate:

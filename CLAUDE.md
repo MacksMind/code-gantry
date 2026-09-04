@@ -437,6 +437,28 @@ site goes quietly missing.
 - **Separate what was found from what should happen next.** Before withholding
   approval over a consequence, *verify* the consequence; naming one is not
   establishing it.
+- **A second sample scored more harshly than the first is not a second
+  check.** `finalize` re-ran the full suite on a tree the last landing's review
+  gate had already run it on — verified on run 20260904-120923, tip
+  `05e65fc5ba44`, nothing between the two runs but a derivation — so it could
+  only resample the suite's nondeterminism, and it did so without the
+  `flake.adjudicate` path the review gate gives the same command. 22 stages
+  landed green; one failure in 6,139 examples escalated the run, and `_clip`
+  dropped the `Failure/Error:` block from the middle of its own diagnosis
+  because finalize writes no `full-suite.log`. It now asserts the tip is the
+  commit the last landing produced and the tree is clean: what a suite cannot
+  answer, since a suite reads the tree and passes on the altered one.
+- **Ask what a repeated check is a second sample *of*.** If the tree is
+  identical the answer is "the runner", and that is a question about the
+  runner, not the work.
+- **A failure layer is declared in one place and routed in another.**
+  `resume_entry_point` reads `failure_layer`, so an unregistered one is not a
+  type error — it is a resume falling through to `stage_has_work` and
+  re-entering where nobody chose. `budget`, `commit` and `gates` were emitted
+  and persisted for months while absent from `FailureLayer`; an AST test over
+  `nodes.py`'s `_escalate` calls found all three at once, the same idiom that
+  derives `EDGES`. **Declaring is not routing** — making the list true and
+  deciding where a resume re-enters are separate changes.
 - **Every gate says why.** A reason that reaches only the planner and the
   checkpoint reaches the two places a person does not look.
 - **A guard and the reset it depends on are one decision written in two

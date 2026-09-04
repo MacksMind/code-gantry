@@ -490,13 +490,19 @@ class TestEscalationPaths:
         assert final["status"] == "escalated"
         assert "budget is exhausted" in final["escalation_reason"]
 
-    def test_a_red_full_suite_at_the_end_escalates(self, repo, tmp_path, scripted_edits):
+    def test_the_full_suite_is_not_re_run_at_the_end(self, repo, tmp_path, scripted_edits):
+        """Driven end to end, because this is where the old behaviour lived.
+
+        `finalize` used to run the suite a second time on a tree the last
+        landing's review gate had already run it on, and without that gate's
+        flake adjudication — so a suite that fails once in thousands of
+        examples ended a run whose every stage had landed green. A command
+        that always fails proves nothing invokes it any more."""
         planner = ScriptedPlanner([PlannerOutcome("project_complete", "done", "e")])
         cfg, project, paths, final = drive(
             repo, tmp_path, planner=planner, full_test_command="exit 1"
         )
-        assert final["status"] == "escalated"
-        assert "project branch tip" in final["escalation_reason"]
+        assert final["status"] == "complete"
 
 
 class TestResume:

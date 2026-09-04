@@ -37,6 +37,23 @@ FailureLayer = Literal[
     "paused",
     "review",
     "full_suite",
+    # Emitted by `nodes` and persisted, and absent here until a test read the
+    # `_escalate` calls out of the source and compared the two. Declaring them
+    # is not routing them: all three fall to `stage_has_work` on resume, which
+    # is the fallback rather than a decision anybody made. `budget` may well
+    # belong in neither set, like `workspace`; `commit` and `gates` both leave
+    # the attempt's work committed on the stage branch and read like repo
+    # state. Left alone deliberately — changing where a resume re-enters is a
+    # separate decision from making this list true.
+    "budget",
+    "commit",
+    "gates",
+    # What `finalize` can find once it stopped re-running the suite. Both are
+    # about the repository rather than the work: the tip is not the commit the
+    # last landing produced, or the tree carries changes no stage made. A suite
+    # answers neither — it reads the tree and would pass on the altered one.
+    "branch_moved",
+    "tree_dirty",
     "planner",
 ]
 
@@ -45,7 +62,7 @@ FailureLayer = Literal[
 # escalation would re-run the stage and discard the human's fix.
 REPO_STATE_FAILURES = frozenset(
     {"setup", "branch", "scope", "patterns", "tests", "checks", "new_tests",
-     "progress", "review", "full_suite"}
+     "progress", "review", "full_suite", "branch_moved", "tree_dirty"}
 )
 PLANNING_FAILURES = frozenset({"precondition", "planner", "replan"})
 # `replan` belongs here by definition rather than by observation: the executor
