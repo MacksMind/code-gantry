@@ -370,7 +370,10 @@ def _ledger_check(cfg: ProjectConfig, project_dir) -> Check:
             "no `ledger:` section in the config; set `ledger.key_prefix` and "
             "import the plan with `code-gantry plan import`",
         )
-    paths = ProjectPaths(project_dir or cfg.work_dir)
+    paths = (
+        project_dir if isinstance(project_dir, ProjectPaths)
+        else ProjectPaths(project_dir or cfg.work_dir)
+    )
     if not paths.ledger.is_file():
         # Ordinary before the first import; `run` refuses on its own.
         return Check(

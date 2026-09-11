@@ -225,3 +225,17 @@ class TestLedgerCommands:
         projection = run("ledger", "render", "--projection").output
         assert "# Demo plan {#p.001}" in plan_text and "claimed" not in plan_text
         assert "### Claimed" in projection and "p.004" in projection
+
+
+class TestValidateSeesTheLedger:
+    def test_validate_reports_the_imported_plan(self, project):
+        imported(project)
+        result = CliRunner().invoke(cli.main, ["validate", "--skip-tests"])
+        assert "Traceback" not in result.output
+        assert "ledger holds a plan" in result.output
+        assert "2 document(s), 4 item(s), 3 open and drawable" in result.output
+
+    def test_validate_before_an_import_is_not_fatal_about_it(self, project):
+        result = CliRunner().invoke(cli.main, ["validate", "--skip-tests"])
+        assert "Traceback" not in result.output
+        assert "no ledger at" in result.output
