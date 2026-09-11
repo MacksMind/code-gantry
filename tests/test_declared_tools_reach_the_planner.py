@@ -1,31 +1,13 @@
-"""The planner must be told what the executor can actually do.
+"""The planner is told what the executor can run, generated from the config.
 
-`PLANNER_SYSTEM_PROMPT` states, flatly, that the executor "cannot run commands"
-and that "what it has no tool for is running anything". That was true of every
-project until `project_tools` shipped, and it is now false for any project that
-declares one — while the *plan* documents, written by people who knew about the
-new tools, say the opposite.
-
-The planner did exactly the right thing with the contradiction and it cost us
-anyway. Verbatim, anchored to the plan:
-
-    under this pipeline's contract the executor has read tools only and cannot
-    run bundler, so a gem-resolution stage cannot read Bundler's answer …
-    the two documents and the pipeline contract disagree, so check which holds
-    before drawing one of these rather than trusting either
-
-That is the expensive failure direction named in `PlanNote.kind`: work that
-reads as blocked is never attempted, and nothing downstream catches it, because
-a stage that is never drawn leaves no artifact to be wrong. A whole stream of
-gem work was withheld on the strength of a sentence in our own prompt.
-
-So the capability paragraph is *generated from the config* rather than asserted.
 A tool the operator declares is a tool the planner is told about, by
-construction — the same reason the reviewer is told about the editor's newline
-normalisation rather than being left to rediscover it.
+construction; a project declaring none is told so through its own file. A
+sentence asserting a capability outlives the fact it was written about, and a
+false constraint withholds work that leaves no artifact to be caught.
 """
 
 from code_gantry.config import ProjectTool, ToolArgument
+from code_gantry.promptfiles import text
 
 
 def a_tool(**over):
@@ -45,14 +27,9 @@ def _text(tools):
 
 
 class TestWithNoDeclaredTools:
-    def test_it_still_says_the_executor_cannot_run_anything(self):
-        text = _text([]).lower()
-        assert "no tool for is running anything" in text or "cannot run" in text
-
-    def test_it_still_warns_against_asking_for_a_shell(self):
-        # The failure that paragraph was written for: one such instruction cost
-        # ten minutes of a model looping over hallucinated command output.
-        assert "invent" in _text([]).lower()
+    def test_it_sends_the_no_tools_file(self):
+        assert text("planner/capability_no_declared_tools") in _text([])
+        assert text("planner/capability_declared_intro") not in _text([])
 
 
 class TestWithDeclaredTools:
@@ -62,18 +39,18 @@ class TestWithDeclaredTools:
     def test_the_operator_description_is_carried(self):
         assert "Install what the manifest names" in _text([a_tool()])
 
-    def test_the_blanket_denial_is_gone(self):
-        # The sentence that withheld the work. It must not survive alongside a
-        # declared tool, or the planner is handed the same contradiction from
-        # one paragraph instead of two documents.
-        text = _text([a_tool()]).lower()
-        assert "no tool for is running anything" not in text
-        assert "cannot run commands" not in text
+    def test_the_no_tools_file_is_not_sent_beside_a_declared_tool(self):
+        # The denial must not survive alongside a declared tool, or the planner
+        # is handed a contradiction from one paragraph instead of two documents.
+        assert text("planner/capability_no_declared_tools") not in _text([a_tool()])
 
-    def test_it_still_refuses_an_undeclared_command(self):
-        # The partition is unchanged: declared tools are a menu, not a shell.
-        text = _text([a_tool()]).lower()
-        assert "invent" in text or "not declared" in text
+    def test_the_declared_menu_is_framed_by_its_files(self):
+        # Declared tools are a menu, not a shell: the intro and the outro that
+        # say so travel with the list.
+        rendered = _text([a_tool()])
+        assert text("planner/capability_declared_intro") in rendered
+        assert text("planner/capability_declared_outro") in rendered
+        assert rendered.index("bundle_install") < rendered.index(text("planner/capability_declared_outro"))
 
     def test_an_argument_is_described(self):
         tool = a_tool(
@@ -93,12 +70,11 @@ class TestItReachesTheRealPrompt:
         text = _system_blocks(project_tools=[a_tool()])[0]["text"]
         assert "bundle_install" in text
 
-    def test_a_project_with_no_tools_reads_as_it_always_did(self):
-        # The constant is a template now, so it is no longer the final text.
+    def test_a_project_with_no_tools_gets_the_no_tools_file(self):
+        # The constant is a template; what a model reads is the rendered block.
         from code_gantry.planner import _system_blocks
 
-        text = _system_blocks()[0]["text"]
-        assert "no tool for is running anything" in text
+        assert text("planner/capability_no_declared_tools") in _system_blocks()[0]["text"]
 
     def test_the_placeholder_never_survives_into_a_prompt(self):
         # A template marker reaching a model is worse than a stale sentence:

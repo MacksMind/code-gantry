@@ -14,8 +14,16 @@ it shows up here rather than on an invoice.
 
 from types import SimpleNamespace
 
+from code_gantry.promptfiles import raw, render, text
 from code_gantry.prompts import build_planner_messages, build_review_messages
 from test_config import as_test_tools
+
+
+def line_of(name):
+    """Enough of a prompt file to say it is present: its longest line that
+    carries no placeholder. The words are the file's to change."""
+    lines = [l.strip() for l in raw(name).splitlines() if "$" not in l and l.strip()]
+    return max(lines, key=len)
 
 
 def a_plan(text="do the thing"):
@@ -195,7 +203,9 @@ class TestPlannerCacheBreakpoint:
             cfg=None, plan_text=a_plan(), completed=[],
             interventions_used=3, interventions_max=12,
         )
-        assert "intervention(s) left" not in leading_text(messages)
+        budget = render("planner/budget", remaining=9, max=12)
+        assert budget not in leading_text(messages)
+        assert budget in all_text(messages)
 
     def test_one_breakpoint_in_the_message_and_no_more(self):
         """After the plan, and nowhere else in the message.
@@ -244,62 +254,33 @@ class TestPlannerCacheBreakpoint:
 
 
 class TestARunsHistoryIsNotTheProjectsHistory:
-    """An empty completed list means this run is new, not the project.
+    """An empty completed list is this run's history, not the project's, and
+    the file that says so is sent only then."""
 
-    The block used to render "None yet — this is the first stage of the
-    project", which is true exactly once and false every restart after. A month
-    of landed work looks identical to a greenfield start, and the planner was
-    being told the false one as a statement of fact.
-
-    What it must not do is invent a substitute claim in the other direction.
-    The run genuinely does not know what the project has done; it knows where
-    that is written down. So it says that, and points at the plan directory and
-    the progress log inside it.
-    """
-
-    def test_it_does_not_claim_the_project_is_starting(self):
-        text = all_text(build_planner_messages(_cfg(), a_plan(), []))
-        assert "first stage of the project" not in text
-
-    def test_it_says_the_runs_history_is_what_is_empty(self):
-        text = all_text(build_planner_messages(_cfg(), a_plan(), []))
-        assert "this run" in text.lower()
-
-    def test_it_points_at_the_written_record(self):
-        # The planner has read tools; what it needs is to be told where the
-        # record is, not to be handed a summary. Asserted inside the history
-        # block itself — the plan block names the log too, and this is about
-        # the empty history not leaving the planner to infer anything.
-        text = all_text(build_planner_messages(_cfg(), a_plan(), []))
-        history = text.split("## Completed stages", 1)[1]
-        assert "ledger" in history
+    def test_an_empty_history_sends_the_empty_case_file(self):
+        text_ = all_text(build_planner_messages(_cfg(), a_plan(), []))
+        assert text("planner/history_empty") in text_
 
     def test_a_populated_history_does_not_get_the_empty_case(self):
-        text = all_text(
+        text_ = all_text(
             build_planner_messages(
                 _cfg(), a_plan(), [{"index": 0, "id": "s1", "instruction": "did it"}]
             )
         )
-        history = text.split("## Completed stages", 1)[1]
-        assert "s1" in history
-        assert "None **in this run**" not in history
+        assert "s1" in text_
+        assert text("planner/history_empty") not in text_
+        assert text("planner/history_head") in text_
 
 
 class TestTheProjectionIsNamedAsTheRecordOfWhatIsDone:
-    """The planner must know that the section after the plan is the record.
+    """The intro that explains keys leads the plan text, and the projection
+    section appears only when there is a projection."""
 
-    The plan text is rendered from the ledger and says what the work is; the
-    projection that follows it says what has changed since the text was last
-    folded. Which is later is stated, not left to be inferred.
-    """
-
-    def test_the_intro_names_the_section_after_the_plan(self):
-        text = leading_text(build_planner_messages(_cfg(), a_plan(), []))
-        assert "since this text was last folded" in text
-
-    def test_it_says_the_plan_alone_does_not_know_what_is_done(self):
-        text = leading_text(build_planner_messages(_cfg(), a_plan(), []))
-        assert "that section is later" in text
+    def test_the_intro_leads_the_plan_text(self):
+        leading = leading_text(build_planner_messages(_cfg(), a_plan(), []))
+        intro = render("planner/plan_intro", prefix="p")
+        assert intro in leading
+        assert leading.index(intro) < leading.index("do the thing")
 
     def test_the_projection_reaches_the_planner_after_the_mark(self):
         messages = build_planner_messages(
@@ -310,8 +291,8 @@ class TestTheProjectionIsNamedAsTheRecordOfWhatIsDone:
         assert "{#p.002} — `abc`" in blocks[1]["text"]
 
     def test_an_empty_projection_adds_no_section(self):
-        text = all_text(build_planner_messages(_cfg(), a_plan(), [], projection=""))
-        assert "since the plan text was last folded" not in text
+        text_ = all_text(build_planner_messages(_cfg(), a_plan(), [], projection=""))
+        assert line_of("planner/projection") not in text_
 
 
 class TestPerProjectGuidance:
@@ -347,13 +328,11 @@ class TestPerProjectGuidance:
 
         assert _system_blocks()[0]["text"] == _system_blocks(guidance="")[0]["text"]
 
-    def test_guidance_is_attributed_to_the_operator(self):
-        # The planner should be able to tell project policy from the standing
-        # contract, and weigh a conflict knowingly rather than silently.
+    def test_guidance_is_framed_by_its_file_at_the_end(self):
         from code_gantry.planner import _system_blocks
 
-        text = _system_blocks(guidance="G")[0]["text"]
-        assert "project" in text.lower().split("## ")[-1]
+        text_ = _system_blocks(guidance="G")[0]["text"]
+        assert text_.endswith("\n\n" + render("planner/guidance", guidance="G"))
 
     def test_it_is_not_a_planner_writable_field(self):
         from code_gantry.config import PLANNER_WRITABLE_FIELDS
@@ -361,39 +340,6 @@ class TestPerProjectGuidance:
 
         assert "guidance" not in PlannedStage.model_fields
         assert "guidance" not in PLANNER_WRITABLE_FIELDS
-
-
-class TestDeployableIncrements:
-    def test_the_prompt_asks_for_independently_shippable_stages(self):
-        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
-
-        lowered = PLANNER_SYSTEM_PROMPT.lower()
-        assert "deploy" in lowered
-
-    def test_the_prompt_says_the_plan_states_dependencies_not_a_queue(self):
-        # A step needing access this run does not have must not stop the run,
-        # and a plan's line order is not an instruction. Both have to be said,
-        # or the planner escalates on the first thing it cannot reach.
-        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
-
-        lowered = PLANNER_SYSTEM_PROMPT.lower()
-        assert "depends on what" in lowered
-        assert "not a queue" in lowered
-        assert "cannot do at all" in lowered
-
-
-class TestScopedTestGuidance:
-    def test_the_prompt_says_what_omitting_test_paths_costs(self):
-        # A behaviour-preserving refactor changes no specs by design, so on a
-        # migration the scoped path depends almost entirely on the planner
-        # naming the specs that cover the code it touches. Left as a neutral
-        # optional field, it will be skipped, and every stage pays for a full
-        # suite on every retry.
-        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
-
-        lowered = PLANNER_SYSTEM_PROMPT.lower()
-        assert "test_paths" in lowered
-        assert "whole suite" in lowered or "full suite" in lowered
 
 
 class TestTheZeroDiffHandoff:
@@ -430,7 +376,7 @@ class TestThePlannerPromptCarriesNoProjectVocabulary:
         lowered = PLANNER_SYSTEM_PROMPT.lower()
         for word in (
             "rails", "ruby", "rspec", "gemfile", "django", "npm",
-            "spec/", "app/", "src/", ".rb", ".py",
+            "spec/", "app/", "src/", ".rb", ".py", ".erb", "activerecord",
         ):
             assert word not in lowered, f"{word!r} is one project's vocabulary"
 
@@ -511,54 +457,15 @@ class TestReviewerCacheBreakpoint:
 
 
 class TestTheExecutorCannotRunCommands:
-    """A stage that asks for the impossible gets an infinite argument.
+    """A project declaring no tools is told, through the capability
+    paragraph, that the executor has none to run; the schema says so too."""
 
-    Observed live. The planner wrote, into `instruction`:
-
-        Find the sites by content instead:
-            grep -n 'nothing:' app/controllers/fckeditor_controller.rb
-        ...
-        When done, re-run the grep above and confirm
-
-    The executor cannot run commands — its own prompt only lets it
-    *suggest* them. So the model hallucinated grep output and argued with
-    itself about the file's contents twenty times over, decoding 24,120 tokens
-    before the client cancelled it at ten minutes. Three times in one evening.
-
-    Capping output bounds what that costs. It does not stop it. The fix is not
-    to ask: mechanical verification belongs in `forbidden_patterns`, which
-    CodeGantry checks against the diff deterministically and for free, and
-    which this very stage already used for unrelated patterns while omitting
-    the one that was its actual goal.
-    """
-
-    def test_the_prompt_says_the_executor_cannot_run_commands(self):
-        # Asserted on the rendered prompt, not the constant. The capability
-        # paragraph is generated from the project's declared tools now, so the
-        # constant is a template and what a model actually reads is this. A
-        # project declaring none — which is every project by default — is told
-        # exactly what it was told before.
+    def test_the_no_tools_paragraph_reaches_the_rendered_prompt(self):
+        # On the rendered prompt, not the constant: the paragraph is generated
+        # from the project's declared tools.
         from code_gantry.planner import _system_blocks
 
-        lowered = _system_blocks()[0]["text"].lower()
-        assert "no tool for is running anything" in lowered
-        assert "grep" in lowered
-
-    def test_it_points_at_forbidden_patterns_as_the_alternative(self):
-        from code_gantry.planner import _system_blocks
-
-        section = _system_blocks()[0]["text"].lower()
-        assert "forbidden_patterns" in section
-        # The guidance has to connect the two: do not ask the executor to
-        # check; declare the check instead. Anchored on the prohibition
-        # itself rather than on the bullet's first words, which now open with
-        # what the executor *can* do — it has read tools, and saying so is
-        # what stops a planner enumerating what `search` would find. Measuring
-        # from the bullet made the window a proxy for the bullet's length
-        # instead of for the distance between the two halves of the argument.
-        idx = section.find("do not write")
-        assert idx != -1
-        assert "forbidden_patterns" in section[idx : idx + 600]
+        assert text("planner/capability_no_declared_tools") in _system_blocks()[0]["text"]
 
     def test_the_field_description_says_it_too(self):
         # The planner sees field descriptions even when it skims the prose.
@@ -757,50 +664,6 @@ class TestTheHistoryCarriesOnlyWhatHasNoOtherHome:
         assert "big/file.rb" in history
 
 
-class TestTheReviewerIsToldWhatTheEditorDoes:
-    """One exemption, stated by the tool rather than by each project.
-
-    The editor normalises the final newline of every file it writes. On a file
-    committed without one that produces a diff hunk no model chose and no
-    instruction can suppress — so a reviewer enforcing scope to the letter
-    rejects correct work, the executor reproduces it, and the stage burns its
-    whole rework budget before reaching the planner. Observed exactly once,
-    costing three attempts at fifteen correct edits.
-
-    A per-project override was considered and rejected: it would not stop the
-    change, only guarantee the rejection, permanently. And the real guard is
-    already in place and made of evidence rather than prose — if a final
-    newline broke something, the full suite is red at the merge gate and the
-    stage does not land.
-    """
-
-    def test_the_exemption_is_stated(self):
-        from code_gantry.prompts import REVIEW_SYSTEM_PROMPT
-
-        text = REVIEW_SYSTEM_PROMPT.lower()
-        assert "final newline" in text
-        assert "no newline at end of file" in text
-
-    def test_trailing_whitespace_on_added_lines_is_declared(self):
-        # The second thing the machinery does without asking. `advance` strips
-        # it before committing, because a pre-commit hook rejecting it killed a
-        # stage four times — so the diff the reviewer reads and the commit that
-        # lands genuinely differ, and only the tool can say so.
-        from code_gantry.prompts import REVIEW_SYSTEM_PROMPT
-
-        text = REVIEW_SYSTEM_PROMPT.lower()
-        assert "trailing whitespace" in text
-        assert "before the stage is committed" in text
-
-    def test_it_is_narrow(self):
-        # Not a licence on whitespace generally. Everything else about it stays
-        # the reviewer's to judge, which is the difference between an exemption
-        # and a hole.
-        from code_gantry.prompts import REVIEW_SYSTEM_PROMPT
-
-        assert "anything else about whitespace" in REVIEW_SYSTEM_PROMPT.lower()
-
-
 class TestTheBreakpointBudgetIsFullySpent:
     """Four is the API's limit; three are in use and the fourth is spare.
 
@@ -969,16 +832,8 @@ class TestThePlannerSeesWhatTheStageHasAlreadyDone:
     def test_the_branch_work_is_rendered_on_a_revision(self):
         assert "let(:seo_header)" in all_text(self._messages())
 
-    def test_it_is_named_as_this_stage_s_own_doing(self):
-        # The whole failure was the planner treating it as pre-existing. The
-        # section has to say whose work it is, not merely show it.
-        text = all_text(self._messages())
-        assert "this stage" in text.lower()
-
-    def test_it_says_the_reviewer_judges_the_same_diff(self):
-        # Without this the planner has the diff and no reason to write in its
-        # vocabulary, which is the half of the bug that showing it does not fix.
-        assert "reviewer" in all_text(self._messages()).lower()
+    def test_it_is_rendered_through_the_stage_diff_file(self):
+        assert render("planner/stage_diff", diff=self.DIFF) in all_text(self._messages())
 
     def test_nothing_is_rendered_when_the_branch_is_empty(self):
         # Revision 0 of a restart, and every first attempt: an empty section
@@ -1049,10 +904,9 @@ class TestTheReviewerReadsTheProjection:
         cached = "".join(
             b["text"] for b in messages[1]["content"] if "prompt_cache_breakpoint" in b
         )
-        text = all_text(messages)
-        assert "`f-h-3` — two callers remain" in text
+        text_ = all_text(messages)
+        assert render("reviewer/proposed", listed="- `f-h-3` — two callers remain") in text_
         assert "f-h-3" not in cached
-        assert "`resolved`" in text
 
     def test_the_history_is_capped(self):
         completed = [
@@ -1112,11 +966,11 @@ class TestTheAgentContextRidesInTheCachedPrefix:
         assert "cache_control" in cached
         assert "the bundle installs itself" in cached["text"]
 
-    def test_it_says_these_are_conventions_not_instructions(self):
-        # The plan says what the work is. This says how the repository
-        # behaves — a planner that conflates them will draw stages from it.
-        text = all_text(self._messages())
-        assert "conventions" in text.lower()
+    def test_it_is_framed_by_the_planner_conventions_file(self):
+        expected = render(
+            "planner/conventions", agent_context="### `AGENTS.md`\n\nthe bundle installs itself"
+        )
+        assert expected in all_text(self._messages())
 
     def test_a_project_without_one_builds_normally(self):
         assert "do the thing" in all_text(self._messages(agent_context=""))
@@ -1155,40 +1009,14 @@ class TestReviewerToolGuidance:
             completed=[],
         )[0]["content"][0]["text"]
 
+    def _tools(self):
+        return render("reviewer/tools", state_not_change=text("shared/state_not_change"))
+
     def test_absent_without_repo_access(self):
-        assert "Looking at the repository" not in self._system(False)
+        assert self._tools() not in self._system(False)
 
     def test_present_with_repo_access(self):
-        assert "Looking at the repository" in self._system(True)
-
-    def test_pre_existing_problems_are_not_grounds_for_rework(self):
-        # A reviewer that can look will find things the stage did not cause.
-        # Rejecting for them burns attempts on work that can never be in scope.
-        text = self._system(True)
-        assert "not grounds for rework" in text
-        assert "problem worse, approve" in text
-
-    def test_it_is_told_where_a_finding_should_go(self):
-        # Without this the tool access is half-wired: a reviewer that can look
-        # will find things, and a finding left in the summary is read once and
-        # lost.
-        text = self._system(True)
-        assert "`observations`" in text
-        assert "ledger" in text
-
-    def test_observations_are_distinguished_from_issues(self):
-        # Conflating them would route a pre-existing problem back to an
-        # executor that cannot fix it.
-        text = self._system(True)
-        assert "those are `issues`" in text
-
-    def test_a_difference_with_no_consequence_is_an_observation(self):
-        # The routing that matters. Rejecting over a difference nobody can
-        # observe costs a rework cycle and returns the same diff; recording it
-        # reaches a human who can decide.
-        text = self._system(True)
-        assert "cannot trace to a consequence" in text
-        assert "approve it and write an observation instead" in text
+        assert self._tools() in self._system(True)
 
     def test_the_guidance_carries_no_project_vocabulary(self):
         # This string ships to every project's reviewer. An example drawn from
@@ -1197,15 +1025,12 @@ class TestReviewerToolGuidance:
         # excluded deliberately: the base contract already says "permitted to
         # edit", and rejecting that would be the test dictating prose rather
         # than catching a leak.
-        text = self._system(True).lower()
+        text_ = self._system(True).lower()
         for word in (
             "rails", "ruby", "gemfile", "rspec", "attr_accessible",
             ".erb", "activerecord", "bundler", "app/", "spec/",
         ):
-            assert word not in text, f"{word!r} is project knowledge in a prompt"
-
-    def test_it_is_told_to_read_before_approving_on_an_unseen_file(self):
-        assert "read the file" in self._system(True)
+            assert word not in text_, f"{word!r} is project knowledge in a prompt"
 
 
 class TestEveryParticipantSeesTheRepositoryConventions:
@@ -1277,7 +1102,7 @@ class TestEveryParticipantSeesTheRepositoryConventions:
             })
         )
         stage = Stage(id="s", instruction="do it", edit_files=["a"])
-        assert "conventions" not in build_executor_prompt(stage, cfg).lower()
+        assert line_of("shared/conventions") not in build_executor_prompt(stage, cfg)
 
         messages = build_review_messages(
             stage=SimpleNamespace(
@@ -1288,26 +1113,13 @@ class TestEveryParticipantSeesTheRepositoryConventions:
             plan_text="THE PLAN ITSELF",
             completed=[],
         )
-        assert "conventions its maintainers" not in all_text(messages).lower()
+        assert line_of("shared/conventions") not in all_text(messages)
 
 
 class TestThePlannerIsToldWhatTheChecksWillDo:
-    """The machinery rewrites the diff after the instruction is written.
-
-    `checks` run once the executor has committed, and `checks_commit_changes`
-    puts what they rewrite onto the child branch. The planner was told nothing
-    about any of it — the word never appeared in its prompt — so it drafted a
-    stage forbidding any line it had not named, the formatter collapsed two
-    blank lines the executor's own deletions had stranded, and the reviewer
-    blocked a diff that was otherwise correct. A whole revision cycle to
-    discover a property of our own tooling.
-
-    Same call as the line-endings note one file over: anything the shipped
-    machinery does is the tool's to declare, not the operator's to work around
-    and not the planner's to rediscover per project. The commands come from
-    config, so nothing here names a language, a linter or a file extension —
-    `test_the_block_carries_no_project_vocabulary` is what keeps that true.
-    """
+    """`checks` run after the executor commits, so the planner is told what
+    they are, from config, inside the cached prefix, and nothing when there
+    are none."""
 
     def _cfg(self, checks):
         from code_gantry.config import parse_config
@@ -1335,23 +1147,13 @@ class TestThePlannerIsToldWhatTheChecksWillDo:
     def test_the_configured_commands_are_named(self):
         assert "some-linter --fix" in self._text(["some-linter --fix"])
 
-    def test_it_says_they_run_after_the_executor_finishes(self):
-        text = self._text(["some-linter --fix"]).lower()
-        assert "after" in text and "commit" in text
-
-    def test_it_states_the_blast_radius_rather_than_asking_for_care(self):
-        # The general fact, and the one that was actually violated: an edit can
-        # strand whitespace that is no longer legal, so a constraint naming an
-        # exact set of changed lines is unsatisfiable. Phrased as a property of
-        # the tooling, because a rule asking the planner to be careful would be
-        # routed around rather than followed.
-        assert "strand" in self._text(["some-linter --fix"]).lower()
+    def test_the_checks_file_is_rendered_around_them(self):
+        assert render("shared/checks", listed="- `some-linter --fix`") in self._text(["some-linter --fix"])
 
     def test_a_project_with_no_checks_gets_no_block(self):
-        # Nothing runs, so there is nothing to declare, and a paragraph about
-        # a step that does not happen is one more thing to reason past.
+        # Nothing runs, so there is nothing to declare.
         assert "some-linter" not in self._text([])
-        assert "may rewrite" not in self._text([])
+        assert line_of("shared/checks") not in self._text([])
 
     def test_it_sits_inside_the_cached_prefix(self):
         # Fixed for the whole run, like the plan and the layout. Behind the
@@ -1365,112 +1167,29 @@ class TestThePlannerIsToldWhatTheChecksWillDo:
         assert "some-linter --fix" in leading_text(messages)
 
     def test_the_block_carries_no_project_vocabulary(self):
-        # The rule that keeps this generic: the commands arrive from config,
-        # so the prose around them must not smuggle in the shape of whatever
-        # project happened to be in front of whoever wrote it.
-        text = self._text(["some-linter --fix"]).lower()
+        # The commands arrive from config, so the prose around them must not
+        # smuggle in the shape of whatever project was in front of its author.
+        text_ = self._text(["some-linter --fix"]).lower()
         for name in (
             "rubocop", "ruby", "rails", "eslint", "prettier", "gofmt",
             "black", ".rb", "spec/", "bundle",
         ):
-            assert name not in text, f"project vocabulary leaked: {name}"
+            assert name not in text_, f"project vocabulary leaked: {name}"
 
 
-class TestThePlannerIsToldToStateTheEndState:
-    """Instruction *form*, measured rather than argued.
-
-    Over one run of 48 stages the reviewer returned 11 rejections. Four were
-    the executor writing an empty file. Five conceded the behaviour and
-    rejected the shape — "the coverage is present, but the ordering constraint
-    was violated", "functionally aligned, but does not follow the exact-content
-    requirement". Two more were instructions that could not be satisfied at
-    all, one of them for contradicting its own scope.
-
-    So seven of eleven were bought by the instruction, and the four that were
-    genuine executor failures are a mode prescription cannot help with: an
-    empty file satisfies an exact instruction exactly as poorly as a loose one.
-
-    The reviewer is not at fault and is deliberately not changed. It already
-    routes a difference it cannot trace to a consequence into `observations`.
-    It rejected these because the instruction *made* placement a requirement,
-    which turns a compliance check into a real one. The fix is upstream: stop
-    writing the requirement that way.
-    """
-
-    def _system(self):
-        from code_gantry.planner import _system_blocks
-
-        return _system_blocks()[0]["text"]
-
-    def test_it_asks_for_the_end_state_rather_than_the_edit(self):
-        text = self._system().lower()
-        assert "end state" in text
-
-    def test_it_warns_that_the_instruction_is_a_reject_criterion(self):
-        # The reason the rule bites. A placement mentioned in passing is
-        # enforced as though it were the point of the stage.
-        assert "reject criterion" in self._system()
-
-    def test_it_says_an_edit_is_unsatisfiable_once_partly_true(self):
-        # The revision case, and the one that deadlocked a stage: the earlier
-        # attempt's work is on the branch, so an instruction phrased as the
-        # edit describes a change that has already partly happened.
-        assert "already true" in self._system()
-
-    def test_the_line_is_authoring_code_not_quoting_it(self):
-        # The rule is a bright line — the planner writes no code — and it fails
-        # if read as "say less". The executor cannot see the plan or the
-        # repository beyond what it is given, so quoting what exists is how it
-        # gets its evidence. Only composing the replacement is forbidden.
-        text = self._system().lower()
-        assert "you do not write code" in text
-        assert "quoting the repository is not writing code" in text
-
-    def test_it_names_the_field_that_replaces_a_quoted_block(self):
-        # The prohibition is enforced mechanically, so the guidance has to say
-        # where the code goes instead — otherwise the cheapest way to satisfy
-        # the validator is to drop the context rather than move it.
-        text = self._system()
-        assert "`read_excerpts`" in text
-        assert "Quote by reference, not by transcription" in text
-
-    def test_a_required_literal_is_not_treated_as_an_exception(self):
-        # The loophole to close. A value that must match something elsewhere is
-        # a property — name it and say what it agrees with — not a licence to
-        # write the surrounding code.
-        assert "A required literal is not an exception" in self._system()
-
-    def test_stage_size_is_not_defaulted_from_one_deployment(self):
-        """The framework states the mechanism; the run states the numbers.
-
-        This bullet used to carry a default — prefer many small stages, seventy
-        files is closer to seventy stages — and said outright that it was "a
-        statement about the executor rather than about the work", "tuned to a
-        local model with modest headroom". That is one deployment's tuning
-        shipped in the framework's system prompt to every project, which is the
-        rule about project knowledge belonging in config, one level up from
-        where it usually breaks.
-
-        The cost was visible: this project's guidance spent some fifty lines
-        countermanding it. What replaces it is the mechanism — a stage lands
-        completely or not at all, so a failure reverts the whole batch — plus a
-        channel that exists everywhere and is measured rather than assumed.
-        """
-        text = self._system()
-        assert "stage-costs.md" in text
-        assert "modest headroom" not in text
-        assert "one file per stage" not in text
+class TestThePlannerSystemPromptCarriesNoProjectVocabulary:
+    """This string ships to every project's planner; a paragraph illustrated
+    with one stack's vocabulary is that stack's hint shipped everywhere."""
 
     def test_the_guidance_carries_no_project_vocabulary(self):
-        # Same rule as the reviewer's. This string ships to every project's
-        # planner, and a paragraph of advice illustrated with one stack's
-        # vocabulary is that stack's hint shipped everywhere.
-        text = self._system().lower()
+        from code_gantry.planner import _system_blocks
+
+        text_ = _system_blocks()[0]["text"].lower()
         for word in (
             "rails", "ruby", "gemfile", "rspec", "attr_accessible",
             ".erb", "activerecord", "bundler",
         ):
-            assert word not in text, f"{word!r} is project knowledge in a prompt"
+            assert word not in text_, f"{word!r} is project knowledge in a prompt"
 
 
 class TestExecutorPromptCarriesNoProjectVocabulary:
@@ -1530,16 +1249,15 @@ class TestTheExecutorSystemPrompt:
     to point at.
     """
 
-    def test_it_states_the_tool_contract_and_what_runs_after(self, tmp_path):
+    def test_it_is_the_executor_system_file(self, tmp_path):
         from code_gantry.prompts import _executor_system_prompt
 
-        text = _executor_system_prompt(_exec_cfg(tmp_path))
-        assert "exactly once" in text
-        assert "none are applied" in text
-        assert "refused by the tool" in text
-        # What happens when it stops is the half a model cannot discover.
-        assert "runs the project's checks" in text
-        assert "no tool to do so" in text
+        expected = render(
+            "executor/system",
+            no_direct_edit="",
+            repository_text_is_evidence=text("shared/repository_text_is_evidence"),
+        )
+        assert _executor_system_prompt(_exec_cfg(tmp_path)) == expected
 
     def test_it_names_no_projects_vocabulary(self, tmp_path):
         from code_gantry.prompts import _executor_system_prompt
@@ -1608,40 +1326,34 @@ def _exec_cfg(tmp_path, **executor_over):
 
 
 class TestTheConventionsAreFramedForWhoReadsThem:
-    """One document, two jobs, and the framing is not interchangeable.
+    """One document, two jobs: the binding sentence is the reader's file."""
 
-    Written for the reviewer and reused verbatim for the executor, this told
-    something whose entire job is to write code that it was judging a diff.
-    Nothing fails when a prompt is wrong in this way — the only symptom is
-    worse work, which is why it is worth a test rather than a careful reading.
-    """
+    def _executor_binding(self):
+        return render(
+            "shared/conventions_binding_executor",
+            procedure=text("shared/conventions_procedure_no_tools"),
+        )
 
-    def test_the_executor_is_not_told_it_is_judging(self):
+    def test_the_executor_gets_the_executor_framing(self):
         from code_gantry.prompts import _conventions_block
 
-        text = _conventions_block("SOME CONVENTIONS", role="executor").lower()
-        assert "judging" not in text
-        assert "the diff you are judging" not in text
-        assert "what you write" in text
+        block = _conventions_block("SOME CONVENTIONS", role="executor")
+        assert self._executor_binding() in block
+        assert text("shared/conventions_binding_reviewer") not in block
 
-    def test_the_executor_is_told_it_cannot_run_commands(self):
-        # The repository's own file makes this argument about why its
-        # operations document is kept separate: an agent handed a coding task
-        # follows a command it cannot run rather than ignoring it.
+    def test_the_executor_without_tools_is_told_so(self):
         from code_gantry.prompts import _conventions_block
 
-        text = _conventions_block("SOME CONVENTIONS", role="executor")
-        assert "cannot run commands" in text
+        block = _conventions_block("SOME CONVENTIONS", role="executor")
+        assert text("shared/conventions_procedure_no_tools") in block
+        assert text("shared/conventions_procedure_with_tools") not in block
 
-    def test_the_reviewers_framing_is_unchanged(self):
-        # It sits inside a cached prefix that is written once per run, so a
-        # change here is a cache miss on every stage as well as a change of
-        # meaning.
+    def test_the_reviewer_gets_the_reviewer_framing(self):
         from code_gantry.prompts import _conventions_block
 
-        text = _conventions_block("SOME CONVENTIONS")
-        assert "the diff you are judging" in text
-        assert "a defect even where" in text
+        block = _conventions_block("SOME CONVENTIONS")
+        assert text("shared/conventions_binding_reviewer") in block
+        assert self._executor_binding() not in block
 
     def test_neither_invents_a_heading_when_there_is_no_document(self):
         from code_gantry.prompts import _conventions_block
@@ -1650,156 +1362,29 @@ class TestTheConventionsAreFramedForWhoReadsThem:
         assert _conventions_block("   ") == ""
 
 
-class TestTheTwoBehaviouralRulesTheOldEditorHad:
-    """Both were in the editor this replaces, and neither is about format.
-
-    Its prompt was mostly SEARCH/REPLACE syntax, which a tool call makes
-    unnecessary — dropping that is the point. But two of its rules were about
-    conduct rather than encoding, and dropping those was an oversight:
-    `lazy_prompt` ("NEVER leave comments describing code without implementing
-    it") and `overeager_prompt` ("Do what they ask, but no more").
-
-    Worded here as facts about this system rather than as exhortation. "A
-    change outside what the stage asked for is rejected" is checkable against
-    the reviewer's behaviour; "Do not improve... in any way!" is shouting.
-    """
-
-    def test_a_placeholder_is_named_as_not_being_a_change(self, tmp_path):
-        from code_gantry.prompts import _executor_system_prompt
-
-        text = _executor_system_prompt(_exec_cfg(tmp_path))
-        assert "TODO" in text
-        assert "is not a change" in text
-        # And the honest alternative, so "stop" is a real option rather than
-        # the model's only out being a stub.
-        assert "say so " in text and "reaches a human" in text
-
-    def test_scope_within_a_permitted_file_is_named_as_the_models_own(self, tmp_path):
-        # The tool enforces file-level scope and cannot enforce this one, so
-        # the prompt has to say which half is which — otherwise "scope is
-        # refused at the tool" reads as covering everything.
-        from code_gantry.prompts import _executor_system_prompt
-
-        text = _executor_system_prompt(_exec_cfg(tmp_path))
-        assert "Within a file it may legitimately edit" in text
-        assert "rejected even when it is an improvement" in text
-
-    def test_neither_rule_names_a_projects_vocabulary(self, tmp_path):
-        from code_gantry.prompts import _executor_system_prompt
-
-        text = _executor_system_prompt(_exec_cfg(tmp_path)).lower()
-        for word in ("rails", "rspec", "rubocop", "ruby", "python", ".rb"):
-            assert word not in text, word
-
-
-class TestTheTwoWaysAStageIsLeftHalfDone:
-    """Scope has two edges and the prompt only ever guarded one of them.
-
-    "Do what the stage asked, and nothing else" and "finish what you start"
-    are both about not doing the wrong work — expanding into a tidy, or leaving
-    a stub. Neither covers doing a *fraction* of the right work: converting
-    three of the eight sites a sweep names and stopping, which reads as
-    finished from inside because nothing is stubbed and nothing is out of
-    scope.
-
-    That failure is why `must_not_remain` exists — the sites a sweep misses are
-    untouched, so they never appear as added lines and the pattern check over
-    the diff is blind to them. And it is already in the prompt, in
-    `_RETRY_OPENING_GATE`: "the sweep is unfinished and repeating the approach
-    on what was missed is the fix." Saying it only there means a gate cycle is
-    what communicates it.
-
-    The mirror case is a stage whose work is already true. `fresh_stage_fields`
-    and the "assert state, not change" rule both exist because a requirement
-    phrased as a change becomes unsatisfiable the moment it holds, and a stage
-    burned its whole budget there. The executor was never told that finding
-    nothing to do is an outcome rather than a failure to try harder.
-    """
-
-    def test_a_partial_sweep_is_named_as_not_finished(self, tmp_path):
-        from code_gantry.prompts import _executor_system_prompt
-
-        text = _executor_system_prompt(_exec_cfg(tmp_path))
-        assert "every site" in text
-        assert "count" in text
-
-    def test_work_that_is_already_true_is_named_as_success(self, tmp_path):
-        from code_gantry.prompts import _executor_system_prompt
-
-        text = _executor_system_prompt(_exec_cfg(tmp_path))
-        assert "already true" in text
-        assert "Do not manufacture a change" in text
-
-    def test_neither_names_a_projects_vocabulary(self, tmp_path):
-        from code_gantry.prompts import _executor_system_prompt
-
-        text = _executor_system_prompt(_exec_cfg(tmp_path)).lower()
-        for word in ("rails", "rspec", "rubocop", "ruby", "python", ".rb", "app/"):
-            assert word not in text, word
-
-
-class TestTheReadListIsDescribedAsAHintNotAFence:
-    """It stopped being a permission list when the executor got a read tool.
-
-    The subprocess editor had only the files it was handed, so "context you may
-    read" was literally true. The in-process one has `read_file` pointed at the
-    whole repository and `RepoReader` never consulted `stage.read_files` — so
-    the wording promised a fence that does not exist.
-
-    Which matters more than tidiness: a model that believes it is confined to a
-    list will quote from memory rather than read, and quoting from memory is
-    what produced a 38% edit-refusal rate, 54% of it on one 1,700-line file.
-    """
-
-    def test_it_does_not_claim_to_be_the_limit_of_what_may_be_read(self, tmp_path):
+class TestTheReadListBlockAppearsOnlyWithReadFiles:
+    def test_a_stage_with_read_files_gets_the_block(self, tmp_path):
         from code_gantry.config import Stage
         from code_gantry.prompts import build_executor_prompt
 
         stage = Stage(
             id="s", instruction="do", edit_files=["a.py"], read_files=["b.py"]
         )
-        text = build_executor_prompt(stage, _exec_cfg(tmp_path))
-        assert "not a permission list" in text
-        assert "may read anything in the repository" in text
-
-    def test_it_still_says_the_write_list_is_enforced(self, tmp_path):
-        # The asymmetry is the point: reading a file the planner did not
-        # anticipate cannot damage the repository, writing one can.
-        from code_gantry.config import Stage
-        from code_gantry.prompts import build_executor_prompt
-
-        stage = Stage(
-            id="s", instruction="do", edit_files=["a.py"], read_files=["b.py"]
-        )
-        text = build_executor_prompt(stage, _exec_cfg(tmp_path))
-        assert "that one is enforced" in text
+        text_ = build_executor_prompt(stage, _exec_cfg(tmp_path))
+        assert render("executor/read_files", listed="- b.py") in text_
 
     def test_a_stage_with_no_read_files_says_nothing(self, tmp_path):
         from code_gantry.config import Stage
         from code_gantry.prompts import build_executor_prompt
 
         stage = Stage(id="s", instruction="do", edit_files=["a.py"])
-        assert "drawn against" not in build_executor_prompt(stage, _exec_cfg(tmp_path))
+        assert line_of("executor/read_files") not in build_executor_prompt(stage, _exec_cfg(tmp_path))
 
 
 class TestAnExcerptIsOnlyCurrentWhileTheTreeHasNotMoved:
-    """The prompt claimed a currency the resolver does not provide.
-
-    `resolve_excerpts` reads at `stage_start_sha`, deliberately, so that the
-    executor, the reviewer's diff and the planner's revision block all describe
-    one tree. Its own docstring says what that costs: "on a rework the
-    executor's own prior attempt has already moved the lines." The block none
-    the less told the executor "treat them as current — you do not need to look
-    them up again", which is true on a first attempt and false on exactly the
-    path where believing it is most expensive. An excerpt quoted into an
-    `old_string` after the tree has moved is the refusal we spent a measurement
-    campaign on, and at distance zero from the read the fault is ours.
-
-    Conditioned on the cumulative diff rather than on `feedback`, because that
-    is the fact rather than the label: a `restart` revision arrives with
-    feedback and a branch reset to the baseline, where the excerpt *is* still
-    current.
-    """
+    """Excerpts are read at the stage's starting commit. Which currency note
+    goes with them is decided by the cumulative diff, not by feedback: a
+    `restart` revision arrives with feedback and a tree where nothing moved."""
 
     def _text(self, tmp_path, **kw):
         from code_gantry.config import Stage
@@ -1814,45 +1399,27 @@ class TestAnExcerptIsOnlyCurrentWhileTheTreeHasNotMoved:
         )
 
     def test_a_first_attempt_is_told_they_are_current(self, tmp_path):
-        text = self._text(tmp_path)
-        assert "Treat them as current" in text
-        assert "may have moved" not in text
+        text_ = self._text(tmp_path)
+        assert text("executor/excerpts_current") in text_
+        assert text("executor/excerpts_moved") not in text_
 
     def test_a_tree_that_has_moved_is_told_they_may_be_stale(self, tmp_path):
-        text = self._text(
+        text_ = self._text(
             tmp_path, feedback=["missed two"], cumulative_diff="--- a\n+++ b"
         )
-        assert "Treat them as current" not in text
-        assert "may have moved" in text
-        # The point of saying so at all: the next thing it does with an excerpt
-        # is quote it, and a stale quotation is refused.
-        assert "read it" in text
+        assert text("executor/excerpts_current") not in text_
+        assert text("executor/excerpts_moved") in text_
 
     def test_a_restart_revision_keeps_the_plain_wording(self, tmp_path):
-        # Feedback, but the branch was reset to the stage baseline — which is
-        # the sha the excerpt was read at, so nothing has moved under it.
-        text = self._text(tmp_path, feedback=["wrong approach"])
-        assert "Treat them as current" in text
+        # Feedback, but the branch was reset to the stage baseline.
+        text_ = self._text(tmp_path, feedback=["wrong approach"])
+        assert text("executor/excerpts_current") in text_
 
 
 class TestARetryIsFramedByWhatFailed:
-    """A rejection and a gate failure ask for opposite things.
-
-    A review rejection means something in the work is *wrong* and has to be
-    replaced. A gate failure — `residue` especially — means the sweep is
-    *incomplete*, and repeating the approach on what was missed is the fix.
-    Measured over one 35-stage run in which the reviewer rejected nothing at
-    all: the rejection wording fired about a dozen times and was wrong every
-    time, and on the seven residue failures it told the executor to do the
-    opposite of what the feedback below it asked for.
-
-    The framing lived inside `build_executor_prompt`'s single string, which the
-    subprocess editor received whole. When feedback moved to its own
-    conversation turn — so the cached prefix stays identical between attempts —
-    the opening was left behind with the string. Bare feedback after a
-    rejection reads as "add this", which is exactly what the review opening
-    exists to prevent.
-    """
+    """A rejection and a gate failure open with different files, and feedback
+    rides as its own turns so the cached prefix is identical between
+    attempts."""
 
     def _turns(self, tmp_path, **kw):
         from code_gantry.config import Stage
@@ -1865,23 +1432,24 @@ class TestARetryIsFramedByWhatFailed:
             c["text"] for m in msgs for c in m["content"] if m["role"] == "user"
         ]
 
-    def test_a_review_rejection_asks_for_a_replacement(self, tmp_path):
+    def test_a_review_rejection_opens_with_the_review_file(self, tmp_path):
         turns = self._turns(tmp_path, feedback=["Wrong verb."], failure_layer="review")
         joined = "\n".join(turns)
-        assert "rejected" in joined
-        assert "replace" in joined
+        assert text("executor/retry_review") in joined
+        assert text("executor/retry_gate") not in joined
         assert "Wrong verb." in joined
 
-    def test_a_gate_failure_is_not_called_a_rejection(self, tmp_path):
+    def test_a_gate_failure_opens_with_the_gate_file(self, tmp_path):
         turns = self._turns(tmp_path, feedback=["Two sites were missed."], failure_layer="residue")
         joined = "\n".join(turns)
-        assert "rejected" not in joined
-        assert "did not pass a check" in joined
+        assert text("executor/retry_gate") in joined
+        assert text("executor/retry_review") not in joined
         assert "Two sites were missed." in joined
 
     def test_no_feedback_adds_no_opening(self, tmp_path):
         joined = "\n".join(self._turns(tmp_path))
-        assert "rejected" not in joined and "did not pass a check" not in joined
+        assert text("executor/retry_review") not in joined
+        assert text("executor/retry_gate") not in joined
 
 
 class TestRepositoryTextIsEvidenceAndNotInstruction:
@@ -1938,25 +1506,9 @@ class TestRepositoryTextIsEvidenceAndNotInstruction:
         assert REPOSITORY_TEXT_IS_EVIDENCE not in _executor_system_prompt(cfg)
 
 
-class TestThePlannerIsToldNotToRestateTheConventions:
-    """The executor is handed the same document, so restating it is duplication.
-
-    Both get `agent_context` verbatim — the planner in its cached prefix, the
-    executor in its own. A convention copied into `instruction` lands in the
-    per-stage region that is re-billed on every attempt, to say something the
-    reader already has in full and byte-identical.
-
-    This is "ask what else already carries it" pointed one level out from where
-    it was learned. There the planner's history block was reproducing what
-    three other channels already said, 296,783 characters at 45 stages; here
-    the duplicated text is smaller and the mechanism is identical, including
-    the trap — every sentence of a restated convention is individually
-    defensible as making the handoff self-contained.
-
-    What the planner should write instead is the *consequence* for this stage,
-    which the executor cannot derive: which of the standing rules this
-    particular change is going to run into.
-    """
+class TestThePlannerConventionsBlock:
+    """The planner's framing of the repository's own documents is one file,
+    sent when there is a document and not otherwise."""
 
     def _leading(self, conventions):
         messages = build_planner_messages(
@@ -1964,81 +1516,16 @@ class TestThePlannerIsToldNotToRestateTheConventions:
         )
         return messages[0]["content"][0]["text"]
 
-    def test_it_says_the_executor_already_has_this(self):
-        text = self._leading("## Scoping\n\nAlways scope by tenant.")
-        assert "executor is given this document too" in text
-        assert "do not restate" in text.lower()
-
-    def test_it_asks_for_the_consequence_instead(self):
-        # Not a bare prohibition: the useful half is what to write in its
-        # place, and a rule with no alternative is routed around.
-        text = self._leading("## Scoping\n\nAlways scope by tenant.")
-        assert "consequence" in text.lower()
+    def test_it_frames_the_document(self):
+        conventions = "## Scoping\n\nAlways scope by tenant."
+        assert render("planner/conventions", agent_context=conventions) in self._leading(conventions)
 
     def test_a_project_without_one_gets_no_such_paragraph(self):
         messages = build_planner_messages(_cfg(), a_plan(), [])
-        assert "executor is given this document too" not in all_text(messages)
+        assert line_of("planner/conventions") not in all_text(messages)
 
 
-class TestThePlannerChecksTheClaimThatBlocksAnItem:
-    """The unattempted item is the one nothing else will catch.
-
-    `READ_TOOLS` already tells the planner that a document is a claim and the
-    code is the fact — but that is aimed at an item it is about to draw, where
-    a wrong count surfaces as a failed stage. An item the plan says is blocked
-    is never drawn, so a false premise there has no downstream check at all.
-
-    Measured: a repository's agent-facing document recorded a capability, the
-    hand-written config guidance omitted it, and the plan asserted the
-    opposite. The false claim gated five items across two streams and nothing
-    found it, because an item that reads as blocked is never attempted.
-    """
-
-    def test_the_system_prompt_says_to_check_a_blocking_claim(self):
-        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
-
-        assert "reads as blocked" in PLANNER_SYSTEM_PROMPT
-        assert "never attempted" in PLANNER_SYSTEM_PROMPT
-
-    def test_it_names_no_projects_vocabulary(self):
-        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
-
-        blob = PLANNER_SYSTEM_PROMPT.lower()
-        for word in ("rails", "rspec", "gemfile", "activerecord", ".rb", ".erb"):
-            assert word not in blob, word
-
-
-class TestTheReviewerJudgesSecurityAndTestsThatCannotFail:
-    """Two things a passing suite cannot tell you, at the only judgement gate.
-
-    "The stage's tests already pass — that is a precondition of you being
-    called" is the reviewer's framing, and it is exactly why both of these
-    belong to it. A test that cannot fail satisfies that precondition and
-    proves nothing; a security regression passes every test that was written
-    before it existed.
-
-    Neither widens the scope rule the tool guidance sets. What is judged is
-    still what this diff introduces or exposes — a pre-existing weakness the
-    diff does not touch remains context rather than a defect, which is the
-    same line the rest of the prompt draws.
-    """
-
-    def test_security_is_named_as_in_scope_without_being_asked_for(self):
-        from code_gantry.prompts import REVIEW_SYSTEM_PROMPT
-
-        assert "introduces or exposes" in REVIEW_SYSTEM_PROMPT
-        assert "even where the stage said nothing about it" in REVIEW_SYSTEM_PROMPT
-
-    def test_a_test_that_cannot_fail_is_named(self):
-        from code_gantry.prompts import REVIEW_SYSTEM_PROMPT
-
-        assert "could not fail" in REVIEW_SYSTEM_PROMPT
-
-    def test_rework_asks_for_the_smallest_correction_not_a_design(self):
-        from code_gantry.prompts import REVIEW_SYSTEM_PROMPT
-
-        assert "smallest change that fixes it" in REVIEW_SYSTEM_PROMPT
-
+class TestTheReviewerPromptCarriesNoProjectVocabulary:
     def test_none_of_it_names_a_projects_vocabulary(self):
         from code_gantry.prompts import REVIEW_SYSTEM_PROMPT
 
@@ -2048,60 +1535,6 @@ class TestTheReviewerJudgesSecurityAndTestsThatCannotFail:
             "activerecord", "permit list", "gemfile",
         ):
             assert word not in blob, word
-
-
-class TestAVerifiedFindingGoesWhereItSurvives:
-    """A check worth running once must not be run once per decision.
-
-    Every planner call starts a fresh conversation — `_attempt` does
-    `conversation = list(messages)` — so there is no continuation between
-    stages and nothing the planner concluded last time is in front of it now.
-    Whether a verification happens once or eighty times is therefore decided
-    entirely by which field the finding was written to.
-
-    `reasoning` reaches `status.md` as the entry's `**Why:**` line, and the
-    planner is fed the last 4,000 characters of that file. At a few hundred
-    characters an entry that is under ten decisions of history, so a finding
-    parked there ages out well inside a long run and the premise gets checked
-    again. `plan_notes` is appended to the progress log, which is spliced into
-    the plan block in the cached prefix and read on every subsequent call —
-    and `PlannerResponse.plan_notes` says so in its own description: "only
-    these notes are written down and survive to the next run."
-
-    So the two places that ask the planner to record a wrong plan document
-    have to name that field. Both said `reasoning`, which is the channel that
-    forgets.
-    """
-
-    def test_the_blocking_claim_section_routes_to_a_plan_note(self):
-        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
-
-        section = PLANNER_SYSTEM_PROMPT[
-            PLANNER_SYSTEM_PROMPT.index("## Check the claim that stops you"):
-        ]
-        assert "record it as a plan note" in section
-        # Naming the wrong channel is fine and is the point; routing to it is
-        # not.
-        assert "say so in `reasoning`" not in section
-
-    def test_the_conventions_contradiction_routes_to_a_plan_note(self):
-        text = messages_leading("## Scoping\n\nAlways scope by tenant.")
-        assert "plan note" in text
-        assert "say so in `reasoning`" not in text
-
-    def test_the_field_that_forgets_is_named_as_such(self):
-        # Not a bare redirection: the planner has to know why, or the next
-        # edit to either passage puts it back.
-        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
-
-        assert "survives to the next call" in PLANNER_SYSTEM_PROMPT
-
-
-def messages_leading(conventions):
-    messages = build_planner_messages(
-        _cfg(), a_plan(), [], agent_context=conventions
-    )
-    return messages[0]["content"][0]["text"]
 
 
 class TestTheScopeListSaysWhichFilesDoNotExist:
@@ -2139,10 +1572,6 @@ class TestTheScopeListSaysWhichFilesDoNotExist:
             _exec_cfg(tmp_path),
         )
 
-    def test_the_retired_claim_is_gone(self, tmp_path):
-        text = self._prompt(tmp_path, ["spec/new_spec.rb"])
-        assert "already been created for you" not in text
-
     def test_a_missing_file_is_marked(self, tmp_path):
         text = self._prompt(tmp_path, ["spec/new_spec.rb"])
         assert "spec/new_spec.rb (does not exist yet)" in text
@@ -2161,8 +1590,8 @@ class TestTheScopeListSaysWhichFilesDoNotExist:
 
     def test_the_create_instruction_appears_only_when_one_is_missing(self, tmp_path):
         (tmp_path / "here.rb").write_text("x\n")
-        assert "create_file" not in self._prompt(tmp_path, ["here.rb"])
-        assert "create_file" in self._prompt(tmp_path, ["spec/new_spec.rb"])
+        assert text("executor/edit_files_missing") not in self._prompt(tmp_path, ["here.rb"])
+        assert text("executor/edit_files_missing") in self._prompt(tmp_path, ["spec/new_spec.rb"])
 
     def test_it_names_no_projects_vocabulary(self, tmp_path):
         text = self._prompt(tmp_path, ["EDIT_PATH"]).lower()
@@ -2170,52 +1599,9 @@ class TestTheScopeListSaysWhichFilesDoNotExist:
             assert word not in text, word
 
 
-class TestNoPromptDescribesTheExecutorThatWasDeleted:
-    """A deliberate pass over every model-facing claim about the machinery.
-
-    Two falsehoods were found in one day by tripping over them — an
-    excerpt described as current when it is read at the stage's start, and a
-    file described as pre-created when nothing creates it. Both were prose that
-    survived a change to the code beneath it. This class is the pass that
-    should have been done instead of waiting for the third.
-
-    The class of defect is narrow and worth naming: a prompt sentence has no
-    compiler and no caller, so nothing fails when what it describes stops being
-    true. A docstring at least sits above the code it describes; these sit in
-    another file entirely.
-    """
-
-    def test_the_planner_is_not_told_the_executor_reads_only_what_it_names(self):
-        # `RepoReader` never consults `stage.read_files`, and the executor's own
-        # prompt says so — "not a permission list: you may read anything in the
-        # repository". The planner was told the opposite.
-        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
-
-        assert "reads the files you name" not in PLANNER_SYSTEM_PROMPT
-
-    def test_the_planner_is_not_told_the_executor_cannot_search(self):
-        # It has `search`, which is grep over the repository.
-        from code_gantry.planner import _system_blocks
-
-        text = _system_blocks()[0]["text"]
-        assert "cannot run `grep`" not in text
-        assert "search" in text
-
-    def test_the_planner_is_not_told_the_executor_never_sees_a_test_result(self):
-        # The loop runs the gates after every batch and appends the failure to
-        # the same conversation. The executor's own prompt describes this.
-        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
-
-        assert "cannot see the result of one" not in PLANNER_SYSTEM_PROMPT
-
-    def test_no_prompt_calls_the_executor_a_local_model(self):
-        # Measured against a hosted model since the cutover; the economics note
-        # in the project instructions exists because that changed.
-        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
-        from code_gantry.prompts import REVIEW_SYSTEM_PROMPT
-
-        for text in (PLANNER_SYSTEM_PROMPT, REVIEW_SYSTEM_PROMPT):
-            assert "local model" not in text
+class TestNoSchemaDescribesTheExecutorThatWasDeleted:
+    """Field descriptions and gate messages must not describe machinery that
+    is gone or name one project's vocabulary."""
 
     def test_the_instruction_field_does_not_ask_for_what_validation_rejects(self):
         # `validate_stage` rejects a fenced block in `instruction` outright, and
@@ -2318,16 +1704,8 @@ class TestAnExcerptHeadingDoesNotSwallowItsNote:
 
 
 class TestTheBatchBlockIsSizedByTheSetting:
-    """Step 10 changed the output contract and left the prompt alone.
-
-    `additional_stages` was described in the schema as "normally empty, and
-    empty is the right answer", and nothing anywhere told the planner what the
-    cap actually was. That is the shape `CLAUDE.md` already records as
-    producing nothing: `observations` came back empty 278 times out of 278
-    because an optional field with a conditional trigger can always be
-    declined in good conscience. Two derivations under `max_batch_stages: 5`
-    each returned one stage.
-    """
+    """The cap is stated to the planner, from config, and a cap of one gets
+    the one-stage file instead of the invitation."""
 
     def _leading(self, cap):
         cfg = SimpleNamespace(
@@ -2336,51 +1714,17 @@ class TestTheBatchBlockIsSizedByTheSetting:
         messages = build_planner_messages(cfg=cfg, plan_text=a_plan(), completed=[])
         return messages[0]["content"][0]["text"]
 
-    def test_one_stage_per_call_says_so_rather_than_staying_silent(self):
-        # At a cap of 1 the extra stages are trimmed in `nodes.py` without the
-        # planner ever being told, so any it writes are output spent on work
-        # that is discarded before it runs.
-        text = self._leading(1)
-        assert "How many stages to return" in text
-        assert "additional_stages" in text
-        assert "discarded" in text
+    def test_one_stage_per_call_gets_the_one_stage_file(self):
+        assert text("planner/batch_one") in self._leading(1)
 
     def test_the_actual_cap_reaches_the_planner(self):
-        # It was reachable only in `config.py` and in the trim at
-        # nodes.py:1703. A planner that cannot see the ceiling cannot size a
-        # batch against it.
-        assert "5" in self._leading(5)
-
-    def test_the_excerpt_contract_travels_with_the_invitation(self):
-        """Not an orthogonality rule — there is no longer one to state.
-
-        The planner used to be told which files a batched stage may not name,
-        which asked it to reason about permissions. What it is told now is what
-        actually happens: quoted ranges are compared against the copy it read,
-        and a stage whose file has moved comes back to be redrawn. That is a
-        fact about the machinery rather than a rule to obey, and it is the
-        shape the rest of these prompts are in.
-        """
-        text = self._leading(5).lower()
-        assert "read_excerpts" in text
-        assert "redrawn" in text
-        # And the causality, so a stale excerpt is not read as bad luck.
-        assert "your own doing" in text
-
-    def test_it_says_batched_stages_are_independent(self):
-        # A batch is taken a stage at a time by whichever run is free, so no
-        # stage may assume another of the batch has landed.
-        text = self._leading(5).lower()
-        assert "they are independent" in text
-        assert "no stage may assume another stage of the batch has landed" in text
-        assert "may assume the earlier ones happened" not in text
+        assert render("planner/batch", cap=5, rest=4) in self._leading(5)
 
     def test_the_invitation_is_absent_when_batching_is_off(self):
-        assert "orthogonal" not in self._leading(1).lower()
+        assert line_of("planner/batch") not in self._leading(1)
+        assert text("planner/batch_one") not in self._leading(5)
 
     def test_a_cfg_without_a_planner_section_still_builds(self):
-        # Every existing caller in the tests passes a bare SimpleNamespace, and
-        # so would any project config predating the setting.
         messages = build_planner_messages(
             cfg=SimpleNamespace(planner=SimpleNamespace(cache_ttl=None)), plan_text=a_plan(), completed=[]
         )
@@ -2439,90 +1783,28 @@ class TestThePlannerPromptIsRecordedBeforeItIsSent:
 
 
 class TestHowLargeOneStageShouldBe:
-    """Stage sizing was project config, and three paragraphs of it were not.
+    """One file, in the cached prefix, and it names no project."""
 
-    One project's `planner.guidance` carried the whole answer — cohesion,
-    independence, blast radius — so it reached that project's planner and no
-    other's. Read against the rule that keeps config and code apart, none of
-    the three named a framework, a file extension or a directory: they were
-    this machine describing its own behaviour. A stage lands completely or not
-    at all; `must_not_remain` reads file contents, so an incomplete sweep is
-    caught without a review; a stage is judged as one diff, so a judgement
-    split across two of them is judged by neither.
-
-    What stayed in config is what genuinely could not be derived: a suite that
-    flakes under parallel execution, with an issue number, and the sizes real
-    stages on that repository came in at.
-    """
-
-    def _text(self):
+    def test_it_is_the_stage_size_file(self):
         from code_gantry.prompts import _stage_size_block
 
-        return _stage_size_block()
+        assert _stage_size_block().strip() == text("planner/stage_size")
 
-    def test_it_leads_with_what_a_large_stage_costs(self):
-        # The reason to care, before the rules. Blast radius is the thing an
-        # operator cannot see from the plan and the planner cannot infer.
-        text = self._text()
-        assert "lands completely or not at all" in text
-        assert "redraw" in text
-
-    def test_it_says_to_group_identical_edits_and_count_the_sites(self):
-        text = self._text()
-        assert "identical edit at every site" in text
-        assert "total number of sites" in text
-
-    def test_it_says_to_split_a_judgement_that_spans_files(self):
-        text = self._text()
-        assert "unreviewable on its own" in text
-
-    def test_it_distinguishes_independent_judgements_from_a_single_one(self):
-        # The distinction the guidance made and the prompt did not: needing
-        # thought everywhere is not a reason to split; needing the *same*
-        # thought everywhere is a reason to group.
-        text = self._text()
-        assert "several small decisions rather than one large one" in text
-
-    def test_it_does_not_restate_the_stage_cost_advice(self):
-        """Sizing by context rather than by file count has a home already.
-
-        `_costs_block` says it beside the figures that make it
-        actionable. Saying it again here would be the history block's fault
-        repeated: text that reads as missing because you are looking at one
-        prompt and not at the one arriving beside it.
-        """
-        text = self._text().lower()
-        assert "file count" not in text
-        assert "peak" not in text
+    def test_it_sits_in_the_cached_prefix(self):
+        messages = build_planner_messages(cfg=_cfg(), plan_text=a_plan(), completed=[])
+        assert text("planner/stage_size") in leading_text(messages)
 
     def test_it_carries_no_project_vocabulary(self):
-        # It ships to every project. The guidance it came from illustrated
-        # itself with one framework's rename and one repository's controller,
-        # which is exactly what must not travel.
-        text = self._text().lower()
+        text_ = text("planner/stage_size").lower()
         for word in (
             "rails", "ruby", "rspec", "gemfile", "controller", "helper",
             ".rb", ".erb", "app/", "spec/", "bundle", "capybara",
         ):
-            assert word not in text, f"{word!r} is project knowledge in a prompt"
+            assert word not in text_, f"{word!r} is project knowledge in a prompt"
 
 
 
-class TestTheCostsBlockTellsThePlannerHowToUseIt:
-    """A merge sha the planner could not dereference.
-
-    Every line of `stage-costs.md` is keyed by the commit that landed the
-    stage, and two docstrings justified carrying it on the grounds that
-    `git show` on that sha is the way back to what the stage did. Nothing the
-    planner could run did that: `git_show` required a path and built
-    `git show <ref>:<path>`, which answers with a file. So twelve shas reached
-    every call and no tool consumed them.
-
-    The tool takes a pathless ref now. This pins the other half — that the
-    block says so — because a capability nothing mentions is one nothing uses,
-    and this block is the only place the sha appears.
-    """
-
+class TestTheCostsBlockRendersTheFileAroundTheLines:
     def _block(self):
         from code_gantry.prompts import _costs_block
 
@@ -2531,22 +1813,11 @@ class TestTheCostsBlockTellsThePlannerHowToUseIt:
              "files": 1, "context_tokens": 88_762},
         ])
 
-    def test_it_says_the_sha_can_be_shown_with_no_path(self):
-        text = self._block()
-        assert "`git_show`" in text
-        assert "with no path" in text
-
-    def test_it_says_what_that_answers_with(self):
-        # The instruction and the per-file counts — which is what turns a
-        # figure into a comparison with the stage about to be drawn.
-        text = self._block()
-        assert "instruction that stage was given" in text
-        assert "how many lines" in text
-
-    def test_it_says_where_the_account_of_a_stage_lives(self):
-        # The reviewer's record is in the landing commit, so the id in a cost
-        # line has a description in exactly one place.
-        assert "The commit is where that account lives" in self._block()
+    def test_the_costs_file_wraps_the_lines(self):
+        assert self._block() == "\n\n" + render(
+            "planner/costs",
+            lines="- `b52851a90c63` some-stage — 88,762 context tokens, 1 file(s) in scope",
+        )
 
     def test_the_sha_is_rendered_long_enough_to_resolve(self):
         # Twelve characters. A shorter prefix is ambiguous on a large
@@ -2600,67 +1871,9 @@ class TestTheCostLineCarriesWhatChanged:
         assert "changed" not in text.split("- `b52851a90c63`")[1]
 
 
-class TestTheCostsAreReadComparatively:
-    """The peak is not a fraction of anything the planner should reason about.
-
-    The block said the figure was the high-water mark "because what decides
-    whether the next stage fits is the largest it ever got". That was written
-    against a local executor with a 229,376-token context. The executor's
-    window is now 1,050,000 and the largest peak on this project's record is
-    88,762 — 8.5% — so fitting is not the question, and a planner told the
-    ratio could reasonably conclude it has room to batch ten times as much.
-
-    What actually bounds a stage is what a failure costs to redraw and what
-    can be judged as one diff, both of which the size block states. So this
-    one stops making a claim about capacity and says what the numbers are for.
-    """
-
-    def _text(self):
-        from code_gantry.prompts import _costs_block
-
-        return _costs_block([{
-            "merge_sha": "b52851a90c6398", "stage_id": "s",
-            "files": 1, "context_tokens": 88_762,
-        }])
-
-    def test_it_no_longer_claims_the_figure_decides_what_fits(self):
-        assert "fits" not in self._text()
-
-    def test_it_says_to_compare_entries_with_each_other(self):
-        text = self._text()
-        assert "against each other, not against a limit" in text
-        assert "nearest the work you are drawing" in text
-
-    def test_it_names_what_actually_bounds_a_stage(self):
-        # Redraw cost and reviewability — the two the size block is built on,
-        # so the planner is not left with a number and no rule.
-        text = self._text()
-        assert "costs to redraw" in text
-        assert "judged as one diff" in text
-
-
 class TestARedrawIsAskedWhatItLearned:
-    """A stage that had to be drawn twice is evidence, and it evaporates.
-
-    `completed` records stages that *landed*, not the drafts they took, and
-    `stage-costs.md` keeps the revision count without the reason. So the next
-    derivation sees that a stage took two revisions and nothing about why —
-    which is exactly the case where the same badly-shaped stage gets drawn
-    again.
-
-    The channel for it already exists and is already used: measured over one
-    project's artifacts, 121 revision calls produced 190 `plan_notes`, and 85%
-    of those calls wrote at least one. Some are genuinely redraw lessons —
-    "`-A` also rewrites spellings that are not layout", "a fourth cause" added
-    to a plan anchor cataloguing why attempts produce no diff. The revision
-    block simply never asked for them, so this is a prompt sentence rather than
-    a new field. `observations` is the standing argument against adding one:
-    empty 278 times out of 278.
-
-    It asks a question with an answer every time — was the previous draft wrong
-    about something specific to this stage, or about the plan — rather than
-    "did you notice anything", which can always be declined in good conscience.
-    """
+    """The redraw-lesson file is sent on a revision and not on a plain
+    derivation, where there is no redraw to learn from."""
 
     def _revision_prompt(self, **over):
         from code_gantry.config import Stage
@@ -2677,23 +1890,14 @@ class TestARedrawIsAskedWhatItLearned:
         return all_text(build_planner_messages(**kwargs))
 
     def test_the_redraw_is_asked_what_it_learned(self):
-        text = self._revision_prompt().lower()
-        assert "plan_notes" in text
-        assert "draw" in text
-
-    def test_it_names_why_nothing_else_carries_it(self):
-        # Without the reason a model has no way to weigh the ask against the
-        # cost of writing to a log that every later call pays for.
-        text = self._revision_prompt().lower()
-        assert "landed" in text or "completed" in text
+        assert text("planner/redraw_lesson") in self._revision_prompt()
 
     def test_a_plain_derivation_is_not_asked(self):
-        # It has no redraw to learn from, and a question with no answer is how
-        # a required field starts collecting filler.
-        text = all_text(
+        text_ = all_text(
             build_planner_messages(cfg=_cfg(), plan_text=a_plan(), completed=[])
-        ).lower()
-        assert "the previous draft" not in text
+        )
+        assert text("planner/redraw_lesson") not in text_
+        assert text("planner/derive") in text_
 
 
 class TestGateHistoryBlock:
@@ -2761,29 +1965,10 @@ class TestGateHistoryBlock:
                 gate_history=[{"revision": 0, "layer": "residue"}],
             )
         )
-        assert "gate verdict" not in text
+        assert line_of("planner/gate_history") not in text
 
 
-class TestExcerptsDoNotClaimTheyAreReadOnly:
-    """The heading said "Lines from files you may read but not change".
-
-    It was borrowed from the `read_files` block directly above it, where the
-    claim is true. It is not true here: `read_excerpts` is how the planner
-    quotes the code a stage is about, because it may not write an after-image
-    and a reference can only point at what already exists. So the excerpt is
-    very often the thing being rewritten.
-
-    Measured over this project's recorded stages: **1,562 of 2,586 excerpts,
-    60%, name a file the stage's own `edit_files` permits.** The heading was
-    wrong in the majority case, and wrong about the one file the executor was
-    most likely to be editing — telling it, on the same page as its
-    instruction, that the code it must change is off limits.
-
-    `edit_files` is the only thing that decides what may change, so the
-    heading names what the lines *are* and points at that list rather than
-    making a permission claim of its own.
-    """
-
+class TestExcerptsAreRenderedFromTheirFile:
     def _prompt(self, tmp_path, **kw):
         from code_gantry.config import Stage
         from code_gantry.prompts import build_executor_prompt
@@ -2791,36 +1976,21 @@ class TestExcerptsDoNotClaimTheyAreReadOnly:
         cfg = _exec_cfg(tmp_path)
         stage = Stage(id="s", instruction="do", edit_files=["app.py"])
         return build_executor_prompt(
-            stage, cfg, excerpts=[("`app.py:1-2`", "1  def hello():")], **kw
+            stage, cfg, excerpts=[("app.py:1-2", "1  def hello():")], **kw
         )
 
-    def test_it_does_not_claim_they_cannot_be_changed(self, tmp_path):
-        text = self._prompt(tmp_path)
-        assert "## Existing lines, quoted from the repository" in text
-        assert "may read but not change" not in text
-
-    def test_it_points_at_the_list_that_actually_decides(self, tmp_path):
-        """A model reading an excerpt of the file it must rewrite needs one
-        unambiguous answer about whether it may."""
-        section = self._prompt(tmp_path).split("## Existing lines, quoted from the repository")[1].split("\n## ")[0]
-        # By the heading the reader can see, not by the planner's field name.
-        # The first version of this said `edit_files`, which appears nowhere in
-        # the executor's prompt — precise-sounding and pointing at nothing.
-        assert "Files you may change" in section
+    def test_the_excerpt_file_carries_the_blocks(self, tmp_path):
+        expected = render(
+            "executor/excerpts",
+            currency=text("executor/excerpts_current"),
+            blocks="### `app.py:1-2`\n\n```\n1  def hello():\n```",
+        )
+        assert expected in self._prompt(tmp_path)
 
 
 class TestTheExecutorPromptNamesNothingItCannotSee:
-    """A prompt may only point at what the reader is looking at.
-
-    The excerpt block told the executor that "`edit_files` above is the only
-    thing that decides" which files it may change. That block renders as
-    **Files you may change**, and the string `edit_files` appears nowhere in
-    the executor's prompt — it is the planner's field name, correct in the
-    planner's prompt and in the gate messages routed to it, and meaningless
-    here. Naming a field the reader cannot find is the same defect as
-    describing a capability it does not have: the sentence reads as precise
-    and points at nothing.
-    """
+    """A prompt may only point at what the reader is looking at. `edit_files`
+    is the planner's field name and appears nowhere the executor can see."""
 
     def test_the_field_name_never_reaches_the_executor(self, tmp_path):
         from code_gantry.config import Stage
@@ -2832,69 +2002,15 @@ class TestTheExecutorPromptNamesNothingItCannotSee:
             edit_files=["app/a.rb"],
             read_files=["app/b.rb"],
         )
-        text = build_executor_prompt(
+        text_ = build_executor_prompt(
             stage,
             _exec_cfg(tmp_path),
             excerpts=[("`app/a.rb:1-2`", "    1 | class A\n    2 | end")],
         )
-
         # The block has to be there, or this asserts the absence of a string
         # from a document that was never rendered.
-        assert "Existing lines, quoted from the repository" in text
-        assert "edit_files" not in text
-
-    def test_the_excerpts_point_at_the_heading_that_is_there(self, tmp_path):
-        from code_gantry.config import Stage
-        from code_gantry.prompts import build_executor_prompt
-
-        stage = Stage(
-            id="s",
-            instruction="do the thing",
-            edit_files=["app/a.rb"],
-        )
-        text = build_executor_prompt(
-            stage,
-            _exec_cfg(tmp_path),
-            excerpts=[("`app/a.rb:1-2`", "    1 | class A\n    2 | end")],
-        )
-
-        assert "## Files you may change" in text
-        assert "Files you may change" in text.split("Existing lines")[-1]
-
-
-class TestIndependentCallsAreAskedForTogether:
-    """The loop accepts a batch of tool calls; the model has to know that.
-
-    Measured over one run's 76 attempts: 6,645 tool calls over 6,764 turns —
-    0.98 per turn, never once more than one. A tool loop re-sends the whole
-    conversation every turn, so one stage spent 1,186,709 prompt tokens on a
-    45,806-token context, and the turn count is what multiplies it.
-
-    Nothing was suppressing it. `tool_choice` is set nowhere and its only
-    parallel knob can restrict rather than encourage; the tools reach the
-    Messages wire in the same shape the planner's do. The model simply
-    defaults to one at a time. Sampled five times per arm against the live
-    route: without a sentence it asked for one thing per turn 5/5, with one it
-    asked for two 5/5, and a harder-pushing version bought nothing more. So
-    the claim this pins is modest and measured — it is worth a sentence, and
-    the sentence is worth about half the turns.
-    """
-
-    def test_the_system_prompt_says_a_turn_may_carry_several(self, tmp_path):
-        from code_gantry.prompts import _executor_system_prompt
-
-        text = _executor_system_prompt(_exec_cfg(tmp_path))
-        assert "same turn" in text
-        assert "do not depend on each other" in text
-
-    def test_it_is_stated_as_the_loop_s_behaviour_not_as_advice(self, tmp_path):
-        # The tool states its own behaviour: every call in a turn is answered
-        # before the model is asked again. A model told only to "be efficient"
-        # has no reason to believe the results come back together.
-        from code_gantry.prompts import _executor_system_prompt
-
-        text = _executor_system_prompt(_exec_cfg(tmp_path))
-        assert "answered together" in text or "answered before" in text
+        assert line_of("executor/excerpts") in text_
+        assert "edit_files" not in text_
 
 
 class TestALandingDoesNotDisturbThePlan:
@@ -2986,20 +2102,5 @@ class TestTheTestWarningsReachThePlanner:
             for m in self._messages(None)
             for b in m["content"]
         )
-        assert "warnings" not in whole.lower().split("## what the repository")[0]
+        assert line_of("planner/warnings") not in whole
 
-
-class TestTheBatchAsksForEveryOrthogonalStage:
-    def _leading(self, cap):
-        cfg = SimpleNamespace(cache_ttl=None, planner=SimpleNamespace(max_batch_stages=cap))
-        messages = build_planner_messages(cfg=cfg, plan_text=a_plan(), completed=[])
-        return messages[0]["content"][0]["text"]
-
-    def test_it_asks_for_as_many_as_can_be_named(self):
-        text = self._leading(5).lower()
-        assert "as many orthogonal stages as you can name" in text
-        assert "no two of them touch the same files or depend on each other" in text
-        assert "a batch of one is a perfectly good answer" not in text
-
-    def test_a_cap_of_one_asks_for_one(self):
-        assert "orthogonal" not in self._leading(1).lower()

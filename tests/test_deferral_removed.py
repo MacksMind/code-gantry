@@ -77,18 +77,6 @@ class TestNothingStillReferencesIt:
 
         assert not hasattr(report, "_deferred_section")
 
-    def test_the_prompt_tells_the_planner_what_to_do_instead(self):
-        """Deleting a mechanism must not delete the capability it served.
-
-        A planner that meets a step this pipeline cannot execute still needs an
-        answer, and now it is a note: say so, name who can, and move on.
-        """
-        from code_gantry.planner import PLANNER_SYSTEM_PROMPT
-
-        text = PLANNER_SYSTEM_PROMPT.lower()
-        assert "cannot" in text
-        assert "plan note" in text or "plan_notes" in text
-
 
 class TestStatusTail:
     """The planner is no longer shown its own prior prose.

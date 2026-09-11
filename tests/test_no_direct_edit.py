@@ -160,8 +160,11 @@ class TestTheExecutorIsToldUpFront:
         from code_gantry.prompts import _executor_system_prompt
         from test_executor_loop import build
 
+        from code_gantry.promptfiles import raw
+
         cfg, _stage = build(repo)
-        assert "not yours to author" not in _executor_system_prompt(cfg)
+        lines = [l.strip() for l in raw("executor/no_direct_edit").splitlines() if "$" not in l and l.strip()]
+        assert max(lines, key=len) not in _executor_system_prompt(cfg)
 
     def test_the_declaration_and_its_reason_both_appear(self, repo):
         from code_gantry.prompts import _executor_system_prompt

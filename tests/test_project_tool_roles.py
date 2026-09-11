@@ -417,43 +417,36 @@ class TestTheConventionsFramingStopsContradictingTheMenu:
     in its own schema.
     """
 
-    def test_with_no_declared_tools_it_reads_as_it_always_did(self):
+    def test_with_no_declared_tools_it_gets_the_no_tools_procedure_file(self):
         from code_gantry.prompts import _conventions_block
+        from code_gantry.promptfiles import text as prompt_text
 
-        text = _conventions_block("Some conventions.", role="executor")
-        assert "cannot run" in text.lower()
+        rendered = _conventions_block("Some conventions.", role="executor")
+        assert prompt_text("shared/conventions_procedure_no_tools") in rendered
+        assert prompt_text("shared/conventions_procedure_with_tools") not in rendered
 
-    def test_with_a_declared_tool_it_stops_claiming_it_cannot_run_anything(self):
+    def test_with_a_declared_tool_it_gets_the_with_tools_procedure_file(self):
         from code_gantry.prompts import _conventions_block
+        from code_gantry.promptfiles import text as prompt_text
 
-        text = _conventions_block(
+        rendered = _conventions_block(
             "Some conventions.",
             role="executor",
             project_tools=[declared(name="bundle_install", roles=["executor"])],
         )
-        assert "cannot run commands" not in text.lower()
-
-    def test_the_instruction_itself_survives(self):
-        # The point of the sentence is unchanged: a document describing a
-        # procedure is not a licence to go and perform it.
-        from code_gantry.prompts import _conventions_block
-
-        text = _conventions_block(
-            "Some conventions.",
-            role="executor",
-            project_tools=[declared(name="bundle_install", roles=["executor"])],
-        )
-        assert "procedure" in text.lower()
+        assert prompt_text("shared/conventions_procedure_with_tools") in rendered
+        assert prompt_text("shared/conventions_procedure_no_tools") not in rendered
 
     def test_a_planner_only_tool_does_not_soften_it(self):
         from code_gantry.prompts import _conventions_block
+        from code_gantry.promptfiles import text as prompt_text
 
-        text = _conventions_block(
+        rendered = _conventions_block(
             "Some conventions.",
             role="executor",
             project_tools=[declared(roles=["planner"])],
         )
-        assert "cannot run" in text.lower()
+        assert prompt_text("shared/conventions_procedure_no_tools") in rendered
 
 
 class TestTheExecutorIsScopedToo:
@@ -530,9 +523,14 @@ class TestTheTwoMenusAreDistinguishable:
         )[0]["text"]
         assert "gem_search" in text, "the planner is not told what it holds"
         assert "bundle_install" in text, "the planner is not told what the executor holds"
-        # The distinction has to be stated, not left to be inferred from two
-        # lists that look alike.
-        assert "cannot" in text.lower() or "not available" in text.lower()
+        # The distinction is stated by its file, not left to be inferred from
+        # two lists that look alike.
+        from code_gantry.planner import PLANNER_ONLY_MARKER
+        from code_gantry.promptfiles import render
+
+        assert render(
+            "planner/capability_planner_only", marker=PLANNER_ONLY_MARKER, named="`gem_search`"
+        ) in text
 
     def test_a_shared_tool_is_not_described_as_withheld(self):
         from code_gantry.planner import _system_blocks
@@ -594,9 +592,10 @@ class TestTheCapabilityParagraph:
         # does not make it false, and softening it here would recreate the
         # contradiction the generated paragraph exists to prevent.
         from code_gantry.planner import executor_capability_block
+        from code_gantry.promptfiles import text as prompt_text
 
-        text = executor_capability_block([declared(roles=["planner"])]).lower()
-        assert "no tool for is running anything" in text or "cannot run" in text
+        rendered = executor_capability_block([declared(roles=["planner"])])
+        assert prompt_text("planner/capability_no_declared_tools") in rendered
 
 
 class TestItIsWiredForReal:

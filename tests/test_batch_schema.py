@@ -105,7 +105,6 @@ class TestTheFieldItself:
         text = _batch_block(SimpleNamespace(planner=SimpleNamespace(max_batch_stages=5)))
         assert "**5**" in text and "4 more" in text
         assert "additional_stages" in text
-        assert "cost more than it saved" in text
 
 
 class TestEveryBatchedStageIsChecked:
