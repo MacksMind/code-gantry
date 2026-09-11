@@ -9,6 +9,7 @@ defmodule CodeGantryDaemon.Host do
         code_gantry: "/home/you/projects/code-gantry",
         primary: "/home/you/projects/app/acme_app",
         config: "docs/technical_debt/code_gantry.yaml",
+        branch: "technical-debt",                # optional; what a new bay starts on
         sync_seconds: 120,
         command: ["uv", "run", "code-gantry"],   # optional; what runs the CLI
         bays: [
@@ -18,7 +19,7 @@ defmodule CodeGantryDaemon.Host do
       ]
   """
 
-  defstruct [:origin, :code_gantry, :primary, :config, :sync_seconds, bays: [], command: ["uv", "run", "code-gantry"]]
+  defstruct [:origin, :code_gantry, :primary, :config, :sync_seconds, :branch, bays: [], command: ["uv", "run", "code-gantry"]]
 
   def path, do: Path.join([System.user_home!(), ".config", "code-gantry", "host.exs"])
 
@@ -48,6 +49,7 @@ defmodule CodeGantryDaemon.Host do
       config: Keyword.fetch!(terms, :config),
       sync_seconds: Keyword.get(terms, :sync_seconds, 120),
       command: Keyword.get(terms, :command, ["uv", "run", "code-gantry"]),
+      branch: Keyword.get(terms, :branch),
       bays: bays
     }
   end

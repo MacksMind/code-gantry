@@ -41,6 +41,7 @@ defmodule CodeGantryDaemonTest do
       primary: primary,
       config: "cfg.yaml",
       sync_seconds: 3600,
+      branch: "work",
       command: [fake],
       bays: [%{name: "bay1", offset: 100, scope: ["p.001"]}]
     }
@@ -74,7 +75,7 @@ defmodule CodeGantryDaemonTest do
     wait_for(fn -> File.exists?(Path.join(root, "calls")) and String.contains?(calls(root), "argv:") end)
     wait_for(fn -> String.contains?(status(state), "bay1 finished") end)
     log = calls(root)
-    assert log =~ "mk-bay bay1 100"
+    assert log =~ "mk-bay bay1 100 work"
     assert log =~ ~r/argv: run .*repo-bay1\/cfg.yaml --run-id \d{8}-\d{6}-bay1 --scope p.001/
     assert File.read!(Path.join(state, "bay1.log")) =~ "line one"
   end

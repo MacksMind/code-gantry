@@ -690,6 +690,15 @@ which; a run that dies is resumed under the same id after a backoff. Every
 the status file, `bin/daemon logs` follows the daemon's log, and each bay's
 run output is in `~/.local/state/code-gantry/daemon/<bay>.log`.
 
+`branch` names what a new bay starts on; without it a bay is cut from
+whatever the primary copy has checked out.
+
+On a MacBook: `brew install mise uv`, `mise install` and `uv sync` in this
+checkout, Docker Desktop running, the target's primary copy on the project
+branch with its `shared/` beside it, the credentials file copied by hand,
+`PARALLEL_WORKERS` set in that file to what the laptop can run, and a scope
+per bay from a part of the plan the other host is not drawing from.
+
 The daemon holds no state the ledger does not hold, and a run started by
 hand behaves the same without it. The toolchain is pinned in
 `.tool-versions`; `mise install` gives every host the same Elixir.

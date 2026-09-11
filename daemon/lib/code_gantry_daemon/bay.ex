@@ -36,8 +36,8 @@ defmodule CodeGantryDaemon.Bay do
       Logger.info("#{bay.name}: making #{dir}")
       Status.put(bay.name, :making, nil)
 
-      {out, status} =
-        Command.run(["bin/mk-bay", bay.name, Integer.to_string(bay.offset)], host.primary, Host.env(host))
+      args = ["bin/mk-bay", bay.name, Integer.to_string(bay.offset)] ++ if(host.branch, do: [host.branch], else: [])
+      {out, status} = Command.run(args, host.primary, Host.env(host))
 
       if status != 0 do
         Logger.error("#{bay.name}: mk-bay failed (#{status}):\n#{out}")
