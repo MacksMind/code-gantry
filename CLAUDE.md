@@ -56,6 +56,19 @@ advance, and on the daemon's clock. A central database exists only ever as a
 replica. Scopes are per host; within a host, bays share the drawn-stage
 queue under the planner lock, so no scope is needed between them.
 
+**Landing across hosts is optimistic, never leased (decided 2026-09-11).**
+Rebase, test, push; a push the remote refuses after a green suite is a
+retry — pull again, test again, push again — bounded by a retry count, with
+a conflict or a red combined tree stopping for a person. No lease ref on the
+remote: a lease can be held by a dead process and blocks a host whose suite
+would have passed. Within a host the suite lock serialises landings. The
+intended reordering, not yet built: squash the stage into one candidate
+commit on its own branch, rebase that onto the pulled tip, run the full
+suite once there, then fast-forward and push — one suite per landing, and
+the candidate stays a branch a rework can amend. The same landing serves a
+person's pull request, with the failure returned to whoever authored the
+candidate.
+
 **Test bed (2026-09).** The Spark (this host, a DGX with 121 GB unified
 memory, hostname `spark`) and the operator's MacBook, which can SSH to the
 Spark and never the reverse. Multi-host is proven between those two before
