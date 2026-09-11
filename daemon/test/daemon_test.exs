@@ -96,6 +96,15 @@ defmodule CodeGantryDaemonTest do
     wait_for(fn -> String.contains?(status(state), "bay1 paused") end)
   end
 
+  test "a run that fails carries its last lines into the daemon log", %{root: root, host: host, state: state} do
+    File.write!(Path.join(root, "exit"), "1")
+    log = ExUnit.CaptureLog.capture_log(fn ->
+      {:ok, _} = Bay.start_link({host, hd(host.bays)})
+      wait_for(fn -> String.contains?(status(state), "bay1 failed") end)
+    end)
+    assert log =~ "failed before or outside a stage (exit 1)\n  line one"
+  end
+
   test "a run that dies is resumed under the same id after a backoff", %{root: root, host: host, state: state} do
     File.write!(Path.join(root, "exit"), "137")
     {:ok, pid} = Bay.start_link({host, hd(host.bays)})

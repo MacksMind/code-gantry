@@ -100,12 +100,12 @@ defmodule CodeGantryDaemon.Bay do
         {:noreply, state}
 
       1 ->
-        Logger.warning("#{bay.name}: run #{state.run_id} failed before or outside a stage (exit 1)")
+        Logger.warning("#{bay.name}: run #{state.run_id} failed before or outside a stage (exit 1)#{last_lines(bay)}")
         Status.put(bay.name, :failed, state.run_id)
         {:noreply, state}
 
       2 ->
-        Logger.warning("#{bay.name}: run #{state.run_id} escalated to a person")
+        Logger.warning("#{bay.name}: run #{state.run_id} escalated to a person#{last_lines(bay)}")
         Status.put(bay.name, :escalated, state.run_id)
         {:noreply, state}
 
@@ -124,6 +124,22 @@ defmodule CodeGantryDaemon.Bay do
   end
 
   def handle_info(:relaunch, state), do: {:noreply, state, {:continue, :launch}}
+
+  # The exit code says which kind of end; the run's own output says why.
+  # Its last lines travel into the daemon log beside the verdict, so a
+  # failure is readable without opening the bay's log.
+  defp last_lines(bay, count \\ 8) do
+    case File.read(Path.join(Host.state_dir(), "#{bay.name}.log")) do
+      {:ok, text} ->
+        text
+        |> String.split("\n", trim: true)
+        |> Enum.take(-count)
+        |> Enum.map_join("", &("\n  " <> &1))
+
+      _ ->
+        ""
+    end
+  end
 
   def handle_info(_other, state), do: {:noreply, state}
 
