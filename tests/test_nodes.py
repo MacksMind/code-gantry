@@ -162,7 +162,7 @@ def make(repo, tmp_path, planner=None, reviewer=None, executor=None, **cfg_over)
         project=project,
         paths=paths,
         git=Git(repo),
-        runner=CommandRunner(cwd=repo, timeout=60),
+        runner=CommandRunner(cwd=repo, timeout=60, exclusive=cfg.exclusive_commands()),
         executor=ex,
         planner=planner or StubPlanner(),
         reviewer=reviewer or StubReviewer(),

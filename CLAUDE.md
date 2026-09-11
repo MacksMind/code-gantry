@@ -136,7 +136,11 @@ only under `remote_landing`.** `Git.push` has no force flag and `precheck` and
 re-runs the full suite only if the pull brought commits — two landings each
 verified on their own tree were never verified together — and pushes; a
 refused push pulls again; a conflict or a red combined tree escalates with the
-landing complete locally, and the next precheck pulls again. Squashing is what
+landing complete locally, and the next precheck pulls again. The whole
+publication, pull to push, runs under the host's suite lock, re-entered by
+the suite it runs, so a bay landing small stages quickly cannot keep moving
+origin under a neighbour's re-test until its retries run out — which is what
+two bays did on 2026-09-11 before the section existed. Squashing is what
 makes "every commit on the project branch is green" and "the executor commits
 before it tests" both true.
 

@@ -1307,7 +1307,8 @@ can forget.
 - `full_test_lock` names a host lock the full suite runs under, whichever
   run or project starts it. The suite takes every core, so two at once buy
   nothing; the wait is recorded apart from the suite's own duration and the
-  log names the holder.
+  log names the holder. A landing holds the same lock from its pull to its
+  push, so one bay cannot land under another's re-test.
 - `gc.auto=0` for the run's duration, so the reflog can recover a discarded
   attempt.
 - Branch identity is asserted as a verify layer on every stage, and a failure

@@ -517,3 +517,27 @@ class TestTheHostLock:
         assert d.name == "locks" and d.parent.name == f"code-gantry-{os.getuid()}"
         monkeypatch.setenv("CODE_GANTRY_LOCK_DIR", str(tmp_path / "elsewhere"))
         assert host_lock_dir() == tmp_path / "elsewhere"
+
+
+class TestTheLockIsReentrant:
+    def test_a_hold_inside_a_hold_on_the_same_name_does_not_block(self, tmp_path):
+        from code_gantry import hostlock
+
+        locks = tmp_path / "locks"
+        with hostlock.hold("suite", "outer", directory=locks) as outer:
+            assert hostlock.held("suite")
+            with hostlock.hold("suite", "inner", directory=locks) as inner:
+                assert inner[0] == 0
+                assert hostlock.held("suite")
+            assert hostlock.held("suite"), "the inner exit did not release the outer"
+        assert not hostlock.held("suite")
+        assert outer[0] == 0
+
+    def test_a_different_name_inside_still_locks(self, tmp_path):
+        from code_gantry import hostlock
+
+        locks = tmp_path / "locks"
+        with hostlock.hold("suite", "outer", directory=locks):
+            with hostlock.hold("planner", "inner", directory=locks):
+                assert hostlock.held("planner") and hostlock.held("suite")
+            assert not hostlock.held("planner")

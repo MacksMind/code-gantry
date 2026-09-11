@@ -37,3 +37,10 @@ def repo(tmp_path):
     git(path, "add", "-A")
     git(path, "commit", "-qm", "initial")
     return path
+
+
+@pytest.fixture(autouse=True)
+def _host_locks_in_tmp(tmp_path, monkeypatch):
+    """Every test takes its host locks under its own directory, never the
+    host's, so a suite leaves nothing behind and cannot wait on a live run."""
+    monkeypatch.setenv("CODE_GANTRY_LOCK_DIR", str(tmp_path / "host-locks"))

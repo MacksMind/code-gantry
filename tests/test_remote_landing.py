@@ -211,3 +211,40 @@ class TestTheGitHelpers:
         with pytest.raises(GitError):
             g.push("proj")
         assert origin_tip(bare) == sh(other, "rev-parse", "HEAD")
+
+
+class TestTheLandingHoldsTheSuiteLock:
+    """From the pull to the push, one landing at a time on the host, with the
+    suite inside re-entering the same lock rather than waiting on it."""
+
+    def _recording(self, monkeypatch):
+        from code_gantry import hostlock
+
+        seen = []
+        real = hostlock.hold
+
+        def hold(name, label, log=None, directory=None):
+            seen.append((name, hostlock.held(name)))
+            return real(name, label, log, directory)
+
+        monkeypatch.setattr(hostlock, "hold", hold)
+        return seen
+
+    def test_the_lock_is_taken_once_for_the_publication_and_re_entered_by_the_suite(
+        self, repo, tmp_path, origin, monkeypatch
+    ):
+        monkeypatch.setenv("CODE_GANTRY_LOCK_DIR", str(tmp_path / "locks"))
+        seen = self._recording(monkeypatch)
+        bare, other = origin
+        other_lands(other)
+        cfg, rt, state, out = land(repo, tmp_path, full_test_command="true")
+        assert out["next_hop"] != "escalate"
+        suite = [entry for entry in seen if entry[0] == cfg.full_test_lock]
+        assert suite[0] == (cfg.full_test_lock, False), "the publication takes the lock first"
+        assert (cfg.full_test_lock, True) in suite, "the re-test re-enters it"
+
+    def test_no_lock_name_means_no_lock(self, repo, tmp_path, origin, monkeypatch):
+        seen = self._recording(monkeypatch)
+        cfg, rt, state, out = land(repo, tmp_path, full_test_lock=None)
+        assert out["next_hop"] != "escalate"
+        assert all(name != "full-suite" for name, _ in seen)

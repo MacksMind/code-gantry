@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import re
 import textwrap
+import contextlib
 import hashlib
 import os
 import time
@@ -3184,6 +3185,22 @@ def _publish_landing(rt: Runtime, stage: Stage) -> tuple[str, dict | None]:
     git, branch = rt.git, rt.cfg.project_branch
     if not git.remote_exists():
         return git.head_sha(), None
+    # One landing at a time on this host, from the pull to the push: a bay
+    # that lands quickly cannot keep moving origin under a neighbour's
+    # re-test, and the suite the section runs re-enters the same lock.
+    lock = rt.cfg.full_test_lock
+    holding = (
+        hostlock.hold(lock, f"landing {stage.id}, run {rt.paths.run_id}", rt.log)
+        if lock else contextlib.nullcontext([0.0])
+    )
+    with holding as waited:
+        if waited[0]:
+            rt.log(f"[advance] {stage.id}: waited {waited[0]:.0f}s for the landing lock")
+        return _publish_landing_locked(rt, stage)
+
+
+def _publish_landing_locked(rt: Runtime, stage: Stage) -> tuple[str, dict | None]:
+    git, branch = rt.git, rt.cfg.project_branch
     refused = None
     for _ in range(3):
         try:
