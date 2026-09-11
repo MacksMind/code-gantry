@@ -95,19 +95,16 @@ class TestTheFieldItself:
         # that cannot survive an earlier stage still has to be named here.
         assert "read_excerpts" in d
 
-    def test_the_prompt_keeps_the_guard_against_surveying_for_the_cap(self):
-        # The concern the old assertion existed for. Stating a ceiling must not
-        # read as a target: the block has to say, in the same breath, that a
-        # batch of one is a correct answer and that extra reading defeats the
-        # purpose.
+    def test_the_prompt_states_the_cap_it_was_built_from(self):
+        # The number and the field are generated; the words around them are
+        # the file's to choose.
         from types import SimpleNamespace
 
         from code_gantry.prompts import _batch_block
 
-        text = _batch_block(
-            SimpleNamespace(planner=SimpleNamespace(max_batch_stages=5))
-        ).lower()
-        assert "batch of one" in text
+        text = _batch_block(SimpleNamespace(planner=SimpleNamespace(max_batch_stages=5)))
+        assert "**5**" in text and "4 more" in text
+        assert "additional_stages" in text
         assert "cost more than it saved" in text
 
 

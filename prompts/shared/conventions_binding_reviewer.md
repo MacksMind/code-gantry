@@ -1,0 +1,1 @@
+They bind the diff you are judging as firmly as the stage's own constraints do: a change that breaks one is a defect even where the stage said nothing about it. Where a passage describes procedure rather than how code should be written, it is context and not a criterion.

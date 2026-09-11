@@ -1,0 +1,1 @@
+They bind what you write as firmly as the stage's own instruction does: a change that breaks one is wrong even where the stage said nothing about it, and it will be rejected on that ground alone. $procedure

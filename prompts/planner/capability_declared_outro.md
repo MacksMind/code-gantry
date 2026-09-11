@@ -1,0 +1,1 @@
+  Nothing else. There is still no shell and no arbitrary command: a tool not in that list does not exist, and asking for one is worse than useless — the executor will invent the output and argue with itself about a file it is already looking at. One such instruction cost ten minutes of a model looping over hallucinated command results.

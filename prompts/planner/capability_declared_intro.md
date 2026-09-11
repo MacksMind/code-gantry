@@ -1,0 +1,1 @@
+  This project also declares tools it may call. These are real: it runs them and reads the exit code and output inside its own attempt, so a stage may depend on the answer rather than having to guess it.

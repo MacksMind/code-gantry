@@ -1,0 +1,1 @@
+Read at the commit this stage started from, which is before the changes shown below, so a line this stage has already touched may have moved. Where that is possible, read it before you quote it — an excerpt is a starting point here, not the current file.

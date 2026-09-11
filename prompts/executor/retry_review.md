@@ -1,0 +1,3 @@
+A previous attempt at this task was rejected, and its work is on the branch — you will find it below, under what this stage has changed so far. Unlike a check that failed, this does not mean the work is unfinished: something in it is wrong and has to change.
+
+So read the feedback as naming something to *replace*, not something to add to. If it says an assertion or a block should be different, change the one that is there — leaving the original in place and putting the new form beside it satisfies nothing and is the common way this goes wrong. Everything the feedback does not name should come out unchanged.
