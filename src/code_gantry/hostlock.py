@@ -37,7 +37,7 @@ def lock_dir() -> Path:
     override = os.environ.get("CODE_GANTRY_LOCK_DIR")
     if override:
         return Path(override)
-    return Path(tempfile.gettempdir()) / f"code-gantry-{os.getuid()}" / "locks"
+    return Path(tempfile.gettempdir()) / f"code_gantry-{os.getuid()}" / "locks"
 
 
 @contextlib.contextmanager

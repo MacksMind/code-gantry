@@ -101,7 +101,7 @@ class TestInspection:
                 if arg in ("-f", "--force", "--force-with-lease") or arg.startswith("+")
             ], argv
         assert "self._guard_ref(ref)" in textwrap.dedent(inspect.getsource(Git.push_ref))
-        assert Git.REF_PREFIX == "refs/code-gantry/"
+        assert Git.REF_PREFIX == "refs/code_gantry/"
 
         callers = {"push": [], "push_ref": []}
         for module in Path(code_gantry.__file__).parent.glob("*.py"):

@@ -2,12 +2,12 @@
 # Usage: bin/daemon start|stop|status|logs
 #
 # The per-host daemon, detached from the terminal that started it. Its
-# state lives under ~/.local/state/code-gantry/daemon: a pid file, the
+# state lives under ~/.local/state/code_gantry/daemon: a pid file, the
 # daemon's own log, one log per bay, and the status file.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-STATE="$HOME/.local/state/code-gantry/daemon"
+STATE="$HOME/.local/state/code_gantry/daemon"
 PIDFILE="$STATE/daemon.pid"
 LOG="$STATE/daemon.log"
 mkdir -p "$STATE"
@@ -17,7 +17,7 @@ alive() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
 case "${1:-}" in
   start)
     if alive; then echo "daemon already running, pid $(cat "$PIDFILE")"; exit 0; fi
-    [ -f "$HOME/.config/code-gantry/host.exs" ] || { echo "no host file at ~/.config/code-gantry/host.exs" >&2; exit 1; }
+    [ -f "$HOME/.config/code_gantry/host.exs" ] || { echo "no host file at ~/.config/code_gantry/host.exs" >&2; exit 1; }
     cd "$HERE/daemon"
     MIX_ENV=prod mix compile >/dev/null
     nohup env MIX_ENV=prod elixir -S mix run --no-halt >> "$LOG" 2>&1 < /dev/null &

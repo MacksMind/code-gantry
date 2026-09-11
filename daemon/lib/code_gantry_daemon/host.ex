@@ -1,6 +1,6 @@
 defmodule CodeGantryDaemon.Host do
   @moduledoc """
-  The host file: `~/.config/code-gantry/host.exs`, evaluated to a keyword
+  The host file: `~/.config/code_gantry/host.exs`, evaluated to a keyword
   list. It names this machine and what it holds, which is why it lives
   outside every checkout and is never tracked.
 
@@ -21,11 +21,11 @@ defmodule CodeGantryDaemon.Host do
 
   defstruct [:origin, :code_gantry, :primary, :config, :sync_seconds, :branch, bays: [], command: ["uv", "run", "code-gantry"]]
 
-  def path, do: Path.join([System.user_home!(), ".config", "code-gantry", "host.exs"])
+  def path, do: Path.join([System.user_home!(), ".config", "code_gantry", "host.exs"])
 
   def state_dir do
     System.get_env("CODE_GANTRY_DAEMON_STATE") ||
-      Path.join([System.user_home!(), ".local", "state", "code-gantry", "daemon"])
+      Path.join([System.user_home!(), ".local", "state", "code_gantry", "daemon"])
   end
 
   def load!, do: load!(path())

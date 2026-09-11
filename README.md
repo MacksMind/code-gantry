@@ -591,7 +591,7 @@ runs the suite.
 
 **Across hosts the ledger travels through the git remote.** Each origin's
 events are one append-only JSON-lines file on a ref of its own,
-`refs/code-gantry/ledger/<origin>`, built with plumbing so no work tree is
+`refs/code_gantry/ledger/<origin>`, built with plumbing so no work tree is
 touched, pushed only by its owner and fast-forward only, fetched by
 everyone. `ledger sync` does one exchange; a run with `remote_landing` on
 does it at start, at the plan node, at precheck and after each landing, and
@@ -664,7 +664,7 @@ saying which effort produced it.
 ## The daemon
 
 `bin/daemon start` runs the per-host daemon, an Elixir application under
-`daemon/`, detached from the terminal. It reads `~/.config/code-gantry/host.exs`,
+`daemon/`, detached from the terminal. It reads `~/.config/code_gantry/host.exs`,
 which names this machine and what it holds:
 
 ```elixir
@@ -688,7 +688,7 @@ finishes, fails, escalates or pauses stops its bay and the status file says
 which; a run that dies is resumed under the same id after a backoff. Every
 `sync_seconds` it runs `code-gantry ledger sync`. `bin/daemon status` prints
 the status file, `bin/daemon logs` follows the daemon's log, and each bay's
-run output is in `~/.local/state/code-gantry/daemon/<bay>.log`.
+run output is in `~/.local/state/code_gantry/daemon/<bay>.log`.
 
 `branch` names what a new bay starts on; without it a bay is cut from
 whatever the primary copy has checked out.

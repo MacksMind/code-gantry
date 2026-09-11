@@ -49,7 +49,7 @@ named explicitly rather than defaulted once there is more than one host.
 remote: every landing is a squash, `pull --rebase`, a re-run of the suite
 only if the pull brought commits, and a fast-forward push of the project
 branch alone. The ledger moves through the same remote: each origin's
-events are an append-only JSON-lines file on `refs/code-gantry/ledger/<origin>`,
+events are an append-only JSON-lines file on `refs/code_gantry/ledger/<origin>`,
 built with plumbing and never touching a work tree, pushed only by its
 owner, fetched by everyone at run start, at the plan node, at precheck and at
 advance, and on the daemon's clock. A central database exists only ever as a
@@ -89,14 +89,14 @@ under the shared cookie qualifies, an SSH session does not. Multi-host is
 proven between those two before any cloud host. On the Spark: `/home/you/projects/app/acme_app` is
 the primary copy, still running as a bay for now, and `acme_app-bay2`
 is the second bay, ports offset by 100. The technical-debt project's ledger
-is `~/.local/share/code-gantry/acme_app/technical-debt.db`. The Rails 5
+is `~/.local/share/code_gantry/acme_app/technical-debt.db`. The Rails 5
 project still keeps its ledger under its work dir. Remote landing is on for
 technical-debt, off for Rails 5.
 
 **Sequence.** (1) the ledger holds the plan — landed; (2) bays behind one
 ledger, the suite and planner locks, drawn stages, leases — landed; (3) the
 per-host daemon: an Elixir Mix application under `daemon/`, started with one
-command, reading `~/.config/code-gantry/host.exs`, supervising `code-gantry
+command, reading `~/.config/code_gantry/host.exs`, supervising `code-gantry
 run` per bay, making a missing bay with `bin/mk-bay`, syncing the ledger
 refs on a clock, answering `bin/daemon status`; toolchain pinned with
 `.tool-versions` and `mise`, since the Spark's packaged Elixir is 1.14 on OTP
@@ -153,6 +153,13 @@ Waiting on the operator:
   ledger beside technical-debt's.
 - When the current two-bay run should stop, so the primary copy can be
   handed back and `acme_app-bay1` made in its place.
+- The technical-debt config's `ledger.path` still spells
+  `~/.local/share/code-gantry/…`; every other host path is `code_gantry`
+  now (decided 2026-09-11: one spelling for directories, the command name
+  stays `code-gantry`). Move the file and the field at the stop. Until no
+  run started on the old code is live, `/tmp/code_gantry-<uid>` is a symlink
+  to the old lock directory so old and new runs share one set of locks;
+  remove the link then.
 - Credentials are per repository (decided 2026-09-11): one file at the
   target's root, `<repo>/.code_gantry/env`, ignored there, shared by every
   project in that repository since a repository is one client; both configs
@@ -217,7 +224,7 @@ breakpoint after content that changes every call costs more than none.
 **The pipeline pushes only the configured project branch, fast-forward, and
 only under `remote_landing`.** `Git.push` has no force flag and `precheck` and
 `advance` are its only callers. The one other push is `Git.push_ref`, which
-refuses any name outside `refs/code-gantry/` — the ledger refs, built with
+refuses any name outside `refs/code_gantry/` — the ledger refs, built with
 plumbing and never a branch — so it cannot become a second way to move code. After a squash the bay pulls with rebase,
 re-runs the full suite only if the pull brought commits — two landings each
 verified on their own tree were never verified together — and pushes; a
@@ -1131,7 +1138,7 @@ escalate. Preflight skips a tree this origin has proven and never one another
 origin has: the tree fact travels, the environment fact does not.
 
 `ledgersync.py` carries a ledger between hosts: our origin's events to
-`refs/code-gantry/ledger/<origin>` on the remote, every origin's ref fetched
+`refs/code_gantry/ledger/<origin>` on the remote, every origin's ref fetched
 and ingested with origin and sequence kept, so the same log can be ingested
 any number of times. `nodes._sync_ledger` is the one caller inside a run and
 logs a failure rather than raising, since the local ledger is this host's

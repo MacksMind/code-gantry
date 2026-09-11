@@ -514,7 +514,7 @@ class TestTheHostLock:
 
         monkeypatch.delenv("CODE_GANTRY_LOCK_DIR", raising=False)
         d = host_lock_dir()
-        assert d.name == "locks" and d.parent.name == f"code-gantry-{os.getuid()}"
+        assert d.name == "locks" and d.parent.name == f"code_gantry-{os.getuid()}"
         monkeypatch.setenv("CODE_GANTRY_LOCK_DIR", str(tmp_path / "elsewhere"))
         assert host_lock_dir() == tmp_path / "elsewhere"
 

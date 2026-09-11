@@ -1,7 +1,7 @@
 """The ledger across hosts, through the git remote.
 
 Each origin's events are one JSON-lines file on a ref of its own,
-`refs/code-gantry/ledger/<origin>`, pushed only by that origin and only
+`refs/code_gantry/ledger/<origin>`, pushed only by that origin and only
 appended to. A sync writes our log to our ref and pushes it, fetches every
 origin's ref, and ingests what is new. Hosts never address each other, and
 nothing here touches a work tree.
@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from code_gantry.gitops import Git, GitError
 from code_gantry.ledger import Ledger
 
-REF_PREFIX = "refs/code-gantry/ledger/"
+REF_PREFIX = "refs/code_gantry/ledger/"
 FILE = "events.jsonl"
 
 

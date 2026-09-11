@@ -742,12 +742,12 @@ class Git:
         return self.head_sha() != before
 
     # -- refs outside the branches -------------------------------------
-    # A ref under `refs/code-gantry/` is a commit like any other, but no
+    # A ref under `refs/code_gantry/` is a commit like any other, but no
     # branch: nothing that reads HEAD, the index or the work tree can see it,
     # so these helpers build and move it with plumbing and never touch the
     # checkout. Only such refs may be pushed through here.
 
-    REF_PREFIX = "refs/code-gantry/"
+    REF_PREFIX = "refs/code_gantry/"
 
     def ref_sha(self, ref: str) -> str | None:
         proc = self._run("rev-parse", "-q", "--verify", f"{ref}^{{commit}}", check=False)
