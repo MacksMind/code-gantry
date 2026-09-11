@@ -140,7 +140,16 @@ defmodule CodeGantryDaemonTest do
     _ = root
   end
 
-  test "the sync loop runs the ledger sync and records the result", %{root: root, host: host, state: state} do
+  test "the sync loop reads a bay's config, never the primary's, once a bay exists", %{root: root, host: host, state: state} do
+    File.write!(Path.join(root, "exit"), "0")
+    File.mkdir_p!(Host.bay_dir(host, hd(host.bays)))
+    {:ok, _} = Sync.start_link(host)
+    wait_for(fn -> String.contains?(status(state), "sync ok") end)
+    assert calls(root) =~ "argv: ledger sync --config #{Path.join(Host.bay_dir(host, hd(host.bays)), "cfg.yaml")}"
+    refute calls(root) =~ host.primary <> "/cfg.yaml"
+  end
+
+  test "with no bay made yet the sync falls back to the primary copy's config", %{root: root, host: host, state: state} do
     File.write!(Path.join(root, "exit"), "0")
     {:ok, _} = Sync.start_link(host)
     wait_for(fn -> String.contains?(status(state), "sync ok") end)
