@@ -2987,3 +2987,19 @@ class TestTheTestWarningsReachThePlanner:
             for b in m["content"]
         )
         assert "warnings" not in whole.lower().split("## what the repository")[0]
+
+
+class TestTheBatchAsksForEveryOrthogonalStage:
+    def _leading(self, cap):
+        cfg = SimpleNamespace(cache_ttl=None, planner=SimpleNamespace(max_batch_stages=cap))
+        messages = build_planner_messages(cfg=cfg, plan_text=a_plan(), completed=[])
+        return messages[0]["content"][0]["text"]
+
+    def test_it_asks_for_as_many_as_can_be_named(self):
+        text = self._leading(5).lower()
+        assert "as many orthogonal stages as you can name" in text
+        assert "no two of them touch the same files or depend on each other" in text
+        assert "a batch of one is a perfectly good answer" not in text
+
+    def test_a_cap_of_one_asks_for_one(self):
+        assert "orthogonal" not in self._leading(1).lower()
