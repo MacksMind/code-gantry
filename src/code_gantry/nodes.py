@@ -321,7 +321,13 @@ def plan(state: RunState, rt: Runtime) -> dict:
     # One derivation at a time against this ledger, and a look at what is
     # already drawn before paying for one: the second bay to arrive finds the
     # first bay's stages waiting and takes one instead of drawing them again.
-    with hostlock.hold(_planner_lock(rt), f"planner, run {rt.paths.run_id}", rt.log) as waited:
+    # A revision draws nothing from the open list, so it holds no lock and
+    # keeps no other bay waiting through its planner call.
+    holding = (
+        hostlock.hold(_planner_lock(rt), f"planner, run {rt.paths.run_id}", rt.log)
+        if stage is None else contextlib.nullcontext([0.0])
+    )
+    with holding as waited:
         if waited[0]:
             rt.log(f"[plan] waited {waited[0]:.0f}s for the planner lock")
         _sync_ledger(rt, "plan")

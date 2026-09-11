@@ -3863,6 +3863,18 @@ class TestDerivedStagesInTheLedger:
         nodes.advance(state, rt)
         assert rt.views().derived[state["current"]["derived_id"]].status == "done"
 
+    def test_a_revision_holds_no_planner_lock(self, repo, tmp_path, monkeypatch):
+        from code_gantry import hostlock
+
+        names = []
+        real = hostlock.hold
+        monkeypatch.setattr(hostlock, "hold", lambda name, label, log=None, directory=None: names.append(name) or real(name, label, log, directory))
+        planner = StubPlanner([PlannerOutcome("revise", "r", "e", stage_fields=planned_stage(), revision_mode="restart")])
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        state = {**state, "current": planned_stage(), "last_failure": {"layer": "tests", "summary": "red"}}
+        nodes.plan(state, rt)
+        assert not [n for n in names if n.startswith("planner-")], names
+
     def test_the_planner_lock_is_held_per_ledger(self, repo, tmp_path, monkeypatch):
         locks = tmp_path / "locks"
         monkeypatch.setenv("CODE_GANTRY_LOCK_DIR", str(locks))
