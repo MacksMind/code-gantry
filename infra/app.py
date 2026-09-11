@@ -40,6 +40,10 @@ class CodeGantryStack(cdk.Stack):
             ),
             deletion_protection=True,
             removal_policy=cdk.RemovalPolicy.RETAIN,
+            # Rows carrying `ttl` expire; a real ledger's rows never carry it.
+            # The only way anything leaves this table, since the user below
+            # is not granted DeleteItem: the log is append-only by policy.
+            time_to_live_attribute="ttl",
         )
 
         user = iam.User(self, "User", user_name=USER_NAME)
