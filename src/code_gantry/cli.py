@@ -879,5 +879,11 @@ def _slugify(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "-", value).strip("-").lower() or "project"
 
 
+from code_gantry.ledgercli import ledger as _ledger_group, plan as _plan_group  # noqa: E402
+
+main.add_command(_plan_group, "plan")
+main.add_command(_ledger_group, "ledger")
+
+
 if __name__ == "__main__":  # pragma: no cover
     main()

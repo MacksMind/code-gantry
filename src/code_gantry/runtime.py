@@ -18,6 +18,7 @@ from code_gantry.config import ProjectConfig, validate_stage
 from code_gantry.executor import Executor
 from code_gantry.gitops import Git, GitError
 from code_gantry.layout import summarize_layout
+from code_gantry.ledger import LEDGER_FILENAME
 from code_gantry.plandoc import PlanDocument, PlanTree, load_snapshot
 from code_gantry.planner import PlannerClient
 from code_gantry.reviewer import ReviewerClient
@@ -75,6 +76,11 @@ class ProjectPaths:
     @property
     def status(self) -> Path:
         return self.project_dir / "status.md"
+
+    @property
+    def ledger(self) -> Path:
+        """The plan tree, key states and findings — see `ledger.py`."""
+        return self.project_dir / LEDGER_FILENAME
 
     @property
     def runs_dir(self) -> Path:

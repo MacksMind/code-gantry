@@ -33,6 +33,7 @@ from code_gantry.globs import matches_any
 # Stage ids name directories and git branches, so they must not contain
 # separators, traversal, or anything git rejects in a ref.
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_KEY_PREFIX = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 
 # Fields the planner is allowed to author. Everything else in Stage is
 # operator-only. `nodes` and `planner` both import this; it is the single
@@ -556,6 +557,17 @@ class Limits(_Strict):
     max_stages: int = 60
     command_timeout_seconds: int = 3600
     wall_clock_hours: float = 14.0
+
+
+class LedgerConfig(_Strict):
+    """The ledger that holds the plan — see `ledger.py`."""
+
+    # Keys are `<key_prefix>.<nnn>`; a short project handle, fixed for its life.
+    key_prefix: str
+    # Fold when the projection is this fraction of the plan text or more.
+    fold_ratio: float = 0.25
+    # Longest a finding's prose is rendered to the planner.
+    note_chars: int = 600
 
 
 class Excerpt(_Strict):
@@ -1108,6 +1120,7 @@ class ProjectConfig(_Strict):
     limits: Limits = Limits()
 
     stage_defaults: StageDefaults = StageDefaults()
+    ledger: LedgerConfig | None = None
 
     # Whether to commit what a `checks` command changed. Most linters only
     # report, and for those this is a no-op — there is nothing uncommitted to
@@ -1658,6 +1671,17 @@ def _structural_problems(cfg: ProjectConfig) -> list[str]:
                     "captures nothing records an excusal with no way to "
                     "reproduce it, which is the thing this exists to prevent"
                 )
+
+    if cfg.ledger is not None:
+        if not _KEY_PREFIX.match(cfg.ledger.key_prefix):
+            problems.append(
+                f"ledger.key_prefix {cfg.ledger.key_prefix!r} must be letters, "
+                "digits, '_' or '-', starting with a letter"
+            )
+        if cfg.ledger.fold_ratio <= 0:
+            problems.append("ledger.fold_ratio must be positive")
+        if cfg.ledger.note_chars < 80:
+            problems.append("ledger.note_chars must be at least 80")
 
     problems.extend(_test_tool_problems(cfg))
 
