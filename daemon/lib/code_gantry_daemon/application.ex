@@ -20,6 +20,7 @@ defmodule CodeGantryDaemon.Application do
 
     children =
       [
+        {Registry, keys: :unique, name: CodeGantryDaemon.Registry},
         {Status, host},
         {Sync, host}
       ] ++ Enum.map(host.bays, fn bay -> Supervisor.child_spec({Bay, {host, bay}}, id: {Bay, bay.name}) end)

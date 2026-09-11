@@ -52,6 +52,7 @@ defmodule CodeGantryDaemonTest do
     System.put_env("CODE_GANTRY_DAEMON_STATE", state)
     on_exit(fn -> System.delete_env("CODE_GANTRY_DAEMON_STATE") end)
     {:ok, _} = Status.start_link(host)
+    start_supervised!({Registry, keys: :unique, name: CodeGantryDaemon.Registry})
     %{root: root, host: host, state: state}
   end
 
@@ -154,6 +155,19 @@ defmodule CodeGantryDaemonTest do
     {:ok, _} = Sync.start_link(host)
     wait_for(fn -> String.contains?(status(state), "sync ok") end)
     assert calls(root) =~ "argv: ledger sync --config #{Path.join(host.primary, "cfg.yaml")}"
+  end
+
+  test "a bay's name is local to its node, never global", %{root: root, host: host, state: state} do
+    # Every host has a bay1. `:global` is cluster-wide and resolves a
+    # duplicate by killing one registrant, so the first Node.connect between
+    # two daemons would take a bay down on one of them.
+    File.write!(Path.join(root, "hold"), "")
+    {:ok, pid} = Bay.start_link({host, hd(host.bays)})
+    wait_for(fn -> String.contains?(status(state), "bay1 running") end)
+    assert GenServer.whereis(Bay.via("bay1")) == pid
+    assert :global.whereis_name({Bay, "bay1"}) == :undefined
+    assert :global.registered_names() == []
+    File.rm!(Path.join(root, "hold"))
   end
 
   describe "retry" do

@@ -24,7 +24,10 @@ defmodule CodeGantryDaemon.Bay do
 
   def start_link({host, bay}), do: GenServer.start_link(__MODULE__, {host, bay}, name: via(bay.name))
 
-  def via(name), do: {:global, {__MODULE__, name}}
+  # Local to this node. Every host has a bay1, and a cluster-wide name
+  # would resolve the duplicate by killing one of them on the first
+  # connection between two daemons; a verb reaches a bay through its node.
+  def via(name), do: {:via, Registry, {CodeGantryDaemon.Registry, {__MODULE__, name}}}
 
   @doc """
   Launch again. `{:ok, mode, run_id}` names what was started; a bay with a
