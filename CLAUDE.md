@@ -151,6 +151,10 @@ Waiting on the operator:
   ledger beside technical-debt's.
 - When the current two-bay run should stop, so the primary copy can be
   handed back and `acme_app-bay1` made in its place.
+- A `checks` entry in the technical-debt config, backed by a script in the
+  target's `bin/`, failing on a quoted path after an HTTP verb in an added
+  line under `spec/requests/`: three reviewer reworks on 2026-09-11 were
+  that convention, and `forbidden_patterns` exempts test files by design.
 
 **Measured facts worth keeping.** Through OpenRouter, Fable 5.1 on the
 Messages wire drops the schema and refuses tools; on Responses it carries both
