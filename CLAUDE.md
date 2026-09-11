@@ -153,10 +153,11 @@ Waiting on the operator:
   ledger beside technical-debt's.
 - When the current two-bay run should stop, so the primary copy can be
   handed back and `acme_app-bay1` made in its place.
-- `env_file` in both target configs pointing at a host-level file,
-  `~/.config/code-gantry/acme_app.env`, instead of technical-debt
-  reaching into the Rails 5 project's private directory; credentials are a
-  host fact, and `bin/mk-bay` then carries none.
+- The technical-debt project's own credentials file: `env_file:
+  .code_gantry/env` under `docs/technical_debt/`, a copy placed by hand,
+  instead of reaching into the Rails 5 project's directory. API keys are per
+  project by decision (2026-09-11), never host-level; `bin/mk-bay` carries
+  each project's file into a new bay.
 - A `checks` entry in the technical-debt config, backed by a script in the
   target's `bin/`, failing on a quoted path after an HTTP verb in an added
   line under `spec/requests/`: three reviewer reworks on 2026-09-11 were
