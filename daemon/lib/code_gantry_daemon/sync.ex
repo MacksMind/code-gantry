@@ -22,7 +22,7 @@ defmodule CodeGantryDaemon.Sync do
   @impl true
   def handle_info(:tick, host) do
     config = Path.join(host.primary, host.config)
-    {out, status} = Command.run(Command.code_gantry(host, ["ledger", "sync", config]), host.code_gantry, Host.env(host))
+    {out, status} = Command.run(Command.code_gantry(host, ["ledger", "sync", "--config", config]), host.code_gantry, Host.env(host))
 
     if status == 0 do
       Status.put(:sync, :ok, String.trim(out))

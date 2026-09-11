@@ -106,10 +106,14 @@ per-host daemon: an Elixir Mix application under `daemon/`, started with
 the ledger refs on a clock, answering `bin/daemon status`; toolchain pinned
 with `.tool-versions` and `mise` as a floor (the Spark's packaged Elixir is
 1.14 on OTP 24, the Mac runs 1.20) — landed, tested against a fake CLI, not
-yet run for real on the Spark; its first Mac start failed to spawn
-`bin/mk-bay` with `enoent` although the path and file are right, cause
-still open (interpreter line or the Mac's spawn), and a spawn failure now
-reads as a failed bay in the status file; (4) ledger sync over the git refs
+yet run for real on the Spark. Its first Mac start (2026-09-11) could not
+spawn `bin/mk-bay`; after the spawn fixes were pulled it made
+`acme_app-bay1`, and the first run there stopped in preflight because
+a host that has never run the project holds no plan until a sync brings the
+other origins' events — so `run` now syncs before preflight under
+`remote_landing`, and the three argv shapes the daemon composes are parsed
+through the real CLI in `tests/test_daemon_argv.py`, which found the sync
+and resume shapes wrong before the Mac did; (4) ledger sync over the git refs
 and preflight deduplication through `suite.green` — landed; (5) remote bays and scopes at placement; (6) an observer role
 that writes findings only; (7) CodeGantry improving itself from its own run
 artifacts. The daemon adds uptime, capacity, reload at the pause seam and a
@@ -1148,9 +1152,10 @@ origin has: the tree fact travels, the environment fact does not.
 `ledgersync.py` carries a ledger between hosts: our origin's events to
 `refs/code_gantry/ledger/<origin>` on the remote, every origin's ref fetched
 and ingested with origin and sequence kept, so the same log can be ingested
-any number of times. `nodes._sync_ledger` is the one caller inside a run and
-logs a failure rather than raising, since the local ledger is this host's
-record and the remote is a replica.
+any number of times. `sync_at` is the exchange at a seam — it logs a failure
+rather than raising, since the local ledger is this host's record and the
+remote is a replica — called by `nodes._sync_ledger` inside a run and by
+`cli.run` before preflight, where a fresh host first needs the plan.
 
 `ledger.py` is the record: one append-only `events` table, views derived from
 it, `open_ledger` the only creator, `read_ledger` never creating. Views are

@@ -58,6 +58,7 @@ from code_gantry.ledger import (
 # decision, and `gates` is where the other half of it lives. Safe at
 # module level — `gates` imports nothing that reaches back here.
 from code_gantry.gates import clip as _clip
+from code_gantry.ledgersync import sync_at
 from code_gantry.repotools import render_counts
 from code_gantry.globs import matches_any
 from code_gantry.planner import append_stage_cost, append_status, recent_stage_costs
@@ -3197,20 +3198,9 @@ def _record_landing(rt: Runtime, stage: Stage, state: RunState, merge_sha: str) 
 
 
 def _sync_ledger(rt: Runtime, where: str) -> None:
-    """Exchange ledgers through the remote at a seam. A failure is logged and
-    the run goes on: this host's ledger is the record for this host, and the
-    remote is a replica of it."""
-    if rt.ledger is None or not rt.cfg.remote_landing:
-        return
-    from code_gantry.ledgersync import sync
-
-    try:
-        report = sync(rt.ledger, rt.git)
-    except (GitError, OSError, ValueError) as e:
-        rt.log(f"[{where}] ledger sync failed: {_clip(str(e))}")
-        return
-    if report.pushed is not None or any(report.ingested.values()):
-        rt.log(f"[{where}] ledger sync: {report.summary()}")
+    """Exchange ledgers through the remote at a seam, under `remote_landing`."""
+    if rt.cfg.remote_landing:
+        sync_at(rt.ledger, rt.git, rt.log, where)
 
 
 def _sync_project_branch(rt: Runtime) -> bool:

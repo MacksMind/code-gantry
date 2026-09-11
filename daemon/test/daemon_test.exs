@@ -103,7 +103,7 @@ defmodule CodeGantryDaemonTest do
     File.write!(Path.join(root, "exit"), "0")
     send(pid, :relaunch)
     wait_for(fn -> String.contains?(status(state), "bay1 finished") end)
-    [first, second] = Regex.scan(~r/argv: (run|resume) \S+ --run-id (\S+)/, calls(root)) |> Enum.map(fn [_, verb, id] -> {verb, id} end)
+    [first, second] = Regex.scan(~r/argv: (run|resume) \S+ (?:--run-id )?(\S+)/, calls(root)) |> Enum.map(fn [_, verb, id] -> {verb, id} end)
     assert {"run", id} = first
     assert {"resume", ^id} = second
   end
@@ -134,6 +134,6 @@ defmodule CodeGantryDaemonTest do
     File.write!(Path.join(root, "exit"), "0")
     {:ok, _} = Sync.start_link(host)
     wait_for(fn -> String.contains?(status(state), "sync ok") end)
-    assert calls(root) =~ "argv: ledger sync #{Path.join(host.primary, "cfg.yaml")}"
+    assert calls(root) =~ "argv: ledger sync --config #{Path.join(host.primary, "cfg.yaml")}"
   end
 end

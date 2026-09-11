@@ -68,7 +68,7 @@ defmodule CodeGantryDaemon.Bay do
     args =
       case state.mode do
         :run -> ["run", config, "--run-id", run_id] ++ Enum.flat_map(bay.scope, &["--scope", &1])
-        :resume -> ["resume", config, "--run-id", run_id]
+        :resume -> ["resume", config, run_id]
       end
 
     log_path = Path.join(Host.state_dir(), "#{bay.name}.log")

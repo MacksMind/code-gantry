@@ -12,6 +12,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
+from typing import Callable
+
+from code_gantry.gates import clip
 from code_gantry.gitops import Git, GitError
 from code_gantry.ledger import Ledger
 
@@ -48,6 +51,21 @@ class SyncReport:
             if new else f"nothing new from {len(self.fetched)} other origin(s)"
         )
         return "; ".join(parts)
+
+
+def sync_at(ledger: Ledger | None, git: Git, log: Callable[[str], object], where: str) -> None:
+    """The exchange at a seam of a run. A failure is logged and the run goes
+    on: this host's ledger is the record for this host, and the remote is a
+    replica of it."""
+    if ledger is None:
+        return
+    try:
+        report = sync(ledger, git)
+    except (GitError, OSError, ValueError) as e:
+        log(f"[{where}] ledger sync failed: {clip(str(e))}")
+        return
+    if report.pushed is not None or any(report.ingested.values()):
+        log(f"[{where}] ledger sync: {report.summary()}")
 
 
 def sync(ledger: Ledger, git: Git, *, remote: str = "origin") -> SyncReport:

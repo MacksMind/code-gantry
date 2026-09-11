@@ -6,7 +6,9 @@ import pytest
 from click.testing import CliRunner
 
 from code_gantry import cli
+from code_gantry.gitops import Git
 from code_gantry.ledger import open_ledger, read_ledger
+from code_gantry.ledgersync import sync
 from code_gantry.runtime import ProjectPaths
 
 PLAN = """# Demo plan
@@ -267,6 +269,55 @@ class TestAConfiguredLedgerPath:
         imported(project)
         other = open_ledger(shared, origin="test-host", actor="bay-2")
         assert other.views().documents(), "the second bay reads the plan the first imported"
+
+
+class TestAFreshHost:
+    """A host that has never run the project holds no ledger. Under
+    `remote_landing` the run fetches the other origins' events before
+    preflight reads the plan, so the first run on a new host imports
+    nothing by hand."""
+
+    def test_the_plan_arrives_from_the_remote_before_preflight_reads_it(
+        self, project, tmp_path, monkeypatch
+    ):
+        repo, config, paths, sha = project
+        bare = tmp_path / "origin.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        subprocess.run(["git", "remote", "add", "origin", str(bare)], cwd=repo, check=True)
+        subprocess.run(["git", "push", "-q", "origin", "main", "work"], cwd=repo, check=True)
+        config.write_text(config.read_text() + "remote_landing: true\n")
+
+        # Another host holds the plan and has pushed its ledger's ref.
+        other = open_ledger(tmp_path / "elsewhere.db", origin="other-host", actor="them")
+        other.upsert_node("p.001", parent=None, position=0, kind="document", title="Plan")
+        other.upsert_node("p.002", parent="p.001", position=0, kind="item", title="A thing")
+        sync(other, Git(repo))
+        other.close()
+        assert not paths.ledger.exists()
+
+        seen = {}
+
+        def preflight(*a, ledger=None, **k):
+            seen["documents_at_preflight"] = len(ledger.views().documents())
+            return []
+
+        monkeypatch.setattr(cli, "run_preflight", preflight)
+        monkeypatch.setattr(
+            cli, "_drive",
+            lambda cfg, project, paths, graph_input, warnings=None: seen.update(graph_input) or 0,
+        )
+        result = run("run", "--scope", "p.002")
+        assert result.exit_code == 0, result.output
+        assert seen["documents_at_preflight"] == 1
+        assert seen["key_scope"] == ["p.002"]
+
+    def test_without_remote_landing_a_missing_ledger_is_not_created(self, project, monkeypatch):
+        repo, config, paths, sha = project
+        monkeypatch.setattr(cli, "run_preflight", lambda *a, **k: [])
+        result = run("run")
+        assert result.exit_code != 0
+        assert "holds no plan" in result.output
+        assert not paths.ledger.exists()
 
 
 class TestRunScope:

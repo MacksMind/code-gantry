@@ -50,6 +50,7 @@ from code_gantry.driver import (
 )
 from code_gantry import nodes
 from code_gantry.ledger import LedgerError, open_ledger, read_ledger, release_dead_holders, resolve_scope
+from code_gantry.ledgersync import sync_at
 from code_gantry.planner import make_planner
 from code_gantry.preflight import format_checks, run_preflight
 from code_gantry.report import build_report
@@ -451,12 +452,17 @@ def run(
     ))
 
     # The ledger, for what preflight can read from it and write to it: a
-    # tree this host has already proven green is not proven again.
+    # tree this host has already proven green is not proven again. Under
+    # `remote_landing` the other origins' events are fetched first, because a
+    # host that has never run this project holds no plan until they arrive,
+    # and preflight is the first thing that reads one.
     early = (
         open_ledger(project.ledger, origin=os.environ.get("CODE_GANTRY_ORIGIN") or None, actor="preflight")
-        if project.ledger.is_file() else None
+        if cfg.remote_landing or project.ledger.is_file() else None
     )
     try:
+        if cfg.remote_landing:
+            sync_at(early, Git(cfg.target_repo), start_log, "preflight")
         checks = run_preflight(cfg, project_dir=project, run_tests=not skip_preflight_tests,
                                config_path=config_path, ledger=early)
     finally:
