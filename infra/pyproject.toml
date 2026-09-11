@@ -1,0 +1,9 @@
+[project]
+name = "code-gantry-infra"
+version = "0.1.0"
+description = "What CodeGantry needs in AWS: the ledger table and the user that writes it."
+requires-python = ">=3.12"
+dependencies = [
+    "aws-cdk-lib>=2.170",
+    "constructs>=10.0",
+]

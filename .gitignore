@@ -43,3 +43,8 @@ scratchpad/
 daemon/_build/
 daemon/deps/
 daemon/.elixir_ls/
+
+# CDK: synthesised output and the context cache, which holds account-specific lookups
+infra/cdk.out/
+infra/cdk.context.json
+infra/.venv/

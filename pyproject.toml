@@ -12,6 +12,7 @@ dependencies = [
     "click>=8.1",
     "openai>=1.60",
     "anthropic>=0.120.2",
+    "boto3>=1.43.93",
 ]
 
 [project.scripts]
