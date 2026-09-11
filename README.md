@@ -580,6 +580,15 @@ then draws from one plan, claims are visible across bays as they happen, and
 a fold is written under one lock. Give each bay a `--scope` so they draw
 disjoint items.
 
+**A suite proven green is not proven again.** Preflight records a green
+full suite as a `suite.green` event naming the tree and the command, and a
+landing records the suite it passed on the tip it pushed. The next preflight
+on the same host skips a tree this origin already proved, so a second bay
+starts in seconds and a run restarted on an unchanged tip pays no suite. The
+record is per origin: another host's green says nothing about this host's
+containers. `--skip-preflight-tests` still forces the skip; `validate` still
+runs the suite.
+
 **Across hosts the ledger travels through the git remote.** Each origin's
 events are one append-only JSON-lines file on a ref of its own,
 `refs/code-gantry/ledger/<origin>`, built with plumbing so no work tree is

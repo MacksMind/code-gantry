@@ -951,3 +951,83 @@ class TestDeclaredChecksRunAtPreflight:
     def test_no_declared_checks_says_nothing(self, repo):
         checks = self._run(repo, checks=[], suite_marker=repo / "suite.txt")
         assert not [c for c in checks if c.name.startswith("check runs:")]
+
+
+class TestASuiteProvenGreenIsNotProvenAgain:
+    """A green suite is a fact about a tree on this host. Preflight records
+    the ones it runs and skips a tree this origin already proved; another
+    origin's proof does not count, since its environment is not this one."""
+
+    def _cfg(self, repo, marker):
+        _commit_a_plan(repo)
+        return parse_config(
+            as_test_tools({
+                "target_repo": str(repo), "base_ref": "main", "project_branch": "proj",
+                "plan_root": "PLAN.md", "full_test_command": f"echo x >> {marker}",
+                "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
+                "reviewer": {"model": "gpt-5.6-sol"},
+            })
+        )
+
+    def _preflight(self, cfg, ledger):
+        return run_preflight(
+            cfg, check_models=False, check_approval=False, check_endpoint=False, ledger=ledger,
+        )
+
+    def test_the_first_run_proves_and_records_and_the_second_skips(self, repo, tmp_path):
+        from code_gantry.gitops import Git
+        from code_gantry.ledger import SUITE_GREEN, open_ledger
+
+        marker = tmp_path / "runs.txt"
+        cfg = self._cfg(repo, marker)
+        led = open_ledger(tmp_path / "ledger.db", origin="this-host", actor="t")
+        self._preflight(cfg, led)
+        assert marker.read_text().count("x") == 1
+        greens = [e for e in led.events() if e.kind == SUITE_GREEN]
+        assert len(greens) == 1 and greens[0].sha == Git(repo).head_sha()
+        assert greens[0].body["command"] == cfg.full_test_command
+        checks = self._preflight(cfg, led)
+        assert marker.read_text().count("x") == 1, "the suite ran again"
+        skipped = next(c for c in checks if "full_test_command passes" in c.name)
+        assert skipped.ok and "proven green by this host" in skipped.detail
+
+    def test_another_origins_proof_does_not_count(self, repo, tmp_path):
+        from code_gantry.gitops import Git
+        from code_gantry.ledger import open_ledger
+
+        marker = tmp_path / "runs.txt"
+        cfg = self._cfg(repo, marker)
+        theirs = open_ledger(tmp_path / "ledger.db", origin="other-host", actor="o")
+        theirs.record_green(Git(repo).head_sha(), cfg.full_test_command)
+        mine = open_ledger(tmp_path / "ledger.db", origin="this-host", actor="t")
+        self._preflight(cfg, mine)
+        assert marker.read_text().count("x") == 1
+
+    def test_a_different_tree_is_proven_again(self, repo, tmp_path):
+        from code_gantry.ledger import open_ledger
+
+        marker = tmp_path / "runs.txt"
+        cfg = self._cfg(repo, marker)
+        led = open_ledger(tmp_path / "ledger.db", origin="this-host", actor="t")
+        self._preflight(cfg, led)
+        (repo / "more.txt").write_text("more\n")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-qm", "more"], cwd=repo, check=True)
+        self._preflight(cfg, led)
+        assert marker.read_text().count("x") == 2
+
+    def test_a_red_suite_records_nothing(self, repo, tmp_path):
+        from code_gantry.ledger import SUITE_GREEN, open_ledger
+
+        _commit_a_plan(repo)
+        cfg = parse_config(
+            as_test_tools({
+                "target_repo": str(repo), "base_ref": "main", "project_branch": "proj",
+                "plan_root": "PLAN.md", "full_test_command": "false",
+                "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
+                "reviewer": {"model": "gpt-5.6-sol"},
+            })
+        )
+        led = open_ledger(tmp_path / "ledger.db", origin="this-host", actor="t")
+        self._preflight(cfg, led)
+        assert not [e for e in led.events() if e.kind == SUITE_GREEN]

@@ -51,6 +51,8 @@ STAGE_TAKEN = "stage.taken"
 STAGE_RELEASED = "stage.released"
 STAGE_DROPPED = "stage.dropped"
 STAGE_DONE = "stage.done"
+# A suite command was green on a tree, on the origin that ran it.
+SUITE_GREEN = "suite.green"
 
 KEY_STATE_KINDS = frozenset({CLAIMED, RELEASED, LANDED, STRUCK, BLOCKED, ANSWER})
 NODE_KINDS = frozenset({"document", "section", "item"})
@@ -202,6 +204,8 @@ class Views:
     key_states: dict[str, KeyState] = field(default_factory=dict)
     findings: dict[str, Finding] = field(default_factory=dict)
     derived: dict[str, DerivedStage] = field(default_factory=dict)
+    # (sha, command) -> [(origin, at)]: which trees which host has proven green.
+    greens: dict[tuple[str, str], list[tuple[str, str]]] = field(default_factory=dict)
 
     # -- tree -------------------------------------------------------------
 
@@ -261,6 +265,13 @@ class Views:
 
     def findings_on(self, key: str) -> list[Finding]:
         return [f for f in self.findings.values() if key in f.keys]
+
+    def proven_green(self, sha: str, command: str, origin: str) -> str | None:
+        """When `origin` last ran `command` green on `sha`, or None. Per
+        origin, because a suite is green on a host's environment, not on a
+        tree alone."""
+        times = [at for o, at in self.greens.get((sha, command), []) if o == origin]
+        return max(times) if times else None
 
     def derived_waiting(self) -> list[DerivedStage]:
         """Stages drawn and not yet taken, a batch at a time in the order drawn."""
@@ -430,6 +441,9 @@ def _apply(views: Views, event: Event) -> None:
         d = views.derived.get(body.get("derived_id", ""))
         if d and d.status == "taken":
             d.status = "done"
+    elif kind == SUITE_GREEN:
+        if event.sha and body.get("command"):
+            views.greens.setdefault((event.sha, body["command"]), []).append((event.origin, event.at))
 
 
 def _apply_key_state(views: Views, event: Event) -> None:
@@ -609,6 +623,10 @@ class Ledger:
             raise
         self._views = None
         return event
+
+    def record_green(self, sha: str, command: str, *, run_id: str | None = None, stage_id: str | None = None) -> Event:
+        """This origin ran `command` green on `sha`."""
+        return self.append(SUITE_GREEN, sha=sha, run_id=run_id, stage_id=stage_id, command=command)
 
     def export(self, origin: str | None = None) -> list[dict]:
         """This origin's events (ours by default) as plain rows, in sequence

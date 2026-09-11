@@ -1971,6 +1971,13 @@ def advance(state: RunState, rt: Runtime) -> dict:
         merge_sha, publication = _publish_landing(rt, stage)
     if rt.ledger is not None:
         _record_landing(rt, stage, state, merge_sha or rt.git.head_sha())
+        # The suite this landing passed is a fact about the pushed tree; the
+        # next preflight on this host reads it rather than proving it again.
+        if publication is None and state.get("full_suite_digest") and rt.cfg.full_test_command:
+            rt.ledger.record_green(
+                merge_sha or rt.git.head_sha(), rt.cfg.full_test_command,
+                run_id=rt.paths.run_id, stage_id=stage.id,
+            )
         _sync_ledger(rt, "advance")
 
     usage = state.get("stage_usage") or {}
@@ -3000,7 +3007,10 @@ def _drop_derived(rt: Runtime, stage: Stage, reason: str) -> None:
     if not stage.derived_id or rt.ledger is None:
         return
     record = rt.views().derived.get(stage.derived_id)
-    if record is not None and record.status in ("derived", "taken"):
+    mine = record is not None and (
+        record.status == "derived" or (record.status == "taken" and record.taken_run == rt.paths.run_id)
+    )
+    if mine:
         rt.ledger.append(STAGE_DROPPED, stage_id=stage.id, run_id=rt.paths.run_id, derived_id=stage.derived_id, reason=reason)
 
 
@@ -3054,6 +3064,12 @@ def _record_derivation(rt: Runtime, head: Stage, queue: list[dict]) -> tuple[Sta
         batch=None, rank=0,
     )
     head = head.model_copy(update={"derived_id": event.derived_id})
+    # The head is this run's to start: taken now, so no other run takes it
+    # between the derivation and this run's precheck.
+    rt.ledger.append(
+        STAGE_TAKEN, stage_id=head.id, run_id=run_id, derived_id=event.derived_id,
+        pid=os.getpid(), bay=bay_id(rt),
+    )
     recorded = []
     for rank, fields in enumerate(queue, start=1):
         sibling = rt.ledger.append(

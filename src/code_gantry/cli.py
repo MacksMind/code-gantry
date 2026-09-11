@@ -449,8 +449,18 @@ def run(
         "" if skip_preflight_tests else " (running the suites, which take minutes)"
     ))
 
-    checks = run_preflight(cfg, project_dir=project, run_tests=not skip_preflight_tests,
-                            config_path=config_path)
+    # The ledger, for what preflight can read from it and write to it: a
+    # tree this host has already proven green is not proven again.
+    early = (
+        open_ledger(project.ledger, origin=os.environ.get("CODE_GANTRY_ORIGIN") or None, actor="preflight")
+        if project.ledger.is_file() else None
+    )
+    try:
+        checks = run_preflight(cfg, project_dir=project, run_tests=not skip_preflight_tests,
+                               config_path=config_path, ledger=early)
+    finally:
+        if early is not None:
+            early.close()
     click.echo(format_checks(checks))
     blocking = [c for c in checks if c.blocking]
     start_log(

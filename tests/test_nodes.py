@@ -3794,14 +3794,15 @@ class TestDerivedStagesInTheLedger:
         )
         return other, {**state, "run_id": "r2"}
 
-    def test_a_batch_is_recorded_and_the_head_is_taken_at_precheck(self, repo, tmp_path):
+    def test_a_batch_is_recorded_with_the_head_held_and_the_rest_waiting(self, repo, tmp_path):
         cfg, rt, state = self._make(repo, tmp_path)
         out = nodes.plan(state, rt)
         records = rt.views().derived
-        assert [d.status for d in records.values()] == ["derived", "derived"]
         head_id = out["current"]["derived_id"]
         assert records[head_id].stage_id == "extract" and records[head_id].rank == 0
-        assert out["stage_queue"][0]["derived_id"] in records
+        assert records[head_id].status == "taken", "the deriving run holds its head from the start"
+        sibling = out["stage_queue"][0]["derived_id"]
+        assert records[sibling].status == "derived", "the rest wait for any run"
         state = {**state, **out}
         nodes.precheck(state, rt)
         assert rt.views().derived[head_id].status == "taken"
@@ -3821,6 +3822,26 @@ class TestDerivedStagesInTheLedger:
         # The first run's own queue no longer offers it.
         promoted = nodes._next_from_queue(first, 0, views=rt.views())
         assert promoted["next_hop"] == "plan"
+
+    def test_the_head_is_taken_at_derivation_so_no_other_run_takes_it(self, repo, tmp_path):
+        cfg, rt, state = self._make(repo, tmp_path)
+        out = nodes.plan(state, rt)
+        head = rt.views().derived[out["current"]["derived_id"]]
+        assert head.status == "taken" and head.taken_run == "r1"
+        other, other_state = self._second_run(rt, state)
+        taken = nodes.plan(other_state, other)
+        assert taken["current"]["id"] == "second"
+
+    def test_a_bounce_withdraws_only_a_record_this_run_holds(self, repo, tmp_path):
+        cfg, rt, state = self._make(repo, tmp_path)
+        first = {**state, **nodes.plan(state, rt)}
+        head_id = first["current"]["derived_id"]
+        other, other_state = self._second_run(rt, state)
+        # The other run arrives holding the same stage, as a resumed checkpoint might.
+        stale = {**other_state, "current": first["current"], "stage_index": 0}
+        out = nodes.precheck(stale, other)
+        assert out["next_hop"] == "plan"
+        assert rt.views().derived[head_id].status == "taken", "the holder's record survived the bounce"
 
     def test_nothing_waiting_means_the_planner_is_called(self, repo, tmp_path):
         cfg, rt, state = make(repo, tmp_path, planner=StubPlanner([

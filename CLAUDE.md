@@ -1040,6 +1040,12 @@ of numbered source. `repotools.Spend` is everything mutable about a read budget
 in one object, so clearing it is replacing it; `count_calls`, `count_refusals`
 and `render_counts` are the one summariser all three roles report through.
 
+A green suite is a `suite.green` event on the ledger, sha plus command plus
+origin, written by preflight after it runs one and by `advance` for the tip
+it pushed when the stage's full suite passed and the publication did not
+escalate. Preflight skips a tree this origin has proven and never one another
+origin has: the tree fact travels, the environment fact does not.
+
 `ledgersync.py` carries a ledger between hosts: our origin's events to
 `refs/code-gantry/ledger/<origin>` on the remote, every origin's ref fetched
 and ingested with origin and sequence kept, so the same log can be ingested

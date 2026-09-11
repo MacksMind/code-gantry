@@ -70,6 +70,7 @@ def run_preflight(
     recorded_base_sha: str = "",
     check_endpoint: bool = True,
     for_resume: bool = False,
+    ledger=None,
 ) -> list[Check]:
     runner = runner or CommandRunner(
         cwd=cfg.target_repo,
@@ -155,8 +156,9 @@ def run_preflight(
 
     checks.extend(
         _environment_checks(
-            cfg, runner, run_tests=run_tests, project_dir=project_dir
-        )
+            cfg, runner, run_tests=run_tests, project_dir=project_dir,
+        ledger=ledger,
+    )
     )
 
     return checks
@@ -474,7 +476,8 @@ def _declared_checks(cfg: ProjectConfig, runner: CommandRunner) -> list[Check]:
 
 
 def _environment_checks(
-    cfg: ProjectConfig, runner: CommandRunner, *, run_tests: bool, project_dir=None
+    cfg: ProjectConfig, runner: CommandRunner, *, run_tests: bool, project_dir=None,
+    ledger=None,
 ) -> list[Check]:
     checks = []
 
@@ -530,8 +533,24 @@ def _environment_checks(
     # second name: there is nothing left to deduplicate against.
     label = "full_test_command"
     command = cfg.full_test_command
+    if command and ledger is not None and ledger.origin:
+        # A suite is a fact about a tree on this host's environment. A tree
+        # this origin has already proven green is not proven again.
+        tip = Git(cfg.target_repo).head_sha()
+        when = ledger.views().proven_green(tip, command, ledger.origin)
+        if when:
+            checks.append(
+                Check(
+                    f"{label} passes on a clean tree", True,
+                    f"not run: {tip[:12]} was proven green by this host at {when}",
+                )
+            )
+            return checks
     if command:
+        tip = Git(cfg.target_repo).head_sha()
         result = runner.run(command)
+        if result.ok and ledger is not None and ledger.origin:
+            ledger.record_green(tip, command)
 
         # The same adjudication the merge gate uses, for the same reason. A
         # large legacy suite is rarely order-independent, and preflight ran the

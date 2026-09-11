@@ -248,3 +248,30 @@ class TestTheLandingHoldsTheSuiteLock:
         cfg, rt, state, out = land(repo, tmp_path, full_test_lock=None)
         assert out["next_hop"] != "escalate"
         assert all(name != "full-suite" for name, _ in seen)
+
+
+class TestALandingRecordsItsGreenSuite:
+    def _land_after_a_green_suite(self, repo, tmp_path, **cfg_over):
+        cfg, rt, state = make(repo, tmp_path, remote_landing=True, **cfg_over)
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("stage work\n")
+        state = {**state, "review_summary": "fine", "review_record": "did it", "full_suite_digest": "green"}
+        return cfg, rt, state, nodes.advance(state, rt)
+
+    def test_a_pushed_landing_is_recorded_green_on_its_tip(self, repo, tmp_path, origin):
+        from code_gantry.ledger import SUITE_GREEN
+
+        bare, other = origin
+        cfg, rt, state, out = self._land_after_a_green_suite(repo, tmp_path)
+        tip = out["completed"][-1]["merge_sha"]
+        greens = [e for e in rt.ledger.events() if e.kind == SUITE_GREEN]
+        assert [(e.sha, e.body["command"]) for e in greens] == [(tip, cfg.full_test_command)]
+
+    def test_a_landing_whose_re_test_was_red_records_nothing(self, repo, tmp_path, origin):
+        from code_gantry.ledger import SUITE_GREEN
+
+        bare, other = origin
+        other_lands(other, name="poison.txt")
+        cfg, rt, state, out = self._land_after_a_green_suite(repo, tmp_path, full_test_command="test ! -e poison.txt")
+        assert out["next_hop"] == "escalate"
+        assert not [e for e in rt.ledger.events() if e.kind == SUITE_GREEN]
