@@ -48,10 +48,15 @@ provider behaviour has been wrong twice.
 whole marked block, so put churn *after* the mark, not last inside it. A
 breakpoint after content that changes every call costs more than none.
 
-**There is no push, and stages land by squash merge.** The safety guarantee is
-that no method exists which could push. Squashing is what makes "every commit on
-the project branch is green" and "the executor commits before it tests" both
-true.
+**The pipeline pushes only the configured project branch, fast-forward, and
+only under `remote_landing`.** `Git.push` has no force flag and `precheck` and
+`advance` are its only callers. After a squash the bay pulls with rebase,
+re-runs the full suite only if the pull brought commits — two landings each
+verified on their own tree were never verified together — and pushes; a
+refused push pulls again; a conflict or a red combined tree escalates with the
+landing complete locally, and the next precheck pulls again. Squashing is what
+makes "every commit on the project branch is green" and "the executor commits
+before it tests" both true.
 
 **A stage lands completely or not at all.** `squash_merge` restores where the
 branch was and `advance` unwinds the note. Anything added to that sequence

@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from code_gantry.ledger import LANDED, STRUCK, Ledger, Views
+from code_gantry.ledger import LANDED, STRUCK, Ledger, Views, apply_fold
 
 KEY_MARK = re.compile(r"\{#([A-Za-z0-9][A-Za-z0-9._-]*)\}")
 _HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
@@ -306,6 +306,10 @@ def import_documents(
 
         walk(doc.sections, doc_key, top)
         doc.key = doc_key
+    # What the documents already showed as closed is folded at once, so the
+    # rendered plan reads as the documents did and the projection starts
+    # empty.
+    apply_fold(ledger, actor=actor)
     return counts
 
 

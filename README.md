@@ -623,8 +623,11 @@ saying which effort produced it.
   `git reset`, deploy tools, `sudo`, and recursive `rm` in any configured
   command — *regardless of what the config says*. A human skims a sixty-line YAML once,
   motivated to start a run; this is the backstop for that moment.
-- Commits only to the project branch and its children. **No push method
-  exists.**
+- Commits only to the project branch and its children. With
+  `remote_landing: true` it pushes that one branch to origin after each
+  landing — pull with rebase, re-run the suite if origin moved, then a
+  fast-forward push; never a force, never `base_ref`. Off, no push method
+  is called at all.
 - `gc.auto` is disabled for the run, so the reflog can recover a discarded
   attempt.
 - Every commit passes `-c commit.gpgsign=false`: an unattended run can't answer a

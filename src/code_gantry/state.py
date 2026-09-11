@@ -57,6 +57,7 @@ FailureLayer = Literal[
     "branch_moved",
     "tree_dirty",
     "planner",
+    "remote_landing",
 ]
 
 # Which failures mean "the repo changed and needs re-checking" versus "the plan

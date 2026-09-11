@@ -973,6 +973,10 @@ class ProjectConfig(_Strict):
     config_path: Path | None = None
     base_ref: str = "main"
     project_branch: str
+    # Land through origin: after each squash, pull --rebase the project branch,
+    # re-run the full suite if the pull brought commits, and push fast-forward.
+    # The only push the pipeline makes, and only of this branch. Off by default.
+    remote_landing: bool = False
 
     # Repo-relative path to the plan document. A document, not a directory:
     # pointing at `docs/` would sweep every runbook and ADR into every review

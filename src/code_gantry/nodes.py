@@ -820,6 +820,20 @@ def precheck(state: RunState, rt: Runtime) -> dict:
         # this stage, or a restart where the planner discarded the approach. In
         # both cases any branch left under this name is the thing being
         # discarded, so it must not be inherited.
+        if rt.cfg.remote_landing:
+            try:
+                if _sync_project_branch(rt):
+                    rt.log(f"[precheck] {stage.id}: origin moved; the stage starts from the pulled tip")
+            except GitError as e:
+                return {
+                    **update,
+                    **_escalate(
+                        "remote_landing",
+                        f"Pulling {rt.cfg.project_branch!r} from origin before "
+                        f"cutting {stage.id!r} failed:\n{_clip(str(e))}\n\n"
+                        "Resolve the branch against origin by hand and resume.",
+                    ),
+                }
         branch = rt.cfg.stage_branch(state.get("stage_index", 0), stage.id)
         start = rt.git.cut_stage_branch(branch, rt.cfg.project_branch, fresh=True)
         update["stage_branch"] = branch
@@ -1921,6 +1935,9 @@ def advance(state: RunState, rt: Runtime) -> dict:
         ),
     )
     rt.git.delete_branch(branch)
+    publication = None
+    if rt.cfg.remote_landing and merge_sha:
+        merge_sha, publication = _publish_landing(rt, stage)
     if rt.ledger is not None:
         _record_landing(rt, stage, state, merge_sha or rt.git.head_sha())
 
@@ -2030,6 +2047,10 @@ def advance(state: RunState, rt: Runtime) -> dict:
     paused = _pause_escalation(
         rt.paths.pause_flag, state, rt.cfg, held_hop(landed)
     )
+    if publication:
+        # Landed locally and recorded; what failed is publication, and the
+        # next precheck pulls again once a person has resolved it.
+        return {**landed, **publication}
     return {**landed, **paused} if paused else landed
 
 
@@ -2990,3 +3011,79 @@ def _record_landing(rt: Runtime, stage: Stage, state: RunState, merge_sha: str) 
         f"{len(state.get('pending_resolved') or [])} finding(s) resolved, "
         f"{len(state.get('pending_observations') or [])} observation(s) opened"
     )
+
+
+def _sync_project_branch(rt: Runtime) -> bool:
+    """Bring the project branch up to origin's before a stage is cut. Returns
+    whether the tip moved; False when there is no origin or no remote branch."""
+    git, branch = rt.git, rt.cfg.project_branch
+    if not git.remote_exists() or not git.remote_has_branch(branch):
+        return False
+    if git.current_branch() != branch:
+        git.checkout(branch)
+    return git.pull_rebase(branch)
+
+
+def _publish_landing(rt: Runtime, stage: Stage) -> tuple[str, dict | None]:
+    """pull --rebase, re-test if the tip moved, push fast-forward.
+
+    Returns the branch's head after publication and an escalation when it
+    could not be published. The landing is complete locally either way; the
+    next precheck pulls again.
+    """
+    git, branch = rt.git, rt.cfg.project_branch
+    if not git.remote_exists():
+        return git.head_sha(), None
+    refused = None
+    for _ in range(3):
+        try:
+            moved = git.remote_has_branch(branch) and git.pull_rebase(branch)
+        except GitError as e:
+            return git.head_sha(), _escalate(
+                "remote_landing",
+                f"{stage.id!r} landed on {branch!r} locally, but rebasing onto "
+                f"origin's copy failed:\n{_clip(str(e))}\n\nResolve the branch "
+                "against origin by hand and resume; nothing was pushed.",
+            )
+        if moved:
+            rt.log(
+                f"[advance] {stage.id}: origin moved under the landing; re-running "
+                "the full suite on the rebased tree"
+            )
+            red = _suite_is_red(rt, stage)
+            if red:
+                return git.head_sha(), _escalate(
+                    "remote_landing",
+                    f"{stage.id!r} was approved on its own tree, but rebased onto "
+                    f"what origin now holds the full suite is red:\n{red}\n\n"
+                    "The two landings conflict. Nothing was pushed.",
+                )
+        try:
+            git.push(branch)
+        except GitError as e:
+            refused = e
+            continue
+        rt.log(f"[advance] {stage.id}: pushed {git.head_sha()[:12]} to origin/{branch}")
+        return git.head_sha(), None
+    return git.head_sha(), _escalate(
+        "remote_landing",
+        f"origin refused the push of {branch!r} three times running:\n"
+        f"{_clip(str(refused))}",
+    )
+
+
+def _suite_is_red(rt: Runtime, stage: Stage) -> str | None:
+    """The full suite on the tree as it stands: None when green or flaked,
+    else what failed."""
+    command = rt.cfg.full_test_command
+    if not command:
+        return None
+    result = rt.runner.run(command)
+    if result.ok:
+        return None
+    verdict = adjudicate(output=result.output, command=command, cfg=rt.cfg, runner=rt.runner)
+    if verdict.flaked:
+        rt.log(f"[advance] {stage.id}: full suite flaked after the rebase — {verdict.summary}")
+        _record_flakes(rt, stage.id, verdict.files, verdict.seeds, verdict.examples)
+        return None
+    return f"{result.summary()}\n{_clip(result.output)}"

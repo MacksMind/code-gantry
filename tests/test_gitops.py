@@ -75,10 +75,40 @@ class TestInspection:
         assert g.is_ancestor(base, "HEAD")
         assert not g.is_ancestor("HEAD", base)
 
-    def test_no_push_method_exists(self):
-        # The safety requirements forbid pushing. The way to guarantee that is
-        # to have no code that can.
-        assert not any("push" in name for name in dir(Git))
+    def test_the_one_push_never_forces_and_has_one_caller(self):
+        # The pipeline pushes only the configured project branch, fast
+        # forward: `push` carries no force flag, and only `nodes` calls it.
+        import ast
+        import inspect
+        import textwrap
+        from pathlib import Path
+
+        import code_gantry
+
+        assert [name for name in dir(Git) if "push" in name] == ["push"]
+        source = textwrap.dedent(inspect.getsource(Git.push))
+        argv = [
+            node.value
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        ]
+        assert "-q" in argv
+        assert not [
+            arg for arg in argv
+            if arg in ("-f", "--force", "--force-with-lease") or arg.startswith("+")
+        ], argv
+
+        callers = []
+        for module in Path(code_gantry.__file__).parent.glob("*.py"):
+            tree = ast.parse(module.read_text())
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "push"
+                ):
+                    callers.append(module.name)
+        assert callers == ["nodes.py"], callers
 
 
 class TestProjectBranch:

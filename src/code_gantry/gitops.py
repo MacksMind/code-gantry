@@ -716,6 +716,41 @@ class Git:
             raise
         return self.head_sha()
 
+    # --- remote landing -------------------------------------------------
+
+    def remote_exists(self, remote: str = "origin") -> bool:
+        return self._run("remote", "get-url", remote, check=False).returncode == 0
+
+    def remote_has_branch(self, branch: str, remote: str = "origin") -> bool:
+        proc = self._run("ls-remote", "--heads", remote, branch, check=False)
+        return proc.returncode == 0 and bool(proc.stdout.strip())
+
+    def pull_rebase(self, branch: str, remote: str = "origin") -> bool:
+        """Rebase the checked-out `branch` onto the remote's copy.
+
+        Returns whether the tip moved. A conflict aborts the rebase, leaving
+        the branch where it was, and raises.
+        """
+        before = self.head_sha()
+        proc = self._run("pull", "--rebase", "-q", remote, branch, check=False)
+        if proc.returncode != 0:
+            self._run("rebase", "--abort", check=False)
+            raise GitError(
+                f"pull --rebase of {branch!r} from {remote!r} failed: "
+                f"{proc.stderr.strip() or proc.stdout.strip()}"
+            )
+        return self.head_sha() != before
+
+    def push(self, branch: str, remote: str = "origin") -> None:
+        """Fast-forward only, never forced. A refusal is the caller's to
+        answer by pulling again."""
+        proc = self._run("push", "-q", remote, f"{branch}:{branch}", check=False)
+        if proc.returncode != 0:
+            raise GitError(
+                f"push of {branch!r} to {remote!r} was refused: "
+                f"{proc.stderr.strip() or proc.stdout.strip()}"
+            )
+
     # --- run-scoped repo settings ---------------------------------------
 
     def get_config(self, key: str) -> str | None:
