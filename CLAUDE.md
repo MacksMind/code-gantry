@@ -116,11 +116,19 @@ through the real CLI in `tests/test_daemon_argv.py`, which found the sync
 and resume shapes wrong before the Mac did. The Mac's next run failed
 preflight on `base_ref 'upgrade/rails-5' exists`: `mk-bay` clones from
 the primary copy, so a bay holds only the branches that copy had locally.
-Not yet fixed; the fix belongs in preflight, not `mk-bay` — when the base
-ref or the project branch is missing locally and origin has it, fetch it
-into a local branch and say so in the check line, since on a fresh host
-`ensure_project_branch` would otherwise cut the project branch afresh from
-the base instead of taking origin's; (4) ledger sync over the git refs
+Fixed in preflight (c41a0b4), not `mk-bay`: a base ref that does not
+resolve here and a project branch missing here are fetched from origin
+into local branches — the project branch only under `remote_landing`,
+which is what makes origin its home — each with its own check line, since
+on a fresh host `ensure_project_branch` would otherwise cut the project
+branch afresh from the base. The Mac's first suite then failed 938 of
+6,168 by one mechanism, every Selenium session removed at one instant for
+inactivity: the grid's 300 s default, outlasted by a worker's non-browser
+stretch while a second run shared the machine. The bay's compose now sets
+`SE_NODE_SESSION_TIMEOUT: 1800` (target commit c72a331a1, ahead of origin
+until the Mac lands). `bin/daemon retry <bay>` (6879534) relaunches a
+stopped bay with no restart, and the clock sync reads a bay's config,
+never the primary's (c18d7dc); (4) ledger sync over the git refs
 and preflight deduplication through `suite.green` — landed; (5) remote bays and scopes at placement; (6) an observer role
 that writes findings only; (7) CodeGantry improving itself from its own run
 artifacts. The daemon adds uptime, capacity, reload at the pause seam and a
@@ -141,7 +149,11 @@ Build next, in order:
    start`; the first cross-host sync and the first Mac landing.
 3. The daemon's control plane: distributed-Erlang mesh with the Mac as a
    hidden node; one status view across hosts; start and stop from anywhere;
-   liveness for leases; hot reload of `daemon/` at a safe point. The daemon
+   liveness for leases; hot reload of `daemon/` at a safe point. The first
+   verb is in (2026-09-11): the daemon starts as `--sname code_gantry_daemon`
+   with a cookie under its state dir, writes its node name beside the
+   status file, and `bin/daemon retry` is an `--rpc-eval` into `Control`;
+   status, stop and the mesh go through that same door. The daemon
    also fetches and fast-forwards its own code-gantry checkout at that
    point and starts the next worker from it, so one landing reaches every
    host without anyone pulling. Decide here what Python moves into Elixir:
@@ -170,8 +182,25 @@ Waiting on the operator:
   measured run once the Spark is idle, or whether Luna stands.
 - Whether to enable `remote_landing` for the Rails 5 project and move its
   ledger beside technical-debt's.
-- When the current two-bay run should stop, so the primary copy can be
-  handed back and `acme_app-bay1` made in its place.
+- When the Spark's runs stop. Decided 2026-09-11: the Spark takes the
+  Mac's shape — the primary copy handed back to its person, `bay1` made
+  at offset 200 (bay2 holds 100 and the primary the defaults), both under
+  the daemon. In order at the stop: `code-gantry pause` on both runs, a
+  last hand-sync so the hyphen ref's events reach the `code_gantry` one,
+  the ledger path and field moved, the lock symlink removed, the hyphen ref
+  deleted, this branch pulled and `mise install` on the Spark, the host
+  file written, `bin/daemon start`. Only the moment is still open; the
+  Spark's bays then run current code, which is what makes the ledger
+  exchange two-way for the first time.
+- How a green tree is tracked. `suite.green` carries a tree fact and a host
+  fact in one row and `proven_green` ANDs them, so a Spark green never lets
+  the Mac skip a suite; and preflight asks about HEAD before `precheck`
+  pulls, so it proves a tree the run then discards. Proposed: the tree
+  fact readable from any origin, a separate host fact that a red suite
+  proves as well as a green one, and a pull before preflight under
+  `remote_landing`. Measured 2026-09-11: zero `suite.green` events in 20
+  landings, because every Spark bay predates c3e5bf8 — the reader has
+  never had a record to read.
 - The technical-debt config's `ledger.path` still spells
   `~/.local/share/code-gantry/…`; every other host path is `code_gantry`
   now (decided 2026-09-11: one spelling for directories, the command name
@@ -205,6 +234,12 @@ bounce on a stage both held that exposed and fixed three defects (head
 taken at derivation, a bounce dropping only its own record, a bounce never
 becoming a revision). The reviewer reworked three stages for the same
 route-helper convention; the fix is a mechanical check, listed above.
+The Mac's full suite is 13 minutes on a 14-cpu, 16 GB Docker VM.
+`preflight-suite.log` under the work dir is a failed preflight's raw
+capture and the only place its `Failures:` blocks survive: the run log
+clips the middle of a 5 MB report and the tail is container teardown. At
+21:14 on 2026-09-11 the Spark's live hyphen ref was 22 events past the
+hand-synced `code_gantry` one.
 
 **Operating this host.** The Claude Code harness stops its own background
 tasks on a "low memory" reading that page cache alone can trigger; it killed
@@ -215,6 +250,12 @@ run this repository's suite while a bay is in preflight. `pkill -f` and
 under xdist prints no summary; read the exit code. Tests that drive the
 plan node must set `CODE_GANTRY_LOCK_DIR`, or they litter the host's lock
 directory.
+
+**Operating the Mac.** Idle sleep on AC is one minute: `caffeinate -i -s
+-w <daemon pid>` after every `bin/daemon start`, or a suite stops when the
+lid does. A bay that stopped for a person is answered with `bin/daemon
+retry <bay>`; `stop` and `start` end every bay's run on the host. The
+daemon reads only the bays; the primary copy is the person's.
 
 ## Invariants
 
