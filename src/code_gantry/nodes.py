@@ -22,6 +22,7 @@ import re
 import textwrap
 import time
 from datetime import datetime
+from pathlib import Path
 
 from code_gantry.commands import clip_for_model
 from code_gantry.cachekey import cache_key
@@ -515,7 +516,8 @@ def plan(state: RunState, rt: Runtime) -> dict:
     new_stage = rt.cfg.stage_from_planner(outcome.stage_fields or {})
     known_keys, open_ids = ledger_references(rt.ledger)
     problems = validate_stage(
-        new_stage, rt.cfg, known_keys=known_keys, open_findings=open_ids
+        new_stage, rt.cfg, known_keys=known_keys, open_findings=open_ids,
+        key_scope=rt.key_scope,
     )
     if problems:
         # A malformed spec is the planner's error to fix, and this used to
@@ -624,7 +626,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
     # that exist, and only this side of the boundary can list them.
     queue, dropped_from_batch = _queue_from_batch(
         rt.cfg, rt.git, new_stage, outcome.additional_stage_fields,
-        ledger=rt.ledger,
+        ledger=rt.ledger, key_scope=rt.key_scope,
     )
     # Everything this derivation produced, named, on one line and on every
     # derivation. Two lines said this before — the stage about to run, and a
@@ -2317,7 +2319,8 @@ def stale_excerpts(git, stage) -> list[str]:
 
 
 def _queue_from_batch(
-    cfg, git, first, extra_fields: list[dict], *, ledger: Ledger | None = None
+    cfg, git, first, extra_fields: list[dict], *,
+    ledger: Ledger | None = None, key_scope: set[str] | None = None,
 ) -> tuple[list[dict], list[str]]:
     """The stages to hold behind the one being started, and what was trimmed.
 
@@ -2356,7 +2359,8 @@ def _queue_from_batch(
     for fields in extra_fields:
         stage = cfg.stage_from_planner(fields)
         problems = validate_stage(
-            stage, cfg, known_keys=known_keys, open_findings=open_ids
+            stage, cfg, known_keys=known_keys, open_findings=open_ids,
+            key_scope=key_scope,
         )
         if problems:
             notes.append(
@@ -2976,8 +2980,15 @@ def _landing_trailers(rt: Runtime, stage: Stage, state: RunState, start_sha: str
         ("Reviewer-Model", rt.cfg.reviewer.model),
         ("Config", state.get("config_hash", "")),
         ("Stage-Base", start_sha),
-        ("Bay", rt.ledger.origin if rt.ledger is not None else ""),
+        ("Bay", bay_id(rt)),
     ]
+
+
+def bay_id(rt: Runtime) -> str:
+    """The checkout this run occupies, on this host: `<origin>/<directory>`.
+    Distinct across bays on one host, where the ledger origin alone is not."""
+    host = rt.ledger.origin if rt.ledger is not None else ""
+    return f"{host}/{Path(rt.cfg.target_repo).name}"
 
 
 def _record_landing(rt: Runtime, stage: Stage, state: RunState, merge_sha: str) -> None:

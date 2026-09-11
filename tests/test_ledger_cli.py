@@ -239,3 +239,60 @@ class TestValidateSeesTheLedger:
         result = CliRunner().invoke(cli.main, ["validate", "--skip-tests"])
         assert "Traceback" not in result.output
         assert "no ledger at" in result.output
+
+
+class TestAConfiguredLedgerPath:
+    def _point_elsewhere(self, project, tmp_path):
+        repo, config, paths, sha = project
+        config.write_text(
+            config.read_text().replace(
+                "ledger:\n  key_prefix: p\n",
+                "ledger:\n  key_prefix: p\n  path: shared/ledger.db\n",
+            )
+        )
+        return tmp_path / "shared" / "ledger.db"
+
+    def test_import_and_show_use_the_configured_file(self, project, tmp_path):
+        repo, config, paths, sha = project
+        shared = self._point_elsewhere(project, tmp_path)
+        imported(project)
+        assert shared.is_file()
+        assert not paths.ledger.exists(), "nothing went under the work dir"
+        result = run("ledger", "show", "--open")
+        assert result.exit_code == 0 and "p.004 open" in result.output
+
+    def test_two_checkouts_naming_one_file_see_one_plan(self, project, tmp_path):
+        repo, config, paths, sha = project
+        shared = self._point_elsewhere(project, tmp_path)
+        imported(project)
+        other = open_ledger(shared, origin="test-host", actor="bay-2")
+        assert other.views().documents(), "the second bay reads the plan the first imported"
+
+
+class TestRunScope:
+    def _stub_the_run(self, monkeypatch):
+        seen = {}
+        monkeypatch.setattr(cli, "run_preflight", lambda *a, **k: [])
+        monkeypatch.setattr(cli, "_drive", lambda cfg, project, paths, graph_input, warnings=None: seen.update(graph_input) or 0)
+        return seen
+
+    def test_a_scope_is_expanded_and_carried_into_the_run(self, project, monkeypatch):
+        seen = self._stub_the_run(monkeypatch)
+        imported(project)
+        result = run("run", "--scope", "p.001")
+        assert result.exit_code == 0, result.output
+        assert "p.001" in seen["key_scope"] and len(seen["key_scope"]) > 1, seen["key_scope"]
+
+    def test_no_scope_means_the_whole_plan(self, project, monkeypatch):
+        seen = self._stub_the_run(monkeypatch)
+        imported(project)
+        assert run("run").exit_code == 0
+        assert "key_scope" not in seen
+
+    def test_an_unknown_key_refuses_before_anything_starts(self, project, monkeypatch):
+        seen = self._stub_the_run(monkeypatch)
+        imported(project)
+        result = run("run", "--scope", "p.999")
+        assert result.exit_code != 0
+        assert "--scope: 'p.999' is not a key" in result.output
+        assert not seen

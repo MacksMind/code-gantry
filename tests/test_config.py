@@ -840,3 +840,40 @@ class TestTheFullSuiteLock:
         a = parse_config(as_test_tools({**minimal(), "full_test_lock": "host"}))
         b = parse_config(as_test_tools({**minimal(), "full_test_command": "make check", "full_test_lock": "host"}))
         assert set(a.exclusive_commands().values()) == set(b.exclusive_commands().values()) == {"host"}
+
+
+class TestTheLedgerPath:
+    def _cfg(self, tmp_path, **ledger):
+        source = tmp_path / "docs" / "proj" / "code_gantry.yaml"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        return parse_config(
+            as_test_tools({**minimal(), "target_repo": str(tmp_path), "ledger": {"key_prefix": "p", **ledger}}),
+            source=source,
+        )
+
+    def test_it_defaults_to_nothing_so_the_work_dir_holds_it(self, tmp_path):
+        assert self._cfg(tmp_path).ledger.path is None
+
+    def test_a_relative_path_is_against_the_config_directory(self, tmp_path):
+        cfg = self._cfg(tmp_path, path="../shared/ledger.db")
+        assert cfg.ledger.path.resolve() == (tmp_path / "docs" / "shared" / "ledger.db").resolve()
+
+    def test_home_and_variables_expand(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LEDGER_HOME", str(tmp_path / "state"))
+        cfg = self._cfg(tmp_path, path="${LEDGER_HOME}/ledger.db")
+        assert cfg.ledger.path == tmp_path / "state" / "ledger.db"
+        assert self._cfg(tmp_path, path="~/x.db").ledger.path == Path.home() / "x.db"
+
+    def test_an_unset_variable_is_a_config_error(self, tmp_path):
+        with pytest.raises(ConfigError, match="ledger.path"):
+            self._cfg(tmp_path, path="${CODE_GANTRY_NO_SUCH_VARIABLE}/ledger.db")
+
+
+class TestTheRunScopeInValidateStage:
+    def test_a_key_outside_the_scope_is_refused_by_that_name(self):
+        cfg = parse_config(as_test_tools(minimal()))
+        stage = cfg.stage_from_planner({"id": "s", "instruction": "do", "edit_files": ["a"], "plan_keys": ["p.003"]})
+        problems = validate_stage(stage, cfg, known_keys={"p.002", "p.003"}, open_findings=set(), key_scope={"p.002"})
+        assert any("outside this run's scope" in p for p in problems), problems
+        assert not validate_stage(stage, cfg, known_keys={"p.002", "p.003"}, open_findings=set(), key_scope={"p.003"})
+        assert not validate_stage(stage, cfg, known_keys={"p.002", "p.003"}, open_findings=set())

@@ -15,6 +15,7 @@ a field is left out of a record only on purpose.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import socket
 import sqlite3
@@ -393,6 +394,7 @@ class Ledger:
         self.actor = actor
         self._clock = clock
         self._views: Views | None = None
+        self._views_version: int | None = None
 
     # -- reading ----------------------------------------------------------
 
@@ -412,10 +414,20 @@ class Ledger:
         ]
 
     def views(self) -> Views:
-        """Rebuilt from the events on every call after a write; cached between."""
-        if self._views is None:
+        """Rebuilt from the events whenever they have changed: after this
+        ledger's own write, and after any other connection's commit, which
+        SQLite reports through `data_version`. Several bays share one file,
+        so a cache that only knew its own writes would miss their claims."""
+        version = self._data_version()
+        if self._views is None or version != self._views_version:
             self._views = build_views(self.events())
+            self._views_version = version
         return self._views
+
+    def _data_version(self) -> int:
+        if self._conn is None:
+            return 0
+        return int(self._conn.execute("PRAGMA data_version").fetchone()[0])
 
     def since(self, origin: str, seq: int) -> list[Event]:
         """This origin's events after `seq` — the unit a later replication fetches."""
@@ -442,8 +454,11 @@ class Ledger:
             body = {"actor": actor, **body}
         # The next sequence number and the insert are one transaction, taken
         # with the write lock up front, so two writers can never both read the
-        # same number.
-        self._conn.execute("BEGIN IMMEDIATE")
+        # same number. Inside `transaction()` the lock is already held and the
+        # caller commits.
+        own = not self._conn.in_transaction
+        if own:
+            self._conn.execute("BEGIN IMMEDIATE")
         try:
             row = self._conn.execute(
                 "SELECT COALESCE(MAX(seq), 0) FROM events WHERE origin = ?",
@@ -467,12 +482,31 @@ class Ledger:
                 " VALUES (:origin, :seq, :at, :kind, :key, :stage_id, :run_id, :sha, :body)",
                 record,
             )
+            if own:
+                self._conn.commit()
+        except BaseException:
+            if own:
+                self._conn.rollback()
+            raise
+        self._views = None
+        return event
+
+    @contextlib.contextmanager
+    def transaction(self):
+        """One write lock across a read and the writes it decides, so what
+        was read is still true when it is written against."""
+        if self._conn is None or self.origin is None:
+            raise LedgerError("this ledger was opened for reading only")
+        self._conn.execute("BEGIN IMMEDIATE")
+        self._views = None
+        try:
+            yield
             self._conn.commit()
         except BaseException:
             self._conn.rollback()
             raise
-        self._views = None
-        return event
+        finally:
+            self._views = None
 
     def upsert_node(
         self,
@@ -659,8 +693,24 @@ def fold_marks(views: Views) -> list[tuple[str, str, dict]]:
 
 
 def apply_fold(ledger: Ledger, *, actor: str | None = None) -> int:
-    """Write what `fold_marks` proposes. Returns how many events were written."""
-    proposed = fold_marks(ledger.views())
-    for kind, key, body in proposed:
-        ledger.append(kind, key=key or None, actor=actor, **body)
+    """Write what `fold_marks` proposes. Returns how many events were written.
+
+    Proposed and written under one lock, so two bays folding at once cannot
+    both write the same mark."""
+    with ledger.transaction():
+        proposed = fold_marks(ledger.views())
+        for kind, key, body in proposed:
+            ledger.append(kind, key=key or None, actor=actor, **body)
     return len(proposed)
+
+
+def resolve_scope(views: Views, names) -> set[str]:
+    """The keys a run may draw from: each name and everything under it."""
+    out: set[str] = set()
+    for name in names:
+        node = views.nodes.get(name)
+        if node is None or node.retired:
+            raise LedgerError(f"{name!r} is not a key in the plan")
+        out.add(name)
+        out.update(n.key for n in views.walk(name))
+    return out

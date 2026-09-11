@@ -48,7 +48,7 @@ from code_gantry.driver import (
     load_state,
     open_checkpointer,
 )
-from code_gantry.ledger import open_ledger, read_ledger
+from code_gantry.ledger import LedgerError, open_ledger, read_ledger, resolve_scope
 from code_gantry.planner import make_planner
 from code_gantry.preflight import format_checks, run_preflight
 from code_gantry.report import build_report
@@ -97,7 +97,7 @@ def _config_argument(value: Path | None) -> Path:
 def _project_for(config_path: Path) -> tuple[ProjectConfig, ProjectPaths]:
     cfg = _load(config_path)
     _apply_env_file(cfg, config_path)
-    return cfg, ProjectPaths(cfg.work_dir)
+    return cfg, ProjectPaths.for_config(cfg)
 
 
 def _apply_env_file(cfg: ProjectConfig, config_path: Path) -> None:
@@ -400,7 +400,15 @@ def _reconcile_prompt(cfg: ProjectConfig, plan_text: str, projection: str) -> li
     help="Skip the suites during preflight. Faster, but an already-red repo "
     "will not be caught.",
 )
-def run(config_path: Path | None, run_id: str | None, skip_preflight_tests: bool) -> None:
+@click.option(
+    "--scope", "scope", multiple=True, metavar="KEY",
+    help="A plan key this run may draw from, with everything under it. "
+    "Repeatable. Without it the run draws from the whole plan.",
+)
+def run(
+    config_path: Path | None, run_id: str | None, skip_preflight_tests: bool,
+    scope: tuple[str, ...],
+) -> None:
     """Start a run against a project."""
     config_path = _config_argument(config_path)
     cfg, project = _project_for(config_path)
@@ -461,7 +469,8 @@ def run(config_path: Path | None, run_id: str | None, skip_preflight_tests: bool
     # layout — are read at: the project branch, where they are maintained.
     plan_sha = git.rev_parse(cfg.project_branch)
 
-    documents = read_ledger(project.ledger).views().documents()
+    views = read_ledger(project.ledger).views()
+    documents = views.documents()
     if not documents:
         click.echo(
             f"the ledger at {project.ledger} holds no plan; import one with "
@@ -470,6 +479,15 @@ def run(config_path: Path | None, run_id: str | None, skip_preflight_tests: bool
         )
         git.restore_gc(previous_gc)
         sys.exit(EXIT_FAILED)
+
+    key_scope: list[str] | None = None
+    if scope:
+        try:
+            key_scope = sorted(resolve_scope(views, scope))
+        except LedgerError as e:
+            click.echo(f"--scope: {e}", err=True)
+            git.restore_gc(previous_gc)
+            sys.exit(EXIT_FAILED)
 
     state = new_state(
         run_id=run_id,
@@ -482,6 +500,8 @@ def run(config_path: Path | None, run_id: str | None, skip_preflight_tests: bool
         project_branch=cfg.project_branch,
         started_at=time.time(),
     )
+    if key_scope:
+        state = {**state, "key_scope": key_scope}
     _write_metadata(paths, slug, run_id)
 
     click.echo(
@@ -713,10 +733,13 @@ def _drive(
             reviewer=make_reviewer(cfg.reviewer, cfg.target_repo, project_tools=cfg.project_tools),
             log=log,
             tool_log=tools,
+            key_scope=graph_input.get("key_scope"),
         )
         # Said once, in the timeline, so the file is discoverable without
         # knowing it exists. A log nobody can find is not visibility.
         log(f"[run] tool reads are streaming to {paths.tool_log}")
+        if rt.key_scope:
+            log(f"[run] scope: {len(rt.key_scope)} key(s): {' '.join(sorted(rt.key_scope))}")
         final = drive(
             rt,
             graph_input,

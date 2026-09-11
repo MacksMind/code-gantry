@@ -306,3 +306,73 @@ class TestFold:
         led.answer_finding(f.finding_id, disposition="discard")
         assert apply_fold(led) == 0
         assert led.views().nodes["k.001"].marks == []
+
+
+class TestOneFileSeveralBays:
+    """Two bays open one file. Each must see the other's writes without being
+    told, and a fold must not be written twice."""
+
+    def test_a_view_sees_another_connections_commit(self, tmp_path):
+        path = tmp_path / "shared.db"
+        a = open_ledger(path, origin="host", actor="bay-a")
+        b = open_ledger(path, origin="host", actor="bay-b")
+        plant(a, "p.001")
+        assert a.views().state("p.001").state == "open"
+        assert b.views().state("p.001").state == "open"
+        b.append(CLAIMED, key="p.001", stage_id="s", run_id="run-b")
+        assert a.views().state("p.001").state == "claimed", "a cached view missed b's claim"
+
+    def test_two_folds_write_one_mark(self, tmp_path):
+        path = tmp_path / "shared.db"
+        a = open_ledger(path, origin="host", actor="bay-a")
+        b = open_ledger(path, origin="host", actor="bay-b")
+        plant(a, "p.001")
+        a.append(LANDED, key="p.001", sha="abc1234", stage_id="s", run_id="r")
+        assert apply_fold(a) == 1
+        assert apply_fold(b) == 0
+        assert sum(1 for e in b.events() if e.kind == NODE_MARKED) == 1
+
+    def test_a_transaction_commits_as_one_and_rolls_back_as_one(self, tmp_path):
+        path = tmp_path / "shared.db"
+        a = open_ledger(path, origin="host", actor="bay-a")
+        b = open_ledger(path, origin="host", actor="bay-b")
+        plant(a, "p.001")
+        with a.transaction():
+            a.append(CLAIMED, key="p.001", stage_id="s", run_id="r")
+        assert b.views().state("p.001").state == "claimed"
+        with pytest.raises(RuntimeError):
+            with a.transaction():
+                a.append(RELEASED, key="p.001", stage_id="s", run_id="r")
+                raise RuntimeError("abandon")
+        assert b.views().state("p.001").state == "claimed"
+
+    def test_a_reader_cannot_open_a_transaction(self, tmp_path):
+        path = tmp_path / "shared.db"
+        open_ledger(path, origin="host")
+        with pytest.raises(LedgerError):
+            with read_ledger(path).transaction():
+                pass
+
+
+class TestScope:
+    def test_a_name_means_itself_and_everything_under_it(self, led):
+        from code_gantry.ledger import resolve_scope
+
+        plant(led, "p.001", kind="document")
+        plant(led, "p.002", parent="p.001", kind="section")
+        plant(led, "p.003", parent="p.002")
+        plant(led, "p.004", parent="p.001")
+        plant(led, "p.005", kind="document")
+        assert resolve_scope(led.views(), ["p.002"]) == {"p.002", "p.003"}
+        assert resolve_scope(led.views(), ["p.001"]) == {"p.001", "p.002", "p.003", "p.004"}
+        assert resolve_scope(led.views(), ["p.003", "p.005"]) == {"p.003", "p.005"}
+
+    def test_an_unknown_or_retired_name_is_refused_by_name(self, led):
+        from code_gantry.ledger import resolve_scope
+
+        plant(led, "p.001")
+        led.append(NODE_RETIRED, key="p.001")
+        with pytest.raises(LedgerError, match="'p.001' is not a key"):
+            resolve_scope(led.views(), ["p.001"])
+        with pytest.raises(LedgerError, match="'p.999' is not a key"):
+            resolve_scope(led.views(), ["p.999"])

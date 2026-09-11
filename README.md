@@ -157,6 +157,11 @@ broken environment stops at the door rather than on stage thirty.
   and it gives up the one check that tells a red repository from a red stage.
   A run that starts against an already-failing suite will blame the first
   stage for it.
+- `--scope KEY` — a plan key this run may draw from, with everything under
+  it; repeatable. The planner sees the rest of the plan marked as outside the
+  run's scope and a stage citing one of those keys is refused. Two bays
+  sharing one ledger are given disjoint scopes so they never draw the same
+  item. Without it the run draws from the whole plan.
 
 ### `pause [config] [run_id]`
 
@@ -516,8 +521,8 @@ prefix, so static content placed after the mark misses every time.
 
 ## The ledger
 
-The plan lives in a per-project SQLite file under the work dir, `ledger.db`,
-as a tree of nodes — documents, sections, items — each with a key like
+The plan lives in a per-project SQLite file, `ledger.db` under the work dir
+unless `ledger.path` names another place, as a tree of nodes — documents, sections, items — each with a key like
 `{#r5.017}`, a prose body, an owner (`pipeline` or `human`) and a blocking
 flag. Markdown is the import and export format: `code-gantry plan import`
 reads the documents you already keep, closed items becoming `landed` or
@@ -553,8 +558,16 @@ Operator commands:
   [--text …]`, `ledger claim|release|land|strike|block|unblock <key> …`,
   `ledger fold`, `ledger render [--projection]`.
 
+**Several bays on one host share one file.** `ledger.path` is resolved
+against the config's directory with `~` and `${VAR}` expanded, so a tracked
+config can name a file outside every checkout; every bay reading that config
+then draws from one plan, claims are visible across bays as they happen, and
+a fold is written under one lock. Give each bay a `--scope` so they draw
+disjoint items.
+
 `CODE_GANTRY_ACTOR` names who is writing (default: your login);
-`CODE_GANTRY_ORIGIN` names the host (default: its hostname). The landing
+`CODE_GANTRY_ORIGIN` names the host (default: its hostname). The `Bay`
+trailer is `<origin>/<checkout directory>`, distinct across bays on one host. The landing
 commit carries the same references as trailers — `Plan-Keys`, `Resolves`,
 the three role models, `Config`, `Stage-Base`, `Bay` — so git is the durable
 copy of what the ledger records.

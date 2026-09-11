@@ -587,11 +587,14 @@ def protected_paths(cfg: ProjectConfig):
     refused at the tool so the write costs one tool result instead of an
     attempt.
     """
-    from code_gantry.verify import _work_dir_rel
+    from code_gantry.verify import _ledger_rel, _work_dir_rel
 
     fixed = set(cfg.effective_agent_context)
     if cfg.config_rel_path:
         fixed.add(cfg.config_rel_path)
+    ledger = _ledger_rel(cfg)
+    if ledger:
+        fixed.add(ledger)
     work_dir = _work_dir_rel(cfg)
 
     def protected(path: str) -> bool:

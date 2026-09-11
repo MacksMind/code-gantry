@@ -946,7 +946,14 @@ in one object, so clearing it is replacing it; `count_calls`, `count_refusals`
 and `render_counts` are the one summariser all three roles report through.
 
 `ledger.py` is the record: one append-only `events` table, views derived from
-it, `open_ledger` the only creator, `read_ledger` never creating. `planmodel.py`
+it, `open_ledger` the only creator, `read_ledger` never creating. Views are
+rebuilt when SQLite's `data_version` moves, because several bays share one
+file through `ledger.path` and a cache that knew only its own writes would
+miss another bay's claim; `transaction()` holds the write lock across a read
+and the writes it decides, which is what keeps a fold from being written
+twice. A run's `key_scope` is fixed at start, carried in the checkpoint, and
+applied at three seams: the renderers mark what is outside it, `validate_stage`
+refuses a stage citing outside it, and nothing else needs to know. `planmodel.py`
 reads Markdown into the tree and renders it back; `render.py` produces the two
 halves the planner is sent; `ledgercli.py` is the operator's `plan …` and
 `ledger …`. The pipeline's writes are in `nodes.py`: findings at derivation,

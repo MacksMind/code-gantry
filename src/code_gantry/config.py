@@ -572,6 +572,10 @@ class LedgerConfig(_Strict):
     fold_ratio: float = 0.25
     # Longest a finding's prose is rendered to the planner.
     note_chars: int = 600
+    # Where the ledger file lives: relative to the config's directory, `~`
+    # and `${VAR}` resolved; default `<work_dir>/ledger.db`. Bays on one host
+    # share one plan by naming one file outside every checkout.
+    path: Path | None = None
 
 
 class Excerpt(_Strict):
@@ -1451,6 +1455,9 @@ def parse_config(data: dict, source: Path | str | None = None) -> ProjectConfig:
     for field in ("target_repo", "work_dir", "env_file"):
         if data.get(field) is not None:
             data[field] = _expanded(data[field], field)
+    ledger = data.get("ledger")
+    if isinstance(ledger, dict) and ledger.get("path") is not None:
+        data["ledger"] = {**ledger, "path": _expanded(ledger["path"], "ledger.path")}
     # The enclosing git repository, found by walking up. Not a fixed depth:
     # the config sits beside the plan documents it belongs with, and a plan
     # root is commonly several directories down.
@@ -1471,6 +1478,11 @@ def parse_config(data: dict, source: Path | str | None = None) -> ProjectConfig:
             declared = Path(data["env_file"])
             if not declared.is_absolute():
                 data["env_file"] = source.parent / declared
+        ledger = data.get("ledger")
+        if isinstance(ledger, dict) and ledger.get("path") is not None:
+            declared = Path(ledger["path"])
+            if not declared.is_absolute():
+                data["ledger"] = {**ledger, "path": source.parent / declared}
     if data.get("target_repo") is None:
         raise ConfigError(
             ["target_repo is not set and the config was not read from a file, "
@@ -1549,6 +1561,7 @@ def validate_stage(
     *,
     known_keys: set[str] | None,
     open_findings: set[str] | None,
+    key_scope: set[str] | None = None,
 ) -> list[str]:
     """Well-formedness of a single stage, planner-derived or otherwise.
 
@@ -1559,6 +1572,8 @@ def validate_stage(
     least one key the ledger holds, and may only claim to resolve findings that
     are open. Both are keyword-only and required so every caller says what it
     is checking against; `None` means the caller has no ledger to check.
+    `key_scope` is the run's, when it has one: a key outside it is refused
+    with its own reason, since the plan shows the mark.
     """
     problems: list[str] = []
     where = f"stage {stage.id!r}"
@@ -1574,6 +1589,12 @@ def validate_stage(
                 problems.append(
                     f"{where}: plan_keys names {key!r}, which is not a key in "
                     "the plan; copy the key from the item's `{#…}` marker"
+                )
+            elif key_scope is not None and key not in key_scope:
+                problems.append(
+                    f"{where}: plan_keys names {key!r}, which is outside this "
+                    "run's scope; draw only from items the plan shows without "
+                    "the scope mark"
                 )
     if open_findings is not None:
         for finding in stage.resolves:

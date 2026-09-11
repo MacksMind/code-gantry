@@ -350,7 +350,7 @@ def _is_plan_document(path: str, ctx: _Context) -> bool:
     work_dir = _work_dir_rel(ctx.cfg)
     if work_dir and (path == work_dir or path.startswith(work_dir + "/")):
         return True
-    return False
+    return path == _ledger_rel(ctx.cfg)
 
 
 def _work_dir_rel(cfg) -> str | None:
@@ -360,6 +360,20 @@ def _work_dir_rel(cfg) -> str | None:
         return None
     try:
         return Path(work_dir).resolve().relative_to(Path(repo).resolve()).as_posix()
+    except ValueError:
+        return None
+
+
+def _ledger_rel(cfg) -> str | None:
+    """A configured ledger file as a repo-relative path, or None when it sits
+    outside the tree or under the work dir, which is covered on its own."""
+    ledger = getattr(cfg, "ledger", None)
+    configured = getattr(ledger, "path", None) if ledger is not None else None
+    repo = getattr(cfg, "target_repo", None)
+    if not configured or not repo:
+        return None
+    try:
+        return Path(configured).resolve().relative_to(Path(repo).resolve()).as_posix()
     except ValueError:
         return None
 

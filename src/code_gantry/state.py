@@ -152,6 +152,8 @@ class FailureDetail(TypedDict, total=False):
 
 class RunState(TypedDict, total=False):
     run_id: str
+    # The keys this run may draw from; absent for the whole plan.
+    key_scope: list[str]
     project_slug: str
     config_hash: str
     target_repo: str

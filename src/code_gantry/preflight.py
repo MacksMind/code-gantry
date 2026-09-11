@@ -373,7 +373,8 @@ def _ledger_check(cfg: ProjectConfig, project_dir) -> Check:
         )
     paths = (
         project_dir if isinstance(project_dir, ProjectPaths)
-        else ProjectPaths(project_dir or cfg.work_dir)
+        else ProjectPaths(project_dir) if project_dir
+        else ProjectPaths.for_config(cfg)
     )
     if not paths.ledger.is_file():
         # Ordinary before the first import; `run` refuses on its own.
