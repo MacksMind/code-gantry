@@ -41,7 +41,6 @@ from code_gantry.plannertools import (
     dispatch,
     tool_schemas,
 )
-from code_gantry.retry import Backoff, with_provider_retry
 
 Verdict = Literal["next_stage", "revise", "project_complete", "blocked"]
 RevisionMode = Literal["extend", "restart"]
@@ -632,26 +631,9 @@ def _blocked(reason: str) -> PlannerOutcome:
     )
 
 
-def _transport_errors() -> tuple[type[BaseException], ...]:
-    """The exception types a transient failure can arrive as.
+class Planner:
+    """The planner, on whichever wire its configured endpoint wants."""
 
-    Resolved lazily and defensively: the SDK is imported lazily everywhere
-    else in this module, and a version that renamed these should degrade to
-    not retrying rather than to not running.
-
-    `APITimeoutError` subclasses `APIConnectionError` in both SDKs, so the
-    one entry covers both. `APIStatusError` is the base of every code the
-    server did answer, which is why it needs `_is_transient` behind it — the
-    type alone cannot tell 529 from 400.
-    """
-    try:
-        from anthropic import APIConnectionError, APIStatusError
-    except ImportError:  # pragma: no cover - the SDK is a hard dependency
-        return ()
-    return (APIConnectionError, APIStatusError)
-
-
-class AnthropicPlanner:
     def __init__(
         self,
         cfg: PlannerConfig,
@@ -673,7 +655,10 @@ class AnthropicPlanner:
         # strings to the schema, and every invalid regex is a valid string.
         # Injected rather than imported so project rules stay in `config.py`.
         self.validate_stage_fields: Callable[[dict], list[str]] | None = None
-        self._client = client if client is not None else _build_anthropic_client(cfg)
+        from code_gantry.dialects import MESSAGES, wire_for
+
+        self.wire = wire_for(cfg, MESSAGES)
+        self._client = client if client is not None else self.wire.client(cfg)
         # Absent on a project with no repository access configured, in which
         # case no tools are offered and this is the single-call planner it has
         # always been.
@@ -890,7 +875,7 @@ class AnthropicPlanner:
         or the answer was truncated. Otherwise `parsed` is what came back, still
         to be checked for contradictions the schema cannot express.
         """
-        tools = (
+        specs = (
             tool_schemas(
                 self.semantic,
                 self.project_tools,
@@ -903,127 +888,58 @@ class AnthropicPlanner:
             if self.reader
             else []
         )
-        conversation = list(messages)
-        usage = PlannerUsage()
-        response = None
+        wire = self.wire
+        conversation = [
+            {
+                "role": "system",
+                "content": _system_blocks(
+                    self.cfg.cache_ttl, self.cfg.guidance, self.project_tools
+                ),
+            },
+            *messages,
+        ]
         # The ledger is cumulative across the whole decision, so the loop
         # reports only what each turn added.
         logged = len(getattr(self.reader, "calls", []) or [])
 
-        # One turn per tool round trip, plus one for the answer. The ceiling is
-        # the reader's own call budget: it refuses past that, the planner reads
-        # the refusal and answers. This bound is the backstop for a model that
-        # ignores the refusal and keeps asking.
-        for _ in range(self._max_tool_turns() + 1):
-            try:
-                response = with_provider_retry(
-                    lambda: self._client.messages.parse(
-                        model=self.cfg.model,
-                        # Generous: thinking is on by default on current models and
-                        # counts against max_tokens along with the response, so a
-                        # tight budget truncates the verdict rather than the
-                        # reasoning.
-                        # Thinking counts against this along with the response,
-                        # so a tight budget truncates the verdict rather than
-                        # the reasoning. 16,000 was not enough: stage
-                        # instructions on a real project reached 10,664
-                        # characters, and a derivation died mid-string at
-                        # 11,710 with the reasoning already spent. The cost of
-                        # headroom is nothing — this is a ceiling, not an
-                        # allocation — and the cost of hitting it is a whole
-                        # derivation discarded.
-                        max_tokens=self.cfg.max_tokens,
-                        output_config=_output_config(self.cfg),
-                        system=_system_blocks(
-                            self.cfg.cache_ttl,
-                            self.cfg.guidance,
-                            self.project_tools,
-                        ),
-                        messages=_with_loop_breakpoint(conversation),
-                        output_format=PlannerResponse,
-                        **({"tools": tools} if tools else {}),
-                        # Empty against a first-party endpoint. Through a
-                        # gateway this carries `require_parameters`, which is
-                        # what keeps `output_format` above from being stripped
-                        # in transit — the failure that returns prose and
-                        # names no cause.
-                        **gateway_body(
-                            self.cfg, getattr(self, "session_id", "") or ""
-                        ),
-                    ),
-                    retry_on=_transport_errors(),
-                    transient=Backoff(
-                        budget_seconds=self.cfg.transport_retry_seconds,
-                        max_delay_seconds=self.cfg.transport_retry_max_delay_seconds,
-                    ),
-                    spurious=Backoff(
-                        budget_seconds=self.cfg.invalid_request_retry_seconds,
-                        initial_seconds=self.cfg.invalid_request_initial_seconds,
-                        factor=self.cfg.invalid_request_factor,
-                    ),
-                    log=self.log,
-                )
-            except Exception as e:  # noqa: BLE001 - any failure means "no plan"
-                return _blocked(_call_failure(e)), None, usage
+        def dispatch_one(name: str, args: dict) -> str:
+            return dispatch(
+                name, args, self.reader, self.semantic,
+                project_tools=self.project_tools, runner=self.runner, role="planner",
+            )
 
-            usage = _merge_usage(usage, _extract_usage(getattr(response, "usage", None)))
-
-            requests = _tool_requests(response)
-            if not requests:
-                break
-
-            # Assistant turn verbatim, then one result block per request. The
-            # API requires every tool_use to be answered in the next message, in
-            # order, or the conversation is malformed.
-            conversation = conversation + [
-                {"role": "assistant", "content": _content_blocks(response)},
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": req["id"],
-                            "content": dispatch(
-                                req["name"],
-                                req["input"],
-                                self.reader,
-                                self.semantic,
-                                project_tools=self.project_tools,
-                                runner=self.runner,
-                                role="planner",
-                            ),
-                        }
-                        for req in requests
-                    ],
-                },
-            ]
-            # After the batch has run, before the next request goes out. This
-            # is the only point in a 7-to-20-minute decision where anything is
-            # known about what it is doing.
+        def after_batch() -> None:
+            nonlocal logged
             logged = self._log_new_calls(logged)
 
-        if response is None:  # pragma: no cover - loop always runs once
+        from code_gantry.dialects import describe_end, request_extras
+        from code_gantry.roleloop import run_structured_loop
+
+        result = run_structured_loop(
+            wire=wire,
+            client=self._client,
+            cfg=self.cfg,
+            conversation=conversation,
+            tools=wire.tool_schemas(specs) if specs else [],
+            schema=PlannerResponse,
+            extra=request_extras(self.cfg, getattr(self, "session_id", "") or ""),
+            dispatch=dispatch_one,
+            max_turns=self._max_tool_turns(),
+            log=self.log,
+            after_batch=after_batch,
+        )
+        usage = _planner_usage(result.usage)
+        if result.failure is not None:
+            return _blocked(_call_failure(result.failure)), None, usage
+        if result.response is None:  # pragma: no cover - loop always runs once
             return _blocked("the planner produced no response"), None, usage
 
-        # How the turn ended, read once from the wire's own answer rather than
-        # compared against string literals here. This module calls
-        # `messages.parse` directly, so the wire is not in question.
-        from code_gantry.dialects import MESSAGES, describe_end
-
-        end = MESSAGES.turn_end(response)
-
-        parsed = getattr(response, "parsed_output", None)
-        # An answer we got is an answer, whatever the ending was called — the
-        # two labels below are the exception, because a refusal is not a plan
-        # and an answer cut off mid-generation cannot be trusted even when the
-        # fragment happens to parse. Blocking on `abnormal` alone was wrong and
-        # the suite said so: a stop reason we do not recognise is worth
-        # *recording*, not worth discarding a verdict over.
+        end = result.end
+        parsed = result.parsed
+        # An answer we got is an answer, whatever the ending was called; a
+        # refusal is not a plan and a truncated answer cannot be trusted even
+        # when the fragment parses.
         if parsed is None or end.label in ("refusal", "max_tokens"):
-            # The record carries what the response actually was, on the branch
-            # whose name describes it. `rejected_answer` used to be written
-            # only where nothing had been rejected, so a block read `null` for
-            # the one field that could have explained it.
             outcome = _blocked(describe_end("planner", end))
             outcome.turn_end = end.as_record()
             return outcome, None, usage
@@ -1031,57 +947,7 @@ class AnthropicPlanner:
         return None, parsed, usage
 
 
-def _tool_requests(response) -> list[dict]:
-    """The tool_use blocks in a response, normalised.
-
-    Tolerant of shape because this reads an SDK object in one place and a stub
-    in another; anything that is not a well-formed tool_use is ignored rather
-    than crashing a fourteen-hour run on an attribute error.
-    """
-    out = []
-    for block in getattr(response, "content", None) or []:
-        if getattr(block, "type", None) != "tool_use":
-            continue
-        out.append(
-            {
-                "id": getattr(block, "id", ""),
-                "name": getattr(block, "name", ""),
-                "input": getattr(block, "input", None) or {},
-            }
-        )
-    return out
-
-
-def _content_blocks(response) -> list[dict]:
-    """The assistant turn, as blocks the API will accept back.
-
-    Replayed verbatim: a tool_use must be echoed in the conversation for its
-    result to be attachable to it.
-    """
-    blocks = []
-    for block in getattr(response, "content", None) or []:
-        kind = getattr(block, "type", None)
-        if kind == "text":
-            blocks.append({"type": "text", "text": getattr(block, "text", "")})
-        elif kind == "tool_use":
-            blocks.append(
-                {
-                    "type": "tool_use",
-                    "id": getattr(block, "id", ""),
-                    "name": getattr(block, "name", ""),
-                    "input": getattr(block, "input", None) or {},
-                }
-            )
-        elif kind == "thinking":
-            # Carried so the model keeps its own reasoning across turns.
-            blocks.append(
-                {
-                    "type": "thinking",
-                    "thinking": getattr(block, "thinking", ""),
-                    "signature": getattr(block, "signature", ""),
-                }
-            )
-    return blocks
+AnthropicPlanner = Planner
 
 
 def _merge_usage(a: PlannerUsage, b: PlannerUsage) -> PlannerUsage:
@@ -1121,9 +987,6 @@ def make_planner(
     `target_repo` is optional so preflight can build a client just to prove the
     credentials work, without needing a repo on hand.
     """
-    if cfg.provider != "anthropic":
-        raise RuntimeError(f"unsupported planner provider {cfg.provider!r}")
-
     reader = semantic = None
     if cfg.repo_access and target_repo is not None:
         from code_gantry.gitops import Git
@@ -1149,65 +1012,28 @@ def make_planner(
             # preceded it.
             semantic = SemanticSearch(search_cfg, reader=reader)
 
-    return AnthropicPlanner(
+    return Planner(
         cfg, reader=reader, semantic=semantic, project_tools=project_tools
     )
 
 
-def _build_anthropic_client(cfg: PlannerConfig):
-    import anthropic
-
-    # Through the same resolver the executor's clients use, so "this endpoint
-    # serves without a key" means the same thing in all three roles. Naming a
-    # variable and not setting it is still a mistake with a clear message;
-    # naming none is a decision, and the endpoint answers it.
-    from code_gantry.dialects import _api_key
-
-    return anthropic.Anthropic(
-        api_key=_api_key(cfg),
-        base_url=cfg.resolve_api_base(),
-        timeout=cfg.request_timeout_seconds,
-        max_retries=cfg.max_retries,
-    )
-
-
 def _extract_usage(usage) -> PlannerUsage:
-    """Normalise Anthropic's counts to the shape the report assumes.
+    """Anthropic's counts as a `PlannerUsage`, through the wire's own reader."""
+    from code_gantry.dialects import MESSAGES
 
-    The two providers use the same words for different quantities. OpenAI's
-    `prompt_tokens` is the total and its cached count is a subset of it.
-    Anthropic reports three *orthogonal* numbers: `input_tokens` is only what was
-    neither read from nor written to the cache, with reads and writes counted
-    separately.
+    return _planner_usage(MESSAGES.usage(usage))
 
-    Read as OpenAI's shape, that produced `Uncached prompt tokens: -2,438` and
-    a cache hit rate of 251% in a real report. So `prompt_tokens` here means
-    total input, and `cached_tokens` is the part of it that was a cache read —
-    which makes `prompt - cached` the uncached remainder for either provider.
-    """
-    from code_gantry.dialects import cache_write_1h
 
-    if usage is None:
-        return PlannerUsage()
-    uncached = getattr(usage, "input_tokens", 0) or 0
-    read = getattr(usage, "cache_read_input_tokens", 0) or 0
-    written = getattr(usage, "cache_creation_input_tokens", 0) or 0
-    total_in = uncached + read + written
+def _planner_usage(usage) -> PlannerUsage:
+    """A wire's `TokenUsage` as the planner's own type, field by name."""
     return PlannerUsage(
-        provider_cost_usd=getattr(usage, "cost", None),
-        prompt_tokens=total_in,
-        cached_tokens=read,
-        cache_write_tokens=written,
-        completion_tokens=getattr(usage, "output_tokens", 0) or 0,
-        # One call's input is this call's peak. The merges take the max, so
-        # the loop's peak is the largest turn rather than the last one — a
-        # conversation does not only grow, a redraw can start from less.
-        peak_prompt_tokens=total_in,
-        # `written` above is the two buckets summed; this is the half of it
-        # that costs 2x rather than 1.25x. Read through the same helper the
-        # Messages dialect uses, so the planner and the reviewer cannot come to
-        # disagree about what the wire said.
-        cache_write_1h_tokens=cache_write_1h(usage),
+        prompt_tokens=usage.prompt_tokens,
+        cached_tokens=usage.cached_tokens,
+        completion_tokens=usage.completion_tokens,
+        cache_write_tokens=usage.cache_write_tokens,
+        peak_prompt_tokens=usage.peak_prompt_tokens,
+        provider_cost_usd=usage.provider_cost_usd,
+        cache_write_1h_tokens=usage.cache_write_1h_tokens,
     )
 
 
@@ -1490,62 +1316,6 @@ def cache_control(ttl: str | None = None) -> dict:
     if ttl:
         marker["ttl"] = ttl
     return marker
-
-
-def _with_loop_breakpoint(conversation: list[dict]) -> list[dict]:
-    """Mark the end of the newest message, so the tool loop caches by increment.
-
-    The fourth and last breakpoint the API allows. Three are static — the
-    system prompt, the plan snapshot, the completed history — and everything
-    after them was uncached on every turn: the volatile tail, each assistant
-    turn, each tool result. A derivation runs ten to twenty-five turns and
-    resends all of it each time, so cost grew with the square of the turn
-    count. Measured across 125 decisions of one run, a decision making no tool
-    calls spent 48k uncached input tokens and one making sixteen or more spent
-    1.4M.
-
-    It moves rather than accumulates. Marking each turn's message and leaving
-    the mark would pass four breakpoints by the fifth turn and the request
-    would be rejected — so this is computed fresh from an unmarked
-    conversation and applied to the outgoing copy only. The loop's own
-    accumulated conversation never carries a marker, which also keeps the
-    corrective retry appending to an unmutated prefix.
-
-    Deliberately the 5-minute default rather than the run's configured `1h`.
-    Turns inside a decision are seconds apart — nineteen tool calls in five
-    minutes, observed — so the short window suffices, and its writes cost
-    1.25x against 2x. The static prefix keeps the long lifetime because that
-    is what has to survive a whole stage between decisions.
-    """
-    if not conversation:
-        return conversation
-    last = conversation[-1]
-    content = last.get("content")
-    if not isinstance(content, list) or not content:
-        return conversation
-    if not isinstance(content[-1], dict):
-        return conversation
-    blocks = list(content)
-    blocks[-1] = {**blocks[-1], "cache_control": cache_control()}
-    return conversation[:-1] + [{**last, "content": blocks}]
-
-
-def _output_config(cfg) -> dict:
-    """The effort setting, as the Messages API wants it.
-
-    Its own function so the value has a seam to test at rather than being a
-    literal buried in a call the tests would have to reach through a stub to
-    see. It was `{"effort": "high"}` inline, and nothing pinned it.
-    """
-    from code_gantry.dialects import MESSAGES, dialect_for
-
-    try:
-        wire = dialect_for(getattr(cfg, "model", ""))
-    except ValueError:
-        # A routing policy resolves per run; this client speaks Messages.
-        wire = MESSAGES
-    # Unwrapped, because the caller passes this as `output_config=` already.
-    return wire.effort(cfg.effort).get("output_config", {"effort": cfg.effort})
 
 
 _NO_DECLARED_TOOLS = """

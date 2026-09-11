@@ -34,7 +34,6 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel
 
-from code_gantry.gateway import gateway_body
 from code_gantry.config import ReviewerConfig
 from code_gantry.openaiclient import (
     TokenUsage,
@@ -45,28 +44,11 @@ from code_gantry.openaiclient import (
     tool_request as _tool_request,
     transport_errors as _transport_errors,
 )
-from code_gantry.plannertools import dispatch, openai_tool_schemas
-from code_gantry.retry import Backoff, with_provider_retry
+from code_gantry.plannertools import dispatch, tool_schemas
 
 Verdict = Literal["approved", "rework", "blocked"]
 
 
-
-
-def _dialect(cfg):
-    """The wire this role's configured model wants.
-
-    Falls back to what this client actually speaks when the model names a
-    routing policy — a policy resolves per run and cannot be classified, and a
-    run must not fail here over it. `wirecheck` reports the case where the two
-    genuinely disagree.
-    """
-    from code_gantry.dialects import RESPONSES, dialect_for
-
-    try:
-        return dialect_for(getattr(cfg, "model", ""))
-    except ValueError:
-        return RESPONSES
 
 
 def _reasoning_param(cfg) -> dict:
@@ -233,7 +215,9 @@ def _blocked(reason: str) -> ReviewOutcome:
     return ReviewOutcome(verdict="blocked", summary=reason, failed=True)
 
 
-class OpenAIReviewer:
+class Reviewer:
+    """The reviewer, on whichever wire its configured endpoint wants."""
+
     def __init__(self, cfg: ReviewerConfig, client=None, log=None, reader=None,
                  semantic=None, project_tools=None):
         self.cfg = cfg
@@ -253,7 +237,10 @@ class OpenAIReviewer:
         # Bound by `build_runtime`; see the planner's.
         self.runner = None
         self.tool_log = None
-        self._client = client if client is not None else _build_openai_client(cfg)
+        from code_gantry.dialects import RESPONSES, wire_for
+
+        self.wire = wire_for(cfg, RESPONSES)
+        self._client = client if client is not None else self.wire.client(cfg)
 
     def _reset_reads(self) -> None:
         """Forget the previous review's reads. See `RepoReader.reset`."""
@@ -359,25 +346,8 @@ class OpenAIReviewer:
         # one and nothing compared the two.
         self._reset_reads()
 
-        extra: dict = {
-            # Spelled by the dialect the model's family wants, rather than
-            # hardcoded here. Same values today; the point is that the wire is
-            # now a property of the model rather than of this file.
-            **_dialect(self.cfg).cache_options(),
-            # Spelled by the dialect for the same reason, and it is the one
-            # that was not: `prompt_cache_key` is a Responses parameter, and
-            # hardcoded here it reached `messages.create()` and ended a run.
-            **_dialect(self.cfg).cache_key_param(cache_key),
-            **_dialect(self.cfg).effort(getattr(self.cfg, "reasoning_effort", None)
-                                        or getattr(self.cfg, "effort", None)),
-            # Empty against a first-party endpoint. When this role is pointed
-            # at a gateway it carries the same two fields the executor does,
-            # decided from the endpoint rather than declared — see `gateway`.
-            **gateway_body(self.cfg, getattr(self, "session_id", "") or ""),
-        }
-
-        tools = (
-            openai_tool_schemas(
+        specs = (
+            tool_schemas(
                 self.semantic,
                 self.project_tools,
                 "reviewer",
@@ -386,155 +356,68 @@ class OpenAIReviewer:
             if self.reader
             else []
         )
+        wire = self.wire
         conversation = list(messages)
-        usage = TokenUsage()
-        # Collected beside the running total rather than derived from it,
-        # because every exit below carries `usage` out and each one has to
-        # carry the series with it.
-        outcome_turns: list[dict] = []
-        response = None
         # The ledger is cumulative, so each turn reports only what it added.
         logged = len(getattr(self.reader, "calls", []) or [])
 
-        # One turn per tool round trip, plus one for the answer.
-        for _ in range(self._max_tool_turns() + 1):
-            try:
-                response = with_provider_retry(
-                    lambda: self._client.responses.parse(
-                        model=self.cfg.model,
-                        input=conversation,
-                        text_format=ReviewVerdict,
-                        **({"tools": tools} if tools else {}),
-                        **extra,
-                    ),
-                    retry_on=_transport_errors(),
-                    transient=Backoff(
-                        budget_seconds=self.cfg.transport_retry_seconds,
-                        max_delay_seconds=self.cfg.transport_retry_max_delay_seconds,
-                    ),
-                    spurious=Backoff(
-                        budget_seconds=self.cfg.invalid_request_retry_seconds,
-                        initial_seconds=self.cfg.invalid_request_initial_seconds,
-                        factor=self.cfg.invalid_request_factor,
-                    ),
-                    log=self.log,
-                )
-            except Exception as e:  # noqa: BLE001 - any failure means "no verdict"
-                outcome = _blocked(f"The reviewer call failed: {e}")
-                _record_usage(outcome, usage, outcome_turns)
-                outcome.tool_calls = self._looked_at()
-                outcome.tool_counts = self._tool_counts()
-                outcome.semantic_results = self._semantic_results()
-                return outcome
-
-            reading = _extract_usage(getattr(response, "usage", None))
-            outcome_turns.append(
-                {
-                    "prompt_tokens": reading.prompt_tokens,
-                    "cached_tokens": reading.cached_tokens,
-                    "cache_write_tokens": reading.cache_write_tokens,
-                }
+        def dispatch_one(name: str, args: dict) -> str:
+            return dispatch(
+                name, args, self.reader, self.semantic,
+                project_tools=self.project_tools, runner=self.runner, role="reviewer",
             )
-            usage = _merge_usage(usage, reading)
 
-            requests = [
-                item
-                for item in (getattr(response, "output", None) or [])
-                if getattr(item, "type", "") == "function_call"
-            ]
-            if not requests:
-                break
-
-            # The whole turn back, then its results. Every output item, not
-            # just the calls: a reasoning model emits a `reasoning` item that
-            # each `function_call` declares as required, and echoing the call
-            # without it is rejected — "was provided without its required
-            # 'reasoning' item". The API then requires each call to be answered
-            # by a `function_call_output` with the same `call_id` before the
-            # next turn.
-            conversation.extend(getattr(response, "output", None) or [])
-            for item in requests:
-                name, args = _tool_request(item)
-                conversation.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": item.call_id,
-                        # A content list rather than a bare string, so the
-                        # result can carry a cache breakpoint. Marks accumulate
-                        # rather than move: a request writes only its latest
-                        # four, but matching considers up to the latest eighty
-                        # in the conversation, so every turn extends the cached
-                        # prefix instead of restarting it. Without this the
-                        # loop re-sends every earlier result at full price and
-                        # cost grows with the square of the turn count — the
-                        # planner measured 48k uncached tokens for a decision
-                        # making no tool calls against 1.4M for one making
-                        # sixteen.
-                        "output": [
-                            {
-                                "type": "input_text",
-                                "text": dispatch(
-                                    name,
-                                    args,
-                                    self.reader,
-                                    self.semantic,
-                                    project_tools=self.project_tools,
-                                    runner=self.runner,
-                                    role="reviewer",
-                                ),
-                                "prompt_cache_breakpoint": {"mode": "explicit"},
-                            }
-                        ],
-                    }
-                )
-            # After the batch has run, before the next request goes out.
+        def after_batch() -> None:
+            nonlocal logged
             logged = self._log_new_calls(logged)
 
-        if response is None:  # pragma: no cover - the loop always runs once
-            return _blocked("The reviewer produced no response.")
+        from code_gantry.dialects import describe_end, request_extras
+        from code_gantry.roleloop import run_structured_loop
 
-        refusal = _refusal(response)
-        if refusal:
-            outcome = _blocked(f"The reviewer refused to answer: {refusal}")
-            _record_usage(outcome, usage, outcome_turns)
+        result = run_structured_loop(
+            wire=wire,
+            client=self._client,
+            cfg=self.cfg,
+            conversation=conversation,
+            tools=wire.tool_schemas(specs) if specs else [],
+            schema=ReviewVerdict,
+            extra=request_extras(
+                self.cfg, getattr(self, "session_id", "") or "", cache_key=cache_key
+            ),
+            dispatch=dispatch_one,
+            max_turns=self._max_tool_turns(),
+            log=self.log,
+            after_batch=after_batch,
+        )
+
+        def finish(outcome: ReviewOutcome) -> ReviewOutcome:
+            _record_usage(outcome, result.usage, result.turns)
             outcome.tool_calls = self._looked_at()
             outcome.tool_counts = self._tool_counts()
             outcome.semantic_results = self._semantic_results()
             return outcome
 
-        if getattr(response, "status", None) == "incomplete":
+        if result.failure is not None:
+            return finish(_blocked(f"The reviewer call failed: {result.failure}"))
+        if result.response is None:  # pragma: no cover - the loop always runs once
+            return finish(_blocked("The reviewer produced no response."))
+        if result.refusal:
+            return finish(_blocked(f"The reviewer refused to answer: {result.refusal}"))
+        end = result.end
+        if end.label == "max_tokens":
             # A verdict cut off mid-JSON is not a verdict, even if the parsed
             # fragment happens to validate.
-            reason = getattr(
-                getattr(response, "incomplete_details", None), "reason", "unknown"
-            )
             outcome = _blocked(
-                f"The reviewer's response was truncated ({reason}), so its "
+                f"The reviewer's response was truncated ({end.reason}), so its "
                 "verdict cannot be trusted."
             )
-            _record_usage(outcome, usage, outcome_turns)
-            outcome.tool_calls = self._looked_at()
-            outcome.tool_counts = self._tool_counts()
-            outcome.semantic_results = self._semantic_results()
-            return outcome
-
-        parsed = getattr(response, "output_parsed", None)
+            outcome.turn_end = end.as_record()
+            return finish(outcome)
+        parsed = result.parsed
         if parsed is None:
-            # Reached the turn ceiling still asking for tools, or answered with
-            # nothing parsable. Either way there is no verdict, and a review
-            # that ran out of turns must say so rather than look like a refusal
-            # — which is why the reason is read rather than guessed at. This
-            # module calls `responses.parse`, so the wire is not in question.
-            from code_gantry.dialects import RESPONSES, describe_end
-
-            end = RESPONSES.turn_end(response)
             outcome = _blocked(describe_end("reviewer", end) + ".")
             outcome.turn_end = end.as_record()
-            _record_usage(outcome, usage, outcome_turns)
-            outcome.tool_calls = self._looked_at()
-            outcome.tool_counts = self._tool_counts()
-            outcome.semantic_results = self._semantic_results()
-            return outcome
+            return finish(outcome)
 
         return ReviewOutcome(
             verdict=parsed.verdict,
@@ -543,19 +426,16 @@ class OpenAIReviewer:
             issues=list(parsed.issues),
             observations=list(getattr(parsed, "observations", None) or []),
             resolved=list(getattr(parsed, "resolved", None) or []),
-            usage=usage,
-            # Beside `usage`, because this is the exit every approved review
-            # takes — the four `_record_usage` sites above are all failure
-            # paths. Adding the series to those alone left it empty on every
-            # successful review and populated only where something had gone
-            # wrong, which is `run_loop`'s pricing bug exactly: the happy case
-            # leaves by a different door.
-            turn_usage=list(outcome_turns),
+            usage=result.usage,
+            turn_usage=list(result.turns),
             failed=False,
             tool_calls=self._looked_at(),
             tool_counts=self._tool_counts(),
             semantic_results=self._semantic_results(),
         )
+
+
+OpenAIReviewer = Reviewer
 
 
 def make_reviewer(
@@ -568,9 +448,6 @@ def make_reviewer(
     credentials work, without needing a repo on hand — the same reason
     `make_planner` takes it that way.
     """
-    if cfg.provider != "openai":
-        raise RuntimeError(f"unsupported reviewer provider {cfg.provider!r}")
-
     reader = semantic = None
     if cfg.repo_access and target_repo is not None:
         from code_gantry.gitops import Git
@@ -594,22 +471,8 @@ def make_reviewer(
             # order, and the order is most of how a conclusion was reached.
             semantic = SemanticSearch(search_cfg, reader=reader)
 
-    return OpenAIReviewer(
+    return Reviewer(
         cfg, log=log, reader=reader, semantic=semantic, project_tools=project_tools
-    )
-
-
-def _build_openai_client(cfg: ReviewerConfig):
-    from openai import OpenAI
-
-    # See `planner._build_anthropic_client`: one resolver for all three roles.
-    from code_gantry.dialects import _api_key
-
-    return OpenAI(
-        api_key=_api_key(cfg),
-        base_url=cfg.resolve_api_base(),
-        timeout=cfg.request_timeout_seconds,
-        max_retries=cfg.max_retries,
     )
 
 

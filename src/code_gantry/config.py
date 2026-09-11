@@ -277,7 +277,7 @@ class ExecutorConfig(_EndpointConfig):
     # their own budgets and the model reads those refusals; this is the
     # backstop for one that ignores them and keeps asking, which would
     # otherwise hold a stage open until the request timeout. Same role as
-    # `AnthropicPlanner._max_tool_turns`.
+    # `Planner._max_tool_turns`.
     # A backstop against a model that ignores every refusal and keeps asking,
     # and nothing more. The real bounds are elsewhere and bind first: the read
     # budget refuses past its own ceiling, and `run_loop` stops the whole cycle

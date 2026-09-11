@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import socket
 import sqlite3
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -439,29 +440,37 @@ class Ledger:
             actor = self.actor
         if actor is not None:
             body = {"actor": actor, **body}
-        row = self._conn.execute(
-            "SELECT COALESCE(MAX(seq), 0) FROM events WHERE origin = ?",
-            (self.origin,),
-        ).fetchone()
-        event = Event(
-            origin=self.origin,
-            seq=int(row[0]) + 1,
-            at=self._clock(),
-            kind=kind,
-            key=key,
-            stage_id=stage_id,
-            run_id=run_id,
-            sha=sha,
-            body=body,
-        )
-        record = asdict(event)
-        record["body"] = json.dumps(event.body, ensure_ascii=False, sort_keys=True)
-        self._conn.execute(
-            "INSERT INTO events (origin, seq, at, kind, key, stage_id, run_id, sha, body)"
-            " VALUES (:origin, :seq, :at, :kind, :key, :stage_id, :run_id, :sha, :body)",
-            record,
-        )
-        self._conn.commit()
+        # The next sequence number and the insert are one transaction, taken
+        # with the write lock up front, so two writers can never both read the
+        # same number.
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = self._conn.execute(
+                "SELECT COALESCE(MAX(seq), 0) FROM events WHERE origin = ?",
+                (self.origin,),
+            ).fetchone()
+            event = Event(
+                origin=self.origin,
+                seq=int(row[0]) + 1,
+                at=self._clock(),
+                kind=kind,
+                key=key,
+                stage_id=stage_id,
+                run_id=run_id,
+                sha=sha,
+                body=body,
+            )
+            record = asdict(event)
+            record["body"] = json.dumps(event.body, ensure_ascii=False, sort_keys=True)
+            self._conn.execute(
+                "INSERT INTO events (origin, seq, at, kind, key, stage_id, run_id, sha, body)"
+                " VALUES (:origin, :seq, :at, :kind, :key, :stage_id, :run_id, :sha, :body)",
+                record,
+            )
+            self._conn.commit()
+        except BaseException:
+            self._conn.rollback()
+            raise
         self._views = None
         return event
 
@@ -561,10 +570,21 @@ def open_ledger(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), check_same_thread=False, timeout=30.0)
-    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=30000")
-    conn.execute(_SCHEMA)
-    conn.commit()
+    # Switching the journal mode and creating the table take an exclusive lock
+    # the busy handler does not always wait for, so several writers opening a
+    # fresh file at once can each see it locked for an instant. Retried, not
+    # trusted to the timeout.
+    for attempt in range(50):
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute(_SCHEMA)
+            conn.commit()
+            break
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e).lower() or attempt == 49:
+                raise
+            time.sleep(0.05 * (attempt + 1))
     return Ledger(path, conn, origin or default_origin(), actor=actor, clock=clock)
 
 

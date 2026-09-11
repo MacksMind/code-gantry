@@ -72,9 +72,7 @@ class TestAKeylessEndpointIsExpressibleInEveryRole:
         assert _api_key(cfg)  # something the SDK will accept
 
     def test_each_role_builds_a_client_without_a_key(self, monkeypatch):
-        from code_gantry.planner import _build_anthropic_client
-        from code_gantry.reviewer import _build_openai_client
-        from code_gantry.dialects import RESPONSES
+        from code_gantry.dialects import MESSAGES, RESPONSES
 
         for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
             monkeypatch.delenv(var, raising=False)
@@ -83,6 +81,6 @@ class TestAKeylessEndpointIsExpressibleInEveryRole:
             planner={"model": "claude-opus-5", "api_key_env": None, "api_base": "http://x"},
             reviewer={"model": "gpt-5.5", "api_key_env": None, "api_base": "http://x/v1"},
         )
-        assert _build_anthropic_client(cfg.planner) is not None
-        assert _build_openai_client(cfg.reviewer) is not None
+        assert MESSAGES.client(cfg.planner) is not None
+        assert RESPONSES.client(cfg.reviewer) is not None
         assert RESPONSES.client(cfg.executor) is not None

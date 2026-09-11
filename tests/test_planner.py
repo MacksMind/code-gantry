@@ -1508,11 +1508,10 @@ class TestReasoningEffortIsOperatorControlled:
 
     def test_the_planner_effort_reaches_the_call(self):
         from code_gantry.config import PlannerConfig
-        from code_gantry.planner import _output_config
+        from code_gantry.dialects import request_extras
 
-        assert _output_config(PlannerConfig(model="m", effort="xhigh")) == {
-            "effort": "xhigh"
-        }
+        built = request_extras(PlannerConfig(model="claude-opus-5", effort="xhigh"))
+        assert built["output_config"] == {"effort": "xhigh"}
 
     def test_the_reviewer_sends_nothing_unless_asked(self):
         # It has always run at the provider default. Inventing one here would

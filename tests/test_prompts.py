@@ -835,14 +835,15 @@ class TestTheBreakpointBudgetIsFullySpent:
         assert len(self._marks(messages[0]["content"])) == 1
 
     def test_system_plus_message_plus_the_moving_one_stays_inside_four(self):
-        from code_gantry.planner import _system_blocks, _with_loop_breakpoint
+        from code_gantry.dialects import MESSAGES
+        from code_gantry.planner import _system_blocks
         from code_gantry.prompts import build_planner_messages
 
         messages = build_planner_messages(
             cfg=SimpleNamespace(planner=SimpleNamespace(cache_ttl="1h")), plan_text=a_plan(), completed=[]
         )
         system = _system_blocks("1h")
-        outgoing = _with_loop_breakpoint(messages)
+        outgoing = MESSAGES.mark_latest(messages)
 
         total = len(self._marks(system)) + sum(
             len(self._marks(m["content"])) for m in outgoing

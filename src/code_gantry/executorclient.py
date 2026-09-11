@@ -29,8 +29,7 @@ import json
 import os
 
 from code_gantry.config import ExecutorConfig
-from code_gantry.dialects import without_cache_markers
-from code_gantry.gateway import gateway_body, gateway_effort_body
+from code_gantry.dialects import request_extra, request_extras, without_cache_markers  # noqa: F401 - re-exported for the seam tests
 from code_gantry.executortools import REPLAN_TOOL, dispatch, openai_tool_schemas
 from code_gantry.openaiclient import (
     TokenUsage,
@@ -248,36 +247,11 @@ EMPTY_FINISH_PROMPT = (
 ).format(replan=REPLAN_TOOL["name"])
 
 
-def request_extra(cfg: ExecutorConfig) -> dict:
-    """Operator-declared request parameters, as SDK kwargs.
-
-    Empty when nothing was declared, for the reason `_reasoning_param` gives
-    just below: a model that does not take a parameter should not be sent one,
-    and no default of ours should override a provider's.
-
-    Wrapped in `extra_body` because these are body fields the SDK has no named
-    argument for — a router's `plugins` is not part of the Responses schema and
-    would be dropped rather than sent if handed over as a keyword.
-    """
-    extra = getattr(cfg, "request_extra", None) or {}
-    return {"extra_body": dict(extra)} if extra else {}
-
-
-
 def _dialect(cfg):
-    """The wire this role's configured model wants.
+    """The wire this role's configured endpoint wants; Responses for a policy."""
+    from code_gantry.dialects import RESPONSES, wire_for
 
-    Falls back to what this client actually speaks when the model names a
-    routing policy — a policy resolves per run and cannot be classified, and a
-    run must not fail here over it. `wirecheck` reports the case where the two
-    genuinely disagree.
-    """
-    from code_gantry.dialects import RESPONSES, dialect_for
-
-    try:
-        return dialect_for(getattr(cfg, "model", ""))
-    except ValueError:
-        return RESPONSES
+    return wire_for(cfg, RESPONSES)
 
 
 def _status_of(failure) -> int | None:
@@ -298,52 +272,6 @@ def _reasoning_param(cfg: ExecutorConfig) -> dict:
     """
     effort = getattr(cfg, "reasoning_effort", None)
     return {"reasoning": {"effort": effort}} if effort else {}
-
-
-def request_extras(cfg, session_id: str = "", cache_key: str | None = None) -> dict:
-    """Every top-level keyword the executor's call carries beyond the basics.
-
-    One function because it is one decision, and because the two outages it
-    exists to prevent were both a keyword the endpoint does not take —
-    `session_id` to `responses.create`, then `prompt_cache_key` to
-    `messages.create`. Each was pinned afterwards by a test that rebuilt this
-    dict by hand, so each test could only see the keys whoever wrote it
-    remembered. A copy of an assembly is not a check on it.
-
-    Assembled here, the loop adds nothing of its own and the seam test reads
-    what production reads. That is the same answer as the transcript being a
-    `list` subclass and `executor-loop.json`'s writer walking
-    `dataclasses.fields`: make the recording a property of the only thing that
-    can change it.
-    """
-    wire = _dialect(cfg)
-    level = getattr(cfg, "reasoning_effort", None) or getattr(cfg, "effort", None)
-    # Effort is spelled for the route on this wire, not for the model. See
-    # `gateway_effort_body` for the measurement; the short version is that
-    # `output_config` 404s through the gateway for anything whose upstream is
-    # not Anthropic, and `require_parameters` turns that into every provider
-    # being excluded rather than one parameter being ignored.
-    via_body = gateway_effort_body(cfg, level) if wire.effort_in_gateway_body else {}
-    declared = dict(request_extra(cfg).get("extra_body") or {})
-    return {
-        # GPT-5.6 caches at breakpoints and does not fall back to the longest
-        # matching prefix, so the opt-in is required rather than helpful. The
-        # marks themselves go on the tool results. Spelled by the dialect the
-        # model's family wants: the wire is a property of the model, not of
-        # this file.
-        **wire.cache_options(),
-        # Spelled by the dialect for the same reason, and it is the one that
-        # was not: `prompt_cache_key` is a Responses parameter, and hardcoded
-        # at the call site it reached `messages.create()` and ended a run.
-        **wire.cache_key_param(cache_key),
-        **({} if via_body else wire.effort(level)),
-        # Last, but it cannot reach anything above it: the reserved keys are
-        # refused at config load, so this adds and never replaces. One body for
-        # both, built by `merged_body` — these were two separate splats and the
-        # second silently replaced the first.
-        # An operator's own declared fields win outright, so ours go under.
-        **gateway_body(cfg, session_id, {**via_body, **declared}),
-    }
 
 
 class OpenAIExecutorModel:

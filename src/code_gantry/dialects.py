@@ -7,8 +7,11 @@ replaced. That made *role* the axis along which the protocol varies, which is
 an accident of arrival order rather than a decision — nothing about judging a
 diff implies one wire and nothing about planning implies the other.
 
-The axis is the model family. There are two wires and three families, because
-Gemini is served best by the same one Anthropic uses.
+The axis is the model family, and where the family is routed. There are three
+wires: Responses, Messages, and chat completions — the last for an Anthropic
+model reached through OpenRouter, where the Messages wire drops the schema and
+refuses tools but chat completions carries schema, tools, effort and a 1h cache
+marker (measured 2026-09-11).
 
 Every row is a measurement rather than a preference:
 
@@ -173,6 +176,11 @@ class Dialect:
     _transport_errors: Callable[[], tuple] | None = None
     # How a turn ended, read per wire. Last, for the reason above.
     _turn_end: Callable[[object], "TurnEnd"] | None = None
+    # The validated model a `parse` call attaches, read per wire.
+    _parsed: Callable[[object], object] | None = None
+    # Whether cache marks on this wire *move* (only the latest counts, four
+    # at most) rather than accumulate. Decides whether `mark_latest` marks.
+    _moving_marks: bool = False
 
     def structured(self, schema) -> dict:
         """The schema argument, when the caller wants a parsed answer."""
@@ -318,15 +326,48 @@ class Dialect:
         """
         if not isinstance(block, dict) or block.get("type") not in _TEXT_TYPES:
             return block
-        out = {k: v for k, v in block.items() if k != "prompt_cache_breakpoint"}
+        out = {k: v for k, v in block.items() if k not in CACHE_MARKER_FIELDS}
         out["type"] = self._text_type
-        if "prompt_cache_breakpoint" in block and self._cache_key != "prompt_cache_breakpoint":
-            # A breakpoint has to survive, or the translated wire silently
-            # loses caching the other one has. No TTL: the one marker in the
-            # executor's prompt closes the static region, and the loop's own
-            # marks carry their own lifetime.
-            out[self._cache_key] = self._cache_marker(None)
+        marked = [k for k in CACHE_MARKER_FIELDS if k in block]
+        if marked:
+            # A mark has to survive translation, or the translated wire
+            # silently loses caching the other one has. The TTL travels where
+            # the wire has one and is dropped where it does not.
+            ttl = None
+            marker = block[marked[0]]
+            if isinstance(marker, dict):
+                ttl = marker.get("ttl")
+            out[self._cache_key] = self._cache_marker(ttl)
         return out
+
+    @property
+    def marks_move(self) -> bool:
+        """Whether only the newest cache mark counts on this wire."""
+        return self._moving_marks
+
+    def parsed(self, response):
+        """The validated model a structured call attached, or None."""
+        return self._parsed(response) if self._parsed else None
+
+    def mark_latest(self, conversation: list, ttl: str | None = None) -> list:
+        """A copy with the newest block carrying a cache mark, where marks move.
+
+        On Messages and chat completions only the latest marks count and four
+        is the ceiling, so a tool loop marks the end of the newest message on
+        each send and lets the mark move. On Responses marks accumulate and
+        the results carry their own, so the conversation is returned as is.
+
+        Never mutates: the caller holds this list across turns.
+        """
+        if not self._moving_marks or not conversation:
+            return conversation
+        last = conversation[-1]
+        content = _get(last, "content")
+        if not isinstance(content, list) or not content or not isinstance(content[-1], dict):
+            return conversation
+        blocks = list(content)
+        blocks[-1] = {**blocks[-1], self._cache_key: self._cache_marker(ttl)}
+        return conversation[:-1] + [{**last, "content": blocks}]
 
     def turn_end(self, response) -> TurnEnd:
         """How this turn ended, read from the wire's own answer.
@@ -346,7 +387,7 @@ class Dialect:
         what a failure arrives as. `executorclient` asked
         `openaiclient.transport_errors()` for them instead — correct while
         every executor call was a Responses call, and silently wrong from the
-        day the executor became the wire-polymorphic role.
+        day a role became wire-polymorphic.
 
         An `anthropic.APIStatusError` is not an `openai.APIStatusError`, so
         `retry_on` matched nothing on the Messages wire and every failure
@@ -538,10 +579,13 @@ def _responses_turn_end(response) -> TurnEnd:
     absence of tool calls, so an interrupted turn and a finished one were the
     same observation.
     """
+    status = getattr(response, "status", "") or ""
     detail = getattr(response, "incomplete_details", None)
-    reason = _get(detail, "reason") if detail else None
+    # The details explain an incomplete status and nothing else; a stub or a
+    # provider that fills them on a completed response is not reporting a cut.
+    reason = _get(detail, "reason") if (detail and status == "incomplete") else None
     return TurnEnd(
-        reason=str(reason or getattr(response, "status", "") or ""),
+        reason=str(reason or status),
         has_content=_responses_text_present(response),
         has_tool_calls=bool(_responses_tool_calls(response)),
     )
@@ -681,9 +725,15 @@ def _lift_system(wire, conversation):
     if not conv or _get(conv[0], "role") != "system":
         return None, conv
     head = conv[0]
+    content = _get(head, "content")
+    if isinstance(content, str):
+        content = [{"type": "text", "text": content}]
+    # Through the wire's own translation, which is idempotent: a block already
+    # in this vocabulary is unchanged, one in the other's is rewritten, and a
+    # cache mark survives either way.
     blocks = [
-        {"type": "text", "text": _get(b, "text") or ""}
-        for b in (_get(head, "content") or [])
+        wire._translate(b) if isinstance(b, dict) else {"type": "text", "text": _get(b, "text") or ""}
+        for b in (content or [])
     ]
     return blocks, conv[1:]
 
@@ -736,7 +786,7 @@ def _gateway_base(base, wire: str):
     trimmed = str(base).rstrip("/")
     if trimmed.endswith("/v1"):
         trimmed = trimmed[: -len("/v1")]
-    return f"{trimmed}/v1" if wire == "responses" else trimmed
+    return f"{trimmed}/v1" if wire in ("responses", "chat") else trimmed
 
 
 def _responses_transport_errors() -> tuple[type[BaseException], ...]:
@@ -841,15 +891,20 @@ def _messages_final_text(response) -> str:
 
 
 def _responses_send(wire, client, cfg, conversation, tools, extra):
-    return client.responses.create(
-        model=cfg.model,
+    # `parse` when the caller asked for a validated answer, `create` otherwise;
+    # the structured key is the dialect's own, so its presence is the signal.
+    method = client.responses.parse if wire._structured_key in extra else client.responses.create
+    kwargs = {
+        "model": cfg.model,
         # A plain list on the wire. `conversation` is a `Transcript` — a list
         # subclass that mirrors itself to disk — and what the SDK does with a
         # subclass is its business rather than a fact to rely on.
-        input=list(conversation),
-        tools=tools,
+        "input": list(conversation),
         **extra,
-    )
+    }
+    if tools:
+        kwargs["tools"] = tools
+    return method(**kwargs)
 
 
 def _messages_send(wire, client, cfg, conversation, tools, extra):
@@ -857,14 +912,225 @@ def _messages_send(wire, client, cfg, conversation, tools, extra):
     # system block, and everything behind it went out in the other wire's
     # vocabulary and was refused.
     system, messages = wire.split_system(wire.normalise(conversation))
-    kwargs = {"model": cfg.model, "messages": messages, "tools": tools, **extra}
+    kwargs = {"model": cfg.model, "messages": messages, **extra}
+    if tools:
+        kwargs["tools"] = tools
     if system:
         kwargs["system"] = system
     # Mandatory on this wire, unlike the other. Generous rather than tight:
     # thinking counts against it along with the answer, so a small budget
     # truncates the response rather than the reasoning.
     kwargs["max_tokens"] = getattr(cfg, "max_tokens", None) or 32_000
-    return client.messages.create(**kwargs)
+    method = client.messages.parse if wire._structured_key in extra else client.messages.create
+    return method(**kwargs)
+
+
+# --- chat completions -------------------------------------------------------
+
+def _chat_message(response):
+    choices = getattr(response, "choices", None) or []
+    return _get(choices[0], "message") if choices else None
+
+
+def _chat_text(message) -> str:
+    content = _get(message, "content") if message is not None else None
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            _get(part, "text") or "" for part in content if _get(part, "type") in _TEXT_TYPES
+        )
+    return ""
+
+
+def _chat_tool_calls(response) -> list[dict]:
+    import json as _json
+
+    out = []
+    for call in _get(_chat_message(response), "tool_calls") or []:
+        function = _get(call, "function")
+        raw = _get(function, "arguments") or "{}"
+        try:
+            args = _json.loads(raw)
+        except (TypeError, ValueError):
+            args = {}
+        out.append({"id": _get(call, "id") or "", "name": _get(function, "name") or "",
+                    "args": args if isinstance(args, dict) else {}})
+    return out
+
+
+def _chat_turn_end(response) -> TurnEnd:
+    choices = getattr(response, "choices", None) or []
+    reason = _get(choices[0], "finish_reason") if choices else ""
+    # A refusal arrives as `content_filter` with the text in `refusal`; the
+    # message, not the finish reason, is what says which.
+    if _get(_chat_message(response), "refusal"):
+        reason = "refusal"
+    return TurnEnd(
+        reason=str(reason or ""),
+        has_content=bool(_chat_text(_chat_message(response)).strip()),
+        has_tool_calls=bool(_chat_tool_calls(response)),
+    )
+
+
+def _chat_stopped(response) -> bool:
+    return not _chat_turn_end(response).has_tool_calls
+
+
+def _chat_append_model_turn(conversation: list, response) -> None:
+    message = _chat_message(response)
+    if message is None:
+        return
+    turn: dict = {"role": "assistant", "content": _chat_text(message) or None}
+    calls = []
+    for call in _get(message, "tool_calls") or []:
+        function = _get(call, "function")
+        calls.append({
+            "id": _get(call, "id") or "",
+            "type": "function",
+            "function": {"name": _get(function, "name") or "",
+                         "arguments": _get(function, "arguments") or "{}"},
+        })
+    if calls:
+        turn["tool_calls"] = calls
+    # OpenRouter hands an Anthropic model's thinking back as `reasoning_details`
+    # and needs it echoed to keep the reasoning across turns.
+    details = _get(message, "reasoning_details")
+    if details:
+        turn["reasoning_details"] = details
+    conversation.append(turn)
+
+
+def _chat_append_tool_results(wire, conversation, results, cache, ttl):
+    # One `tool` message per call, content as parts so the last can carry the
+    # mark; marks move on this wire, so only the newest is marked.
+    items = list(results)
+    for i, (call_id, text) in enumerate(items):
+        block = {"type": "text", "text": text}
+        if cache and i == len(items) - 1:
+            block[wire._cache_key] = wire._cache_marker(ttl)
+        conversation.append({"role": "tool", "tool_call_id": call_id, "content": [block]})
+
+
+def _chat_tool_schemas(specs) -> list[dict]:
+    from code_gantry.plannertools import as_strict_tool
+
+    out = []
+    for spec in specs:
+        flat = as_strict_tool(spec)
+        out.append({"type": "function", "function": {
+            k: flat[k] for k in ("name", "description", "strict", "parameters")
+        }})
+    return out
+
+
+def _chat_usage(raw):
+    from code_gantry.openaiclient import TokenUsage
+
+    if raw is None:
+        return TokenUsage()
+    details = getattr(raw, "prompt_tokens_details", None)
+    if details is None and isinstance(raw, dict):
+        details = raw.get("prompt_tokens_details")
+    prompt = _num(raw, "prompt_tokens")
+    return TokenUsage(
+        prompt_tokens=prompt,
+        completion_tokens=_num(raw, "completion_tokens"),
+        cached_tokens=_num(details, "cached_tokens") if details else 0,
+        cache_write_tokens=_num(details, "cache_write_tokens") if details else 0,
+        peak_prompt_tokens=prompt,
+        provider_cost_usd=_get(raw, "cost"),
+        # No TTL breakdown on this wire; zero, not the total.
+        cache_write_1h_tokens=0,
+    )
+
+
+def _chat_refusal(response) -> str:
+    return _get(_chat_message(response), "refusal") or ""
+
+
+def _chat_final_text(response) -> str:
+    return _chat_text(_chat_message(response))
+
+
+def _chat_parsed(response):
+    return _get(_chat_message(response), "parsed")
+
+
+def _chat_client(cfg):
+    from openai import OpenAI
+
+    kwargs = {"api_key": _api_key(cfg), "max_retries": 0}
+    base = cfg.resolve_api_base() if hasattr(cfg, "resolve_api_base") else None
+    base = _gateway_base(base, "chat")
+    if base:
+        kwargs["base_url"] = base
+    timeout = getattr(cfg, "request_timeout_seconds", None)
+    if timeout:
+        kwargs["timeout"] = timeout
+    return OpenAI(**kwargs)
+
+
+def _chat_send(wire, client, cfg, conversation, tools, extra):
+    kwargs = {"model": cfg.model, "messages": wire.normalise(conversation), **extra}
+    if tools:
+        kwargs["tools"] = tools
+    ceiling = getattr(cfg, "max_tokens", None)
+    if ceiling:
+        kwargs["max_tokens"] = ceiling
+    if wire._structured_key not in extra:
+        return client.chat.completions.create(**kwargs)
+    try:
+        return client.chat.completions.parse(**kwargs)
+    except Exception as e:  # noqa: BLE001 - narrowed below
+        # The SDK's `parse` raises on a refusal or a truncation instead of
+        # returning the completion that says so. Re-read the same answer raw,
+        # so the loop reports the refusal rather than a failed call.
+        if type(e).__name__ not in ("ContentFilterFinishReasonError", "LengthFinishReasonError"):
+            raise
+        from openai.lib._parsing import type_to_response_format_param
+
+        kwargs["response_format"] = type_to_response_format_param(kwargs["response_format"])
+        return client.chat.completions.create(**kwargs)
+
+
+def _messages_parsed(response):
+    return getattr(response, "parsed_output", None)
+
+
+def _responses_parsed(response):
+    return getattr(response, "output_parsed", None)
+
+
+CHAT = Dialect(
+    name="chat",
+    _structured_key="response_format",
+    _effort_key="reasoning_effort",
+    _effort_shape=lambda level: level,
+    _text_type="text",
+    _cache_key="cache_control",
+    _cache_marker=lambda ttl: {"type": "ephemeral", **({"ttl": ttl} if ttl else {})},
+    _request_cache_options={},
+    _translates_blocks=True,
+    # Through the gateway effort rides in the body as `reasoning`; first party
+    # takes `reasoning_effort` at the top level.
+    _effort_in_gateway_body=True,
+    _transport_errors=_responses_transport_errors,
+    _turn_end=_chat_turn_end,
+    _parsed=_chat_parsed,
+    _moving_marks=True,
+    _usage=_chat_usage,
+    _tool_calls=_chat_tool_calls,
+    _stopped=_chat_stopped,
+    _append_model_turn=_chat_append_model_turn,
+    _append_tool_results=_chat_append_tool_results,
+    _tool_schemas=_chat_tool_schemas,
+    _split_system=_no_split,
+    _client=_chat_client,
+    _refusal=_chat_refusal,
+    _final_text=_chat_final_text,
+    _send=_chat_send,
+)
 
 
 RESPONSES = Dialect(
@@ -881,6 +1147,7 @@ RESPONSES = Dialect(
     _cache_key_param="prompt_cache_key",
     _transport_errors=_responses_transport_errors,
     _turn_end=_responses_turn_end,
+    _parsed=_responses_parsed,
     _usage=_responses_usage,
     _tool_calls=_responses_tool_calls,
     _stopped=_responses_stopped,
@@ -903,6 +1170,8 @@ MESSAGES = Dialect(
     _cache_key="cache_control",
     _transport_errors=_messages_transport_errors,
     _turn_end=_messages_turn_end,
+    _parsed=_messages_parsed,
+    _moving_marks=True,
     _cache_marker=lambda ttl: {"type": "ephemeral", **({"ttl": ttl} if ttl else {})},
     _request_cache_options={},
     _translates_blocks=True,
@@ -925,8 +1194,9 @@ MESSAGES = Dialect(
 # and `us.anthropic.claude-opus-5` depending on the route, and both an
 # operator and a router can extend the set. A fixed list of exact strings
 # meeting an extensible set is a bet rather than a specification.
+_ANTHROPIC = ("anthropic", "claude")
 _FAMILIES: tuple[tuple[tuple[str, ...], Dialect], ...] = (
-    (("anthropic", "claude"), MESSAGES),
+    (_ANTHROPIC, MESSAGES),
     (("google", "gemini"), MESSAGES),
     (("openai", "gpt-", "o1", "o3", "o4"), RESPONSES),
 )
@@ -944,14 +1214,19 @@ _POLICIES = ("openrouter/pareto", "openrouter/auto", "openrouter/free",
 # fine-grained control and nothing else.
 _DEFAULT = RESPONSES
 
-_BY_NAME = {"responses": RESPONSES, "messages": MESSAGES}
+_BY_NAME = {"responses": RESPONSES, "messages": MESSAGES, "chat": CHAT}
 
 
-def dialect_for(model: str, override: str | None = None) -> Dialect:
-    """The wire this model should be called on.
+def dialect_for(model: str, override: str | None = None, api_base=None) -> Dialect:
+    """The wire this model should be called on, given where it is reached.
 
     `override` is the operator's escape hatch: the map is provider knowledge,
     but a deployment may know about a model this file has never heard of.
+
+    `api_base` is the route. An Anthropic model through OpenRouter goes on
+    chat completions: on Messages the gateway drops `output_format` in
+    silence and answers 404 to any `tools` block, while chat completions
+    carries schema, strict tools, effort and a 1h `cache_control`.
     """
     if override:
         try:
@@ -969,5 +1244,62 @@ def dialect_for(model: str, override: str | None = None) -> Dialect:
         )
     for needles, dialect in _FAMILIES:
         if any(n in ident for n in needles):
+            if dialect is MESSAGES and needles is _ANTHROPIC and _via_openrouter(api_base):
+                return CHAT
             return dialect
     return _DEFAULT
+
+
+def _via_openrouter(api_base) -> bool:
+    from code_gantry.gateway import is_openrouter
+
+    return is_openrouter(api_base)
+
+
+def wire_for(cfg, default: Dialect) -> Dialect:
+    """The wire a role's configured endpoint wants, or `default` for a policy.
+
+    A routing policy resolves per run and cannot be classified, and a run
+    must not fail here over it. The route is read without raising: a config
+    naming an unset `api_base_env` is preflight's to report, not this
+    function's to crash on.
+    """
+    try:
+        base = cfg.resolve_api_base() if hasattr(cfg, "resolve_api_base") else getattr(cfg, "api_base", None)
+    except KeyError:
+        base = None
+    try:
+        return dialect_for(getattr(cfg, "model", ""), getattr(cfg, "wire", None), api_base=base)
+    except ValueError:
+        return default
+
+
+def request_extra(cfg) -> dict:
+    """An operator's own request fields, as one `extra_body`."""
+    extra = getattr(cfg, "request_extra", None) or {}
+    return {"extra_body": dict(extra)} if extra else {}
+
+
+def request_extras(cfg, session_id: str = "", cache_key: str | None = None) -> dict:
+    """Every top-level keyword a role's call carries beyond the basics.
+
+    One function for every role, because it is one decision: the two outages
+    it exists to prevent were both a keyword an endpoint does not take, and
+    each was pinned afterwards by a test that rebuilt this dict by hand. The
+    seam test reads what production reads.
+    """
+    from code_gantry.gateway import gateway_body, gateway_effort_body
+
+    wire = wire_for(cfg, _DEFAULT)
+    level = getattr(cfg, "reasoning_effort", None) or getattr(cfg, "effort", None)
+    # Effort is spelled for the route where the wire's native spelling is one
+    # a gateway cannot carry — see `gateway_effort_body`.
+    via_body = gateway_effort_body(cfg, level) if wire.effort_in_gateway_body else {}
+    declared = dict(request_extra(cfg).get("extra_body") or {})
+    return {
+        **wire.cache_options(),
+        **wire.cache_key_param(cache_key),
+        **({} if via_body else wire.effort(level)),
+        # An operator's own declared fields win outright, so ours go under.
+        **gateway_body(cfg, session_id, {**via_body, **declared}),
+    }

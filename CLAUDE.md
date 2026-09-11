@@ -864,8 +864,12 @@ construct blocks, because the eighth will not remember.
 than declared in config — `session_id`, `provider.require_parameters`, the
 effort spelling. `resolve_policy` turns a routing policy into the model it picks
 today with one throwaway call, because nothing reports what a router *would*
-choose. `wirecheck.py` warns when a role's model wants a wire that role cannot
-speak; only the executor is wire-polymorphic.
+choose. Every role speaks every wire: `dialect_for` picks from the model and
+the route, and an Anthropic model reached through OpenRouter goes on chat
+completions, the third dialect, because the gateway drops the schema and
+refuses tools on Messages. `roleloop.run_structured_loop` is the one tool loop
+the planner and reviewer share; `request_extras` in `dialects` is the one
+request assembly all three roles call.
 
 `executorclient.request_extras` is the single assembly of every top-level
 keyword the executor's call carries — one function, because a copy of an
