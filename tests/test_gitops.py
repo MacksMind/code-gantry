@@ -75,9 +75,11 @@ class TestInspection:
         assert g.is_ancestor(base, "HEAD")
         assert not g.is_ancestor("HEAD", base)
 
-    def test_the_one_push_never_forces_and_has_one_caller(self):
+    def test_the_two_pushes_never_force_and_each_has_one_caller(self):
         # The pipeline pushes only the configured project branch, fast
-        # forward: `push` carries no force flag, and only `nodes` calls it.
+        # forward, and only `nodes` calls `push`. The one other push is
+        # `push_ref`, guarded to the code-gantry ref namespace so it cannot
+        # move a branch, and only the ledger sync calls it.
         import ast
         import inspect
         import textwrap
@@ -85,30 +87,33 @@ class TestInspection:
 
         import code_gantry
 
-        assert [name for name in dir(Git) if "push" in name] == ["push"]
-        source = textwrap.dedent(inspect.getsource(Git.push))
-        argv = [
-            node.value
-            for node in ast.walk(ast.parse(source))
-            if isinstance(node, ast.Constant) and isinstance(node.value, str)
-        ]
-        assert "-q" in argv
-        assert not [
-            arg for arg in argv
-            if arg in ("-f", "--force", "--force-with-lease") or arg.startswith("+")
-        ], argv
+        assert sorted(name for name in dir(Git) if "push" in name) == ["push", "push_ref"]
+        for method in (Git.push, Git.push_ref):
+            source = textwrap.dedent(inspect.getsource(method))
+            argv = [
+                node.value
+                for node in ast.walk(ast.parse(source))
+                if isinstance(node, ast.Constant) and isinstance(node.value, str)
+            ]
+            assert "-q" in argv
+            assert not [
+                arg for arg in argv
+                if arg in ("-f", "--force", "--force-with-lease") or arg.startswith("+")
+            ], argv
+        assert "self._guard_ref(ref)" in textwrap.dedent(inspect.getsource(Git.push_ref))
+        assert Git.REF_PREFIX == "refs/code-gantry/"
 
-        callers = []
+        callers = {"push": [], "push_ref": []}
         for module in Path(code_gantry.__file__).parent.glob("*.py"):
             tree = ast.parse(module.read_text())
             for node in ast.walk(tree):
                 if (
                     isinstance(node, ast.Call)
                     and isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "push"
+                    and node.func.attr in callers
                 ):
-                    callers.append(module.name)
-        assert callers == ["nodes.py"], callers
+                    callers[node.func.attr].append(module.name)
+        assert callers == {"push": ["nodes.py"], "push_ref": ["ledgersync.py"]}, callers
 
 
 class TestProjectBranch:
