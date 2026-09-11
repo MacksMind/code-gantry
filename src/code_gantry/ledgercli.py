@@ -25,8 +25,8 @@ from code_gantry.ledger import (
     Ledger,
     LedgerError,
     apply_fold,
-    open_ledger,
-    read_ledger,
+    import_old_file,
+    ledger_for,
     STAGE_DROPPED,
 )
 from code_gantry.plandoc import extract_links
@@ -53,10 +53,7 @@ def _cfg_and_ledger(config_path, *, write: bool) -> tuple:
         raise click.ClickException(
             "no `ledger:` section in the config; set `ledger.key_prefix` first"
         )
-    if write:
-        led = open_ledger(project.ledger, origin=origin(), actor=actor())
-    else:
-        led = read_ledger(project.ledger)
+    led = ledger_for(cfg, project, write=write, origin=origin(), actor=actor())
     return cfg, project, led
 
 
@@ -369,17 +366,18 @@ def ledger_drop(derived_id, reason, config_path) -> None:
     click.echo(f"{derived_id} dropped")
 
 
-@ledger.command("sync")
+@ledger.command("import")
+@click.argument("old_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @config_option
-def ledger_sync(config_path) -> None:
-    """Push this origin's events to its ref on the remote and ingest every
-    other origin's."""
-    from code_gantry.gitops import Git
-    from code_gantry.ledgersync import sync
-
-    cfg, _, led = _cfg_and_ledger(config_path, write=True)
-    report = sync(led, Git(cfg.target_repo))
-    click.echo(report.summary())
+def ledger_import(old_file, config_path) -> None:
+    """Copy a ledger file from before one sequence per ledger into the
+    configured ledger, which must hold nothing yet."""
+    _, _, led = _cfg_and_ledger(config_path, write=True)
+    try:
+        n = import_old_file(led, old_file)
+    except LedgerError as e:
+        raise click.ClickException(str(e))
+    click.echo(f"{n} event(s) imported into {led.where}")
 
 
 @ledger.command("fold")

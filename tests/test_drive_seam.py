@@ -31,9 +31,8 @@ def test_a_run_reaches_the_driver_with_every_start_step_done(tmp_path, monkeypat
     monkeypatch.setattr(cli, "make_reviewer", lambda *a, **k: object())
     monkeypatch.setattr(cli, "build_runtime", lambda *a, **k: fake_rt)
     monkeypatch.setattr(cli, "release_dead_holders", lambda *a, **k: steps.append("released") or 0)
-    monkeypatch.setattr(cli.nodes, "_sync_ledger", lambda rt, where: steps.append(f"synced:{where}"))
     monkeypatch.setattr(cli, "drive", lambda *a, **k: steps.append("driven") or {"status": "complete"})
 
     code = cli._drive(cfg, project, paths, {"run_id": "run-1", "key_scope": ["p.001"]})
     assert code == cli.EXIT_OK
-    assert steps[:4] == ["released", "synced:run", "driven", "closed"], steps
+    assert steps[:3] == ["released", "driven", "closed"], steps

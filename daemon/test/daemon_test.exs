@@ -7,7 +7,7 @@ defmodule CodeGantryDaemonTest do
   """
   use ExUnit.Case
 
-  alias CodeGantryDaemon.{Host, Bay, Status, Sync}
+  alias CodeGantryDaemon.{Host, Bay, Status}
 
   setup do
     root = Path.join(System.tmp_dir!(), "cgd-#{System.os_time(:microsecond)}-#{System.unique_integer([:positive])}")
@@ -43,7 +43,6 @@ defmodule CodeGantryDaemonTest do
       code_gantry: root,
       primary: primary,
       config: "cfg.yaml",
-      sync_seconds: 3600,
       branch: "work",
       command: [fake],
       bays: [%{name: "bay1", offset: 100, scope: ["p.001"]}]
@@ -139,22 +138,6 @@ defmodule CodeGantryDaemonTest do
     {_out, status} = Command.run(["bin/bad-interp"], host.primary, [])
     assert status != 0
     _ = root
-  end
-
-  test "the sync loop reads a bay's config, never the primary's, once a bay exists", %{root: root, host: host, state: state} do
-    File.write!(Path.join(root, "exit"), "0")
-    File.mkdir_p!(Host.bay_dir(host, hd(host.bays)))
-    {:ok, _} = Sync.start_link(host)
-    wait_for(fn -> String.contains?(status(state), "sync ok") end)
-    assert calls(root) =~ "argv: ledger sync --config #{Path.join(Host.bay_dir(host, hd(host.bays)), "cfg.yaml")}"
-    refute calls(root) =~ host.primary <> "/cfg.yaml"
-  end
-
-  test "with no bay made yet the sync falls back to the primary copy's config", %{root: root, host: host, state: state} do
-    File.write!(Path.join(root, "exit"), "0")
-    {:ok, _} = Sync.start_link(host)
-    wait_for(fn -> String.contains?(status(state), "sync ok") end)
-    assert calls(root) =~ "argv: ledger sync --config #{Path.join(host.primary, "cfg.yaml")}"
   end
 
   test "a bay's name is local to its node, never global", %{root: root, host: host, state: state} do

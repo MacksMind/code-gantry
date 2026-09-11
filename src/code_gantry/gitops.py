@@ -756,64 +756,10 @@ class Git:
             )
         return self.head_sha() != before
 
-    # -- refs outside the branches -------------------------------------
-    # A ref under `refs/code_gantry/` is a commit like any other, but no
-    # branch: nothing that reads HEAD, the index or the work tree can see it,
-    # so these helpers build and move it with plumbing and never touch the
-    # checkout. Only such refs may be pushed through here.
-
-    REF_PREFIX = "refs/code_gantry/"
-
     def ref_sha(self, ref: str) -> str | None:
+        """The commit a ref names, or None when it names nothing."""
         proc = self._run("rev-parse", "-q", "--verify", f"{ref}^{{commit}}", check=False)
         return proc.stdout.strip() if proc.returncode == 0 else None
-
-    def ref_file(self, ref: str, path: str) -> str | None:
-        """The file's text at the ref, or None when either is absent."""
-        proc = self._run("cat-file", "-p", f"{ref}:{path}", check=False)
-        return proc.stdout if proc.returncode == 0 else None
-
-    def write_ref_file(self, ref: str, path: str, text: str, message: str) -> str:
-        """Commit `text` as `path` on `ref`, on top of what the ref holds.
-        Returns the new commit. The index and the tree are untouched."""
-        self._guard_ref(ref)
-        blob = subprocess.run(
-            ["git", "hash-object", "-w", "--stdin"], cwd=str(self.repo),
-            input=text, capture_output=True, text=True, check=True,
-        ).stdout.strip()
-        tree = subprocess.run(
-            ["git", "mktree"], cwd=str(self.repo),
-            input=f"100644 blob {blob}\t{path}\n", capture_output=True, text=True, check=True,
-        ).stdout.strip()
-        parent = self.ref_sha(ref)
-        args = ["commit-tree", tree, "-m", message] + (["-p", parent] if parent else [])
-        commit = self._out(*args)
-        self._run("update-ref", ref, commit, *( [parent] if parent else [] ))
-        return commit
-
-    def push_ref(self, ref: str, remote: str = "origin") -> None:
-        """Push one ref of ours to the same name on the remote, fast-forward
-        only. Never a branch."""
-        self._guard_ref(ref)
-        proc = self._run("push", "-q", remote, f"{ref}:{ref}", check=False)
-        if proc.returncode != 0:
-            raise GitError(
-                f"push of {ref!r} to {remote!r} was refused: "
-                f"{proc.stderr.strip() or proc.stdout.strip()}"
-            )
-
-    def fetch_refs(self, prefix: str, remote: str = "origin") -> None:
-        """Fetch every ref under `prefix` to the same names here."""
-        self._guard_ref(prefix)
-        self._run("fetch", "-q", remote, f"+{prefix}*:{prefix}*")
-
-    def list_refs(self, prefix: str) -> list[str]:
-        out = self._out("for-each-ref", "--format=%(refname)", prefix)
-        return [line for line in out.splitlines() if line]
-
-    def _guard_ref(self, ref: str) -> None:
-        if not ref.startswith(self.REF_PREFIX):
-            raise GitError(f"{ref!r} is not under {self.REF_PREFIX}; branches are not pushed this way")
 
     def push(self, branch: str, remote: str = "origin") -> None:
         """Fast-forward only, never forced. A refusal is the caller's to

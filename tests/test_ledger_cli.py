@@ -8,7 +8,6 @@ from click.testing import CliRunner
 from code_gantry import cli
 from code_gantry.gitops import Git
 from code_gantry.ledger import open_ledger, read_ledger
-from code_gantry.ledgersync import sync
 from code_gantry.runtime import ProjectPaths
 
 PLAN = """# Demo plan
@@ -277,39 +276,6 @@ class TestAFreshHost:
     preflight reads the plan, so the first run on a new host imports
     nothing by hand."""
 
-    def test_the_plan_arrives_from_the_remote_before_preflight_reads_it(
-        self, project, tmp_path, monkeypatch
-    ):
-        repo, config, paths, sha = project
-        bare = tmp_path / "origin.git"
-        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
-        subprocess.run(["git", "remote", "add", "origin", str(bare)], cwd=repo, check=True)
-        subprocess.run(["git", "push", "-q", "origin", "main", "work"], cwd=repo, check=True)
-        config.write_text(config.read_text() + "remote_landing: true\n")
-
-        # Another host holds the plan and has pushed its ledger's ref.
-        other = open_ledger(tmp_path / "elsewhere.db", origin="other-host", actor="them")
-        other.upsert_node("p.001", parent=None, position=0, kind="document", title="Plan")
-        other.upsert_node("p.002", parent="p.001", position=0, kind="item", title="A thing")
-        sync(other, Git(repo))
-        other.close()
-        assert not paths.ledger.exists()
-
-        seen = {}
-
-        def preflight(*a, ledger=None, **k):
-            seen["documents_at_preflight"] = len(ledger.views().documents())
-            return []
-
-        monkeypatch.setattr(cli, "run_preflight", preflight)
-        monkeypatch.setattr(
-            cli, "_drive",
-            lambda cfg, project, paths, graph_input, warnings=None: seen.update(graph_input) or 0,
-        )
-        result = run("run", "--scope", "p.002")
-        assert result.exit_code == 0, result.output
-        assert seen["documents_at_preflight"] == 1
-        assert seen["key_scope"] == ["p.002"]
 
     def test_without_remote_landing_a_missing_ledger_is_not_created(self, project, monkeypatch):
         repo, config, paths, sha = project
@@ -379,9 +345,35 @@ class TestDrawnStagesOnTheCommandLine:
         assert again.exit_code != 0
 
 
-class TestSyncOnTheCommandLine:
-    def test_it_reports_when_there_is_no_remote(self, project):
-        imported(project)
-        result = run("ledger", "sync")
+class TestImportOnTheCommandLine:
+    def test_an_old_file_is_imported_into_an_empty_ledger(self, project, tmp_path):
+        import json
+        import sqlite3
+
+        repo, config, paths, sha = project
+        # The fixture's ledger holds the project's plan; an import wants an
+        # empty one, so the file and SQLite's sidecars go first.
+        for sidecar in ("", "-wal", "-shm"):
+            candidate = paths.ledger.with_name(paths.ledger.name + sidecar)
+            if candidate.exists():
+                candidate.unlink()
+        old = tmp_path / "old.db"
+        conn = sqlite3.connect(old)
+        conn.execute(
+            "CREATE TABLE events (origin TEXT NOT NULL, seq INTEGER NOT NULL, at TEXT NOT NULL,"
+            " kind TEXT NOT NULL, key TEXT, stage_id TEXT, run_id TEXT, sha TEXT, body TEXT NOT NULL,"
+            " PRIMARY KEY (origin, seq))"
+        )
+        conn.execute(
+            "INSERT INTO events (origin, seq, at, kind, key, body) VALUES (?, ?, ?, ?, ?, ?)",
+            ("spark", 1, "2026-01-01T00:00:00+00:00", "node.upserted", "p.001",
+             json.dumps({"parent": None, "position": 0, "node_kind": "document", "title": "Plan"})),
+        )
+        conn.commit()
+        conn.close()
+        result = run("ledger", "import", str(old))
         assert result.exit_code == 0, result.output
-        assert "no remote 'origin'" in result.output
+        assert "1 event(s) imported" in result.output
+        assert "p.001" in run("ledger", "render").output
+        again = run("ledger", "import", str(old))
+        assert again.exit_code != 0 and "already holds" in again.output

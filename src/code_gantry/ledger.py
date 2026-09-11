@@ -16,16 +16,19 @@ a field is left out of a record only on purpose.
 from __future__ import annotations
 
 import contextlib
-import json
+import os
 import socket
-import sqlite3
-import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from code_gantry.ledgerstore import (  # noqa: F401 - Event is this module's public type
+    Draft, DynamoStore, Event, SqliteStore, Store, StoreError, boto3_table,
+)
+
 LEDGER_FILENAME = "ledger.db"
+LEDGER_TABLE_ENV = "CODE_GANTRY_LEDGER_TABLE"
 
 # Kinds. Named with a dot where the subject is a thing with a lifecycle of its
 # own (a node, a finding) and bare where the subject is a key's state.
@@ -60,53 +63,12 @@ OWNERS = frozenset({"pipeline", "human"})
 NEEDS = frozenset({"pipeline", "human"})
 DISPOSITIONS = frozenset({"fold", "discard", "debt", "raise"})
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS events (
-    origin   TEXT    NOT NULL,
-    seq      INTEGER NOT NULL,
-    at       TEXT    NOT NULL,
-    kind     TEXT    NOT NULL,
-    key      TEXT,
-    stage_id TEXT,
-    run_id   TEXT,
-    sha      TEXT,
-    body     TEXT    NOT NULL,
-    PRIMARY KEY (origin, seq)
-)
-"""
-
-
 class LedgerError(RuntimeError):
     """A write the ledger refuses: a stale edit, an unknown key, a bad kind."""
 
 
 class StaleEdit(LedgerError):
     """A human edit built on a version of the node that is no longer current."""
-
-
-@dataclass
-class Event:
-    """One row, exactly as written."""
-
-    origin: str
-    seq: int
-    at: str
-    kind: str
-    key: str | None = None
-    stage_id: str | None = None
-    run_id: str | None = None
-    sha: str | None = None
-    body: dict = field(default_factory=dict)
-
-    @property
-    def finding_id(self) -> str:
-        """The id a `finding.opened` event confers: unique across origins for free."""
-        return f"f-{self.origin}-{self.seq}"
-
-    @property
-    def derived_id(self) -> str:
-        """The id a `stage.derived` event confers, by the same rule."""
-        return f"d-{self.origin}-{self.seq}"
 
 
 # --------------------------------------------------------------------------
@@ -506,65 +468,56 @@ def default_origin() -> str:
 
 
 class Ledger:
-    """One ledger file, readable, and writable when it has an origin.
+    """One ledger, readable, and writable when it has an origin.
 
-    A writer holds one connection and commits per event. WAL and a busy
-    timeout, because a run and the operator's CLI share the file.
+    Sits on a `Store` — a file on this host or the table every host writes —
+    and keeps the events it has read, asking the store only for what follows
+    the last one, so a second bay's write is seen on the next read.
     """
 
     def __init__(
         self,
-        path: Path | None,
-        conn: sqlite3.Connection | None,
+        store: Store,
         origin: str | None,
         *,
         actor: str | None = None,
         clock: Callable[[], str] = _utcnow,
+        where: str = "",
     ):
-        self.path = path
-        self._conn = conn
+        self.store = store
         self.origin = origin
         self.actor = actor
+        self.where = where
         self._clock = clock
+        self._events: list[Event] = []
+        self._last = 0
         self._views: Views | None = None
-        self._views_version: int | None = None
+
+    @property
+    def path(self) -> str:
+        """Where this ledger is, for a message: a file, or a name in the table."""
+        return self.where
 
     # -- reading ----------------------------------------------------------
 
+    def _refresh(self) -> None:
+        new = self.store.events_after(self._last)
+        if new:
+            self._events.extend(new)
+            self._last = new[-1].seq
+            self._views = None
+
     def events(self) -> list[Event]:
-        if self._conn is None:
-            return []
-        rows = self._conn.execute(
-            "SELECT origin, seq, at, kind, key, stage_id, run_id, sha, body"
-            "  FROM events ORDER BY at, origin, seq"
-        ).fetchall()
-        return [
-            Event(
-                origin=r[0], seq=r[1], at=r[2], kind=r[3], key=r[4],
-                stage_id=r[5], run_id=r[6], sha=r[7], body=json.loads(r[8]),
-            )
-            for r in rows
-        ]
+        self._refresh()
+        return list(self._events)
 
     def views(self) -> Views:
-        """Rebuilt from the events whenever they have changed: after this
-        ledger's own write, and after any other connection's commit, which
-        SQLite reports through `data_version`. Several bays share one file,
-        so a cache that only knew its own writes would miss their claims."""
-        version = self._data_version()
-        if self._views is None or version != self._views_version:
-            self._views = build_views(self.events())
-            self._views_version = version
+        """Rebuilt whenever the store holds something this ledger has not
+        read: after this ledger's own write, and after any other writer's."""
+        self._refresh()
+        if self._views is None:
+            self._views = build_views(self._events)
         return self._views
-
-    def _data_version(self) -> int:
-        if self._conn is None:
-            return 0
-        return int(self._conn.execute("PRAGMA data_version").fetchone()[0])
-
-    def since(self, origin: str, seq: int) -> list[Event]:
-        """This origin's events after `seq` — the unit a later replication fetches."""
-        return [e for e in self.events() if e.origin == origin and e.seq > seq]
 
     # -- writing ----------------------------------------------------------
 
@@ -579,48 +532,22 @@ class Ledger:
         actor: str | None = None,
         **body,
     ) -> Event:
-        if self._conn is None or self.origin is None:
+        if self.origin is None or not self.store.writable:
             raise LedgerError("this ledger was opened for reading only")
         if actor is None:
             actor = self.actor
         if actor is not None:
             body = {"actor": actor, **body}
-        # The next sequence number and the insert are one transaction, taken
-        # with the write lock up front, so two writers can never both read the
-        # same number. Inside `transaction()` the lock is already held and the
-        # caller commits.
-        own = not self._conn.in_transaction
-        if own:
-            self._conn.execute("BEGIN IMMEDIATE")
-        try:
-            row = self._conn.execute(
-                "SELECT COALESCE(MAX(seq), 0) FROM events WHERE origin = ?",
-                (self.origin,),
-            ).fetchone()
-            event = Event(
-                origin=self.origin,
-                seq=int(row[0]) + 1,
-                at=self._clock(),
-                kind=kind,
-                key=key,
-                stage_id=stage_id,
-                run_id=run_id,
-                sha=sha,
-                body=body,
-            )
-            record = asdict(event)
-            record["body"] = json.dumps(event.body, ensure_ascii=False, sort_keys=True)
-            self._conn.execute(
-                "INSERT INTO events (origin, seq, at, kind, key, stage_id, run_id, sha, body)"
-                " VALUES (:origin, :seq, :at, :kind, :key, :stage_id, :run_id, :sha, :body)",
-                record,
-            )
-            if own:
-                self._conn.commit()
-        except BaseException:
-            if own:
-                self._conn.rollback()
-            raise
+        draft = Draft(
+            origin=self.origin, at=self._clock(), kind=kind, key=key,
+            stage_id=stage_id, run_id=run_id, sha=sha, body=body,
+        )
+        (event,) = self.store.append([draft])
+        if event.seq == self._last + 1:
+            self._events.append(event)
+            self._last = event.seq
+        else:
+            self._refresh()
         self._views = None
         return event
 
@@ -628,53 +555,19 @@ class Ledger:
         """This origin ran `command` green on `sha`."""
         return self.append(SUITE_GREEN, sha=sha, run_id=run_id, stage_id=stage_id, command=command)
 
-    def export(self, origin: str | None = None) -> list[dict]:
-        """This origin's events (ours by default) as plain rows, in sequence
-        order: the unit another host fetches."""
-        origin = origin or self.origin
-        rows = sorted((e for e in self.events() if e.origin == origin), key=lambda e: e.seq)
-        return [asdict(e) for e in rows]
-
-    def ingest(self, rows) -> int:
-        """Write events another origin recorded, keeping their origin,
-        sequence and time. A row already held is skipped, so the same log can
-        be ingested any number of times. Returns how many were new."""
-        if self._conn is None:
-            raise LedgerError("this ledger was opened for reading only")
-        new = 0
-        with self.transaction():
-            for row in rows:
-                record = {
-                    "origin": row["origin"], "seq": int(row["seq"]), "at": row["at"],
-                    "kind": row["kind"], "key": row.get("key"), "stage_id": row.get("stage_id"),
-                    "run_id": row.get("run_id"), "sha": row.get("sha"),
-                    "body": json.dumps(row.get("body") or {}, ensure_ascii=False, sort_keys=True),
-                }
-                cursor = self._conn.execute(
-                    "INSERT OR IGNORE INTO events (origin, seq, at, kind, key, stage_id, run_id, sha, body)"
-                    " VALUES (:origin, :seq, :at, :kind, :key, :stage_id, :run_id, :sha, :body)",
-                    record,
-                )
-                new += cursor.rowcount
-        self._views = None
-        return new
-
     @contextlib.contextmanager
     def transaction(self):
-        """One write lock across a read and the writes it decides, so what
-        was read is still true when it is written against."""
-        if self._conn is None or self.origin is None:
+        """One writer across a read and the writes it decides, so what was
+        read is still true when it is written against."""
+        if self.origin is None or not self.store.writable:
             raise LedgerError("this ledger was opened for reading only")
-        self._conn.execute("BEGIN IMMEDIATE")
-        self._views = None
-        try:
-            yield
-            self._conn.commit()
-        except BaseException:
-            self._conn.rollback()
-            raise
-        finally:
+        with self.store.exclusive():
+            self._refresh()
             self._views = None
+            try:
+                yield
+            finally:
+                self._views = None
 
     def upsert_node(
         self,
@@ -756,9 +649,7 @@ class Ledger:
         )
 
     def close(self) -> None:
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+        self.store.close()
 
 
 def open_ledger(
@@ -768,44 +659,84 @@ def open_ledger(
     actor: str | None = None,
     clock: Callable[[], str] = _utcnow,
 ) -> Ledger:
-    """The writer. Creates the file, and is the only function that may."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), check_same_thread=False, timeout=30.0)
-    conn.execute("PRAGMA busy_timeout=30000")
-    # Switching the journal mode and creating the table take an exclusive lock
-    # the busy handler does not always wait for, so several writers opening a
-    # fresh file at once can each see it locked for an instant. Retried, not
-    # trusted to the timeout.
-    for attempt in range(50):
-        try:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute(_SCHEMA)
-            conn.commit()
-            break
-        except sqlite3.OperationalError as e:
-            if "locked" not in str(e).lower() or attempt == 49:
-                raise
-            time.sleep(0.05 * (attempt + 1))
-    return Ledger(path, conn, origin or default_origin(), actor=actor, clock=clock)
+    """The writer on a file. Creates it, and is the only function that may."""
+    return Ledger(SqliteStore.open(path), origin or default_origin(), actor=actor, clock=clock, where=str(path))
 
 
 def read_ledger(path: Path | str) -> Ledger:
-    """A reader. An absent file is an empty ledger, and stays absent."""
-    path = Path(path)
-    if not path.is_file():
-        return Ledger(path, None, None)
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=False)
-    conn.execute("PRAGMA busy_timeout=30000")
-    tables = {
-        name for (name,) in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'"
+    """A reader on a file. An absent file is an empty ledger, and stays absent."""
+    return Ledger(SqliteStore.read(path), None, where=str(path))
+
+
+def ledger_for(cfg, paths, *, write: bool, origin: str | None = None, actor: str | None = None) -> Ledger:
+    """The ledger a config names. `ledger.name` is a ledger in the table the
+    environment names — every host's; otherwise the file `paths.ledger`, this
+    host's. Credentials and the table come from the environment, which the
+    repository's credentials file supplies, so nothing tracked names them."""
+    if cfg.ledger is None:
+        raise LedgerError("no `ledger:` section in the config")
+    if cfg.ledger.name:
+        table = os.environ.get(LEDGER_TABLE_ENV)
+        if not table:
+            raise LedgerError(
+                f"ledger.name is set but {LEDGER_TABLE_ENV} is not in the environment; "
+                "the repository's credentials file names the table"
+            )
+        store = DynamoStore(boto3_table(table), cfg.ledger.name)
+        return Ledger(
+            store, (origin or default_origin()) if write else None,
+            actor=actor, where=f"{cfg.ledger.name} in {table}",
         )
-    }
-    if "events" not in tables:
+    if write:
+        return open_ledger(paths.ledger, origin=origin, actor=actor)
+    return read_ledger(paths.ledger)
+
+
+def import_old_file(ledger: Ledger, path: Path | str) -> int:
+    """Copy a ledger file from before one sequence per ledger — sequence per
+    origin, replicated by refs — into `ledger`, which must hold nothing.
+
+    Rows are taken in the order the old file replayed them, `(at, origin,
+    seq)`, and given the new ledger's sequence. The ids a `finding.opened`
+    or `stage.derived` row conferred were `<origin>-<seq>`, so every body
+    that names one is rewritten to the sequence the row now has; the id
+    rule itself is unchanged. Returns how many rows were written.
+    """
+    import sqlite3
+
+    if ledger.events():
+        raise LedgerError(f"{ledger.where} already holds events; an import writes only into an empty ledger")
+    conn = sqlite3.connect(f"file:{Path(path)}?mode=ro", uri=True)
+    try:
+        rows = conn.execute(
+            "SELECT origin, seq, at, kind, key, stage_id, run_id, sha, body"
+            "  FROM events ORDER BY at, origin, seq"
+        ).fetchall()
+    finally:
         conn.close()
-        return Ledger(path, None, None)
-    return Ledger(path, conn, None)
+    import json as _json
+
+    old_ids = {(r[0], int(r[1])): n for n, r in enumerate(rows, start=1)}
+
+    def renamed(value):
+        if isinstance(value, str):
+            for prefix in ("f-", "d-"):
+                if value.startswith(prefix):
+                    origin, _, seq = value[len(prefix):].rpartition("-")
+                    if seq.isdigit() and (origin, int(seq)) in old_ids:
+                        return f"{prefix}{origin}-{old_ids[(origin, int(seq))]}"
+        return value
+
+    drafts = []
+    for origin, _seq, at, kind, key, stage_id, run_id, sha, body in rows:
+        body = {k: renamed(v) for k, v in _json.loads(body).items()}
+        drafts.append(Draft(origin=origin, at=at, kind=kind, key=key, stage_id=stage_id, run_id=run_id, sha=sha, body=body))
+    with ledger.transaction():
+        if ledger.events():
+            raise LedgerError(f"{ledger.where} already holds events; an import writes only into an empty ledger")
+        written = ledger.store.append(drafts)
+    ledger._refresh()
+    return len(written)
 
 
 # --------------------------------------------------------------------------

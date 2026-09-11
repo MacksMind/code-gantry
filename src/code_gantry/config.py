@@ -33,6 +33,7 @@ from code_gantry.globs import matches_any
 # Stage ids name directories and git branches, so they must not contain
 # separators, traversal, or anything git rejects in a ref.
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_LEDGER_NAME = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 _KEY_PREFIX = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 
 # Fields the planner is allowed to author. Everything else in Stage is
@@ -574,8 +575,13 @@ class LedgerConfig(_Strict):
     note_chars: int = 600
     # Where the ledger file lives: relative to the config's directory, `~`
     # and `${VAR}` resolved; default `<work_dir>/ledger.db`. Bays on one host
-    # share one plan by naming one file outside every checkout.
+    # share one plan by naming one file outside every checkout. A ledger on
+    # one host only; `name` is the alternative.
     path: Path | None = None
+    # The ledger's name in the shared table, `<repo>/<project>`, which every
+    # host that can reach the models writes. The table itself and the
+    # credentials come from the environment, never from here.
+    name: str | None = None
 
 
 class Excerpt(_Strict):
@@ -1748,6 +1754,13 @@ def _structural_problems(cfg: ProjectConfig) -> list[str]:
                 )
 
     if cfg.ledger is not None:
+        if cfg.ledger.name and cfg.ledger.path:
+            problems.append("ledger.name and ledger.path are two places for one ledger; set one")
+        if cfg.ledger.name and not _LEDGER_NAME.match(cfg.ledger.name):
+            problems.append(
+                f"ledger.name {cfg.ledger.name!r} must be `<repo>/<project>`: letters, "
+                "digits, `.`, `_` and `-` on either side of one `/`"
+            )
         if not _KEY_PREFIX.match(cfg.ledger.key_prefix):
             problems.append(
                 f"ledger.key_prefix {cfg.ledger.key_prefix!r} must be letters, "

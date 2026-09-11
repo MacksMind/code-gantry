@@ -20,7 +20,7 @@ from code_gantry.config import ProjectConfig, validate_stage
 from code_gantry.executor import Executor
 from code_gantry.gitops import Git, GitError
 from code_gantry.layout import summarize_layout
-from code_gantry.ledger import LEDGER_FILENAME, Ledger, open_ledger
+from code_gantry.ledger import LEDGER_FILENAME, Ledger, ledger_for
 from code_gantry.render import render_plan, render_projection
 from code_gantry.planner import PlannerClient
 from code_gantry.reviewer import ReviewerClient
@@ -426,8 +426,8 @@ def build_runtime(
     # the second attempt is no better.
     scope = set(key_scope) if key_scope else None
     ledger = (
-        open_ledger(
-            project.ledger,
+        ledger_for(
+            cfg, project, write=True,
             origin=os.environ.get("CODE_GANTRY_ORIGIN") or None,
             actor=f"run:{paths.run_id}" if paths.run_id else "run",
         )

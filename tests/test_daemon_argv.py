@@ -12,7 +12,6 @@ from click.testing import CliRunner
 from code_gantry import cli, ledgercli
 
 SHAPES = {
-    "ledger sync": (ledgercli.ledger_sync, ["ledger", "sync", "--config", "cfg.yaml"]),
     "run": (cli.run, ["run", "cfg.yaml", "--run-id", "20260911-204745-bay1", "--scope", "td.010"]),
     "resume": (cli.resume, ["resume", "cfg.yaml", "20260911-204745-bay1"]),
 }

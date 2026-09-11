@@ -1,7 +1,7 @@
 defmodule CodeGantryDaemon.Status do
   @moduledoc """
   What the daemon knows right now, as one plain-text file a person or
-  `bin/daemon status` can read: one line per bay, one for the sync. Rewritten
+  `bin/daemon status` can read: one line per bay. Rewritten
   on every change through a temporary sibling, so a reader never sees half
   a file.
   """

@@ -522,7 +522,8 @@ prefix, so static content placed after the mark misses every time.
 ## The ledger
 
 The plan lives in a per-project SQLite file, `ledger.db` under the work dir
-unless `ledger.path` names another place, as a tree of nodes — documents, sections, items — each with a key like
+unless `ledger.path` names another file or `ledger.name` names a ledger in
+the shared table, as a tree of nodes — documents, sections, items — each with a key like
 `{#r5.017}`, a prose body, an owner (`pipeline` or `human`) and a blocking
 flag. Markdown is the import and export format: `code-gantry plan import`
 reads the documents you already keep, closed items becoming `landed` or
@@ -589,14 +590,17 @@ record is per origin: another host's green says nothing about this host's
 containers. `--skip-preflight-tests` still forces the skip; `validate` still
 runs the suite.
 
-**Across hosts the ledger travels through the git remote.** Each origin's
-events are one append-only JSON-lines file on a ref of its own,
-`refs/code_gantry/ledger/<origin>`, built with plumbing so no work tree is
-touched, pushed only by its owner and fast-forward only, fetched by
-everyone. `ledger sync` does one exchange; a run with `remote_landing` on
-does it at start, at the plan node, at precheck and after each landing, and
-the daemon does it on a clock. Hosts never address each other, and a laptop
-that has been closed catches up on its next sync.
+**Across hosts the ledger is one table every host writes.** `ledger.name`
+(`<repo>/<project>`) names a ledger in a DynamoDB table; the table and the
+credentials come from the repository's credentials file
+(`CODE_GANTRY_LEDGER_TABLE`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_DEFAULT_REGION`), never from the config. Every host that can reach
+the models can reach the table, and a host that cannot is idle, so there is
+nothing to reconcile: a claim, a drawn stage or a green written on one host
+is what the next host reads. The ledger's credential can append and read
+and not delete. `infra/` holds the CDK app that provisions the table and
+the user; `ledger import` copies a ledger file from before this into an
+empty ledger.
 
 `CODE_GANTRY_ACTOR` names who is writing (default: your login);
 `CODE_GANTRY_ORIGIN` names the host (default: its hostname). The `Bay`
@@ -673,7 +677,6 @@ which names this machine and what it holds:
   code_gantry: "/home/you/projects/code-gantry",
   primary: "/home/you/projects/app/acme_app",
   config: "docs/technical_debt/code_gantry.yaml",
-  sync_seconds: 120,
   bays: [
     [name: "bay1", offset: 100],
     [name: "bay2", offset: 200, scope: ["td.010"]]
@@ -685,8 +688,10 @@ For each bay it makes the checkout beside the primary copy with the target's
 `bin/mk-bay` if it is missing, then runs `code-gantry run` there under a run
 id it chose, with `CODE_GANTRY_ORIGIN` set to the host's origin. A run that
 finishes, fails, escalates or pauses stops its bay and the status file says
-which; a run that dies is resumed under the same id after a backoff. Every
-`sync_seconds` it runs `code-gantry ledger sync`. `bin/daemon status` prints
+which; a run that dies is resumed under the same id after a backoff, and
+`bin/daemon retry <bay>` asks the running daemon to launch a stopped bay
+again — a new run after a failure, a resume after an escalation or a
+pause. `bin/daemon status` prints
 the status file, `bin/daemon logs` follows the daemon's log, and each bay's
 run output is in `~/.local/state/code_gantry/daemon/<bay>.log`.
 

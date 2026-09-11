@@ -74,20 +74,22 @@ class TestTheTableIsAppendOnly:
         assert (a.origin, a.seq) == ("host-a", 1)
         assert (b.origin, b.seq) == ("host-a", 2)
 
-    def test_a_second_origin_counts_on_its_own(self, tmp_path):
+    def test_the_sequence_is_one_per_ledger_across_origins(self, tmp_path):
         path = tmp_path / "ledger.db"
         a = open_ledger(path, origin="host-a")
         a.append("x")
         b = open_ledger(path, origin="host-b")
         event = b.append("y")
-        assert (event.origin, event.seq) == ("host-b", 1)
-        assert [e.seq for e in b.since("host-a", 0)] == [1]
+        # One sequence per ledger, whoever writes: ids built from it stay
+        # unique without the origin having to carry them.
+        assert (event.origin, event.seq) == ("host-b", 2)
+        assert [(e.origin, e.seq) for e in a.events()] == [("host-a", 1), ("host-b", 2)]
 
     def test_the_row_is_the_dataclass(self, led):
         led.append("x", key="k", stage_id="s", run_id="r", sha="abc", note="n")
         conn = sqlite3.connect(str(led.path))
-        columns = [c[1] for c in conn.execute("PRAGMA table_info(events)")]
-        assert columns == [f.name for f in Event.__dataclass_fields__.values()]
+        columns = {c[1] for c in conn.execute("PRAGMA table_info(events)")}
+        assert columns == {f.name for f in Event.__dataclass_fields__.values()}
         (body,) = conn.execute("SELECT body FROM events").fetchone()
         assert '"note": "n"' in body and '"actor": "test"' in body
 
@@ -133,8 +135,11 @@ class TestTwoWritersShareTheFile:
         events = read_ledger(path).events()
         assert len(events) == 120
         assert sorted({e.origin for e in events}) == ["p0", "p1", "p2"]
+        # One sequence for the ledger, with no gap and no repeat, however the
+        # three writers interleaved; each writer's forty all arrived.
+        assert sorted(e.seq for e in events) == list(range(1, 121))
         for origin in ("p0", "p1", "p2"):
-            assert sorted(e.seq for e in events if e.origin == origin) == list(range(1, 41))
+            assert sum(1 for e in events if e.origin == origin) == 40
 
 
 class TestKeyState:

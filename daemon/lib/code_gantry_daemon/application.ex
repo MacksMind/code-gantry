@@ -2,13 +2,14 @@ defmodule CodeGantryDaemon.Application do
   @moduledoc """
   The per-host daemon: what stays alive on a host between runs and across
   them. It supervises one `code-gantry run` per bay, makes a bay that does
-  not exist yet, syncs the ledger on a clock, and writes a status file.
+  not exist yet, and writes a status file. The record of the work is the
+  ledger, which every host writes directly; the daemon carries none of it.
   Nothing it holds is state the ledger does not hold; losing it loses
   nothing, and a run started by hand with no daemon behaves the same.
   """
   use Application
 
-  alias CodeGantryDaemon.{Host, Status, Sync, Bay}
+  alias CodeGantryDaemon.{Host, Status, Bay}
 
   @impl true
   def start(_type, _args) do
@@ -21,8 +22,7 @@ defmodule CodeGantryDaemon.Application do
     children =
       [
         {Registry, keys: :unique, name: CodeGantryDaemon.Registry},
-        {Status, host},
-        {Sync, host}
+        {Status, host}
       ] ++ Enum.map(host.bays, fn bay -> Supervisor.child_spec({Bay, {host, bay}}, id: {Bay, bay.name}) end)
 
     Supervisor.start_link(children, strategy: :one_for_one, name: CodeGantryDaemon.Supervisor)

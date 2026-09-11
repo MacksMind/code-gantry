@@ -58,7 +58,6 @@ from code_gantry.ledger import (
 # decision, and `gates` is where the other half of it lives. Safe at
 # module level — `gates` imports nothing that reaches back here.
 from code_gantry.gates import clip as _clip
-from code_gantry.ledgersync import sync_at
 from code_gantry.repotools import render_counts
 from code_gantry.globs import matches_any
 from code_gantry.planner import append_stage_cost, append_status, recent_stage_costs
@@ -331,7 +330,6 @@ def plan(state: RunState, rt: Runtime) -> dict:
     with holding as waited:
         if waited[0]:
             rt.log(f"[plan] waited {waited[0]:.0f}s for the planner lock")
-        _sync_ledger(rt, "plan")
         if stage is not None and rt.ledger is not None:
             elsewhere = _held_elsewhere(rt, stage)
             if elsewhere:
@@ -867,7 +865,6 @@ def precheck(state: RunState, rt: Runtime) -> dict:
         # both cases any branch left under this name is the thing being
         # discarded, so it must not be inherited.
         if rt.cfg.remote_landing:
-            _sync_ledger(rt, "precheck")
             try:
                 if _sync_project_branch(rt):
                     rt.log(f"[precheck] {stage.id}: origin moved; the stage starts from the pulled tip")
@@ -1994,7 +1991,6 @@ def advance(state: RunState, rt: Runtime) -> dict:
                 merge_sha or rt.git.head_sha(), rt.cfg.full_test_command,
                 run_id=rt.paths.run_id, stage_id=stage.id,
             )
-        _sync_ledger(rt, "advance")
 
     usage = state.get("stage_usage") or {}
     result = {
@@ -3195,12 +3191,6 @@ def _record_landing(rt: Runtime, stage: Stage, state: RunState, merge_sha: str) 
         f"{len(state.get('pending_resolved') or [])} finding(s) resolved, "
         f"{len(state.get('pending_observations') or [])} observation(s) opened"
     )
-
-
-def _sync_ledger(rt: Runtime, where: str) -> None:
-    """Exchange ledgers through the remote at a seam, under `remote_landing`."""
-    if rt.cfg.remote_landing:
-        sync_at(rt.ledger, rt.git, rt.log, where)
 
 
 def _sync_project_branch(rt: Runtime) -> bool:

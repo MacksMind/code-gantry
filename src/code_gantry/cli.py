@@ -49,8 +49,7 @@ from code_gantry.driver import (
     open_checkpointer,
 )
 from code_gantry import nodes
-from code_gantry.ledger import LedgerError, open_ledger, read_ledger, release_dead_holders, resolve_scope
-from code_gantry.ledgersync import sync_at
+from code_gantry.ledger import LedgerError, ledger_for, release_dead_holders, resolve_scope
 from code_gantry.planner import make_planner
 from code_gantry.preflight import format_checks, run_preflight
 from code_gantry.report import build_report
@@ -290,10 +289,11 @@ def reconcile(config_path: Path | None, dry_run: bool) -> None:
 
     from code_gantry.render import render_plan, render_projection
 
-    views = read_ledger(project.ledger).views()
+    led = ledger_for(cfg, project, write=False)
+    views = led.views()
     if not views.documents():
         raise click.ClickException(
-            f"the ledger at {project.ledger} holds no plan; import one first"
+            f"the ledger at {led.where} holds no plan; import one first"
         )
     outcome = planner.plan(
         _reconcile_prompt(
@@ -342,13 +342,13 @@ def reconcile(config_path: Path | None, dry_run: bool) -> None:
     from code_gantry.ledgercli import actor, origin
     from code_gantry.nodes import open_findings
 
-    led = open_ledger(project.ledger, origin=origin(), actor=actor())
+    led = ledger_for(cfg, project, write=True, origin=origin(), actor=actor())
     try:
         opened = open_findings(led, git, outcome.plan_notes, by="reconcile",
                                stage_id="reconcile", run_id=None)
     finally:
         led.close()
-    click.echo(f"\n{opened} finding(s) opened in {project.ledger}")
+    click.echo(f"\n{opened} finding(s) opened in {led.where}")
 
 
 def _reconcile_prompt(cfg: ProjectConfig, plan_text: str, projection: str) -> list[dict]:
@@ -452,17 +452,13 @@ def run(
     ))
 
     # The ledger, for what preflight can read from it and write to it: a
-    # tree this host has already proven green is not proven again. Under
-    # `remote_landing` the other origins' events are fetched first, because a
-    # host that has never run this project holds no plan until they arrive,
-    # and preflight is the first thing that reads one.
+    # tree this host has already proven green is not proven again. A file
+    # that does not exist yet is left for `plan import` to create.
     early = (
-        open_ledger(project.ledger, origin=os.environ.get("CODE_GANTRY_ORIGIN") or None, actor="preflight")
-        if cfg.remote_landing or project.ledger.is_file() else None
+        ledger_for(cfg, project, write=True, origin=os.environ.get("CODE_GANTRY_ORIGIN") or None, actor="preflight")
+        if cfg.ledger is not None and (cfg.ledger.name or project.ledger.is_file()) else None
     )
     try:
-        if cfg.remote_landing:
-            sync_at(early, Git(cfg.target_repo), start_log, "preflight")
         checks = run_preflight(cfg, project_dir=project, run_tests=not skip_preflight_tests,
                                config_path=config_path, ledger=early)
     finally:
@@ -489,11 +485,12 @@ def run(
     # layout — are read at: the project branch, where they are maintained.
     plan_sha = git.rev_parse(cfg.project_branch)
 
-    views = read_ledger(project.ledger).views()
+    led = ledger_for(cfg, project, write=False)
+    views = led.views()
     documents = views.documents()
     if not documents:
         click.echo(
-            f"the ledger at {project.ledger} holds no plan; import one with "
+            f"the ledger at {led.where} holds no plan; import one with "
             "`code-gantry plan import`",
             err=True,
         )
@@ -774,7 +771,6 @@ def _drive(
             freed = release_dead_holders(rt.ledger, alive=_pid_alive, keep_run=paths.run_id)
             if freed:
                 log(f"[run] released {freed} claim(s) held by runs that have exited")
-            nodes._sync_ledger(rt, "run")
         if rt.key_scope:
             log(f"[run] scope: {len(rt.key_scope)} key(s): {' '.join(sorted(rt.key_scope))}")
         final = drive(

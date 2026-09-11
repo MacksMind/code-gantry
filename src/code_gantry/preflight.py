@@ -414,7 +414,7 @@ def _read_budget_check(cfg: ProjectConfig, git: Git) -> Check:
 
 def _ledger_check(cfg: ProjectConfig, project_dir) -> Check:
     """The ledger holds a plan: at least one document, with something drawable."""
-    from code_gantry.ledger import read_ledger
+    from code_gantry.ledger import LedgerError, ledger_for
     from code_gantry.runtime import ProjectPaths
 
     if cfg.ledger is None:
@@ -428,20 +428,19 @@ def _ledger_check(cfg: ProjectConfig, project_dir) -> Check:
         else ProjectPaths(project_dir) if project_dir
         else ProjectPaths.for_config(cfg)
     )
-    if not paths.ledger.is_file():
+    try:
+        led = ledger_for(cfg, paths, write=False)
+    except LedgerError as e:
+        return Check("ledger configured", False, str(e))
+    views = led.views()
+    documents = views.documents()
+    if not documents:
         # Ordinary before the first import; `run` refuses on its own.
         return Check(
             "ledger holds a plan", False,
-            f"no ledger at {paths.ledger} yet; `code-gantry plan import` "
-            "creates it, and `run` refuses until it holds a plan",
+            f"no ledger at {led.where} yet; `code-gantry plan import` "
+            "writes one, and `run` refuses until it holds a plan",
             fatal=False,
-        )
-    views = read_ledger(paths.ledger).views()
-    documents = views.documents()
-    if not documents:
-        return Check(
-            "ledger holds a plan", False,
-            f"{paths.ledger} holds no plan; import one with `code-gantry plan import`",
         )
     items = [n for n in views.walk() if n.kind == "item"]
     drawable = [
