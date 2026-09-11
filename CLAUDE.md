@@ -113,7 +113,14 @@ a host that has never run the project holds no plan until a sync brings the
 other origins' events — so `run` now syncs before preflight under
 `remote_landing`, and the three argv shapes the daemon composes are parsed
 through the real CLI in `tests/test_daemon_argv.py`, which found the sync
-and resume shapes wrong before the Mac did; (4) ledger sync over the git refs
+and resume shapes wrong before the Mac did. The Mac's next run failed
+preflight on `base_ref 'upgrade/rails-5' exists`: `mk-bay` clones from
+the primary copy, so a bay holds only the branches that copy had locally.
+Not yet fixed; the fix belongs in preflight, not `mk-bay` — when the base
+ref or the project branch is missing locally and origin has it, fetch it
+into a local branch and say so in the check line, since on a fresh host
+`ensure_project_branch` would otherwise cut the project branch afresh from
+the base instead of taking origin's; (4) ledger sync over the git refs
 and preflight deduplication through `suite.green` — landed; (5) remote bays and scopes at placement; (6) an observer role
 that writes findings only; (7) CodeGantry improving itself from its own run
 artifacts. The daemon adds uptime, capacity, reload at the pause seam and a
@@ -171,7 +178,12 @@ Waiting on the operator:
   stays `code-gantry`). Move the file and the field at the stop. Until no
   run started on the old code is live, `/tmp/code_gantry-<uid>` is a symlink
   to the old lock directory so old and new runs share one set of locks;
-  remove the link then.
+  remove the link then. The same runs push their ledger to the hyphenated
+  `refs/code-gantry/ledger/host-b`; the `code_gantry` ref that current
+  code fetches advances only when synced by hand from the Spark (`uv run
+  code-gantry ledger sync --config <target config>` with
+  `CODE_GANTRY_ORIGIN=host-b`) until those runs stop; delete the old
+  ref on GitHub then.
 
 - A `checks` entry in the technical-debt config, backed by a script in the
   target's `bin/`, failing on a quoted path after an HTTP verb in an added
