@@ -369,6 +369,19 @@ def ledger_drop(derived_id, reason, config_path) -> None:
     click.echo(f"{derived_id} dropped")
 
 
+@ledger.command("sync")
+@config_option
+def ledger_sync(config_path) -> None:
+    """Push this origin's events to its ref on the remote and ingest every
+    other origin's."""
+    from code_gantry.gitops import Git
+    from code_gantry.ledgersync import sync
+
+    cfg, _, led = _cfg_and_ledger(config_path, write=True)
+    report = sync(led, Git(cfg.target_repo))
+    click.echo(report.summary())
+
+
 @ledger.command("fold")
 @config_option
 def ledger_fold(config_path) -> None:

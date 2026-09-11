@@ -326,3 +326,11 @@ class TestDrawnStagesOnTheCommandLine:
         assert f"{did} dropped : not wanted" in run("ledger", "derived", "--all").output
         again = run("ledger", "drop", did)
         assert again.exit_code != 0
+
+
+class TestSyncOnTheCommandLine:
+    def test_it_reports_when_there_is_no_remote(self, project):
+        imported(project)
+        result = run("ledger", "sync")
+        assert result.exit_code == 0, result.output
+        assert "no remote 'origin'" in result.output

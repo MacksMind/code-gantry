@@ -610,6 +610,37 @@ class Ledger:
         self._views = None
         return event
 
+    def export(self, origin: str | None = None) -> list[dict]:
+        """This origin's events (ours by default) as plain rows, in sequence
+        order: the unit another host fetches."""
+        origin = origin or self.origin
+        rows = sorted((e for e in self.events() if e.origin == origin), key=lambda e: e.seq)
+        return [asdict(e) for e in rows]
+
+    def ingest(self, rows) -> int:
+        """Write events another origin recorded, keeping their origin,
+        sequence and time. A row already held is skipped, so the same log can
+        be ingested any number of times. Returns how many were new."""
+        if self._conn is None:
+            raise LedgerError("this ledger was opened for reading only")
+        new = 0
+        with self.transaction():
+            for row in rows:
+                record = {
+                    "origin": row["origin"], "seq": int(row["seq"]), "at": row["at"],
+                    "kind": row["kind"], "key": row.get("key"), "stage_id": row.get("stage_id"),
+                    "run_id": row.get("run_id"), "sha": row.get("sha"),
+                    "body": json.dumps(row.get("body") or {}, ensure_ascii=False, sort_keys=True),
+                }
+                cursor = self._conn.execute(
+                    "INSERT OR IGNORE INTO events (origin, seq, at, kind, key, stage_id, run_id, sha, body)"
+                    " VALUES (:origin, :seq, :at, :kind, :key, :stage_id, :run_id, :sha, :body)",
+                    record,
+                )
+                new += cursor.rowcount
+        self._views = None
+        return new
+
     @contextlib.contextmanager
     def transaction(self):
         """One write lock across a read and the writes it decides, so what

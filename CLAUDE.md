@@ -132,7 +132,9 @@ breakpoint after content that changes every call costs more than none.
 
 **The pipeline pushes only the configured project branch, fast-forward, and
 only under `remote_landing`.** `Git.push` has no force flag and `precheck` and
-`advance` are its only callers. After a squash the bay pulls with rebase,
+`advance` are its only callers. The one other push is `Git.push_ref`, which
+refuses any name outside `refs/code-gantry/` — the ledger refs, built with
+plumbing and never a branch — so it cannot become a second way to move code. After a squash the bay pulls with rebase,
 re-runs the full suite only if the pull brought commits — two landings each
 verified on their own tree were never verified together — and pushes; a
 refused push pulls again; a conflict or a red combined tree escalates with the
@@ -1037,6 +1039,13 @@ schemas and its provider call. `repotools.number_lines` is the single renderer
 of numbered source. `repotools.Spend` is everything mutable about a read budget
 in one object, so clearing it is replacing it; `count_calls`, `count_refusals`
 and `render_counts` are the one summariser all three roles report through.
+
+`ledgersync.py` carries a ledger between hosts: our origin's events to
+`refs/code-gantry/ledger/<origin>` on the remote, every origin's ref fetched
+and ingested with origin and sequence kept, so the same log can be ingested
+any number of times. `nodes._sync_ledger` is the one caller inside a run and
+logs a failure rather than raising, since the local ledger is this host's
+record and the remote is a replica.
 
 `ledger.py` is the record: one append-only `events` table, views derived from
 it, `open_ledger` the only creator, `read_ledger` never creating. Views are

@@ -580,6 +580,15 @@ then draws from one plan, claims are visible across bays as they happen, and
 a fold is written under one lock. Give each bay a `--scope` so they draw
 disjoint items.
 
+**Across hosts the ledger travels through the git remote.** Each origin's
+events are one append-only JSON-lines file on a ref of its own,
+`refs/code-gantry/ledger/<origin>`, built with plumbing so no work tree is
+touched, pushed only by its owner and fast-forward only, fetched by
+everyone. `ledger sync` does one exchange; a run with `remote_landing` on
+does it at start, at the plan node, at precheck and after each landing, and
+the daemon does it on a clock. Hosts never address each other, and a laptop
+that has been closed catches up on its next sync.
+
 `CODE_GANTRY_ACTOR` names who is writing (default: your login);
 `CODE_GANTRY_ORIGIN` names the host (default: its hostname). The `Bay`
 trailer is `<origin>/<checkout directory>`, distinct across bays on one host. The landing

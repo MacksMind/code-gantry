@@ -757,6 +757,7 @@ def _drive(
             freed = release_dead_holders(rt.ledger, alive=_pid_alive, keep_run=paths.run_id)
             if freed:
                 log(f"[run] released {freed} claim(s) held by runs that have exited")
+            nodes._sync_ledger(rt, "run")
         if rt.key_scope:
             log(f"[run] scope: {len(rt.key_scope)} key(s): {' '.join(sorted(rt.key_scope))}")
         final = drive(

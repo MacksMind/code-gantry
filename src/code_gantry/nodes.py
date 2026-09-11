@@ -324,6 +324,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
     with hostlock.hold(_planner_lock(rt), f"planner, run {rt.paths.run_id}", rt.log) as waited:
         if waited[0]:
             rt.log(f"[plan] waited {waited[0]:.0f}s for the planner lock")
+        _sync_ledger(rt, "plan")
         if stage is None:
             taken = _take_derived(rt, state)
             if taken is not None:
@@ -850,6 +851,7 @@ def precheck(state: RunState, rt: Runtime) -> dict:
         # both cases any branch left under this name is the thing being
         # discarded, so it must not be inherited.
         if rt.cfg.remote_landing:
+            _sync_ledger(rt, "precheck")
             try:
                 if _sync_project_branch(rt):
                     rt.log(f"[precheck] {stage.id}: origin moved; the stage starts from the pulled tip")
@@ -1969,6 +1971,7 @@ def advance(state: RunState, rt: Runtime) -> dict:
         merge_sha, publication = _publish_landing(rt, stage)
     if rt.ledger is not None:
         _record_landing(rt, stage, state, merge_sha or rt.git.head_sha())
+        _sync_ledger(rt, "advance")
 
     usage = state.get("stage_usage") or {}
     result = {
@@ -3162,6 +3165,23 @@ def _record_landing(rt: Runtime, stage: Stage, state: RunState, merge_sha: str) 
         f"{len(state.get('pending_resolved') or [])} finding(s) resolved, "
         f"{len(state.get('pending_observations') or [])} observation(s) opened"
     )
+
+
+def _sync_ledger(rt: Runtime, where: str) -> None:
+    """Exchange ledgers through the remote at a seam. A failure is logged and
+    the run goes on: this host's ledger is the record for this host, and the
+    remote is a replica of it."""
+    if rt.ledger is None or not rt.cfg.remote_landing:
+        return
+    from code_gantry.ledgersync import sync
+
+    try:
+        report = sync(rt.ledger, rt.git)
+    except (GitError, OSError, ValueError) as e:
+        rt.log(f"[{where}] ledger sync failed: {_clip(str(e))}")
+        return
+    if report.pushed is not None or any(report.ingested.values()):
+        rt.log(f"[{where}] ledger sync: {report.summary()}")
 
 
 def _sync_project_branch(rt: Runtime) -> bool:
