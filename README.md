@@ -97,6 +97,7 @@ reworks, or planner interventions — so no loop in the diagram can run forever.
 
 ```bash
 code-gantry init docs/my_plan.md       # draft a config from a plan document
+code-gantry plan import docs/my_plan.md --follow-links   # the plan into the ledger
 code-gantry validate [config]          # prove it works on this host
 code-gantry run [config]               # go
 code-gantry resume [config] [run_id]   # continue after an interruption or escalation
@@ -114,11 +115,12 @@ anything, and nothing has to remember to re-approve.
 
 ## Commands
 
-Seven commands. Every one but `init` takes the config path as its first
-argument, and every one of those makes it optional: set `CODE_GANTRY_CONFIG`
-and the path is typed once per shell instead of once per command. `pause`,
-`resume` and `status` take an optional run id after it, defaulting to the
-latest run for that project.
+Eight commands and two groups. Every one but `init` takes the config path as
+its first argument, and every one of those makes it optional: set
+`CODE_GANTRY_CONFIG` and the path is typed once per shell instead of once per
+command. `pause`, `resume` and `status` take an optional run id after it,
+defaulting to the latest run for that project. `plan …` and `ledger …` are
+the operator's side of the ledger and are described under *The ledger*.
 
 ### `init <plan-doc> [config]`
 
@@ -201,15 +203,12 @@ anything or running a model. Safe against a live run.
 ### `reconcile [config]`
 
 Checks the plan against what the branch actually did and records the drift.
-Plan documents are written before the work and go stale during it — after
-thirteen landed stages on one project the checklist still claimed twenty-four
-sites across nine files when seven remained in one.
-
-A run's own plan notes catch drift as it happens; this is for drift that
-already happened, by hand or by someone else or before the mechanism existed.
-Deliberately separate from `run`, because reconciling is a judgement about what
-the work has become and doing it mid-run would let a run rewrite its own
-premises. It edits no plan document: it appends observations for a later fold.
+Plan items are written before the work and go stale during it. A run's own
+plan notes catch drift as it happens; this is for drift that already
+happened, by hand or by someone else or before the mechanism existed.
+Deliberately separate from `run`, because reconciling is a judgement about
+what the work has become and doing it mid-run would let a run rewrite its own
+premises. It opens findings in the ledger, keyed to the items they are about.
 
 - `--dry-run` — print the observations without writing them.
 
@@ -515,16 +514,50 @@ placement is paid for once rather than per stage — and the model it is sent to
 caches at an explicit breakpoint without falling back to the longest matching
 prefix, so static content placed after the mark misses every time.
 
-## Plan documents
+## The ledger
 
-`plan_root` is a **document, not a directory** — pointing it at `docs/` would
-sweep every runbook and ADR into every paid call. Children resolve via explicit
-markdown links, one level deep, and **may not escape the root document's
-directory**.
+The plan lives in a per-project SQLite file under the work dir, `ledger.db`,
+as a tree of nodes — documents, sections, items — each with a key like
+`{#r5.017}`, a prose body, an owner (`pipeline` or `human`) and a blocking
+flag. Markdown is the import and export format: `code-gantry plan import`
+reads the documents you already keep, closed items becoming `landed` or
+`struck` records with their sha and evidence, and `plan export` renders a
+document back for editing and re-import.
 
-The resolved tree is snapshotted per run. The reviewer and planner judge against
-the plan as it stood when the run began; the planner's own revisions land in the
-live documents and show up as divergence in `status.md`.
+The file holds one append-only table of events, each stamped with the origin
+that wrote it and a per-origin sequence. The tree, each key's state and the
+findings table are derived from those events on read, never stored. That is
+what lets a later host exchange ledgers by fetching "origin X after seq N".
+
+**What the planner is sent is rendered from it.** The stable half — the tree
+with its keys and the marks a fold has written — sits in the cached block. The
+projection — landings not yet marked, keys claimed by other runs, questions
+waiting on a person, and open findings with their ids — follows the cache
+mark. When the projection grows past `ledger.fold_ratio` of the plan text the
+run folds: marks and answered findings move into the node bodies, with no
+model and no commit.
+
+**A stage cites keys.** `plan_keys` names the items it is drawn from; precheck
+claims them and a landing closes them. `resolves` proposes open findings the
+diff will settle, and the reviewer's `resolved` list is what actually closes
+them. A finding a planner note opens carries `needs: pipeline` or
+`needs: human`; the human ones sit in a queue until answered.
+
+Operator commands:
+
+- `plan import <paths…> [--follow-links] [--owner human] [--blocking]`,
+  `plan export <key>`, `plan show <key>`, `plan add --under <key> --title …`,
+  `plan edit <key> [--owner pipeline]`, `plan retire <key>`.
+- `ledger show [--open|--claimed|--blocked|--landed] [key]`,
+  `ledger findings [--for-human]`, `ledger answer <id> fold|discard|debt|raise
+  [--text …]`, `ledger claim|release|land|strike|block|unblock <key> …`,
+  `ledger fold`, `ledger render [--projection]`.
+
+`CODE_GANTRY_ACTOR` names who is writing (default: your login);
+`CODE_GANTRY_ORIGIN` names the host (default: its hostname). The landing
+commit carries the same references as trailers — `Plan-Keys`, `Resolves`,
+the three role models, `Config`, `Stage-Base`, `Bay` — so git is the durable
+copy of what the ledger records.
 
 ## Output
 
@@ -532,8 +565,8 @@ live documents and show up as divergence in `status.md`.
 <target-repo>/docs/<project>/
   code_gantry.yaml                         # the config, tracked and reviewed
   .code_gantry/                            # everything written; gitignored
-    plan-snapshot/     status.md           # append-only expected-vs-actual log
-    flakes.jsonl       stage-costs.md      findings.md
+    ledger.db          status.md           # the plan; append-only expected-vs-actual log
+    flakes.jsonl       stage-costs.md
     runs/<run_id>/
       report.md        run.log   state.db  run.json   tool.log
       stages/<n>-<id>-rev-<r>-attempt-<m>/

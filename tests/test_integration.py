@@ -20,7 +20,8 @@ from code_gantry.config import parse_config
 from code_gantry.gitops import Git
 from code_gantry.driver import default_max_steps, open_checkpointer
 from code_gantry.driver import drive as drive_graph
-from code_gantry.plandoc import PlanDocument, PlanTree
+from code_gantry.ledger import open_ledger
+from code_gantry.planmodel import import_documents, parse_markdown
 from code_gantry.planner import PlannerOutcome, PlannerUsage
 from code_gantry.report import build_report
 from code_gantry.reviewer import ReviewOutcome, TokenUsage
@@ -63,6 +64,7 @@ def stage_spec(**over):
         "id": "extract",
         "instruction": "Extract the thing.",
         "edit_files": ["app.py", "src/**"],
+        "plan_keys": ["p.002"],
     }
     fields.update(over)
     return fields
@@ -132,6 +134,7 @@ def drive(repo, tmp_path, planner=None, reviewer=None, state=None, run_id="r1", 
         "executor": {"model": "openai/local"},
         "planner": {"model": "claude-opus-5"},
         "reviewer": {"model": "gpt-5.5"},
+        "ledger": {"key_prefix": "p", "fold_ratio": 1000.0},
     }
     data.update(cfg_over)
     cfg = parse_config(as_test_tools(data))
@@ -146,6 +149,13 @@ def drive(repo, tmp_path, planner=None, reviewer=None, state=None, run_id="r1", 
 
     runner = CommandRunner(cwd=repo, timeout=60)
     checkpoint, conn = open_checkpointer(paths.state_db)
+    ledger = open_ledger(project.ledger, origin="test-host", actor=f"run:{run_id}")
+    if not ledger.views().documents():
+        import_documents(
+            ledger,
+            [parse_markdown("# The plan\n\n- [ ] **do the thing**\n- [ ] **do the other thing**\n")],
+            prefix="p",
+        )
     try:
         rt = Runtime(
             cfg=cfg,
@@ -156,8 +166,8 @@ def drive(repo, tmp_path, planner=None, reviewer=None, state=None, run_id="r1", 
             executor=Executor(cfg, runner),
             planner=planner or ScriptedPlanner(),
             reviewer=reviewer or ScriptedReviewer(),
+            ledger=ledger,
         )
-        rt._plan = PlanTree(root=PlanDocument(path="PLAN.md", content="# The plan"))
 
         base_sha = rt.git.ensure_project_branch("proj", "main")
         if state is None:
@@ -178,6 +188,7 @@ def drive(repo, tmp_path, planner=None, reviewer=None, state=None, run_id="r1", 
         return cfg, project, paths, final
     finally:
         conn.close()
+        ledger.close()
 
 
 class TestTwoStageProject:
@@ -187,7 +198,7 @@ class TestTwoStageProject:
         )
         planner = ScriptedPlanner([
             PlannerOutcome("next_stage", "first", "e", stage_fields=stage_spec(id="one")),
-            PlannerOutcome("next_stage", "second", "e", stage_fields=stage_spec(id="two")),
+            PlannerOutcome("next_stage", "second", "e", stage_fields=stage_spec(id="two", plan_keys=["p.003"])),
             PlannerOutcome("project_complete", "done", "e"),
         ])
         cfg, project, paths, final = drive(repo, tmp_path, planner=planner)
@@ -200,11 +211,7 @@ class TestTwoStageProject:
         log = g._out("log", "--pretty=%s", "-3")
         assert "[one]" in log and "[two]" in log
 
-        # One commit per stage, counted rather than sampled. A project with
-        # `plan_addendum_path` set adds a second commit per stage that produced
-        # observations — deliberately separate, so the commit the reviewer
-        # approved and the suite went green on stays exactly what landed. This
-        # config has no addendum, so the count here is the bare invariant.
+        # One commit per stage, counted rather than sampled.
         assert len(g._out("log", "--oneline", "main..proj").splitlines()) == 2
 
     def test_child_branches_are_deleted_after_landing(self, repo, tmp_path, scripted_edits):
@@ -231,7 +238,7 @@ class TestTwoStageProject:
         reviewer = ScriptedReviewer()
         planner = ScriptedPlanner([
             PlannerOutcome("next_stage", "r", "e", stage_fields=stage_spec(id="one")),
-            PlannerOutcome("next_stage", "r", "e", stage_fields=stage_spec(id="two")),
+            PlannerOutcome("next_stage", "r", "e", stage_fields=stage_spec(id="two", plan_keys=["p.003"])),
             PlannerOutcome("project_complete", "done", "e"),
         ])
         drive(repo, tmp_path, planner=planner, reviewer=reviewer)

@@ -14,22 +14,20 @@ it shows up here rather than on an invoice.
 
 from types import SimpleNamespace
 
-from code_gantry.plandoc import PlanDocument, PlanTree
 from code_gantry.prompts import build_planner_messages, build_review_messages
 from test_config import as_test_tools
 
 
 def a_plan(text="do the thing"):
-    return PlanTree(
-        root=PlanDocument(path="p.md", content=text),
-        children=[],
-        problems=[],
-        skipped=[],
+    """The plan as the planner receives it: rendered text with keys."""
+    return f"# Plan {{#p.001}}\n\n- [ ] {{#p.002}} **{text}**\n"
+
+
+def _cfg(addendum=None, cache_ttl="1h"):
+    return SimpleNamespace(
+        planner=SimpleNamespace(cache_ttl=cache_ttl),
+        ledger=SimpleNamespace(key_prefix="p", note_chars=600, fold_ratio=0.25),
     )
-
-
-def _cfg(addendum="docs/proj/progress_log.md", cache_ttl="1h"):
-    return SimpleNamespace(planner=SimpleNamespace(cache_ttl=cache_ttl), plan_addendum_path=addendum)
 
 
 def all_text(messages):
@@ -84,7 +82,7 @@ class TestCacheLifetime:
         # where the 3% was the system block and nothing else.
         cfg = SimpleNamespace(planner=SimpleNamespace(cache_ttl="1h"))
         messages = build_planner_messages(
-            cfg=cfg, plan=a_plan(), completed=[], layout="- `src/` (1)"
+            cfg=cfg, plan_text=a_plan(), completed=[], layout="- `src/` (1)"
         )
         assert messages[0]["content"][0]["cache_control"] == {
             "type": "ephemeral",
@@ -95,7 +93,7 @@ class TestCacheLifetime:
         # cache_ttl is optional, and a missing one must not raise on a path
         # every planner call takes.
         messages = build_planner_messages(
-            cfg=SimpleNamespace(planner=SimpleNamespace(cache_ttl=None)), plan=a_plan(), completed=[]
+            cfg=SimpleNamespace(planner=SimpleNamespace(cache_ttl=None)), plan_text=a_plan(), completed=[]
         )
         assert messages[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
 
@@ -126,7 +124,7 @@ class TestThePlanBlockCarriesTheConfiguredLifetime:
 
     def _plan_block(self, ttl):
         messages = build_planner_messages(
-            cfg=self._real_cfg(ttl), plan=a_plan(), completed=[]
+            cfg=self._real_cfg(ttl), plan_text=a_plan(), completed=[]
         )
         blocks = messages[0]["content"]
         marked = [b for b in blocks if b.get("cache_control")]
@@ -150,7 +148,7 @@ class TestThePlanBlockCarriesTheConfiguredLifetime:
 
         with _pytest.raises(AttributeError) as e:
             build_planner_messages(
-                cfg=SimpleNamespace(), plan=a_plan(), completed=[]
+                cfg=SimpleNamespace(), plan_text=a_plan(), completed=[]
             )
         assert "cache_ttl" in str(e.value)
 
@@ -158,7 +156,7 @@ class TestThePlanBlockCarriesTheConfiguredLifetime:
 class TestPlannerCacheBreakpoint:
     def test_the_stable_prefix_is_marked_cacheable(self):
         messages = build_planner_messages(
-            cfg=None, plan=a_plan(), completed=[], layout="- `src/` (1)"
+            cfg=None, plan_text=a_plan(), completed=[], layout="- `src/` (1)"
         )
         blocks = messages[0]["content"]
         assert isinstance(blocks, list), "a string cannot carry cache_control"
@@ -167,7 +165,7 @@ class TestPlannerCacheBreakpoint:
     def test_the_plan_and_layout_are_inside_the_cached_block(self):
         messages = build_planner_messages(
             cfg=None,
-            plan=a_plan("PLAN_MARKER"),
+            plan_text=a_plan("PLAN_MARKER"),
             completed=[],
             layout="LAYOUT_MARKER",
         )
@@ -180,7 +178,7 @@ class TestPlannerCacheBreakpoint:
         # the cache on every call, which is worse than not caching at all.
         messages = build_planner_messages(
             cfg=None,
-            plan=a_plan(),
+            plan_text=a_plan(),
             completed=[],
             layout="LAYOUT_MARKER",
             stage_costs=[{"merge_sha": "abc123def456", "stage_id": "COST_MARKER",
@@ -194,7 +192,7 @@ class TestPlannerCacheBreakpoint:
     def test_the_budget_countdown_is_not_cached(self):
         # It decrements on interventions, so caching it would defeat the point.
         messages = build_planner_messages(
-            cfg=None, plan=a_plan(), completed=[],
+            cfg=None, plan_text=a_plan(), completed=[],
             interventions_used=3, interventions_max=12,
         )
         assert "intervention(s) left" not in leading_text(messages)
@@ -217,7 +215,7 @@ class TestPlannerCacheBreakpoint:
         planner reads to protect ~4KB.
         """
         messages = build_planner_messages(
-            cfg=None, plan=a_plan(), completed=[], layout="x"
+            cfg=None, plan_text=a_plan(), completed=[], layout="x"
         )
         marked = [
             b for m in messages
@@ -231,12 +229,12 @@ class TestPlannerCacheBreakpoint:
         # Caching depends on a byte-identical prefix. Anything varying here —
         # a timestamp, a counter — silently costs full price every call.
         first = build_planner_messages(
-            cfg=None, plan=a_plan(), completed=[], layout="L",
+            cfg=None, plan_text=a_plan(), completed=[], layout="L",
             stage_costs=[{"merge_sha": "a" * 12, "stage_id": "a",
                           "context_tokens": 1, "files": 1}],
         )
         second = build_planner_messages(
-            cfg=None, plan=a_plan(), completed=[], layout="L",
+            cfg=None, plan_text=a_plan(), completed=[], layout="L",
             stage_costs=[{"merge_sha": "b" * 12, "stage_id": "b",
                           "context_tokens": 2, "files": 1}],
         )
@@ -274,7 +272,7 @@ class TestARunsHistoryIsNotTheProjectsHistory:
         # the empty history not leaving the planner to infer anything.
         text = all_text(build_planner_messages(_cfg(), a_plan(), []))
         history = text.split("## Completed stages", 1)[1]
-        assert "docs/proj/progress_log.md" in history
+        assert "ledger" in history
 
     def test_a_populated_history_does_not_get_the_empty_case(self):
         text = all_text(
@@ -287,34 +285,33 @@ class TestARunsHistoryIsNotTheProjectsHistory:
         assert "None **in this run**" not in history
 
 
-class TestTheProgressLogIsNamedAsTheRecordOfWhatIsDone:
-    """The planner must know which plan document reports progress.
+class TestTheProjectionIsNamedAsTheRecordOfWhatIsDone:
+    """The planner must know that the section after the plan is the record.
 
-    The log is a plan child like any other once PLAN.md links it, so it arrives
-    in the payload as one more document among eight. Which of them is the
-    record of what has landed is not inferable from the content, and it is the
-    one document whose role changes how the others should be read.
-
-    Driven by `plan_addendum_path`, so it stays a property of the project's
-    configuration rather than prose a human has to remember to write.
+    The plan text is rendered from the ledger and says what the work is; the
+    projection that follows it says what has changed since the text was last
+    folded. Which is later is stated, not left to be inferred.
     """
 
-    def test_the_configured_log_is_identified(self):
-        text = leading_text(
-            build_planner_messages(_cfg(addendum="docs/proj/progress_log.md"), a_plan(), [])
-        )
-        assert "docs/proj/progress_log.md" in text
+    def test_the_intro_names_the_section_after_the_plan(self):
+        text = leading_text(build_planner_messages(_cfg(), a_plan(), []))
+        assert "since this text was last folded" in text
 
     def test_it_says_the_plan_alone_does_not_know_what_is_done(self):
-        text = leading_text(
-            build_planner_messages(_cfg(addendum="docs/proj/progress_log.md"), a_plan(), [])
-        )
-        lowered = text.lower()
-        assert "what has been done" in lowered or "what is done" in lowered
+        text = leading_text(build_planner_messages(_cfg(), a_plan(), []))
+        assert "that section is later" in text
 
-    def test_a_project_without_one_says_nothing_about_it(self):
-        text = all_text(build_planner_messages(_cfg(addendum=None), a_plan(), []))
-        assert "progress_log" not in text
+    def test_the_projection_reaches_the_planner_after_the_mark(self):
+        messages = build_planner_messages(
+            _cfg(), a_plan(), [], projection="### Landed\n\n- {#p.002} — `abc`"
+        )
+        blocks = messages[0]["content"]
+        assert "{#p.002} — `abc`" not in blocks[0]["text"]
+        assert "{#p.002} — `abc`" in blocks[1]["text"]
+
+    def test_an_empty_projection_adds_no_section(self):
+        text = all_text(build_planner_messages(_cfg(), a_plan(), [], projection=""))
+        assert "since the plan text was last folded" not in text
 
 
 class TestPerProjectGuidance:
@@ -462,7 +459,7 @@ class TestReviewerCacheBreakpoint:
             stage=Stage(id="s", instruction="do it", edit_files=["a.py"]),
             cfg=None,
             diff="--- a\n+++ b\n",
-            plan=a_plan("PLAN"),
+            plan_text=a_plan("PLAN"),
             completed=[],
         )
         args.update(over)
@@ -598,7 +595,7 @@ class TestTheCachedPrefixSurvivesALandedStage:
             stage=Stage(id="s", instruction="i", edit_files=["a.py"]),
             cfg=None,
             diff=diff,
-            plan=a_plan("PLAN_TEXT"),
+            plan_text=a_plan("PLAN_TEXT"),
             completed=completed or [],
         )
 
@@ -645,7 +642,7 @@ class TestThePlannerPrefixAlsoSurvivesALanding:
         from code_gantry.prompts import build_planner_messages
 
         messages = build_planner_messages(
-            cfg=None, plan=a_plan("PLAN_TEXT"), completed=[], layout="LAYOUT_TEXT"
+            cfg=None, plan_text=a_plan("PLAN_TEXT"), completed=[], layout="LAYOUT_TEXT"
         )
         marked = messages[0]["content"][0]
         assert "PLAN_TEXT" in marked["text"]
@@ -659,7 +656,7 @@ class TestThePlannerPrefixAlsoSurvivesALanding:
 
         landed = [{"id": "earlier", "index": 0, "merge_sha": "abc123"}]
         messages = build_planner_messages(
-            cfg=None, plan=a_plan(), completed=landed, layout="L"
+            cfg=None, plan_text=a_plan(), completed=landed, layout="L"
         )
         assert "earlier" not in leading_text(messages)
 
@@ -673,10 +670,10 @@ class TestThePlannerPrefixAlsoSurvivesALanding:
         from code_gantry.prompts import build_planner_messages
 
         one = build_planner_messages(
-            cfg=None, plan=a_plan(), completed=[{"id": "x", "index": 0}], layout="L"
+            cfg=None, plan_text=a_plan(), completed=[{"id": "x", "index": 0}], layout="L"
         )
         two = build_planner_messages(
-            cfg=None, plan=a_plan(),
+            cfg=None, plan_text=a_plan(),
             completed=[{"id": "x", "index": 0}, {"id": "y", "index": 1}],
             layout="L",
         )
@@ -693,7 +690,7 @@ class TestThePlannerPrefixAlsoSurvivesALanding:
 
         landed = [{"id": "earlier", "index": 0, "merge_sha": "abc123"}]
         messages = build_planner_messages(
-            cfg=None, plan=a_plan(), completed=landed, layout="L"
+            cfg=None, plan_text=a_plan(), completed=landed, layout="L"
         )
         text = "".join(
             m["content"] if isinstance(m["content"], str)
@@ -830,7 +827,7 @@ class TestTheBreakpointBudgetIsFullySpent:
 
         messages = build_planner_messages(
             cfg=SimpleNamespace(planner=SimpleNamespace(cache_ttl="1h")),
-            plan=a_plan(),
+            plan_text=a_plan(),
             completed=[{"index": 0, "id": "s1", "instruction": "did it"}],
             layout="- `src/` (1)",
         )
@@ -842,7 +839,7 @@ class TestTheBreakpointBudgetIsFullySpent:
         from code_gantry.prompts import build_planner_messages
 
         messages = build_planner_messages(
-            cfg=SimpleNamespace(planner=SimpleNamespace(cache_ttl="1h")), plan=a_plan(), completed=[]
+            cfg=SimpleNamespace(planner=SimpleNamespace(cache_ttl="1h")), plan_text=a_plan(), completed=[]
         )
         system = _system_blocks("1h")
         outgoing = _with_loop_breakpoint(messages)
@@ -878,7 +875,7 @@ class TestThePlannerSeesTheDiagnosisNotOnlyTheConsequence:
     def _messages(self, failure, opening):
         return build_planner_messages(
             cfg=_cfg(),
-            plan=a_plan(),
+            plan_text=a_plan(),
             completed=[],
             current_stage=self._stage(),
             failure=failure,
@@ -954,7 +951,7 @@ class TestThePlannerSeesWhatTheStageHasAlreadyDone:
     def _messages(self, diff=DIFF, stage=True):
         return build_planner_messages(
             cfg=_cfg(),
-            plan=a_plan(),
+            plan_text=a_plan(),
             completed=[],
             current_stage=(
                 SimpleNamespace(
@@ -1005,62 +1002,56 @@ class TestThePlannerSeesWhatTheStageHasAlreadyDone:
         assert text.index("rework") < text.index("let(:seo_header)")
 
 
-class TestTheReviewerReadsTheLiveRecord:
-    """What has been done, and how much of it is worth paying for every call.
+class TestTheReviewerReadsTheProjection:
+    """What has been done sits after the reviewer's breakpoint, and the
+    history is capped.
 
-    The reviewer was handed the frozen plan snapshot, whose copy of the
-    progress log is whatever existed at run start — measured at 6,680 bytes
-    against 480,867 on the branch. So its only account of this run's 133
-    landed stages was the completed-stage history, which sits after the cache
-    breakpoint and is re-billed in full on every review. At 322k prompt tokens
-    against 56k cached, that history was most of what every review cost.
-
-    Two changes, in opposite directions. The live log replaces the stale one,
-    so the reviewer sees the actual record. The history is capped, because
-    across 164 stored verdicts not one cites an earlier stage — it was paying
-    roughly 220k tokens a call to prevent a failure that has not occurred.
-
-    Ordering is the whole trick. GPT-5.6 caches at an explicit breakpoint and
-    does not fall back to the longest matching prefix, so a growing region
-    placed before it misses on every landing. The frozen documents stay in the
-    cached prefix; the log and the tail go after it.
+    GPT-5.6 caches at an explicit breakpoint and does not fall back to the
+    longest matching prefix, so a growing region placed before it misses on
+    every landing. The plan text stays in the cached prefix; the projection
+    and the tail go after it.
     """
 
-    def _messages(self, log="## entry\n\nit was done", completed=None, **cfg_over):
+    def _messages(self, projection="### Landed\n\n- {#p.002} — it was done", completed=None, proposed=None, **cfg_over):
         return build_review_messages(
             stage=SimpleNamespace(
-                id="s", instruction="do it", constraints=None, acceptance=None
+                id="s", instruction="do it", constraints=None, acceptance=None,
+                resolves=[],
             ),
             cfg=_review_cfg(**cfg_over),
             diff="--- a\n+++ b",
-            plan=_plan_with_log(),
+            plan_text="THE PLAN ITSELF",
             completed=completed if completed is not None else [],
-            progress_log=log,
+            projection=projection,
+            proposed=proposed,
         )
 
-    def test_the_live_log_is_in_the_prompt(self):
+    def test_the_projection_is_in_the_prompt(self):
         assert "it was done" in all_text(self._messages())
 
-    def test_the_frozen_copy_is_not(self):
-        # Two copies of the same document, one of them wrong, is worse than
-        # either alone.
-        assert "STALE SNAPSHOT" not in all_text(self._messages())
-
-    def test_the_log_sits_after_the_breakpoint(self):
-        # Before it, every landing would invalidate the reviewer's only
-        # working cache — this model has no longest-prefix fallback.
+    def test_the_projection_sits_after_the_breakpoint(self):
         messages = self._messages()
         cached = "".join(
             b["text"] for b in messages[1]["content"] if "prompt_cache_breakpoint" in b
         )
         assert "it was done" not in cached
 
-    def test_the_plan_documents_stay_cached(self):
+    def test_the_plan_text_stays_cached(self):
         messages = self._messages()
         cached = "".join(
             b["text"] for b in messages[1]["content"] if "prompt_cache_breakpoint" in b
         )
         assert "THE PLAN ITSELF" in cached
+
+    def test_proposed_resolutions_are_listed_after_the_mark(self):
+        messages = self._messages(proposed=[("f-h-3", "two callers remain")])
+        cached = "".join(
+            b["text"] for b in messages[1]["content"] if "prompt_cache_breakpoint" in b
+        )
+        text = all_text(messages)
+        assert "`f-h-3` — two callers remain" in text
+        assert "f-h-3" not in cached
+        assert "`resolved`" in text
 
     def test_the_history_is_capped(self):
         completed = [
@@ -1072,8 +1063,6 @@ class TestTheReviewerReadsTheLiveRecord:
         assert "stage-19" not in text, "an older stage is dropped"
 
     def test_the_cap_says_what_it_dropped(self):
-        # A truncated list that does not say it is truncated reads as the whole
-        # record, and the reviewer would judge completeness against it.
         completed = [
             {"index": i, "id": f"stage-{i}", "instruction": f"work {i}"}
             for i in range(30)
@@ -1089,28 +1078,15 @@ class TestTheReviewerReadsTheLiveRecord:
         text = all_text(self._messages(completed=completed, history_stages=None))
         assert "stage-0" in text
 
-    def test_a_missing_log_still_builds(self):
-        # A project with no addendum configured, or one not yet written. A
-        # review is far too expensive to fail over a missing progress file.
-        assert "do it" in all_text(self._messages(log=None))
+    def test_an_empty_projection_still_builds(self):
+        assert "do it" in all_text(self._messages(projection=""))
 
 
-def _review_cfg(history_stages=None, addendum="docs/progress_log.md"):
+def _review_cfg(history_stages=None, addendum=None):
     return SimpleNamespace(
         cache_ttl=None,
-        plan_addendum_path=addendum,
+        ledger=SimpleNamespace(key_prefix="p", note_chars=600, fold_ratio=0.25),
         reviewer=SimpleNamespace(history_stages=history_stages),
-    )
-
-
-def _plan_with_log():
-    return PlanTree(
-        root=PlanDocument(path="PLAN.md", content="THE PLAN ITSELF"),
-        children=[
-            PlanDocument(path="docs/progress_log.md", content="STALE SNAPSHOT"),
-        ],
-        problems=[],
-        skipped=[],
     )
 
 
@@ -1123,7 +1099,7 @@ class TestTheAgentContextRidesInTheCachedPrefix:
 
     def _messages(self, agent_context="### `AGENTS.md`\n\nthe bundle installs itself"):
         return build_planner_messages(
-            cfg=_cfg(), plan=a_plan(), completed=[],
+            cfg=_cfg(), plan_text=a_plan(), completed=[],
             layout="- `app/` (1)", agent_context=agent_context,
         )
 
@@ -1174,7 +1150,7 @@ class TestReviewerToolGuidance:
             stage=Stage(id="s", instruction="do it", edit_files=["a.py"]),
             cfg=self._cfg(repo_access),
             diff="--- a\n+++ b\n",
-            plan=a_plan("PLAN"),
+            plan_text=a_plan("PLAN"),
             completed=[],
         )[0]["content"][0]["text"]
 
@@ -1197,7 +1173,7 @@ class TestReviewerToolGuidance:
         # lost.
         text = self._system(True)
         assert "`observations`" in text
-        assert "progress log" in text
+        assert "ledger" in text
 
     def test_observations_are_distinguished_from_issues(self):
         # Conflating them would route a pre-existing problem back to an
@@ -1256,7 +1232,7 @@ class TestEveryParticipantSeesTheRepositoryConventions:
             ),
             cfg=_review_cfg(),
             diff="--- a\n+++ b",
-            plan=_plan_with_log(),
+            plan_text="THE PLAN ITSELF",
             completed=[],
             agent_context=self.CONVENTIONS,
         )
@@ -1273,7 +1249,7 @@ class TestEveryParticipantSeesTheRepositoryConventions:
             ),
             cfg=_review_cfg(),
             diff="--- a\n+++ b",
-            plan=_plan_with_log(),
+            plan_text="THE PLAN ITSELF",
             completed=[],
             agent_context=self.CONVENTIONS,
         )
@@ -1308,7 +1284,7 @@ class TestEveryParticipantSeesTheRepositoryConventions:
             ),
             cfg=_review_cfg(),
             diff="--- a\n+++ b",
-            plan=_plan_with_log(),
+            plan_text="THE PLAN ITSELF",
             completed=[],
         )
         assert "conventions its maintainers" not in all_text(messages).lower()
@@ -1351,7 +1327,7 @@ class TestThePlannerIsToldWhatTheChecksWillDo:
     def _text(self, checks):
         return leading_text(
             build_planner_messages(
-                cfg=self._cfg(checks), plan=a_plan(), completed=[], layout="-"
+                cfg=self._cfg(checks), plan_text=a_plan(), completed=[], layout="-"
             )
         )
 
@@ -1381,7 +1357,7 @@ class TestThePlannerIsToldWhatTheChecksWillDo:
         # breakpoint it would be re-billed on every planner call.
         messages = build_planner_messages(
             cfg=self._cfg(["some-linter --fix"]),
-            plan=a_plan(),
+            plan_text=a_plan(),
             completed=[],
             layout="-",
         )
@@ -2356,7 +2332,7 @@ class TestTheBatchBlockIsSizedByTheSetting:
         cfg = SimpleNamespace(
             cache_ttl=None, planner=SimpleNamespace(max_batch_stages=cap)
         )
-        messages = build_planner_messages(cfg=cfg, plan=a_plan(), completed=[])
+        messages = build_planner_messages(cfg=cfg, plan_text=a_plan(), completed=[])
         return messages[0]["content"][0]["text"]
 
     def test_one_stage_per_call_says_so_rather_than_staying_silent(self):
@@ -2402,7 +2378,7 @@ class TestTheBatchBlockIsSizedByTheSetting:
         # Every existing caller in the tests passes a bare SimpleNamespace, and
         # so would any project config predating the setting.
         messages = build_planner_messages(
-            cfg=SimpleNamespace(planner=SimpleNamespace(cache_ttl=None)), plan=a_plan(), completed=[]
+            cfg=SimpleNamespace(planner=SimpleNamespace(cache_ttl=None)), plan_text=a_plan(), completed=[]
         )
         assert messages[0]["content"][0]["text"]
 
@@ -2563,14 +2539,10 @@ class TestTheCostsBlockTellsThePlannerHowToUseIt:
         assert "instruction that stage was given" in text
         assert "how many lines" in text
 
-    def test_it_says_why_the_commit_is_the_only_copy_left(self):
-        """The reason this matters more after a fold than before.
-
-        The reviewer's account of a landed stage lives in the progress log,
-        and folding empties it. After that the id in a cost line has a
-        description in exactly one place.
-        """
-        assert "fold empties the progress log" in self._block()
+    def test_it_says_where_the_account_of_a_stage_lives(self):
+        # The reviewer's record is in the landing commit, so the id in a cost
+        # line has a description in exactly one place.
+        assert "The commit is where that account lives" in self._block()
 
     def test_the_sha_is_rendered_long_enough_to_resolve(self):
         # Twelve characters. A shorter prefix is ambiguous on a large
@@ -2691,7 +2663,7 @@ class TestARedrawIsAskedWhatItLearned:
 
         kwargs = dict(
             cfg=_cfg(),
-            plan=a_plan(),
+            plan_text=a_plan(),
             completed=[],
             current_stage=Stage(id="s", instruction="do it", edit_files=["a.py"]),
             revision=1,
@@ -2715,7 +2687,7 @@ class TestARedrawIsAskedWhatItLearned:
         # It has no redraw to learn from, and a question with no answer is how
         # a required field starts collecting filler.
         text = all_text(
-            build_planner_messages(cfg=_cfg(), plan=a_plan(), completed=[])
+            build_planner_messages(cfg=_cfg(), plan_text=a_plan(), completed=[])
         ).lower()
         assert "the previous draft" not in text
 
@@ -2762,7 +2734,7 @@ class TestGateHistoryBlock:
         text = all_text(
             build_planner_messages(
                 cfg=_cfg(),
-                plan=a_plan(),
+                plan_text=a_plan(),
                 completed=[],
                 current_stage=Stage(id="s", instruction="do it", edit_files=["a.py"]),
                 gate_history=[
@@ -2780,7 +2752,7 @@ class TestGateHistoryBlock:
         text = all_text(
             build_planner_messages(
                 cfg=_cfg(),
-                plan=a_plan(),
+                plan_text=a_plan(),
                 completed=[],
                 gate_history=[{"revision": 0, "layer": "residue"}],
             )
@@ -2922,59 +2894,44 @@ class TestIndependentCallsAreAskedForTogether:
 
 
 class TestALandingDoesNotDisturbThePlan:
-    """The whole reason the log came out of the marked block.
+    """The projection sits outside the marked block.
 
-    While the progress log sat among the plan documents, the cache breakpoint
-    at the end of that block covered it — so one appended note discarded the
-    plan, the conventions and the layout along with it. Measured on a live
-    run: block 0 was 735,413 characters, 99.2-99.7% identical to the previous
-    derivation, and read back from cache never. Shared is not cached, and the
-    block is the unit.
-
-    This asserts the property directly rather than counting marks: two
-    prompts that differ only by a landing must be byte-identical up to and
-    including the marked block.
+    Two prompts that differ only by a landing — a longer projection — must be
+    byte-identical up to and including the marked block.
     """
 
-    def _messages(self, log_text):
-        from code_gantry.plandoc import PlanDocument, PlanTree
-
-        plan = PlanTree(
-            root=PlanDocument(path="p.md", content="ROOT [l](log.md)"),
-            children=[PlanDocument(path="log.md", content=log_text)],
-            problems=[],
-            skipped=[],
-        )
+    def _messages(self, projection):
         return build_planner_messages(
-            cfg=SimpleNamespace(planner=SimpleNamespace(cache_ttl="1h"), plan_addendum_path="log.md"),
-            plan=plan,
+            cfg=_cfg(),
+            plan_text="# ROOT {#p.001}\n",
             completed=[],
+            projection=projection,
             layout="- `src/` (1)",
         )
 
-    def test_the_marked_block_survives_a_new_log_entry(self):
-        before = self._messages("entry one")
-        after = self._messages("entry one\n\nentry two")
+    def test_the_marked_block_survives_a_new_landing(self):
+        before = self._messages("### Landed\n\n- one")
+        after = self._messages("### Landed\n\n- one\n- two")
 
         marked_before = [b for b in before[0]["content"] if "cache_control" in b]
         marked_after = [b for b in after[0]["content"] if "cache_control" in b]
 
         assert len(marked_before) == 1
         assert marked_before[0]["text"] == marked_after[0]["text"], (
-            "a landing changed the cached block; the log is back inside it"
+            "a landing changed the cached block; the projection is inside it"
         )
 
-    def test_the_log_is_still_sent_just_after_the_mark(self):
-        messages = self._messages("entry one")
+    def test_the_projection_is_sent_just_after_the_mark(self):
+        messages = self._messages("### Landed\n\n- entry one")
         blocks = messages[0]["content"]
         marked = next(i for i, b in enumerate(blocks) if "cache_control" in b)
         following = "".join(b.get("text", "") for b in blocks[marked + 1:])
 
-        assert "entry one" in following, "the log must still reach the planner"
+        assert "entry one" in following, "the projection must still reach the planner"
         assert "entry one" not in blocks[marked]["text"]
 
-    def test_the_plan_documents_are_still_in_the_marked_block(self):
-        blocks = self._messages("entry one")[0]["content"]
+    def test_the_plan_text_is_in_the_marked_block(self):
+        blocks = self._messages("### Landed\n\n- entry one")[0]["content"]
         marked = next(b for b in blocks if "cache_control" in b)
         assert "ROOT" in marked["text"]
 
@@ -2996,7 +2953,7 @@ class TestTheTestWarningsReachThePlanner:
     def _messages(self, warnings):
         return build_planner_messages(
             cfg=SimpleNamespace(planner=SimpleNamespace(cache_ttl="1h")),
-            plan=a_plan(),
+            plan_text=a_plan(),
             completed=[],
             layout="- `src/` (1)",
             test_warnings=warnings,

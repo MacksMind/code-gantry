@@ -202,7 +202,7 @@ repo receives product code, plan-document revisions, and nothing else.
 projects/<slug>/
   config.yaml            # the project's configuration
   approval.json          # recorded hash of the approved config
-  plan-snapshot/         # plan tree as resolved at the start of each run
+  ledger.db              # the plan tree, key states and findings
   status.md              # append-only expected-vs-actual log, one entry per stage
   runs/<run_id>/
     state.db             # one row per node, the run's own checkpointer
@@ -313,20 +313,18 @@ unattended for hours.
 been fixed by a human.
 `status` reports where a run stopped and why.
 
-**Editing a document the run reads means `run`, not `resume`.** The plan tree
-and the repository's agent-facing conventions are both pinned to a sha taken at
-run start — `_doc_sha` is `plan_sha or base_sha` — and only the progress log
-splices live. So a resume after a fold reads the pre-fold checklists, and a
-resume after an `AGENTS.md` edit feeds the old conventions to all three roles,
-for the rest of the run. Both were caught by diffing the document at the frozen
-sha against the branch tip before resuming: 14,757 characters against 17,692 in
-the `AGENTS.md` case. That check is two commands and worth making a habit,
-because nothing in the run's output says which sha its documents came from.
+**Editing a repository document the run reads means `run`, not `resume`.**
+The agent-facing conventions and operations documents are pinned to a sha
+taken at run start — `_doc_sha` is `plan_sha or base_sha` — so a resume after
+an `AGENTS.md` edit feeds the old conventions to all three roles for the rest
+of the run. The plan itself is not pinned: it is rendered from the ledger on
+every derivation, and a fold or a human answer reaches the next derivation
+without a restart.
 
-Everything already landed survives a restart — it is on the project branch, and
-a fresh run rebuilds its history from the progress log and `stage-costs.md`
-rather than from in-run memory. What restarting costs is the completed-stage
-block and a cold prompt cache, which is one prefix write.
+Everything already landed survives a restart — it is on the project branch and
+in the ledger, and a fresh run rebuilds its history from those and from
+`stage-costs.md` rather than from in-run memory. What restarting costs is the
+completed-stage block and a cold prompt cache, which is one prefix write.
 
 **Killing a run is second-best but not dangerous, and the danger is not where
 the docstring says.** `pause` is checked before each planner call, so the stage
@@ -349,44 +347,49 @@ This exists because a human will skim a sixty-line YAML once, motivated to
 start a run. A denylist the tool refuses to override is the backstop for
 exactly that moment.
 
-## Plan documents
+## The plan, in the ledger
 
-A project is defined by a plan document, which may or may not have children.
+A project is defined by a plan: a tree of documents, sections and items, each
+with a key like `{#r5.017}`, a prose body, an owner (`pipeline` or `human`)
+and a blocking flag. It lives in the project's ledger, a per-project SQLite
+file under the work dir, not in the target repository's tree. Markdown is the
+import and export format: `plan import` reads the documents a project already
+keeps — closed items become `landed` or `struck` records carrying their sha
+and evidence — and `plan export` renders a document back for editing.
 
-**The plan root is a document, not a directory.** Pointing it at `docs/`
-sweeps runbooks, ADRs, and onboarding notes into every review prompt. Point it
-at `docs/rails_upgrade_plan.md`, and resolve children only via explicit links
-from it.
+**The plan root is a document, not a directory**, and `--follow-links` imports
+only the documents it links, one level. Pointing an import at `docs/` would
+sweep runbooks, ADRs and onboarding notes into every paid call.
 
-**Children resolve relative to the root document's directory and may not
-escape it.** `validate` rejects any that do. Without this, a link in a plan
-document could pull arbitrary files off disk into a payload that is pasted
-verbatim into every review call — a correctness and a cost problem at once.
+**The ledger is one append-only table of events; everything else is a view.**
+The tree, each key's state and the findings table are rebuilt from the events
+on read, so no status column can disagree with the history that produced it.
+Every event names the origin that wrote it and its sequence within that
+origin, which makes a later exchange between hosts a fetch of "origin X after
+seq N" rather than a merge.
 
-**Snapshot the resolved tree at the start of each run** into
-`projects/<slug>/plan-snapshot/`, and have the reviewer read the snapshot
-rather than the live files. Three things this buys:
+**The planner is sent two halves rendered from it.** The plan text — the tree
+with its keys and the marks a fold has written — sits in the cached block and
+changes only at a fold or a plan edit. The projection — landings not yet
+marked, keys claimed by other runs, questions waiting on a person, and open
+findings with their ids — follows the cache mark and is bounded by open keys
+times `ledger.note_chars`. When the projection outgrows `ledger.fold_ratio`
+of the plan text the run folds at the derivation seam: marks and answered
+findings move into the node bodies, with no model and no commit.
 
-1. Run-duration immutability — the mandate cannot shift mid-flight.
-2. A byte-stable prefix for prompt caching.
-3. The reviewer judges against the plan as it stood when the run began, while
-   the planner's revisions land in the live documents and appear in `status.md`
-   as divergence. Nothing is silently substituted underneath the reviewer.
+**Findings have a lifecycle.** A planner note opens one at derivation, keyed
+to an item, with `needs: pipeline` or `needs: human`; a reviewer observation
+opens one at landing, for a person. A landing on a leaf key resolves its
+findings; the reviewer's `resolved` list closes the ones the stage proposed
+to settle; a later note on the same key and subject supersedes; a person
+answers with `fold`, `discard`, `debt` or `raise`.
 
-Read the live plan at `base_sha`, not at the branch tip, so a concurrent edit
-on `main` cannot change what a run thinks it was asked to do.
+**Nothing in the tree is the plan, so the executor cannot reach it.** What it
+can reach — the config, the agent-facing documents and the work dir — is
+refused at the write tool and again at the scope gate.
 
-**Planner writes go to two places, for two different artifacts.** Plan
-revisions go to the target repo on the project branch, in the planner's own
-commit lane — so plan evolution ships through the same flow as the code, and a
-completed project's diff contains both the change and the plan it came from.
-The expected-vs-actual log goes to `projects/<slug>/status.md`, append-only,
-one entry per stage: goal, expected, actual, divergence, next goal. Never
-rewrite it as a status page; the divergence over time is the whole value.
-
-Plan documents in the target repo need no scope-guard exclusion. `edit_files`
-is an allowlist, so they are excluded from every stage by construction unless a
-stage explicitly names them.
+The expected-vs-actual log still goes to `status.md`, append-only, one entry
+per stage; nothing reads it back.
 
 ## Branch topology
 
@@ -842,7 +845,8 @@ discipline:
 {
   "verdict": "approved" | "rework" | "blocked",
   "summary": "one-line assessment, justifying the verdict",
-  "record": "what the change does, for the progress log",
+  "record": "what the change does, for the ledger and the landing commit",
+  "resolved": ["ids of the proposed findings the diff actually settles"],
   "issues": [
     {
       "severity": "major" | "minor",
@@ -899,7 +903,7 @@ behind, what is actually there.
 5. **The cumulative stage diff.**
 
 **The history is thin, deliberately.** A landed stage is described to the
-planner by four separate channels — this history, the live progress log,
+planner by four separate channels — this history, the ledger's projection,
 `stage-costs.md`, and the status tail — and for a long time this one
 reproduced what three of them already said: the stage's full instruction
 verbatim, the reviewer's verdict summary, and the executor's context cost.
@@ -909,8 +913,8 @@ tool iteration and growing by ~6,600 per landing.
 It now carries only what nothing else records: which stages this run landed,
 their revision counts, the reference files the executor never received, and
 the ids that tie the other three channels together — 4,278 characters for the
-same 45 stages. The instruction lives in git as the squash commit's subject;
-what the stage *did* is the reviewer's record in the progress log, fed live;
+same 45 stages. The instruction and the reviewer's record both live in the
+landing commit; the landing itself is in the ledger, rendered on every call;
 the cost is in `stage-costs.md`, which spans every run rather than one.
 
 **This order is the caching strategy, not presentation.** Items 1 and 2 are

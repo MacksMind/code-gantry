@@ -8,6 +8,8 @@ network.
 
 from __future__ import annotations
 
+import os
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -18,8 +20,8 @@ from code_gantry.config import ProjectConfig, validate_stage
 from code_gantry.executor import Executor
 from code_gantry.gitops import Git, GitError
 from code_gantry.layout import summarize_layout
-from code_gantry.ledger import LEDGER_FILENAME
-from code_gantry.plandoc import PlanDocument, PlanTree, load_snapshot
+from code_gantry.ledger import LEDGER_FILENAME, Ledger, open_ledger
+from code_gantry.render import render_plan, render_projection
 from code_gantry.planner import PlannerClient
 from code_gantry.reviewer import ReviewerClient
 
@@ -68,10 +70,6 @@ class ProjectPaths:
     @property
     def project_dir(self) -> Path:
         return self.work_dir
-
-    @property
-    def plan_snapshot(self) -> Path:
-        return self.project_dir / "plan-snapshot"
 
     @property
     def status(self) -> Path:
@@ -165,86 +163,23 @@ class Runtime:
     planner: PlannerClient
     reviewer: ReviewerClient
     log: Callable[[str], None] = field(default=lambda _msg: None)
-    _plan: PlanTree | None = None
+    # The plan tree, key states and findings. None only in tests that build a
+    # runtime without one; every node that plans, cuts or lands needs it.
+    ledger: Ledger | None = None
     _layout: str | None = None
 
-    @property
-    def plan(self) -> PlanTree:
-        """The run's plan snapshot, read once and held.
+    def views(self):
+        if self.ledger is None:
+            raise RuntimeError("this run has no ledger; configure `ledger:` and import a plan")
+        return self.ledger.views()
 
-        The reviewer and planner judge against the plan as it stood when the
-        run began, and nothing is silently substituted underneath them mid-run.
+    def plan_text(self) -> str:
+        """The stable half of what the planner reads: the tree with its marks."""
+        return render_plan(self.views())
 
-        It is a freeze against *outside* edits, not against the run's own. No
-        stage can write a plan document — `verify._is_plan_document` covers the
-        whole resolved tree — and the planner's findings go to the addendum, so
-        the only way this snapshot and the working tree diverge is a human
-        editing from another session, which preflight catches on a resume.
-
-        An earlier version of this said "the planner's own revisions land in
-        the live documents and show up as divergence in status.md", which
-        described neither a revision that happens nor an artifact anything
-        reads. See `plandoc`'s header, where the same sentence was maintained
-        in parallel.
-        """
-        if self._plan is None:
-            self._plan = load_snapshot(self.paths.project.plan_snapshot)
-        return self._plan
-
-    @property
-    def live_plan(self) -> PlanTree:
-        """The snapshot, with the progress log as it stands right now.
-
-        The freeze above is right for every document that says what the work
-        *is*: a run should not have its instructions change underneath it. It
-        is exactly wrong for the one that says what has been *done*. The log
-        was only frozen because it happens to be reachable by a markdown link
-        from the plan root, not because anyone decided progress should be
-        immutable.
-
-        Measured on the first long run: the snapshot held 6,680 bytes of
-        progress log while the file on disk had reached 114,554. The planner
-        was reading 6% of the record, and the prompt's instruction to fetch the
-        rest with `read_file` was taken twice in forty-nine derivations — so in
-        practice the log did not inform planning at all. What kept the planner
-        accurate was the live completed-stage history and its own searches over
-        the code, which is why it kept rediscovering counts the log already
-        knew.
-
-        Read from the worktree rather than a commit. CodeGantry writes
-        this file itself and commits it inside each stage, so between stages
-        the worktree copy is the project branch's, and during one it is the
-        same file the last landing left. There is no revision at which it is
-        more current.
-
-        The reviewer keeps the frozen *tree* — it judges a diff against what
-        the stage was asked to do, and the plan documents must not move
-        underneath it — but takes the live log separately, after its cache
-        breakpoint. See `live_progress_log`.
-        """
-        tree = self.plan
-        path = self.cfg.plan_addendum_path
-        if not path:
-            return tree
-        try:
-            content = (Path(self.cfg.target_repo) / path).read_text()
-        except OSError:
-            # Not yet written, or unreadable. The snapshot's copy — possibly
-            # nothing — is still the best available answer, and a planner call
-            # is far too expensive to fail over a missing progress file.
-            return tree
-
-        live = PlanDocument(path=path, content=content)
-        children = [d for d in tree.children if d.path != path] + [live]
-        if tree.root is not None and tree.root.path == path:
-            return PlanTree(root=live, children=list(tree.children),
-                            problems=tree.problems, skipped=tree.skipped)
-        return PlanTree(
-            root=tree.root,
-            children=children,
-            problems=tree.problems,
-            skipped=tree.skipped,
-        )
+    def projection(self) -> str:
+        """The churning half: every key state and finding the text does not show."""
+        return render_projection(self.views(), note_chars=self.cfg.ledger.note_chars)
 
     def operations_context(self, sha: str) -> str:
         """The operational documents, for the planner alone.
@@ -322,27 +257,6 @@ class Runtime:
         except OSError:
             return None
 
-    @property
-    def live_progress_log(self) -> str | None:
-        """The addendum as it stands now, or None if there isn't one.
-
-        The same file `live_plan` splices in, handed over on its own so a
-        caller can place it where it belongs. The reviewer needs that: the
-        document has to sit *after* its cache breakpoint, because it grows on
-        every landing and GPT-5.6 does not fall back to the longest matching
-        prefix — inside the cached region it would miss on every stage.
-
-        Never raises. A review is far too expensive to fail over a missing
-        progress file, and a project without one is an ordinary case.
-        """
-        path = self.cfg.plan_addendum_path
-        if not path:
-            return None
-        try:
-            return (Path(self.cfg.target_repo) / path).read_text()
-        except OSError:
-            return None
-
     def layout(self, plan_sha: str) -> str:
         """What the repository contains, read once and held.
 
@@ -383,7 +297,17 @@ class Runtime:
         return path
 
 
-def _stage_problems(cfg: ProjectConfig, fields: dict) -> list[str]:
+def ledger_references(ledger: Ledger | None) -> tuple[set[str] | None, set[str] | None]:
+    """What a stage may cite: live keys and open finding ids, or None without a ledger."""
+    if ledger is None:
+        return None, None
+    views = ledger.views()
+    keys = {n.key for n in views.nodes.values() if not n.retired}
+    findings = {f.id for f in views.open_findings()}
+    return keys, findings
+
+
+def _stage_problems(cfg: ProjectConfig, fields: dict, ledger: Ledger | None) -> list[str]:
     """The same check `nodes.py` applies, phrased for the planner.
 
     Building the stage can fail on its own — an id that is not a string, a
@@ -391,8 +315,12 @@ def _stage_problems(cfg: ProjectConfig, fields: dict) -> list[str]:
     again as a pattern that will not compile. Reported rather than raised, so
     a malformed field costs one more call instead of ending the run.
     """
+    known_keys, open_findings = ledger_references(ledger)
     try:
-        return validate_stage(cfg.stage_from_planner(fields), cfg)
+        return validate_stage(
+            cfg.stage_from_planner(fields), cfg,
+            known_keys=known_keys, open_findings=open_findings,
+        )
     except Exception as e:  # noqa: BLE001 - any failure here is the model's
         return [f"the stage spec could not be read: {e}"]
 
@@ -478,8 +406,17 @@ def build_runtime(
     # told, a single bad character escalates to a human and discards the whole
     # tool loop that produced the stage. `nodes.py` still rejects the stage if
     # the second attempt is no better.
+    ledger = (
+        open_ledger(
+            project.ledger,
+            origin=os.environ.get("CODE_GANTRY_ORIGIN") or None,
+            actor=f"run:{paths.run_id}" if paths.run_id else "run",
+        )
+        if cfg.ledger is not None
+        else None
+    )
     if hasattr(planner, "validate_stage_fields"):
-        planner.validate_stage_fields = lambda fields: _stage_problems(cfg, fields)
+        planner.validate_stage_fields = lambda fields: _stage_problems(cfg, fields, ledger)
     runner = CommandRunner(
         cwd=cfg.target_repo,
         timeout=cfg.limits.command_timeout_seconds,
@@ -523,6 +460,7 @@ def build_runtime(
         paths=paths,
         git=git,
         runner=runner,
+        ledger=ledger,
         # The executor takes git only to list tracked paths, which is what tells
         # the mention shield what counts as a path in the prompt it is handed.
         executor=Executor(

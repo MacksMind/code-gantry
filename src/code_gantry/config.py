@@ -61,6 +61,10 @@ PLANNER_WRITABLE_FIELDS = frozenset(
         # field joins `Stage`. Read by nothing that decides anything — it is
         # recorded beside what the stage cost so the rating can be checked.
         "difficulty",
+        # Ledger keys and finding ids: references into a record the planner
+        # reads but cannot write, so nothing here can become an instruction.
+        "plan_keys",
+        "resolves",
     }
 )
 
@@ -626,6 +630,10 @@ class Stage(_Strict):
     # Extra spec paths the planner expects to be affected beyond those the diff
     # reveals. Paths, never a command — see `scoped_test_command`.
     test_paths: list[str] = []
+    # Which plan nodes this stage is drawn from, and which open findings its
+    # diff is meant to settle. Keys the ledger knows; validated on derivation.
+    plan_keys: list[str] = []
+    resolves: list[str] = []
 
     # --- machinery-recorded ---
     # The commit the planner's excerpt line numbers were chosen against, set by
@@ -997,14 +1005,8 @@ class ProjectConfig(_Strict):
     # through `build_argv`, because a suite invoked one way in the loop and
     # another at the gate is how an exit code stops describing the artifacts.
     scoped_test_tool: str | None = None
-    # Where the planner's append-only record of what git history shows was done
-    # is kept. Commonly a subdirectory of the plan directory, so a later pass —
-    # a human, or a tool outside this loop — can fold it into the plan
-    # documents properly.
-    #
-    # Written by CodeGantry from the planner's structured output, never
-    # by a stage. The scope guard treats it as a plan document precisely so an
-    # executor cannot edit the record of its own work.
+    # No longer read: the ledger holds what the progress log held. Kept so
+    # an older config still parses; preflight says it is ignored.
     plan_addendum_path: str | None = None
     # Where the project's test runner leaves its tally of warnings and
     # unexpected output. The path, not the copy: it is rewritten by every
@@ -1524,14 +1526,45 @@ def _glob_could_match_a_test(glob: str, test_patterns: list[str]) -> bool:
     )
 
 
-def validate_stage(stage: Stage, cfg: ProjectConfig) -> list[str]:
+def validate_stage(
+    stage: Stage,
+    cfg: ProjectConfig,
+    *,
+    known_keys: set[str] | None,
+    open_findings: set[str] | None,
+) -> list[str]:
     """Well-formedness of a single stage, planner-derived or otherwise.
 
-    Runs before anything acts on a planner-produced spec: a bad stage should
-    fail here, cheaply, rather than as a confusing verify failure.
+    Runs before anything acts on a planner-produced spec, so a bad stage fails
+    here cheaply rather than as a confusing verify failure.
+
+    `known_keys` and `open_findings` are the ledger's: a stage must cite at
+    least one key the ledger holds, and may only claim to resolve findings that
+    are open. Both are keyword-only and required so every caller says what it
+    is checking against; `None` means the caller has no ledger to check.
     """
     problems: list[str] = []
     where = f"stage {stage.id!r}"
+
+    if known_keys is not None:
+        if not stage.plan_keys:
+            problems.append(
+                f"{where}: plan_keys is empty — name the key of every plan item "
+                "this stage is drawn from"
+            )
+        for key in stage.plan_keys:
+            if key not in known_keys:
+                problems.append(
+                    f"{where}: plan_keys names {key!r}, which is not a key in "
+                    "the plan; copy the key from the item's `{#…}` marker"
+                )
+    if open_findings is not None:
+        for finding in stage.resolves:
+            if finding not in open_findings:
+                problems.append(
+                    f"{where}: resolves names {finding!r}, which is not an open "
+                    "finding; copy the id from the projection"
+                )
 
     if not _SAFE_ID.match(stage.id):
         problems.append(

@@ -96,6 +96,8 @@ STAGES = [
         # script in CI, so it sat broken from the moment `difficulty` was added
         # while the unit suite stayed green.
         "difficulty": "low",
+        "plan_keys": ["p.002"],
+        "resolves": [],
     },
     {
         "id": "add-divide",
@@ -110,6 +112,8 @@ STAGES = [
         "forbidden_patterns": [],
         "test_paths": [],
         "difficulty": "medium",
+        "plan_keys": ["p.002"],
+        "resolves": [],
     },
 ]
 
@@ -331,6 +335,7 @@ class ModelStub(BaseHTTPRequestHandler):
             "summary": "Implements the stage as specified, with tests.",
             "record": "Adds the operation to src/calc.py and a test for it.",
             "issues": [],
+            "resolved": [],
         }
         return {
             "id": "resp_smoke_review",
@@ -588,6 +593,7 @@ class ModelStub(BaseHTTPRequestHandler):
             "summary": "Implements the stage as specified, with tests.",
             "record": "Adds the operation to src/calc.py and a test for it.",
             "issues": [],
+            "resolved": [],
         }
         return {
             "id": "chatcmpl-smoke",

@@ -110,6 +110,11 @@ class StageResult(TypedDict, total=False):
     review_issues: list[dict]
     verify_failures: list[str]
     planner_notes: list[str]
+    # The plan keys the stage was drawn from and the finding ids the reviewer
+    # confirmed it settled — the same references the landing commit's trailers
+    # carry.
+    plan_keys: list[str]
+    resolves: list[str]
     config_hash: str
     prompt_tokens: int
     cached_tokens: int
@@ -224,11 +229,9 @@ class RunState(TypedDict, total=False):
     # verify writes it, the schema discards it, and the gate silently never
     # skips — which is exactly how it shipped the first time.
     full_suite_digest: str
-    # Observations the planner made about the plan going stale, held until the
-    # stage lands. Written on advance rather than when the planner speaks: a
-    # note about work that then fails review would record something that did
-    # not happen.
-    pending_plan_notes: list[dict]
+    # Finding ids the reviewer confirmed the stage's diff settles, held until
+    # the stage lands: an abandoned diff settles nothing.
+    pending_resolved: list[str]
     # The reviewer's out-of-scope findings, held until the stage lands, for the
     # same reason as above. Replaced rather than appended on each review: a
     # stage can be reviewed several times across rework attempts and every one
@@ -327,7 +330,7 @@ def new_state(
         session_started_at=started_at,
         last_diff_digest="",
         full_suite_digest="",
-        pending_plan_notes=[],
+        pending_resolved=[],
         pending_observations=[],
         last_failure=None,
         opening_failure=None,
@@ -410,13 +413,9 @@ def fresh_stage_fields() -> dict:
     halves' unit tests passed. `advance` clears it, being the node that ends
     the stage the time belongs to.
 
-    Not `pending_plan_notes` either, and that one cost two stages to find. The
-    notes are written by `advance`, which then clears them explicitly — but
-    `plan` also spreads this reset over its own return value, *after* the notes
-    it just accumulated. So every note the planner produced while deriving a
-    stage was zeroed within the same function call, and `advance` never saw
-    one. A field cleared by whoever finishes with it, rather than by a
-    catch-all, cannot be swallowed that way.
+    Not `pending_resolved` either: `advance` writes it out and clears it, and
+    a catch-all reset that `plan` also spreads over its own return would zero
+    it before `advance` saw it.
     """
     return {
         "stage_branch": None,

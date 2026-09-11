@@ -31,7 +31,6 @@ from code_gantry.commands import CommandResult, CommandRunner, truncate_middle
 from code_gantry.config import ProjectConfig
 from code_gantry.flake import FlakeVerdict, adjudicate, append_flakes
 from code_gantry.gitops import Git, GitError
-from code_gantry.plandoc import resolve_plan_tree
 
 
 # Both ends, not just the tail. A test runner prints its verdict and then keeps
@@ -69,7 +68,6 @@ def run_preflight(
     check_approval: bool = True,
     config_path=None,
     recorded_base_sha: str = "",
-    recorded_plan_sha: str = "",
     check_endpoint: bool = True,
     for_resume: bool = False,
 ) -> list[Check]:
@@ -96,9 +94,18 @@ def run_preflight(
         # confusing secondary failures.
         return checks
 
-    checks.extend(_plan_checks(cfg, git))
+    checks.append(_ledger_check(cfg, project_dir))
+    if cfg.plan_addendum_path:
+        checks.append(
+            Check(
+                "plan_addendum_path",
+                False,
+                f"{cfg.plan_addendum_path!r} is no longer read; the ledger "
+                "holds what the progress log held. Remove the setting",
+                fatal=False,
+            )
+        )
     checks.append(_read_budget_check(cfg, git))
-    checks.append(_unfolded_progress_check(cfg))
     checks.extend(_endpoint_checks(cfg))
     checks.extend(check_wire_match(cfg))
     if check_endpoint:
@@ -110,10 +117,6 @@ def run_preflight(
         checks.append(_approval_check(cfg, config_path))
     if recorded_base_sha:
         checks.append(_baseline_still_reachable(cfg, recorded_base_sha))
-    # Only a resume records one, and only a resume can be refused by it: a fresh
-    # run reads the plan as it stands and has nothing to have moved away from.
-    if recorded_plan_sha:
-        checks.append(_plan_unmoved(cfg, git, recorded_plan_sha))
 
     # The suites go last, and not at all once something already blocks.
     #
@@ -356,126 +359,45 @@ def _read_budget_check(cfg: ProjectConfig, git: Git) -> Check:
     )
 
 
-def _unfolded_progress_check(cfg: ProjectConfig) -> Check:
-    """How much the progress log has accumulated since anyone last folded it.
+def _ledger_check(cfg: ProjectConfig, project_dir) -> Check:
+    """The ledger holds a plan: at least one document, with something drawable."""
+    from code_gantry.ledger import read_ledger
+    from code_gantry.runtime import ProjectPaths
 
-    Folding is the largest single lever on a run's bill and the one step
-    nothing in the loop performs — deliberately, because rewriting a plan is a
-    judgement about what the work has become and should not happen unattended
-    in the middle of doing the work. The consequence is that it only happens if
-    someone remembers, and nothing was reminding them.
-
-    The cost is invisible in behaviour. The log is spliced into the plan block,
-    which carries a cache breakpoint, so every landing invalidates that block
-    and pays to rewrite it: the log does not merely cost its own size, it drags
-    the plan tree through the cache with it. Measured between two folds, 292
-    bytes to 263KB over 66 landings, with the extra per-stage cost growing with
-    the *gap* rather than with the log — so the total is quadratic in how long
-    nobody looked. Every stage still lands and every gate still passes.
-
-    Said at preflight because that is the moment acting on it is free: nothing
-    is in flight, and folding costs a commit. Never fatal — a run that refuses
-    to start until someone rewrites a plan is worse than an expensive one.
-
-    The line itself is the accounting and nothing else. The first version
-    explained all of the above on every start, which is four sentences an
-    operator reads once and scrolls past forever after, in a preflight block
-    they are scanning for the thing that is wrong. The reasoning belongs here,
-    where the code beneath it keeps it honest.
-    """
-    if not cfg.plan_addendum_path:
-        return Check("progress log", True, "no addendum configured")
-
-    from code_gantry.addendum import _target
-
-    try:
-        target = _target(cfg.target_repo, cfg.plan_addendum_path)
-        body = target.read_text()
-    except OSError:
-        # Not yet written is the normal state of a new project, and an
-        # unreadable one is already reported by the plan checks.
-        return Check("progress log", True, "no progress log yet")
-
-    # Counted by the marker each writer stamps, not by the heading. Three
-    # functions in `addendum` produce entries and each writes exactly one of
-    # these lines, so the count is a fact about who wrote what. Headings are
-    # not: a planner note lifts its title from the plan, and a detail body can
-    # quote a `##` line out of a plan document.
-    kinds = (
-        ("planner note", "planner notes", "- **observed** while planning"),
-        (
-            "reviewer note",
-            "reviewer notes",
-            "- **observed** by the reviewer while landing",
-        ),
-        ("reviewer summary", "reviewer summaries", "## What "),
-    )
-    counted = [
-        (one, many, sum(1 for line in body.splitlines() if line.startswith(marker)))
-        for one, many, marker in kinds
+    if cfg.ledger is None:
+        return Check(
+            "ledger configured", False,
+            "no `ledger:` section in the config; set `ledger.key_prefix` and "
+            "import the plan with `code-gantry plan import`",
+        )
+    paths = ProjectPaths(project_dir or cfg.work_dir)
+    if not paths.ledger.is_file():
+        # Ordinary before the first import; `run` refuses on its own.
+        return Check(
+            "ledger holds a plan", False,
+            f"no ledger at {paths.ledger} yet; `code-gantry plan import` "
+            "creates it, and `run` refuses until it holds a plan",
+            fatal=False,
+        )
+    views = read_ledger(paths.ledger).views()
+    documents = views.documents()
+    if not documents:
+        return Check(
+            "ledger holds a plan", False,
+            f"{paths.ledger} holds no plan; import one with `code-gantry plan import`",
+        )
+    items = [n for n in views.walk() if n.kind == "item"]
+    drawable = [
+        n for n in items if n.owner == "pipeline" and views.is_open(n.key)
     ]
-    if not any(n for _, _, n in counted):
-        return Check("progress log", True, "nothing to fold")
-
-    # Disjoint, and each named for its author. The first version said "68
-    # entries and 24 landings", which put a subset beside its superset — the
-    # numbers could not be added — and then "44 planner notes", which silently
-    # counted the reviewer's own findings among the planner's.
-    parts = [f"{n} {one if n == 1 else many}" for one, many, n in counted if n]
-    listed = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + f" and {parts[-1]}"
-    size = len(body.encode())
-    shown = f"{size / 1024:.0f}KB" if size >= 1024 else f"{size} bytes"
-    rel = target.relative_to(cfg.target_repo)
+    human = sum(1 for n in items if n.owner == "human")
+    findings = len(views.open_findings())
     return Check(
-        "progress log",
-        False,
-        f"{listed} unfolded in {rel} ({shown})",
-        fatal=False,
+        "ledger holds a plan",
+        True,
+        f"{len(documents)} document(s), {len(items)} item(s), {len(drawable)} open "
+        f"and drawable, {human} for a person; {findings} open finding(s)",
     )
-
-
-def _plan_checks(cfg: ProjectConfig, git: Git) -> list[Check]:
-    """The plan tree resolves, and no child escapes the root's directory.
-
-    Resolved at the project branch when there is one — that is where the run
-    will read it, and checking the base instead would pass on a plan the run
-    is not going to use, or fail on a restructure the branch has already done.
-    """
-    ref = cfg.project_branch if git.branch_exists(cfg.project_branch) else cfg.base_ref
-    try:
-        plan_sha = git.rev_parse(ref)
-    except GitError as e:  # pragma: no cover - caught upstream
-        return [Check("plan resolves", False, str(e))]
-
-    tree = resolve_plan_tree(git, cfg.plan_root, plan_sha)
-    checks = [
-        Check(
-            f"plan root {cfg.plan_root!r} resolves",
-            tree.root is not None,
-            "\n".join(tree.problems) if tree.problems else "",
-        )
-    ]
-    if tree.root is None:
-        return checks
-
-    if tree.problems:
-        checks.append(
-            Check(
-                "every plan child stays inside the plan root's directory",
-                False,
-                "\n".join(tree.problems),
-            )
-        )
-    else:
-        checks.append(
-            Check(
-                "plan children resolve",
-                True,
-                f"{len(tree.children)} child document(s)"
-                + (f"; {len(tree.skipped)} linked but not yet written" if tree.skipped else ""),
-            )
-        )
-    return checks
 
 
 def _declared_checks(cfg: ProjectConfig, runner: CommandRunner) -> list[Check]:
@@ -1160,85 +1082,6 @@ def _baseline_still_reachable(cfg: ProjectConfig, recorded: str) -> Check:
         f"{cfg.base_ref} was rewritten: {recorded[:12]} is no longer an "
         f"ancestor of {current[:12]}. Start a new run — this one measured "
         "itself against a commit the branch no longer contains.",
-    )
-
-
-def _pinned_documents(cfg: ProjectConfig, git, sha: str) -> dict[str, str]:
-    """Everything a run reads at its fixed sha and never re-reads.
-
-    The plan tree, minus the progress log, plus the repository's agent-facing
-    and operational documents. Exactly the set `Runtime.plan`, `agent_context`
-    and `operations_context` resolve — if a document is added to one of those
-    prompts it belongs here too, or the check will pass on an edit the run
-    would have read.
-
-    The progress log is excluded by name because `live_plan` splices it from
-    the worktree on every call. It is the one plan document that is allowed to
-    move under a resume, and it moves on every landing.
-    """
-    docs: dict[str, str] = {}
-    tree = resolve_plan_tree(git, cfg.plan_root, sha)
-    for doc in tree.documents:
-        docs[doc.path] = doc.content
-    docs.pop(cfg.plan_addendum_path, None)
-
-    for path in [*cfg.effective_agent_context, *cfg.effective_operations_context]:
-        resolved = git.real_path(sha, path)
-        try:
-            docs[resolved] = git.show_file(sha, resolved)
-        except GitError:
-            # Absent at this sha. The agent-context default names two files and
-            # most projects have one, so this is ordinary rather than a
-            # problem — and a document that appears between the two shas shows
-            # up as an addition below.
-            continue
-    return docs
-
-
-def _plan_unmoved(cfg: ProjectConfig, git, recorded: str) -> Check:
-    """Do the documents this run pinned still say what they said?
-
-    A run reads its plan once, at `plan_sha`, so that the reviewer judges a
-    diff against the text the planner drew it from. A resume inherits that sha
-    in `**saved` and re-reads nothing, which is right for a stop of a few
-    minutes and wrong across a fold: a fold moves content *out* of the live
-    progress log and *into* these documents, so a resumed run sees neither
-    copy. Measured on this project's own plan, a fold rewrote eight documents
-    and the log; resumed, the planner would have read the folded log with none
-    of what the fold moved.
-
-    Refusing rather than re-reading, because `current` and everything queued
-    behind it were derived against the old text and loading the new does not
-    make them valid. A fresh run is the boundary that re-reads, and it is cheap:
-    landed work is on the project branch, not in the checkpoint.
-    """
-    name = "the plan is the one this run started from"
-    ref = cfg.project_branch if git.branch_exists(cfg.project_branch) else cfg.base_ref
-    try:
-        head = git.rev_parse(ref)
-    except GitError as e:
-        return Check(name, False, str(e))
-    if head == recorded:
-        return Check(name, True, recorded[:12])
-
-    before = _pinned_documents(cfg, git, recorded)
-    after = _pinned_documents(cfg, git, head)
-    moved = sorted(
-        path
-        for path in set(before) | set(after)
-        if before.get(path) != after.get(path)
-    )
-    if not moved:
-        # The ordinary case: the run's own landings moved the branch.
-        return Check(name, True, f"{recorded[:12]} → {head[:12]}, documents unchanged")
-
-    listed = ", ".join(moved[:6]) + (f" and {len(moved) - 6} more" if len(moved) > 6 else "")
-    return Check(
-        name,
-        False,
-        f"{len(moved)} pinned document(s) changed since {recorded[:12]}: {listed}. "
-        "A run reads these once and this one would not see the change — start a "
-        f"fresh run instead: {cfg.start_command()}",
     )
 
 

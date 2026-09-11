@@ -172,14 +172,14 @@ class StubReader:
 
 class TestVerdicts:
     def test_approved(self):
-        verdict = ReviewVerdict(verdict="approved", summary="Looks right.", record="what changed", issues=[])
+        verdict = ReviewVerdict(resolved=[], verdict="approved", summary="Looks right.", record="what changed", issues=[])
         client = StubClient(response(parsed=verdict))
         out = OpenAIReviewer(cfg_with().reviewer, client=client).review(MESSAGES)
         assert out.verdict == "approved"
         assert out.summary == "Looks right."
 
     def test_rework_carries_issues(self):
-        verdict = ReviewVerdict(
+        verdict = ReviewVerdict(resolved=[],
             verdict="rework",
             summary="One problem.",
             record="what changed",
@@ -191,7 +191,7 @@ class TestVerdicts:
         assert out.issues[0].file == "app/x.rb"
 
     def test_blocked(self):
-        verdict = ReviewVerdict(
+        verdict = ReviewVerdict(resolved=[],
             verdict="blocked", summary="Instruction is impossible.",
             record="what changed", issues=[]
         )
@@ -210,7 +210,7 @@ class TestDefensiveHandling:
     def test_truncated_response_becomes_blocked(self):
         # A verdict cut off mid-JSON is not a verdict. Advancing on a partial
         # review is worse than stopping.
-        verdict = ReviewVerdict(verdict="approved", summary="part", record="what changed", issues=[])
+        verdict = ReviewVerdict(resolved=[], verdict="approved", summary="part", record="what changed", issues=[])
         client = StubClient(response(parsed=verdict, status="incomplete"))
         out = OpenAIReviewer(cfg_with().reviewer, client=client).review(MESSAGES)
         assert out.verdict == "blocked"
@@ -247,7 +247,7 @@ class TestDefensiveHandling:
         assert out.failed is True
 
     def test_a_real_verdict_is_not_marked_failed(self):
-        verdict = ReviewVerdict(verdict="blocked", summary="genuine", record="what changed", issues=[])
+        verdict = ReviewVerdict(resolved=[], verdict="blocked", summary="genuine", record="what changed", issues=[])
         client = StubClient(response(parsed=verdict))
         out = OpenAIReviewer(cfg_with().reviewer, client=client).review(MESSAGES)
         assert out.failed is False
@@ -255,7 +255,7 @@ class TestDefensiveHandling:
 
 class TestUsageAccounting:
     def test_records_token_counts(self):
-        verdict = ReviewVerdict(verdict="approved", summary="ok", record="what changed", issues=[])
+        verdict = ReviewVerdict(resolved=[], verdict="approved", summary="ok", record="what changed", issues=[])
         client = StubClient(response(parsed=verdict))
         out = OpenAIReviewer(cfg_with().reviewer, client=client).review(MESSAGES)
         assert out.usage.prompt_tokens == 1000
@@ -263,20 +263,20 @@ class TestUsageAccounting:
 
     def test_records_cached_tokens(self):
         # The economic argument for the split depends on this being visible.
-        verdict = ReviewVerdict(verdict="approved", summary="ok", record="what changed", issues=[])
+        verdict = ReviewVerdict(resolved=[], verdict="approved", summary="ok", record="what changed", issues=[])
         client = StubClient(response(parsed=verdict))
         out = OpenAIReviewer(cfg_with().reviewer, client=client).review(MESSAGES)
         assert out.usage.cached_tokens == 900
 
     def test_absent_usage_does_not_crash(self):
-        verdict = ReviewVerdict(verdict="approved", summary="ok", record="what changed", issues=[])
+        verdict = ReviewVerdict(resolved=[], verdict="approved", summary="ok", record="what changed", issues=[])
         client = StubClient(response(parsed=verdict, usage=None))
         out = OpenAIReviewer(cfg_with().reviewer, client=client).review(MESSAGES)
         assert out.usage.prompt_tokens == 0
 
     def test_absent_cached_token_detail_does_not_crash(self):
         # Not every provider or model reports this.
-        verdict = ReviewVerdict(verdict="approved", summary="ok", record="what changed", issues=[])
+        verdict = ReviewVerdict(resolved=[], verdict="approved", summary="ok", record="what changed", issues=[])
         usage = SimpleNamespace(prompt_tokens=10, completion_tokens=2)
         client = StubClient(response(parsed=verdict, usage=usage))
         out = OpenAIReviewer(cfg_with().reviewer, client=client).review(MESSAGES)
@@ -286,7 +286,7 @@ class TestUsageAccounting:
 class TestRequestShape:
     def test_messages_are_passed_through_in_order(self):
         # Reordering would break prefix caching.
-        verdict = ReviewVerdict(verdict="approved", summary="ok", record="what changed", issues=[])
+        verdict = ReviewVerdict(resolved=[], verdict="approved", summary="ok", record="what changed", issues=[])
         client = StubClient(response(parsed=verdict))
         OpenAIReviewer(cfg_with().reviewer, client=client).review(MESSAGES)
         # Verbatim. The breakpoints are placed once by `build_review_messages`;
@@ -298,13 +298,13 @@ class TestRequestShape:
         # The default. A reviewer with no reader must make the same request it
         # always did, or every project without repo access pays for a shape it
         # cannot use.
-        verdict = ReviewVerdict(verdict="approved", summary="ok", record="what changed", issues=[])
+        verdict = ReviewVerdict(resolved=[], verdict="approved", summary="ok", record="what changed", issues=[])
         client = StubClient(response(parsed=verdict))
         OpenAIReviewer(cfg_with().reviewer, client=client).review(MESSAGES)
         assert "tools" not in client.calls[0]
 
     def test_configured_model_is_used(self):
-        verdict = ReviewVerdict(verdict="approved", summary="ok", record="what changed", issues=[])
+        verdict = ReviewVerdict(resolved=[], verdict="approved", summary="ok", record="what changed", issues=[])
         client = StubClient(response(parsed=verdict))
         OpenAIReviewer(cfg_with(model="gpt-5.4-mini").reviewer, client=client).review(
             MESSAGES
@@ -313,7 +313,7 @@ class TestRequestShape:
 
     def test_the_verdict_schema_is_requested(self):
         # Server-side enforcement, rather than hoping the shape comes back.
-        verdict = ReviewVerdict(verdict="approved", summary="ok", record="what changed", issues=[])
+        verdict = ReviewVerdict(resolved=[], verdict="approved", summary="ok", record="what changed", issues=[])
         client = StubClient(response(parsed=verdict))
         OpenAIReviewer(cfg_with().reviewer, client=client).review(MESSAGES)
         assert client.calls[0]["text_format"] is ReviewVerdict
@@ -363,14 +363,14 @@ class TestReviewerCacheControls:
     """
 
     def test_a_cache_key_is_sent(self):
-        client = StubClient(response(parsed=ReviewVerdict(verdict="approved", summary="ok", record="what changed", issues=[])))
+        client = StubClient(response(parsed=ReviewVerdict(resolved=[], verdict="approved", summary="ok", record="what changed", issues=[])))
         OpenAIReviewer(cfg_with().reviewer, client=client).review(
             MESSAGES, cache_key="proj-slug"
         )
         assert client.calls[0]["prompt_cache_key"] == "proj-slug"
 
     def test_no_cache_key_sends_no_field(self):
-        client = StubClient(response(parsed=ReviewVerdict(verdict="approved", summary="ok", record="what changed", issues=[])))
+        client = StubClient(response(parsed=ReviewVerdict(resolved=[], verdict="approved", summary="ok", record="what changed", issues=[])))
         OpenAIReviewer(cfg_with().reviewer, client=client).review(MESSAGES)
         assert "prompt_cache_key" not in client.calls[0]
 
@@ -379,7 +379,7 @@ class TestReviewerCacheControls:
         # Responses API the lifetime comes from prompt_cache_options.ttl,
         # which is fixed at 30m and is currently the only supported value —
         # so there is nothing here for an operator to choose.
-        client = StubClient(response(parsed=ReviewVerdict(verdict="approved", summary="ok", record="what changed", issues=[])))
+        client = StubClient(response(parsed=ReviewVerdict(resolved=[], verdict="approved", summary="ok", record="what changed", issues=[])))
         OpenAIReviewer(cfg_with().reviewer, client=client).review(MESSAGES)
         assert "prompt_cache_retention" not in client.calls[0]
 
@@ -432,7 +432,7 @@ class TestExplicitCacheMode:
     """
 
     def call(self, **over):
-        verdict = ReviewVerdict(verdict="approved", summary="ok", record="what changed", issues=[])
+        verdict = ReviewVerdict(resolved=[], verdict="approved", summary="ok", record="what changed", issues=[])
         client = StubClient(response(parsed=verdict))
         OpenAIReviewer(cfg_with(**over.pop("cfg", {})).reviewer, client=client).review(
             MESSAGES, **over
@@ -470,7 +470,7 @@ class TestOutagesAreWaitedOutNotEscalated:
         return APIConnectionError(request=httpx.Request("POST", "https://x/y"))
 
     def test_a_connection_error_is_retried(self):
-        verdict = ReviewVerdict(verdict="approved", summary="Fine.", record="what changed", issues=[])
+        verdict = ReviewVerdict(resolved=[], verdict="approved", summary="Fine.", record="what changed", issues=[])
         client = SequenceClient([self._connection_error(), response(parsed=verdict)])
         out = OpenAIReviewer(
             cfg_with(transport_retry_seconds=0.01).reviewer, client=client
@@ -505,7 +505,7 @@ class TestOutagesAreWaitedOutNotEscalated:
         )
 
     def test_an_overloaded_provider_is_waited_out(self):
-        verdict = ReviewVerdict(verdict="approved", summary="Fine.", record="what changed", issues=[])
+        verdict = ReviewVerdict(resolved=[], verdict="approved", summary="Fine.", record="what changed", issues=[])
         client = SequenceClient([self._status_error(529), response(parsed=verdict)])
         out = OpenAIReviewer(
             cfg_with(transport_retry_seconds=0.01).reviewer, client=client
@@ -514,7 +514,7 @@ class TestOutagesAreWaitedOutNotEscalated:
         assert len(client.calls) == 2
 
     def test_a_server_error_is_waited_out(self):
-        verdict = ReviewVerdict(verdict="approved", summary="Fine.", record="what changed", issues=[])
+        verdict = ReviewVerdict(resolved=[], verdict="approved", summary="Fine.", record="what changed", issues=[])
         client = SequenceClient([self._status_error(503), response(parsed=verdict)])
         out = OpenAIReviewer(
             cfg_with(transport_retry_seconds=0.01).reviewer, client=client
@@ -554,7 +554,7 @@ class TestToolLoop:
     """
 
     def test_a_tool_request_is_answered_and_the_loop_continues(self):
-        verdict = ReviewVerdict(verdict="approved", summary="ok", record="what changed", issues=[])
+        verdict = ReviewVerdict(resolved=[], verdict="approved", summary="ok", record="what changed", issues=[])
         reader = StubReader("def discount_params\n  permit(:title)\nend")
         client = SequenceClient(
             [
@@ -578,7 +578,7 @@ class TestToolLoop:
         # Marks accumulate rather than move: a request writes only its latest
         # four, but matching considers up to eighty in the conversation, so
         # every turn extends the cached prefix instead of restarting it.
-        verdict = ReviewVerdict(verdict="approved", summary="ok", record="what changed", issues=[])
+        verdict = ReviewVerdict(resolved=[], verdict="approved", summary="ok", record="what changed", issues=[])
         client = SequenceClient(
             [
                 tool_response("read_file", '{"path": "a.rb"}'),
@@ -592,7 +592,7 @@ class TestToolLoop:
         assert result["output"][0]["prompt_cache_breakpoint"] == {"mode": "explicit"}
 
     def test_tools_are_offered_when_a_reader_is_present(self):
-        verdict = ReviewVerdict(verdict="approved", summary="ok", record="what changed", issues=[])
+        verdict = ReviewVerdict(resolved=[], verdict="approved", summary="ok", record="what changed", issues=[])
         client = StubClient(response(parsed=verdict))
         OpenAIReviewer(
             cfg_with().reviewer, client=client, reader=StubReader()
@@ -607,7 +607,7 @@ class TestToolLoop:
     def test_what_it_looked_at_is_recorded(self):
         # A verdict reached without reading is worth less than one reached
         # after it, and the two are indistinguishable from the verdict alone.
-        verdict = ReviewVerdict(verdict="rework", summary="no", record="what changed", issues=[])
+        verdict = ReviewVerdict(resolved=[], verdict="rework", summary="no", record="what changed", issues=[])
         client = SequenceClient(
             [
                 tool_response("read_file", '{"path": "app/models/cart.rb"}'),
@@ -626,7 +626,7 @@ class TestToolLoop:
     def test_usage_is_summed_across_turns(self):
         # A tool loop bills once per turn. Reporting only the last one
         # understates what a review cost by however many times it looked.
-        verdict = ReviewVerdict(verdict="approved", summary="ok", record="what changed", issues=[])
+        verdict = ReviewVerdict(resolved=[], verdict="approved", summary="ok", record="what changed", issues=[])
         client = SequenceClient(
             [
                 tool_response("read_file", '{"path": "a.rb"}'),
@@ -642,7 +642,7 @@ class TestToolLoop:
     def test_unparsable_tool_arguments_do_not_end_the_review(self):
         # A bad request is not a dead review: the refusal reaches the model as
         # a readable result and it can answer with what it has.
-        verdict = ReviewVerdict(verdict="approved", summary="ok", record="what changed", issues=[])
+        verdict = ReviewVerdict(resolved=[], verdict="approved", summary="ok", record="what changed", issues=[])
         client = SequenceClient(
             [
                 tool_response("read_file", "{not json"),
@@ -711,7 +711,7 @@ class TestThePerTurnUsageSeries:
         )
 
     def test_every_turn_is_recorded_in_order(self):
-        verdict = ReviewVerdict(
+        verdict = ReviewVerdict(resolved=[],
             verdict="approved", summary="ok", record="what changed", issues=[]
         )
         asking = tool_response("read_file", '{"path": "a.rb"}')
@@ -728,7 +728,7 @@ class TestThePerTurnUsageSeries:
         assert [t["cached_tokens"] for t in out.turn_usage] == [0, 1000]
 
     def test_a_single_turn_review_still_records_one(self):
-        verdict = ReviewVerdict(
+        verdict = ReviewVerdict(resolved=[],
             verdict="approved", summary="ok", record="what changed", issues=[]
         )
         client = StubClient(response(parsed=verdict, usage=self._usage(900, 800)))

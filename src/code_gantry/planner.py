@@ -243,25 +243,32 @@ class PlannedStage(BaseModel):
             "nothing."
         ),
     )
+    plan_keys: list[str] = Field(
+        min_length=1,
+        description=(
+            "The keys of the plan items this stage is drawn from — the "
+            "`{#prefix.nnn}` markers on headings and items in the plan. At "
+            "least one, copied exactly. A landing on these keys is what closes "
+            "them, so name the items the work completes, not the section it "
+            "sits under, unless the section itself is the unit of work."
+        ),
+    )
+    resolves: list[str] = Field(
+        description=(
+            "Ids of open findings from the projection that this stage's diff "
+            "will settle, copied exactly (`f-…`). Empty when none apply, which "
+            "is the usual answer. The reviewer confirms which were actually "
+            "addressed; naming one here is a proposal, not a record."
+        ),
+    )
 
 
 class PlanNote(BaseModel):
-    """How the plan learns what is done.
+    """What reading the plan against the code revealed while deriving a stage.
 
-    A plan document lists work. Nothing in it knows which of that work has
-    happened — and a run starts with an empty history, so without a record the
-    next one re-derives a stage that already landed. This is the record. Each
-    note says what a plan item looks like now that this stage has landed, and
-    is written into that stage's own commit.
-
-    So the usual note is progress: this sweep is complete, this count is down
-    to seven, this item can be closed. A correction — the plan was wrong when
-    written — is the same mechanism pointed at a different cause, and belongs
-    here too. Both answer one question: what does the plan not yet know?
-
-    Append-only, and nothing here rewrites a plan. A later pass folds these
-    into the documents and closes the items they report, which is a judgement
-    about what the work has become and does not belong mid-run.
+    Each note opens a finding in the ledger, keyed to a plan item. A later
+    note on the same key and subject supersedes it; a landing on the item
+    resolves it; a person answers the ones that need a person.
     """
 
     kind: NoteKind = Field(
@@ -297,23 +304,35 @@ class PlanNote(BaseModel):
             "`out_of_scope` however real it is."
         )
     )
-    plan_path: str = Field(
-        description="Which plan document this is about, as a repo-relative "
-        "path. One of the documents shown to you above."
-    )
-    anchor: str = Field(
+    key: str = Field(
         description=(
-            "A short exact quote from that document — the sentence, bullet or "
-            "table row this note is about. Copy it, do not paraphrase it: it "
-            "is matched against the document to work out which lines you mean, "
-            "and the line numbers in the entry are derived from where it is "
-            "found.\n\n"
-            "So do not give line numbers yourself. The documents are shown to "
-            "you as prose and counting their lines is not something you can do "
-            "reliably — three attempts at it each named a real file, a real "
-            "span, and the wrong passage. Quoting is the part you are good at.\n\n"
-            "One or two sentences is plenty. Long enough to appear once in the "
-            "document rather than anywhere, short enough to copy exactly."
+            "The key of the plan item this is about — its `{#prefix.nnn}` "
+            "marker, copied exactly. A heading's key when the finding is about "
+            "a section rather than one item."
+        )
+    )
+    subject: str = Field(
+        description=(
+            "What this note measures or asserts, in a few words, stable across "
+            "derivations: 'remaining render sites', 'gem still required', "
+            "'blocked on data'. A later note with the same subject on the same "
+            "key replaces this one, so use the same words next time."
+        )
+    )
+    total: str = Field(
+        description=(
+            "The resulting total or state in a few words — '7 sites in 1 "
+            "controller', 'none remain' — never a change. The literal `none` "
+            "when the finding is not a count."
+        )
+    )
+    needs: Literal["pipeline", "human"] = Field(
+        description=(
+            "Who can act on this. `pipeline` when a later stage can settle it "
+            "from the tree. `human` when it takes a shell, a browser, "
+            "production data, or a decision with more than one defensible "
+            "answer — it is then queued for a person and left intact until "
+            "they answer."
         )
     )
     finding: str = Field(

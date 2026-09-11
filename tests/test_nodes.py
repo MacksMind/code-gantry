@@ -20,7 +20,8 @@ from code_gantry.commands import CommandRunner
 from code_gantry.config import Stage, parse_config
 from code_gantry.executor import ExecutionResult
 from code_gantry.gitops import Git, GitError
-from code_gantry.plandoc import PlanDocument, PlanTree
+from code_gantry.ledger import CLAIMED, LANDED, open_ledger, read_ledger
+from code_gantry.planmodel import import_documents, parse_markdown
 from code_gantry.planner import PlannerOutcome, PlannerUsage
 from code_gantry.reviewer import Issue, ReviewOutcome, TokenUsage
 from code_gantry.runtime import ProjectPaths, RunPaths, Runtime
@@ -114,11 +115,18 @@ class StubExecutor:
         return ExecutionResult(ok=self.ok, log="script log")
 
 
+PLAN_TEXT = "# The plan\n\n- [ ] **do the thing**\n- [ ] **do the other thing**\n"
+# Keys the fixture plan imports to: p.001 the document, p.002 and p.003 the items.
+THE_ITEM = "p.002"
+THE_OTHER_ITEM = "p.003"
+
+
 def planned_stage(**over):
     fields = {
         "id": "extract",
         "instruction": "Extract the thing.",
         "edit_files": ["app.py", "src/**"],
+        "plan_keys": [THE_ITEM],
     }
     fields.update(over)
     return fields
@@ -134,6 +142,7 @@ def make(repo, tmp_path, planner=None, reviewer=None, executor=None, **cfg_over)
         "executor": {"model": "m"},
         "planner": {"model": "claude-opus-5"},
         "reviewer": {"model": "gpt-5.5"},
+        "ledger": {"key_prefix": "p", "fold_ratio": 1000.0},
     }
     data.update(cfg_over)
     cfg = parse_config(as_test_tools(data))
@@ -142,6 +151,9 @@ def make(repo, tmp_path, planner=None, reviewer=None, executor=None, **cfg_over)
     project.ensure()
     paths = RunPaths(project, "r1")
     paths.ensure()
+    ledger = open_ledger(project.ledger, origin="test-host", actor="run:r1")
+    if not ledger.views().documents():
+        import_documents(ledger, [parse_markdown(PLAN_TEXT)], prefix="p")
 
     ex = executor or StubExecutor(repo=repo, edits=[("app.py", "changed\n")])
     ex.repo = repo
@@ -154,8 +166,8 @@ def make(repo, tmp_path, planner=None, reviewer=None, executor=None, **cfg_over)
         executor=ex,
         planner=planner or StubPlanner(),
         reviewer=reviewer or StubReviewer(),
+        ledger=ledger,
     )
-    rt._plan = PlanTree(root=PlanDocument(path="PLAN.md", content="# The plan"))
 
     base_sha = rt.git.ensure_project_branch("proj", "main")
     state = new_state(
@@ -1224,20 +1236,15 @@ class TestPlanDocumentsFollowTheProjectBranch:
     not see the plan it was executing.
     """
 
-    def test_a_child_added_on_the_branch_is_still_protected(
+    def test_the_conventions_document_is_still_protected(
         self, repo, tmp_path, run_git
     ):
-        (repo / "PLAN.md").write_text("# Plan\n\nSee [the child](docs/child.md).\n")
-        Git(repo).commit_all("plan, on main")
-
-        run_git(repo, "checkout", "-qb", "proj")
-        (repo / "docs").mkdir(exist_ok=True)
-        (repo / "docs" / "child.md").write_text("# Child\n\nstep one\n")
-        Git(repo).commit_all("a plan child, on the project branch only")
+        (repo / "AGENTS.md").write_text("# Conventions\n\nrule one\n")
+        Git(repo).commit_all("conventions, on main")
 
         cfg, rt, state = make(repo, tmp_path)
-        state = with_stage(state, rt, edit_files=["docs/**"])
-        (repo / "docs" / "child.md").write_text("# Child\n\nrewritten\n")
+        state = with_stage(state, rt, edit_files=["*.md"])
+        (repo / "AGENTS.md").write_text("# Conventions\n\nrewritten\n")
 
         out = nodes.verify(state, rt)
         assert out["failure_layer"] == "scope"
@@ -1969,88 +1976,91 @@ class TestPlannerArtifactRecordsWhatItLookedAtAndSaid:
         assert written["reads_answered"] == 1
 
 
-class TestPlanNotesSurviveFromDerivationToLanding:
-    """The planner emits a note; the commit has to contain it.
+class TestTheLedgerRecordsTheWholeJourney:
+    """Derivation opens findings, precheck claims, landing closes — end to end.
 
-    Driven end to end, because the isolated halves both passed while the
-    feature did nothing. `plan` accumulated the notes into its returned state
-    and `advance` wrote whatever it was handed — but `plan`'s return spread
-    `fresh_stage_fields()` *after* that state, and the reset zeroes
-    `pending_plan_notes`. So every note the planner produced while deriving a
-    stage was discarded microseconds later, and `advance` had nothing to write.
-
-    Live for two stages before anyone noticed, because the only visible symptom
-    is a commit that quietly lacks a progress entry — and the artifact test
-    proves the planner *said* something, not that it survived.
+    Driven through the real nodes because every value here crosses a schema
+    boundary, and the isolated halves of the old log passed while the feature
+    did nothing.
     """
 
     A_NOTE = {
-        "plan_path": "PLAN.md",
-        "anchor": "24 sites across 9 controllers.",
+        "kind": "progress",
+        "key": THE_ITEM,
+        "subject": "remaining sites",
+        "total": "0 remain",
+        "needs": "pipeline",
+        "finding": "the sweep is complete",
         "observation": "This sweep is complete; 0 sites remain in app/controllers.",
     }
 
-    def test_the_note_survives_stage_derivation(self, repo, tmp_path):
-        planner = StubPlanner(
+    def _planner(self, **fields):
+        return StubPlanner(
             [
                 PlannerOutcome(
                     "next_stage", "next", "e",
-                    stage_fields=planned_stage(),
+                    stage_fields=planned_stage(**fields),
                     plan_notes=[self.A_NOTE],
                 )
             ]
-        )
-        cfg, rt, state = make(repo, tmp_path, planner=planner)
-        out = nodes.plan(state, rt)
-        assert out["pending_plan_notes"] == [self.A_NOTE], (
-            "the per-stage reset must not discard notes the planner just wrote"
         )
 
-    def test_the_note_lands_in_the_stage_commit(self, repo, tmp_path, run_git):
-        planner = StubPlanner(
-            [
-                PlannerOutcome(
-                    "next_stage", "next", "e",
-                    stage_fields=planned_stage(),
-                    plan_notes=[self.A_NOTE],
-                )
-            ]
-        )
-        # A real plan document, committed before the run measures anything, so
-        # the note's line reference has something to resolve against.
-        (repo / "PLAN.md").write_text(
-            "# The plan\n\n## Render sweeps\n24 sites across 9 controllers.\n"
-        )
-        run_git(repo, "add", "-A")
-        run_git(repo, "commit", "-qm", "plan")
-        cfg, rt, state = make(
-            repo, tmp_path, planner=planner, plan_addendum_path="docs/progress_log.md"
-        )
-        # Through the real precheck, not the `with_stage` stand-in: publishing
-        # the note is precheck's job now, and a helper that cuts the branch
-        # itself would step over the thing under test.
+    def test_the_note_opens_a_finding_at_derivation(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path, planner=self._planner())
+        nodes.plan(state, rt)
+        (finding,) = rt.ledger.views().open_findings()
+        assert finding.keys == [THE_ITEM] and finding.by == "planner"
+        assert finding.stage_id == "extract" and finding.run_id == "r1"
+        assert "0 sites remain" in finding.claim
+
+    def test_precheck_claims_the_keys(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path, planner=self._planner())
+        state = {**state, **nodes.plan(state, rt)}
+        nodes.precheck(state, rt)
+        claim = rt.ledger.views().state(THE_ITEM)
+        assert (claim.state, claim.run_id, claim.stage_id) == ("claimed", "r1", "extract")
+
+    def test_landing_closes_the_key_and_its_finding(self, repo, tmp_path, run_git):
+        cfg, rt, state = make(repo, tmp_path, planner=self._planner())
         state = {**state, **nodes.plan(state, rt)}
         state = {**state, **nodes.precheck(state, rt)}
         (repo / "app.py").write_text("stage work\n")
-        nodes.advance(state, rt)
+        state = {**state, **nodes.review(state, rt)}
+        out = nodes.advance(state, rt)
 
-        log = repo / "docs" / "progress_log.md"
-        assert log.exists(), "the note did not survive derivation"
-        text = log.read_text()
-        assert "0 sites remain" in text
-        # The heading is lifted from the cited document at `plan_sha`, so the
-        # reference has to survive the same trip the observation does — and be
-        # resolvable against the commit once it arrives.
-        assert "## Render sweeps — `PLAN.md#L4`" in text, (
-            "the quote must reach the writer and be located in the plan"
-        )
-        # In its own commit *before* the stage, not inside the squash. That is
-        # the point of moving it: a stage that never lands still leaves the
-        # finding behind, so it cannot ride in the landing commit.
-        assert "progress_log.md" not in rt.git._out("show", "--stat", "HEAD")
-        assert "plan observations" in rt.git._out(
-            "log", "--format=%s", cfg.project_branch
-        )
+        views = rt.ledger.views()
+        landed = views.state(THE_ITEM)
+        assert landed.state == "landed"
+        assert landed.sha == out["completed"][-1]["merge_sha"]
+        assert views.findings_on(THE_ITEM)[0].status == "resolved"
+        assert out["completed"][-1]["plan_keys"] == [THE_ITEM]
+
+    def test_the_landing_commit_carries_the_trailers(self, repo, tmp_path, run_git):
+        cfg, rt, state = make(repo, tmp_path, planner=self._planner())
+        state = {**state, **nodes.plan(state, rt)}
+        state = {**state, **nodes.precheck(state, rt)}
+        (repo / "app.py").write_text("stage work\n")
+        state = {**state, **nodes.review(state, rt)}
+        nodes.advance(state, rt)
+        body = run_git(repo, "log", "-1", "--format=%B", cfg.project_branch)
+        assert f"Plan-Keys: {THE_ITEM}" in body
+        assert "Planner-Model: claude-opus-5" in body
+        assert "Reviewer-Model: gpt-5.5" in body
+        assert "Bay: test-host" in body
+        assert "Stage-Base: " in body
+
+    def test_the_next_derivation_sees_the_landing_in_the_projection(self, repo, tmp_path):
+        planner = self._planner()
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        state = {**state, **nodes.plan(state, rt)}
+        state = {**state, **nodes.precheck(state, rt)}
+        (repo / "app.py").write_text("stage work\n")
+        state = {**state, **nodes.review(state, rt)}
+        state = {**state, **nodes.advance(state, rt)}
+        nodes.plan(state, rt)
+        prompt = _text_of(planner.calls[-1])
+        assert "### Landed since the plan text was last folded" in prompt
+        assert f"{{#{THE_ITEM}}}" in prompt.split("### Landed", 1)[1]
 
 
 class TestExecutorFeedbackIsBounded:
@@ -2333,79 +2343,37 @@ class TestTheReadBudgetIsToldToThePlanner:
         assert "withheld_reads" not in out
 
 
-class TestTheProgressLogIsSentLive:
-    """The one plan document that must not be frozen.
+class TestTheProjectionIsSentToThePlanner:
+    """What has changed since the plan text was folded reaches every derivation."""
 
-    Freezing the plan is right: a run should not have its instructions change
-    underneath it mid-flight. Applying that to the progress log made it
-    useless. Measured on the first long run — the snapshot held 6,680 bytes
-    while the file on disk had reached 114,554, so the planner was being shown
-    6% of the record of what had been done, and the prompt's instruction to
-    fetch the rest with `read_file` was taken twice in forty-nine derivations.
+    def test_a_landing_recorded_in_the_ledger_reaches_the_prompt(self, repo, tmp_path):
+        planner = StubPlanner()
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        rt.ledger.append(LANDED, key=THE_OTHER_ITEM, sha="abc1234def", stage_id="earlier")
+        nodes.plan(state, rt)
+        prompt = _text_of(planner.calls[0])
+        assert "abc1234def" in prompt
 
-    The log was only frozen because it is reachable by a markdown link from the
-    plan root, not because anyone decided progress should be immutable.
-    """
+    def test_the_plan_text_is_in_the_marked_block_and_the_projection_is_not(self, repo, tmp_path):
+        planner = StubPlanner()
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        rt.ledger.append(LANDED, key=THE_OTHER_ITEM, sha="abc1234def", stage_id="earlier")
+        nodes.plan(state, rt)
+        blocks = planner.calls[0][0]["content"]
+        marked = next(b for b in blocks if "cache_control" in b)
+        assert "do the thing" in marked["text"]
+        assert "abc1234def" not in marked["text"]
 
-    def _rt(self, repo, tmp_path, log="## Landed\n\nzero sites remain\n"):
-        cfg, rt, state = make(
-            repo, tmp_path, plan_addendum_path="docs/progress_log.md"
-        )
-        rt._plan = PlanTree(
-            root=PlanDocument(path="PLAN.md", content="# The plan"),
-            children=[
-                PlanDocument(path="docs/progress_log.md", content="stale"),
-                PlanDocument(path="runbook.md", content="static"),
-            ],
-        )
-        if log is not None:
-            (repo / "docs").mkdir(exist_ok=True)
-            (repo / "docs" / "progress_log.md").write_text(log)
-        return cfg, rt, state
-
-    def test_the_planner_gets_what_is_on_disk_now(self, repo, tmp_path):
-        cfg, rt, state = self._rt(repo, tmp_path)
-        payload = rt.live_plan.as_prompt_payload()
-        assert "zero sites remain" in payload
-        assert "stale" not in payload
-
-    def test_the_snapshot_itself_is_not_mutated(self, repo, tmp_path):
-        # `rt.plan` is held for the run and handed to the reviewer. Swapping a
-        # document in place would change what the reviewer judges against.
-        cfg, rt, state = self._rt(repo, tmp_path)
-        rt.live_plan
-        assert "stale" in rt.plan.as_prompt_payload()
-
-    def test_the_reviewer_still_judges_against_the_frozen_plan(
-        self, repo, tmp_path
-    ):
-        # Progress is not evidence about whether a diff did what it was asked.
-        cfg, rt, state = self._rt(repo, tmp_path)
-        state = with_stage(state, rt)
-        (repo / "app.py").write_text("changed\n")
-        nodes.review(state, rt)
-        sent = "\n".join(str(m) for m in rt.reviewer.cache_keys)
-        assert "zero sites remain" not in sent
-
-    def test_a_log_absent_from_the_snapshot_is_added(self, repo, tmp_path):
-        # A project whose plan root never links the log would otherwise never
-        # show the planner any progress at all.
-        cfg, rt, state = self._rt(repo, tmp_path)
-        rt._plan = PlanTree(root=PlanDocument(path="PLAN.md", content="# Plan"))
-        assert "zero sites remain" in rt.live_plan.as_prompt_payload()
-
-    def test_a_missing_file_falls_back_rather_than_failing(self, repo, tmp_path):
-        # A planner call is far too expensive to lose over a progress file that
-        # has not been written yet.
-        cfg, rt, state = self._rt(repo, tmp_path, log=None)
-        assert "stale" in rt.live_plan.as_prompt_payload()
-
-    def test_it_still_sinks_to_the_end(self, repo, tmp_path):
-        # It is now both live and the largest growing document, so its position
-        # in the cached prefix matters more than before, not less.
-        cfg, rt, state = self._rt(repo, tmp_path)
-        payload = rt.live_plan.as_prompt_payload(last="docs/progress_log.md")
-        assert payload.index("static") < payload.index("zero sites remain")
+    def test_a_fold_moves_the_landing_into_the_plan_text(self, repo, tmp_path):
+        planner = StubPlanner()
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        rt.cfg.ledger.fold_ratio = 0.0001
+        rt.ledger.append(LANDED, key=THE_OTHER_ITEM, sha="abc1234def", stage_id="earlier")
+        nodes.plan(state, rt)
+        blocks = planner.calls[0][0]["content"]
+        marked = next(b for b in blocks if "cache_control" in b)
+        assert "abc1234def" in marked["text"]
+        assert "### Landed" not in _text_of(planner.calls[0])
 
 
 class TestTheWithoutLandingBudgetIsTerminalAndSaysSo:
@@ -2792,18 +2760,16 @@ class TestTheRejectedAnswerReachesTheArtifact:
         assert written["rejected_answer"] is None
 
 
-class TestTheFindingSurvivesToTheAddendum:
-    """Planner response to plan note to state to the file on disk.
+class TestTheFindingSurvivesToTheLedger:
+    """Planner response to plan note to the finding's claim."""
 
-    The same journey `plan_notes` itself was lost on once, to a reset spread
-    over the top of it. A new field on that note travels the identical path and
-    gets the identical test.
-    """
-
-    def test_a_finding_reaches_the_written_entry(self, repo, tmp_path):
+    def test_a_finding_reaches_the_claim(self, repo, tmp_path):
         note = {
-            "plan_path": "PLAN.md",
-            "anchor": "24 sites across 9 controllers.",
+            "kind": "progress",
+            "key": THE_ITEM,
+            "subject": "remaining renders",
+            "total": "7 of 24",
+            "needs": "pipeline",
             "finding": "7 of 24 remain, all inline `<script>` renders",
             "observation": "The mechanical half is done.",
         }
@@ -2816,64 +2782,19 @@ class TestTheFindingSurvivesToTheAddendum:
                 )
             ]
         )
-        cfg, rt, state = make(
-            repo, tmp_path, planner=planner,
-            plan_addendum_path="docs/progress_log.md",
-        )
-        (repo / "docs").mkdir(exist_ok=True)
-        (repo / "PLAN.md").write_text("# Plan\n\n24 sites across 9 controllers.\n")
-        # Committed, because precheck refuses to cut a branch over an
-        # unattributable change — the stand-in it replaces did not care.
-        rt.git.commit_all("plan")
-
-        state = {**state, **nodes.plan(state, rt)}
-        state = {**state, **nodes.precheck(state, rt)}
-        (repo / "app.py").write_text("stage work\n")
-        nodes.advance(state, rt)
-
-        written = (repo / "docs/progress_log.md").read_text()
-        assert "- **found** 7 of 24 remain, all inline `<script>` renders" in written
-        assert "The mechanical half is done." in written
+        cfg, rt, state = make(repo, tmp_path, planner=planner)
+        nodes.plan(state, rt)
+        (finding,) = rt.ledger.views().open_findings()
+        assert "7 of 24 remain, all inline `<script>` renders" in finding.claim
+        assert "The mechanical half is done." in finding.claim
+        assert finding.total == "7 of 24"
 
 
 class TestAFailedLandingLeavesNothingBehind:
-    """Either the stage lands or the tree is as advance found it.
+    """Either the stage lands or the ledger is as advance found it."""
 
-    `advance` mutates in several steps — record what landed, strip whitespace,
-    commit, squash-merge — and a failure in any of them used to leave the
-    repository part-way through. Two faces of that: a staged merge stranded on
-    the project branch, and an uncommitted plan document left in the worktree.
-
-    What is protected here is now the *reviewer's* entries only. The planner's
-    notes moved to `precheck`, which commits them before the branch is cut, so
-    they are outside this transaction deliberately — see
-    `TestPlanNotesArePublishedWhenTheStageIsCut` for why their survival must
-    not depend on the stage landing.
-
-    The second is the more confusing one. The next resume re-enters at verify,
-    whose scope guard sees a plan document changed during a stage and routes it
-    to the planner as the executor editing the record of its own work. That
-    never happened, and the planner cannot fix it.
-    """
-
-    def _cfg(self, repo, tmp_path):
-        cfg, rt, state = make(
-            repo, tmp_path, plan_addendum_path="docs/progress_log.md"
-        )
-        (repo / "docs").mkdir(exist_ok=True)
-        (repo / "PLAN.md").write_text("# Plan\n\nsome item\n")
-        return cfg, rt, state
-
-    A_NOTE = {
-        "plan_path": "PLAN.md",
-        "anchor": "some item",
-        "observation": "done",
-    }
-
-    def test_a_failed_merge_unwinds_what_the_reviewer_recorded(
-        self, repo, tmp_path, monkeypatch
-    ):
-        cfg, rt, state = self._cfg(repo, tmp_path)
+    def test_a_failed_merge_records_no_landing(self, repo, tmp_path, monkeypatch):
+        cfg, rt, state = make(repo, tmp_path)
         state = with_stage(state, rt)
         (repo / "app.py").write_text("stage work\n")
         state = {**state, "review_record": "what the stage did"}
@@ -2882,51 +2803,21 @@ class TestAFailedLandingLeavesNothingBehind:
             raise GitError("pre-commit hook rejected the commit")
 
         monkeypatch.setattr(rt.git, "squash_merge", boom)
-
         with pytest.raises(GitError):
             nodes.advance(state, rt)
-
-        assert not (repo / "docs/progress_log.md").exists(), (
-            "the record was written by advance and must not outlive its failure"
-        )
+        assert rt.ledger.views().state(THE_ITEM).state == "open"
 
     def test_a_successful_landing_keeps_the_record(self, repo, tmp_path):
-        cfg, rt, state = self._cfg(repo, tmp_path)
+        cfg, rt, state = make(repo, tmp_path)
         state = with_stage(state, rt)
         (repo / "app.py").write_text("stage work\n")
-        state = {**state, "review_record": "what the stage did"}
-
+        state = {**state, "review_record": "what the stage did", "review_summary": "fine"}
         nodes.advance(state, rt)
-        assert "what the stage did" in (repo / "docs/progress_log.md").read_text()
-
-    def test_the_planner_note_is_not_advance_s_to_write(self, repo, tmp_path):
-        # It belongs to `precheck` now. Handing one to `advance` must not
-        # resurrect the old path and put it back inside the transaction.
-        cfg, rt, state = self._cfg(repo, tmp_path)
-        state = with_stage(state, rt)
-        (repo / "app.py").write_text("stage work\n")
-        state = {**state, "pending_plan_notes": [self.A_NOTE]}
-
-        nodes.advance(state, rt)
-        log = repo / "docs/progress_log.md"
-        assert not log.exists() or "done" not in log.read_text()
-
-    def test_a_landing_with_nothing_recorded_is_unaffected(self, repo, tmp_path, monkeypatch):
-        # Nothing was written, so there is nothing to unwind and the unwind
-        # must not invent a revert of a file that never existed.
-        cfg, rt, state = self._cfg(repo, tmp_path)
-        state = with_stage(state, rt)
-        (repo / "app.py").write_text("stage work\n")
-
-        def boom(*a, **kw):
-            raise GitError("nope")
-
-        monkeypatch.setattr(rt.git, "squash_merge", boom)
-        with pytest.raises(GitError):
-            nodes.advance(state, rt)
+        landed = rt.ledger.views().state(THE_ITEM)
+        assert landed.state == "landed" and landed.evidence == "fine"
 
 
-class TestTheReviewerIsGivenTheLiveRecord:
+class TestTheReviewerIsGivenTheProjection:
     """Runtime to node to the messages the reviewer actually receives.
 
     The frozen snapshot's copy of the progress log is whatever existed at run
@@ -2946,16 +2837,10 @@ class TestTheReviewerIsGivenTheLiveRecord:
                 out += [b.get("text", "") for b in content]
         return "\n".join(out)
 
-    def test_the_live_log_reaches_the_reviewer(self, repo, tmp_path):
+    def test_the_projection_reaches_the_reviewer(self, repo, tmp_path):
         reviewer = StubReviewer()
-        cfg, rt, state = make(
-            repo, tmp_path, reviewer=reviewer,
-            plan_addendum_path="docs/progress_log.md",
-        )
-        (repo / "docs").mkdir(exist_ok=True)
-        (repo / "docs/progress_log.md").write_text(
-            "## a section\n\n- **found** 7 of 24 remain\n"
-        )
+        cfg, rt, state = make(repo, tmp_path, reviewer=reviewer)
+        rt.ledger.open_finding(keys=[THE_OTHER_ITEM], by="planner", claim="7 of 24 remain")
         state = with_stage(state, rt)
         (repo / "app.py").write_text("stage work\n")
 
@@ -3092,7 +2977,10 @@ class TestReviewerObservationsReachTheLog:
         assert len(notes) == 2
         assert "first thing" in notes[0] and "second thing" in notes[1]
 
-    def test_an_observation_is_written_when_the_stage_lands(self, repo, tmp_path):
+    def _reviewer_findings(self, rt):
+        return [f for f in rt.ledger.views().findings.values() if f.by == "reviewer"]
+
+    def test_an_observation_opens_a_finding_when_the_stage_lands(self, repo, tmp_path):
         reviewer = self._reviewer([
             {
                 "file": "app/views/admin/product_types/_form.html.erb",
@@ -3100,89 +2988,57 @@ class TestReviewerObservationsReachTheLog:
                 "detail": "The checkbox posts it and no permit list covers it.",
             }
         ])
-        cfg, rt, state = make(
-            repo, tmp_path, reviewer=reviewer,
-            plan_addendum_path="docs/progress_log.md",
-        )
-        (repo / "docs").mkdir(exist_ok=True)
-        (repo / "PLAN.md").write_text("# Plan\n\nsome item\n")
-
+        cfg, rt, state = make(repo, tmp_path, reviewer=reviewer)
         state = with_stage(state, rt)
         (repo / "app.py").write_text("stage work\n")
         state = {**state, **nodes.review(state, rt)}
         nodes.advance(state, rt)
 
-        written = (repo / "docs/progress_log.md").read_text()
-        assert "app/views/admin/product_types/_form.html.erb" in written
-        assert "mailing_service_ids is submitted but never permitted" in written
-        assert "The checkbox posts it and no permit list covers it." in written
+        (finding,) = self._reviewer_findings(rt)
+        assert finding.needs == "human" and finding.status == "open"
+        assert "app/views/admin/product_types/_form.html.erb" in finding.claim
+        assert "mailing_service_ids is submitted but never permitted" in finding.claim
+        assert "The checkbox posts it and no permit list covers it." in finding.claim
 
-    def test_nothing_is_written_when_there_are_none(self, repo, tmp_path):
-        # Most stages have none, so the empty case is the common one and must
-        # not leave an empty heading behind.
-        cfg, rt, state = make(
-            repo, tmp_path, reviewer=self._reviewer([]),
-            plan_addendum_path="docs/progress_log.md",
-        )
-        (repo / "docs").mkdir(exist_ok=True)
-        (repo / "PLAN.md").write_text("# Plan\n\nsome item\n")
-
+    def test_nothing_is_opened_when_there_are_none(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path, reviewer=self._reviewer([]))
         state = with_stage(state, rt)
         (repo / "app.py").write_text("stage work\n")
         state = {**state, **nodes.review(state, rt)}
         nodes.advance(state, rt)
-
-        # The log exists, because a landed stage always records what it did.
-        # What must not appear is an observation heading with nothing under it.
-        text = (repo / "docs/progress_log.md").read_text()
-        assert "**observed** by the reviewer" not in text
+        assert self._reviewer_findings(rt) == []
 
     def test_a_rework_cycle_does_not_report_the_same_finding_twice(
         self, repo, tmp_path
     ):
         # Every review of a stage sees the whole cumulative diff, so the newest
-        # set supersedes the last. Accumulating would report one finding once
-        # per attempt, and the log cannot distinguish that from independent
-        # confirmation.
+        # set supersedes the last.
         observation = {
             "file": "app/models/cart.rb",
             "finding": "two attr_accessible blocks",
             "detail": "Lines 149 and 396 both declare one.",
         }
-        cfg, rt, state = make(
-            repo, tmp_path, reviewer=self._reviewer([observation]),
-            plan_addendum_path="docs/progress_log.md",
-        )
-        (repo / "docs").mkdir(exist_ok=True)
-        (repo / "PLAN.md").write_text("# Plan\n\nsome item\n")
-
+        cfg, rt, state = make(repo, tmp_path, reviewer=self._reviewer([observation]))
         state = with_stage(state, rt)
         (repo / "app.py").write_text("stage work\n")
         state = {**state, **nodes.review(state, rt)}
         state = {**state, **nodes.review(state, rt)}
         nodes.advance(state, rt)
-
-        written = (repo / "docs/progress_log.md").read_text()
-        assert written.count("two attr_accessible blocks") == 1
+        assert len(self._reviewer_findings(rt)) == 1
 
     def test_a_stage_that_never_lands_records_nothing(self, repo, tmp_path):
-        # A finding from abandoned work must not enter the record: the log is
-        # what the next run reads to know what is true.
+        # A finding from abandoned work must not enter the record.
         cfg, rt, state = make(
             repo, tmp_path,
             reviewer=self._reviewer([
                 {"file": "a.rb", "finding": "something", "detail": "detail"}
             ]),
-            plan_addendum_path="docs/progress_log.md",
         )
-        (repo / "docs").mkdir(exist_ok=True)
-        (repo / "PLAN.md").write_text("# Plan\n\nsome item\n")
-
         state = with_stage(state, rt)
         (repo / "app.py").write_text("stage work\n")
         state = {**state, **nodes.review(state, rt)}
         # No advance: the stage was abandoned.
-        assert not (repo / "docs/progress_log.md").exists()
+        assert self._reviewer_findings(rt) == []
         assert state["pending_observations"][0]["file"] == "a.rb"
 
 
@@ -3218,15 +3074,8 @@ class TestChecksThatWrite:
         assert rt.git.uncommitted()
 
 
-class TestTheRecordReachesTheLog:
-    """The reviewer's account of the change, end to end.
-
-    Written here rather than only against `append_outcome` because this value
-    crosses two schema boundaries — `ReviewOutcome` into `RunState`, and
-    `RunState` into the addendum — and every defect of this shape in this
-    codebase has been a value computed correctly, written correctly, and
-    dropped in transit by a schema that did not declare the key.
-    """
+class TestTheRecordReachesTheCommit:
+    """The reviewer's account of the change, end to end into the landing commit."""
 
     def _reviewer(self, record):
         return StubReviewer(
@@ -3234,58 +3083,35 @@ class TestTheRecordReachesTheLog:
                            record=record)]
         )
 
-    def test_it_is_what_the_log_gets(self, repo, tmp_path):
+    def test_it_is_what_the_commit_gets(self, repo, tmp_path, run_git):
         cfg, rt, state = make(
             repo, tmp_path,
             reviewer=self._reviewer("Widens the permit list to the two id "
                                     "columns, so the selects now save."),
-            plan_addendum_path="docs/progress_log.md",
         )
-        (repo / "docs").mkdir(exist_ok=True)
         state = with_stage(state, rt)
         (repo / "app.py").write_text("stage work\n")
         state = {**state, **nodes.review(state, rt)}
         nodes.advance(state, rt)
 
-        text = (repo / "docs/progress_log.md").read_text()
-        assert "so the selects now save" in text
-        # Not the verdict rationale, which is written for a different job.
-        assert "matches the stage" not in text
+        body = run_git(repo, "log", "-1", "--format=%B", cfg.project_branch)
+        assert "so the selects now save" in body.split("Landed:", 1)[1]
+        assert "matches the stage" not in body.split("Landed:", 1)[1].split("Plan-Keys", 1)[0]
 
     def test_a_reviewer_that_writes_none_falls_back_to_the_summary(
-        self, repo, tmp_path
+        self, repo, tmp_path, run_git
     ):
-        # Better a gate-shaped entry than no entry.
-        cfg, rt, state = make(
-            repo, tmp_path, reviewer=self._reviewer(""),
-            plan_addendum_path="docs/progress_log.md",
-        )
-        (repo / "docs").mkdir(exist_ok=True)
+        cfg, rt, state = make(repo, tmp_path, reviewer=self._reviewer(""))
         state = with_stage(state, rt)
         (repo / "app.py").write_text("stage work\n")
         state = {**state, **nodes.review(state, rt)}
         nodes.advance(state, rt)
-        assert "matches the stage" in (repo / "docs/progress_log.md").read_text()
+        body = run_git(repo, "log", "-1", "--format=%B", cfg.project_branch)
+        assert "matches the stage" in body
 
 
 class TestTheSquashCommitIsAProperCommitMessage:
-    """Subject, blank line, wrapped body — not a truncated one-liner.
-
-    The landing commit was `[{stage.id}] {instruction[:70]}` and nothing else:
-    a subject cut mid-word, no body, and on a project whose stage ids run to
-    forty-odd characters the visible text was down to a clause. Meanwhile the
-    reviewer's account of what the stage actually did — the only description
-    written by a participant that saw the diff — was already in hand two lines
-    above, going to the progress log and nowhere else.
-
-    So `git log` on the project branch described the *intent* of each stage,
-    truncated, and never the outcome. `git blame` on the plan is the mechanism
-    CLAUDE.md leans on for answering what a stage did from facts rather than
-    claims, and it was reading a sentence fragment.
-
-    The body goes through `decode_escapes` for the same reason the addendum
-    does, and so the commit body and the log entry are the same bytes.
-    """
+    """Subject, blank line, what was asked, what landed, trailers."""
 
     def _stage(self, instruction):
         from code_gantry.config import Stage
@@ -3293,25 +3119,18 @@ class TestTheSquashCommitIsAProperCommitMessage:
         return Stage(id="a-fairly-long-stage-id-like-real-ones", instruction=instruction)
 
     def test_the_subject_is_the_stage_id_alone(self):
-        # The id is authored as an identifier, not slugified from a title the
-        # tooling then discarded — so appending the instruction's first line
-        # repeated in prose what the id already said, and pushed the subject
-        # past 72 columns to do it.
         msg = nodes._commit_message(self._stage("Do the thing\n\nmore"), "")
         assert msg.splitlines()[0] == "[a-fairly-long-stage-id-like-real-ones]"
 
     def test_the_subject_does_not_carry_the_instruction(self):
-        # The instruction is written before the work. Keeping it out of the
-        # subject is the same call as recording the reviewer's account in the
-        # body: the commit should say what happened, not what was asked for.
         msg = nodes._commit_message(self._stage("Close the permit gap"), "did it")
-        assert "Close the permit gap" not in msg
+        assert "Close the permit gap" not in msg.splitlines()[0]
 
-    def test_the_body_is_separated_by_exactly_one_blank_line(self):
-        msg = nodes._commit_message(self._stage("Subject here"), "The reviewer said this.")
+    def test_asked_and_landed_are_kept_apart_and_in_that_order(self):
+        msg = nodes._commit_message(self._stage("Close the permit gap"), "It closed it.")
         lines = msg.splitlines()
         assert lines[1] == "", "git needs a blank line after the subject"
-        assert lines[2] == "The reviewer said this."
+        assert msg.index("Asked:") < msg.index("Close the permit gap") < msg.index("Landed:") < msg.index("It closed it.")
 
     def test_a_long_body_is_wrapped_rather_than_one_line(self):
         record = (
@@ -3320,108 +3139,82 @@ class TestTheSquashCommitIsAProperCommitMessage:
             "retained top-level hidden input, preserving the positional request "
             "style and the existing spec structure throughout the file."
         )
-        body = nodes._commit_message(self._stage("s"), record).split("\n\n", 1)[1]
+        body = nodes._commit_message(self._stage("s"), record).split("Landed:\n\n", 1)[1]
         assert len(body.splitlines()) > 1
         assert max(len(line) for line in body.splitlines()) <= 72
 
     def test_paragraphs_survive_wrapping(self):
         msg = nodes._commit_message(self._stage("s"), "First para.\n\nSecond para.")
-        body = msg.split("\n\n", 1)[1]
+        body = msg.split("Landed:\n\n", 1)[1]
         assert "First para." in body and "Second para." in body
         assert "" in body.splitlines(), "the paragraph break is kept"
 
     def test_a_long_path_is_not_broken_across_lines(self):
-        # Wrapping a path makes it unsearchable, and these bodies are full of
-        # them. Better an over-long line than a path that cannot be grepped.
         record = "It changes " + "a/very/long/path/that/goes/on/" * 4 + "file.rb here."
-        body = nodes._commit_message(self._stage("s"), record).split("\n\n", 1)[1]
+        body = nodes._commit_message(self._stage("s"), record).split("Landed:\n\n", 1)[1]
         assert "a/very/long/path/that/goes/on/a/very/long" in body
 
-    def test_no_body_means_no_trailing_blank_line(self):
-        # A reviewer that returned nothing must not produce a commit whose
-        # message is a subject followed by whitespace.
-        msg = nodes._commit_message(self._stage("Just this"), "")
-        assert msg == msg.strip()
-        assert "\n" not in msg
+    def test_nothing_asked_and_nothing_landed_is_the_subject_alone(self):
+        from code_gantry.config import Stage
+
+        msg = nodes._commit_message(Stage(id="just-this"), "")
+        assert msg == "[just-this]"
 
     def test_unicode_escapes_are_decoded(self):
-        # The same pass the addendum makes, so the commit body and the log
-        # entry are the same bytes. It is narrow by design: `\\n` is not a
-        # sequence it touches, in either place.
         msg = nodes._commit_message(self._stage("s"), "an em dash \\u2014 here")
         assert "\u2014" in msg
         assert "u2014" not in msg.replace("\u2014", "")
 
+    def test_trailers_close_the_message_and_skip_empty_values(self):
+        msg = nodes._commit_message(
+            self._stage("s"), "done",
+            trailers=[("Plan-Keys", "p.002 p.003"), ("Resolves", ""), ("Bay", "host-a")],
+        )
+        tail = msg.rsplit("\n\n", 1)[1]
+        assert tail == "Plan-Keys: p.002 p.003\nBay: host-a"
 
-class TestPlanNotesArePublishedWhenTheStageIsCut:
-    """Not held to the landing gate, because their truth does not depend on it.
 
-    The notes say things like "the two documents contradict each other" and
-    "not drawable" — findings about the *plan*, made by reading it against the
-    code while deriving a stage. Nothing about them is contingent on the
-    executor succeeding, and a stage that escalates used to take them to the
-    grave. That is the expensive direction: a false blocker in a plan makes
-    items read as blocked, and an item that reads as blocked is never
-    attempted.
+class TestKeysAreClaimedWhenTheStageIsCut:
+    """Precheck claims the stage's keys, and refuses a key that is no longer open."""
 
-    The code already conceded the point for revisions — the notes accumulated
-    across a redraw "because a redrawn stage is the same piece of work and its
-    observations about the plan are still true". Abandonment is the same
-    argument one step further.
-
-    The reviewer's observations stay on the landing gate and are deliberately
-    not moved: those are findings about a diff, and an abandoned diff does not
-    exist.
-
-    Publishing here also removes an obligation rather than adding one. The note
-    used to be written inside `advance`, which then had to unwind it by hand if
-    any later step raised — the landing transaction is smaller without it.
-    """
-
-    def _notes(self):
-        return [{"anchor": "PLAN.md#L1", "observation": "the plan says X", "finding": "found Y"}]
-
-    def test_the_note_lands_before_the_branch_is_cut(self, repo, tmp_path, run_git):
-        cfg, rt, state = make(repo, tmp_path, plan_addendum_path="docs/progress_log.md")
-        state = {**with_stage(state, rt), "pending_plan_notes": self._notes()}
+    def test_the_keys_are_claimed_before_the_branch_is_cut(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        state = {**state, "current": planned_stage()}
         out = nodes.precheck(state, rt)
+        assert out.get("stage_branch")
+        claim = rt.ledger.views().state(THE_ITEM)
+        assert (claim.state, claim.run_id, claim.stage_id) == ("claimed", "r1", "extract")
 
-        log = repo / "docs/progress_log.md"
-        assert log.exists(), "the note is written at cut time"
-        assert "found Y" in log.read_text()
-        assert rt.git.is_clean(), "and committed, or the cut sweeps it up"
+    def test_a_claim_by_this_stage_is_not_repeated(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        state = {**state, "current": planned_stage()}
+        state = {**state, **nodes.precheck(state, rt)}
+        nodes.precheck({**state, "revision": 1}, rt)
+        claims = [e for e in rt.ledger.events() if e.kind == CLAIMED]
+        assert len(claims) == 1
 
-    def test_the_note_commit_is_on_the_project_branch(self, repo, tmp_path, run_git):
-        # Not the stage branch, which is discarded when the stage is abandoned
-        # — which is the whole case for moving it.
-        cfg, rt, state = make(repo, tmp_path, plan_addendum_path="docs/progress_log.md")
-        state = {**with_stage(state, rt), "pending_plan_notes": self._notes()}
+    def test_a_key_landed_elsewhere_sends_the_stage_back_to_the_planner(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        rt.ledger.append(LANDED, key=THE_ITEM, sha="abc1234def", stage_id="someone-else")
+        state = {**state, "current": planned_stage(), "stage_queue": [planned_stage(id="behind", plan_keys=[THE_OTHER_ITEM])]}
+        out = nodes.precheck(state, rt)
+        assert out["next_hop"] == "plan"
+        assert out["failure_layer"] == "plan_keys"
+        assert out["stage_queue"] == []
+        assert THE_ITEM in out["last_failure"]["detail"]
+
+    def test_a_key_claimed_by_another_run_is_refused_too(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        rt.ledger.append(CLAIMED, key=THE_ITEM, stage_id="theirs", run_id="r0")
+        state = {**state, "current": planned_stage()}
+        out = nodes.precheck(state, rt)
+        assert out["next_hop"] == "plan"
+
+    def test_a_stage_with_no_keys_claims_nothing(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        state = {**state, "current": planned_stage(plan_keys=[])}
         nodes.precheck(state, rt)
-        subjects = run_git(repo, "log", "--format=%s", cfg.project_branch).splitlines()
-        assert any("log.md" in s or "plan" in s.lower() for s in subjects), subjects
-
-    def test_the_stage_diff_does_not_contain_the_note(self, repo, tmp_path, run_git):
-        # It precedes stage_start_sha, so the scope guard never sees it and
-        # cannot report it as the executor editing a plan document.
-        cfg, rt, state = make(repo, tmp_path, plan_addendum_path="docs/progress_log.md")
-        state = {**with_stage(state, rt), "pending_plan_notes": self._notes()}
-        out = nodes.precheck(state, rt)
-        changed = rt.git.diff_names(out.get("stage_start_sha") or rt.git.head_sha())
-        assert "docs/progress_log.md" not in changed
-
-    def test_the_notes_are_cleared_once_written(self, repo, tmp_path, run_git):
-        # Otherwise a revision re-enters precheck and republishes everything the
-        # first cut already wrote.
-        cfg, rt, state = make(repo, tmp_path, plan_addendum_path="docs/progress_log.md")
-        state = {**with_stage(state, rt), "pending_plan_notes": self._notes()}
-        out = nodes.precheck(state, rt)
-        assert out["pending_plan_notes"] == []
-
-    def test_no_notes_means_no_commit(self, repo, tmp_path, run_git):
-        cfg, rt, state = make(repo, tmp_path, plan_addendum_path="docs/progress_log.md")
-        before = run_git(repo, "rev-parse", "HEAD").strip()
-        nodes.precheck({**with_stage(state, rt), "pending_plan_notes": []}, rt)
-        assert run_git(repo, "rev-parse", cfg.project_branch).strip() == before
+        assert not [e for e in rt.ledger.events() if e.kind == CLAIMED]
 
 
 class TestTheNativeExecutorsMeasurementsSurviveTheTrip:

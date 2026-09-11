@@ -36,8 +36,14 @@ def a_config(repo):
 
 @pytest.fixture
 def assembled(repo, tmp_path):
+    from code_gantry.ledger import open_ledger
+    from code_gantry.planmodel import import_documents, parse_markdown
+
     cfg = a_config(repo)
     project = ProjectPaths(tmp_path / "projects" / "proj")
+    seed = open_ledger(project.ledger, origin="test")
+    import_documents(seed, [parse_markdown("# Plan\n\n- [ ] **the item**\n")], prefix="p")
+    seed.close()
     planner = AnthropicPlanner(cfg.planner, client=object())
     reviewer = OpenAIReviewer(cfg.reviewer, client=object())
     lines: list[str] = []
@@ -93,6 +99,7 @@ class TestThePlannerCanCheckItsOwnStage:
                     "id": "funnel-links",
                     "instruction": "do the thing",
                     "edit_files": ["app/**"],
+                    "plan_keys": ["p.002"],
                     "forbidden_patterns": [r"\.html_safe.*funnel_request"],
                 }
             )
@@ -105,48 +112,6 @@ class TestThePlannerCanCheckItsOwnStage:
         planner, _, _ = assembled
         problems = planner.validate_stage_fields({"id": None, "edit_files": "app/**"})
         assert problems, "a spec that cannot be built is a problem, not a crash"
-
-
-class TestTheLiveProgressLog:
-    """Handed over on its own so the reviewer can place it after its breakpoint.
-
-    `live_plan` splices the same file into a tree, which is right for the
-    planner — Anthropic extends the longest matching cached prefix, so an
-    append-only document before a breakpoint gets cheaper as it grows. The
-    reviewer's model has no such fallback, so the same arrangement misses on
-    every landing. It needs the text, not the tree.
-    """
-
-    def test_it_reads_the_file_as_it_stands(self, repo, tmp_path):
-        cfg = a_config(repo)
-        cfg = cfg.model_copy(update={"plan_addendum_path": "docs/log.md"})
-        (repo / "docs").mkdir(exist_ok=True)
-        (repo / "docs/log.md").write_text("## entry\n\nlanded\n")
-        rt = _runtime(cfg, tmp_path)
-        assert "landed" in rt.live_progress_log
-
-    def test_no_configured_path_is_not_an_error(self, repo, tmp_path):
-        rt = _runtime(a_config(repo), tmp_path)
-        assert rt.live_progress_log is None
-
-    def test_a_missing_file_is_not_an_error(self, repo, tmp_path):
-        # A review is far too expensive to fail over a progress file that has
-        # not been written yet.
-        cfg = a_config(repo).model_copy(
-            update={"plan_addendum_path": "docs/never-written.md"}
-        )
-        assert _runtime(cfg, tmp_path).live_progress_log is None
-
-
-def _runtime(cfg, tmp_path):
-    project = ProjectPaths(tmp_path / "projects" / "proj")
-    return build_runtime(
-        cfg,
-        project,
-        RunPaths(project, "run-1"),
-        AnthropicPlanner(cfg.planner, client=object()),
-        OpenAIReviewer(cfg.reviewer, client=object()),
-    )
 
 
 class TestAgentContextDocuments:

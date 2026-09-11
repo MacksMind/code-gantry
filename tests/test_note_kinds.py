@@ -1,43 +1,32 @@
-"""A plan note declares what kind of thing it is, and one kind never reaches the run.
+"""A plan note names its key, its subject, who can act on it — and opens a finding.
 
-The planner reads the plan against the code and finds three different things.
-Two of them are about the plan — a step is further along than the plan says, or
-the plan was wrong when it was written — and belong in the progress log, which
-is spliced live into every planner prompt and folded into the documents later.
+The planner reads the plan against the code and finds three kinds of thing:
+a step further along than the plan says, a plan that was wrong when written,
+and a defect in code this plan is not about. All three open a finding in the
+ledger, keyed to a plan item. `needs` decides who can act on it: `pipeline`
+findings are shown to every later derivation; `human` findings are queued for
+a person and left intact until answered.
 
-The third is a defect in the code that this plan is not about. Measured over 926
-notes on one project, 46 of them said so in their own prose: "classified
-pre-existing, so it belongs in the general technical debt plan". The planner was
-already routing them, and it had nowhere to route them *to* — so they landed in
-the log with everything else and were read back on every subsequent derivation
-until the next fold. That is the whole of the scope-creep mechanism: a finding
-about work nobody asked for, arriving in the prompt that decides what work to
-do next.
-
-Classifying at fold time cannot fix it, because the damage happens in the hours
-before the fold. So the kind is declared where the evidence is, and `advance`
-routes on it: in-scope notes to the log, out-of-scope findings to a file in the
-work directory that nothing reads back.
-
-`kind` is required rather than optional. `observations` was optional with a
-conditional trigger and came back empty 278 times out of 278; a question that
-has a true answer for every note does not get declined.
+Every field is required. An optional field with a conditional trigger is
+declined in good conscience; a question with a true answer for every note is
+answered every time.
 """
 
-from pathlib import Path
-
 import pytest
+from pydantic import ValidationError
 
-from test_config import as_test_tools
-
-from code_gantry.addendum import append_findings, append_notes
+from code_gantry.ledger import open_ledger
+from code_gantry.nodes import open_findings
+from code_gantry.planmodel import import_documents, parse_markdown
 
 
 def note(kind="progress", **over):
     base = {
         "kind": kind,
-        "plan_path": "docs/plan.md",
-        "anchor": "convert the remaining sites",
+        "key": "p.002",
+        "subject": "remaining sites",
+        "total": "7 sites in 1 controller",
+        "needs": "pipeline",
         "finding": "7 of 24 remain",
         "observation": "Seven sites remain, all inline renders.",
     }
@@ -45,147 +34,97 @@ def note(kind="progress", **over):
     return base
 
 
-class TestSchema:
-    def test_kind_is_required(self):
-        from pydantic import ValidationError
+@pytest.fixture
+def led(tmp_path):
+    led = open_ledger(tmp_path / "ledger.db", origin="t", actor="t")
+    import_documents(led, [parse_markdown("# Plan\n\n- [ ] **do the thing**\n")], prefix="p")
+    return led
 
+
+class FakeGit:
+    def head_sha(self):
+        return "abc1234def"
+
+
+class TestSchema:
+    def _build(self, **over):
         from code_gantry.planner import PlanNote
 
+        return PlanNote(**note(**over))
+
+    @pytest.mark.parametrize("field", ["kind", "key", "subject", "total", "needs", "observation"])
+    def test_every_field_is_required(self, field):
+        from code_gantry.planner import PlanNote
+
+        fields = note()
+        del fields[field]
         with pytest.raises(ValidationError):
-            PlanNote(
-                plan_path="docs/plan.md",
-                anchor="a",
-                observation="b",
-            )
+            PlanNote(**fields)
 
     def test_kind_rejects_anything_unlisted(self):
-        from pydantic import ValidationError
-
-        from code_gantry.planner import PlanNote
-
         with pytest.raises(ValidationError):
-            PlanNote(
-                kind="interesting",
-                plan_path="docs/plan.md",
-                anchor="a",
-                observation="b",
-            )
+            self._build(kind="interesting")
 
     def test_the_three_kinds_are_accepted(self):
+        for kind in ("progress", "correction", "out_of_scope"):
+            assert self._build(kind=kind).kind == kind
+
+    def test_needs_is_pipeline_or_human(self):
+        for needs in ("pipeline", "human"):
+            assert self._build(needs=needs).needs == needs
+        with pytest.raises(ValidationError):
+            self._build(needs="someone")
+
+    def test_there_is_no_quoted_anchor_any_more(self):
         from code_gantry.planner import PlanNote
 
-        for kind in ("progress", "correction", "out_of_scope"):
-            assert PlanNote(
-                kind=kind, plan_path="docs/plan.md", anchor="a", observation="b"
-            ).kind == kind
+        assert "anchor" not in PlanNote.model_fields
+        assert "plan_path" not in PlanNote.model_fields
 
 
 class TestRouting:
-    """The log takes two kinds; the findings file takes the third."""
+    """Every note opens a finding; `needs` decides who sees it first."""
 
-    def test_out_of_scope_never_reaches_the_progress_log(self, tmp_path):
-        (tmp_path / "docs").mkdir()
-        written = append_notes(
-            tmp_path,
-            "docs/progress.md",
-            [note("out_of_scope", observation="A GET mutates in checkout.")],
-            stage_id="s1",
-        )
-        assert written is None
-        assert not (tmp_path / "docs" / "progress.md").exists()
+    def test_a_note_opens_a_finding_on_its_key(self, led):
+        opened = open_findings(led, FakeGit(), [note()], by="planner", stage_id="s1", run_id="r1")
+        assert opened == 1
+        (finding,) = led.views().open_findings()
+        assert finding.keys == ["p.002"]
+        assert finding.by == "planner" and finding.needs == "pipeline"
+        assert finding.total == "7 sites in 1 controller"
+        assert finding.subject == "remaining sites"
+        assert "7 of 24 remain" in finding.claim and "Seven sites remain" in finding.claim
+        assert (finding.at_sha, finding.stage_id, finding.run_id) == ("abc1234def", "s1", "r1")
 
-    def test_in_scope_kinds_still_reach_the_log(self, tmp_path):
-        (tmp_path / "docs").mkdir()
-        written = append_notes(
-            tmp_path,
-            "docs/progress.md",
-            [note("progress"), note("correction", observation="The plan names a gone file.")],
-            stage_id="s1",
-        )
-        assert written is not None
-        body = written.read_text()
-        assert "Seven sites remain" in body
-        assert "gone file" in body
+    def test_a_human_finding_is_queued_intact(self, led):
+        open_findings(led, FakeGit(), [note("out_of_scope", needs="human")], by="planner", stage_id="s1", run_id="r1")
+        (finding,) = led.views().open_findings()
+        assert finding.needs == "human" and finding.status == "open"
 
-    def test_a_mixed_batch_is_split_rather_than_dropped(self, tmp_path):
-        (tmp_path / "docs").mkdir()
-        written = append_notes(
-            tmp_path,
-            "docs/progress.md",
-            [note("progress"), note("out_of_scope", observation="Unrelated defect.")],
-            stage_id="s1",
-        )
-        body = written.read_text()
-        assert "Seven sites remain" in body
-        assert "Unrelated defect" not in body
+    def test_a_total_of_none_is_no_total(self, led):
+        open_findings(led, FakeGit(), [note(total="none")], by="planner", stage_id="s1", run_id="r1")
+        (finding,) = led.views().open_findings()
+        assert finding.total is None
 
+    def test_an_unknown_key_is_filed_without_one_and_said_so(self, led):
+        said = []
+        open_findings(led, FakeGit(), [note(key="p.999")], by="planner", stage_id="s1", run_id="r1", log=said.append)
+        (finding,) = led.views().open_findings()
+        assert finding.keys == []
+        assert any("p.999" in line for line in said)
 
-class TestFindingsFile:
-    def test_writes_to_the_top_of_the_work_directory(self, tmp_path):
-        target = append_findings(
-            tmp_path, [note("out_of_scope", observation="A GET mutates.")], stage_id="s1"
-        )
-        assert target == tmp_path / "findings.md"
-        assert "A GET mutates." in target.read_text()
+    def test_a_later_reading_of_the_same_subject_supersedes(self, led):
+        open_findings(led, FakeGit(), [note(total="7")], by="planner", stage_id="s1", run_id="r1")
+        open_findings(led, FakeGit(), [note(total="3", observation="Three remain.")], by="planner", stage_id="s2", run_id="r1")
+        open_ones = led.views().open_findings()
+        assert len(open_ones) == 1 and open_ones[0].total == "3"
 
-    def test_names_the_stage_that_found_it(self, tmp_path):
-        target = append_findings(tmp_path, [note("out_of_scope")], stage_id="checkout-specs")
-        assert "checkout-specs" in target.read_text()
-
-    def test_appends_rather_than_replacing(self, tmp_path):
-        append_findings(tmp_path, [note("out_of_scope", observation="First.")], stage_id="a")
-        target = append_findings(
-            tmp_path, [note("out_of_scope", observation="Second.")], stage_id="b"
-        )
-        body = target.read_text()
-        assert "First." in body and "Second." in body
-
-    def test_nothing_to_write_writes_nothing(self, tmp_path):
-        assert append_findings(tmp_path, [], stage_id="a") is None
-        assert not (tmp_path / "findings.md").exists()
-
-    def test_the_findings_file_is_not_a_plan_document(self, tmp_path):
-        """It lives in the work dir, which is gitignored and never read back.
-
-        The point of the split is that a planner prompt cannot contain these.
-        """
-        from code_gantry.config import parse_config
-
-        cfg = parse_config(
-            as_test_tools({
-                "target_repo": str(tmp_path),
-                "base_ref": "main",
-                "project_branch": "proj",
-                "plan_root": "docs/plan.md",
-                "plan_addendum_path": "docs/progress.md",
-                "full_test_command": "true",
-                "executor": {"model": "m"},
-                "planner": {"model": "claude-opus-5"},
-                "reviewer": {"model": "gpt-5.6-sol"},
-            })
-        )
-        assert Path(cfg.work_dir).is_relative_to(cfg.target_repo)
-        assert "findings.md" not in str(cfg.plan_addendum_path)
+    def test_no_ledger_opens_nothing(self):
+        assert open_findings(None, FakeGit(), [note()], by="planner", stage_id="s", run_id="r") == 0
 
 
 class TestCorrectionNamesADependencyError:
-    """The most useful correction is one the description never asked for.
-
-    `deferred` was deleted because it asked the wrong question — "why did you
-    not go down the list in order", which presumes the plan is a queue. What is
-    worth hearing is the opposite: that the plan's *stated* prerequisites are
-    wrong. Measured on this project's notes, the planner already reports that
-    class under `correction` without being asked, and the good ones name the
-    mechanism: "Step 1 is ordered after the funnel-helper conversion, not
-    independent of it — the driver registers the CSRF hook those helpers
-    depend on."
-
-    So this is naming a thing that already happens rather than inviting a new
-    one. It earns its line because the question is answerable on every
-    derivation — the planner reads the plan against the code each time — and
-    the standing evidence here is that an always-answerable prompt gets an
-    answer while a conditional one is declined in good conscience.
-    """
+    """The most useful correction is a wrong prerequisite, in either direction."""
 
     def _correction_text(self) -> str:
         from code_gantry.planner import PlanNote
@@ -197,8 +136,6 @@ class TestCorrectionNamesADependencyError:
         assert "depend" in text or "prerequisite" in text
 
     def test_it_covers_both_directions(self):
-        # A missing edge and a claimed-but-absent one are different findings,
-        # and only one of them makes work look blocked that is not.
         text = self._correction_text()
         assert "independent" in text or "does not" in text or "no such" in text
 
@@ -207,8 +144,6 @@ class TestCorrectionNamesADependencyError:
         assert "progress" in text and "out_of_scope" in text
 
     def test_it_names_no_project_vocabulary(self):
-        # This ships to every project's planner. The example that prompted it
-        # is a Rails one and must not travel with it.
         text = self._correction_text()
         for word in ("rails", "ruby", "gem", "prototype", "rspec", "ujs", ".rb"):
             assert word not in text, f"{word!r} is project knowledge in a schema"

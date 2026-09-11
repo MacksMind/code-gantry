@@ -33,6 +33,8 @@ def _fields(sid="s", **over):
         "test_paths": [],
         "require_new_tests": False,
         "difficulty": "medium",
+        "plan_keys": ["p.002"],
+        "resolves": [],
     }
     base.update(over)
     return base

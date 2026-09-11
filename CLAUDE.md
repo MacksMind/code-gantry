@@ -60,9 +60,11 @@ silent — the original failure is the diagnosis and must reach the caller.
 
 **Whatever the planner draws from, the executor may not edit**, or the planner
 can put its own inputs in scope and have the executor amend the instructions it
-will be judged against. `_is_plan_document` is the guard, and every input added
-to the planner's prompt belongs in it — the plan tree, the progress log, and the
-repository's agent-facing documents most of all.
+will be judged against. `_is_plan_document` at the gate and `protected_paths`
+on the editor are the guard, and every input added to the planner's prompt
+belongs in them — the config, the repository's agent-facing documents, and the
+work dir that holds the ledger. The plan itself is not in the tree, which is
+what makes it unreachable.
 
 **A gate must be able to reach what decides its verdict.** A gate that cannot
 reach its evidence produces verdicts indistinguishable from judgement. Record
@@ -180,8 +182,22 @@ site goes quietly missing.
 - **A record published from a run is a claim in every later prompt.** Before
   restoring a pending note on resume, ask whether what it asserts still stands.
 - **Publish a finding when it is found, not when the work lands.** Planner notes
-  are true whether or not the stage succeeds; reviewer observations stay on the
-  landing gate, because an abandoned diff does not exist.
+  open findings at derivation, true whether or not the stage succeeds; reviewer
+  observations stay on the landing gate, because an abandoned diff does not
+  exist.
+- **State is derived from events, never stored.** The ledger's tree, key states
+  and findings are rebuilt from one append-only table on read, so no status
+  column can disagree with the history that produced it — the `gate_history`
+  idiom applied to the whole record. Every event names the origin that wrote it
+  and its sequence within that origin, so a later exchange between hosts is a
+  fetch, not a merge.
+- **A fold is a rendering policy, not a document edit.** Landings and answered
+  findings move from the projection into the node bodies when the projection
+  outgrows `ledger.fold_ratio` of the plan text; the run does it at the
+  derivation seam with no model and no commit.
+- **The landing commit is the durable copy.** Its trailers carry the keys, the
+  resolved findings, which model held which role, the config and the base; the
+  gitignored ledger can be rebuilt from history.
 - **Classify where the damage is, not where the tidying is.** Ask whether the
   thing being sorted is inert while it waits.
 - **Prefer the fact to the label.** `git blame` answers from facts that cannot
@@ -518,12 +534,11 @@ site goes quietly missing.
 - **The failure that opens a retry sequence is the diagnosis; the ones after it
   are consequences.** `opening_failure` claims the first write-once, on the
   retry branch too.
-- **Content cannot move between a pinned document and a live one.** The plan is
-  read at `plan_sha`, the progress log spliced live; a fold moves content
-  between them and a resume inherits `plan_sha` and re-reads nothing.
-  `_plan_unmoved` refuses rather than re-reading, and fires for any edit to a
-  pinned document — including a human editing from another session. Ask of any
-  two inputs read at different revisions whether anything moves between them.
+- **The plan is not pinned; the repository's own documents are.** The plan is
+  rendered from the ledger on every derivation, so a fold or a human answer
+  reaches the next call without a restart. `plan_sha` now pins only the
+  conventions, operations and layout, which a resume still inherits — editing
+  one of those means `run`, not `resume`.
 - **A field removed from a model strands the run that persisted it.** `Stage` is
   `extra="forbid"`, so deleting a field raises on the next *resume*;
   `current_stage` filters to declared fields.
@@ -796,18 +811,18 @@ site goes quietly missing.
   commands reach the work through `docker compose exec`, and killing that client
   kills the client. Aim cleanup narrowly — a pattern broad enough to catch the
   workers is broad enough to catch the entrypoint.
-- **The progress log sits inside the cached prefix and changes every landing.**
-  It is spliced into the plan block, which carries a cache breakpoint, so each
-  landing invalidates and rewrites the whole block at a cost proportional to
-  landings since the last fold. Folding is not housekeeping. The planner's
-  *peak* prompt tokens will not show this — peak tracks how much work a
-  derivation did — so measure cache writes across derivations that drew the same
-  number of stages.
+- **The projection is the churning half and it sits after the mark.** The
+  rendered plan is block 0 and changes only at a fold or a plan edit; what has
+  changed since sits in block 1, bounded by open keys times `note_chars`. The
+  planner's *peak* prompt tokens will not show a change here — peak tracks how
+  much work a derivation did — so measure cache writes across derivations that
+  drew the same number of stages, against `scripts/planner_cache_series.py`'s
+  baseline.
 - **Nothing can be omitted after a tool call, so the lever is what you send
   first.** The API is stateless; caching changes the price of resent tokens, not
-  whether they are sent. Block 0 is append-only and almost entirely plan
-  documents, so the only lever with that magnitude is a smaller plan — and a
-  planner asked to fetch a document behind a tool will fetch it.
+  whether they are sent. Block 0 is almost entirely the rendered plan, so the
+  only lever with that magnitude is a smaller plan — and a planner asked to
+  fetch a document behind a tool will fetch it.
 
 ## Where things live
 
@@ -915,10 +930,12 @@ of numbered source. `repotools.Spend` is everything mutable about a read budget
 in one object, so clearing it is replacing it; `count_calls`, `count_refusals`
 and `render_counts` are the one summariser all three roles report through.
 
-`addendum.py` *routes* a planner note rather than formatting it: `LOGGED_KINDS`
-decides what reaches the progress log and therefore every later prompt, and
-`append_findings` writes the rest to `findings.md`, uncommitted and read by
-nobody. The filter lives in `append_notes`, not at the call site.
+`ledger.py` is the record: one append-only `events` table, views derived from
+it, `open_ledger` the only creator, `read_ledger` never creating. `planmodel.py`
+reads Markdown into the tree and renders it back; `render.py` produces the two
+halves the planner is sent; `ledgercli.py` is the operator's `plan …` and
+`ledger …`. The pipeline's writes are in `nodes.py`: findings at derivation,
+claims at precheck, landings and resolutions after the squash.
 
 What the planner is sent is overwhelmingly the plan, then the repository's agent
 and operations documents and the layout, with everything about *this run* under

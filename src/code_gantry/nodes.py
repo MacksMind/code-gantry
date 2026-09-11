@@ -23,15 +23,6 @@ import textwrap
 import time
 from datetime import datetime
 
-from code_gantry.addendum import (
-    append_findings,
-    append_notes,
-    append_observations,
-    append_outcome,
-    decode_escapes,
-    in_scope,
-    out_of_scope,
-)
 from code_gantry.commands import clip_for_model
 from code_gantry.cachekey import cache_key
 from code_gantry.config import ProjectConfig, Stage, validate_stage
@@ -43,6 +34,14 @@ from code_gantry.executor import (
 from code_gantry.flake import adjudicate, append_flakes, predates_stage
 from code_gantry.gateway import resolve_policy
 from code_gantry.gitops import GitError
+from code_gantry.ledger import (
+    CLAIMED,
+    FINDING_RESOLVED,
+    LANDED,
+    Ledger,
+    apply_fold,
+    should_fold,
+)
 # The gate's clip, under the name thirteen call sites here already use.
 # Imported rather than redefined: the budget and the helper are one
 # decision, and `gates` is where the other half of it lives. Safe at
@@ -57,7 +56,7 @@ from code_gantry.prompts import (
     build_review_messages,
 )
 from code_gantry.reviewer import issues_as_feedback
-from code_gantry.runtime import Runtime
+from code_gantry.runtime import Runtime, ledger_references
 from code_gantry.state import (
     usage_deltas,
     clear_rework_after_approval,
@@ -302,10 +301,16 @@ def plan(state: RunState, rt: Runtime) -> dict:
     if paused is not None:
         return paused
 
+    plan_text, projection = rt.plan_text(), rt.projection()
+    if should_fold(plan_text, projection, rt.cfg.ledger.fold_ratio):
+        written = apply_fold(rt.ledger, actor=f"run:{rt.paths.run_id}")
+        rt.log(f"[plan] folded {written} mark(s) into the plan text")
+        plan_text, projection = rt.plan_text(), rt.projection()
+
     messages = build_planner_messages(
         cfg=rt.cfg,
-        # Live, not the snapshot: this one says what has been done.
-        plan=rt.live_plan,
+        plan_text=plan_text,
+        projection=projection,
         completed=state.get("completed") or [],
         current_stage=stage,
         failure=state.get("last_failure"),
@@ -485,12 +490,17 @@ def plan(state: RunState, rt: Runtime) -> dict:
         # Accumulated rather than assigned: a revision is more planning for the
         # same stage, and every path out of this node carries the total.
         "plan_seconds": state.get("plan_seconds", 0.0) + planned_for,
-        # Held until the stage lands. Accumulated across revisions, because a
-        # redrawn stage is the same piece of work and its observations about
-        # the plan are still true.
-        "pending_plan_notes": (state.get("pending_plan_notes") or [])
-        + list(outcome.plan_notes),
     }
+
+    # Published when found: a note is true whether or not the stage lands.
+    opened = open_findings(
+        rt.ledger, rt.git, outcome.plan_notes, by="planner",
+        stage_id=stage.id if stage else (outcome.stage_fields or {}).get("id"),
+        run_id=rt.paths.run_id,
+        log=rt.log,
+    )
+    if opened:
+        rt.log(f"[plan] opened {opened} finding(s)")
 
     if outcome.verdict == "project_complete":
         rt.log("[plan] project complete")
@@ -503,7 +513,10 @@ def plan(state: RunState, rt: Runtime) -> dict:
         }
 
     new_stage = rt.cfg.stage_from_planner(outcome.stage_fields or {})
-    problems = validate_stage(new_stage, rt.cfg)
+    known_keys, open_ids = ledger_references(rt.ledger)
+    problems = validate_stage(
+        new_stage, rt.cfg, known_keys=known_keys, open_findings=open_ids
+    )
     if problems:
         # A malformed spec is the planner's error to fix, and this used to
         # escalate to a human on the first occurrence — which the comment here
@@ -610,7 +623,8 @@ def plan(state: RunState, rt: Runtime) -> dict:
     # than in the planner because the check resolves globs against the files
     # that exist, and only this side of the boundary can list them.
     queue, dropped_from_batch = _queue_from_batch(
-        rt.cfg, rt.git, new_stage, outcome.additional_stage_fields
+        rt.cfg, rt.git, new_stage, outcome.additional_stage_fields,
+        ledger=rt.ledger,
     )
     # Everything this derivation produced, named, on one line and on every
     # derivation. Two lines said this before — the stage about to run, and a
@@ -785,29 +799,19 @@ def precheck(state: RunState, rt: Runtime) -> dict:
                 ),
             }
 
-    # The planner's notes about the plan, published here rather than held to
-    # the landing gate. Their truth does not depend on the stage: they say
-    # things like "the two documents contradict each other" and "not drawable",
-    # found by reading the plan against the code while deriving the stage, and
-    # a stage that escalates used to take them with it. That is the expensive
-    # direction — a false blocker makes plan items read as blocked, and an item
-    # that reads as blocked is never attempted.
-    #
-    # The code already conceded this for revisions, accumulating notes across a
-    # redraw "because a redrawn stage is the same piece of work and its
-    # observations about the plan are still true". Abandonment is the same
-    # argument one step further.
-    #
-    # Before the cut and on the project branch, so the note precedes
-    # `stage_start_sha` and the scope guard never sees a plan document in the
-    # stage's diff. And it removes an obligation rather than adding one: this
-    # used to be written inside `advance`, which then had to unwind it by hand
-    # if any later step raised.
-    #
-    # The reviewer's observations are deliberately left on the landing gate.
-    # Those are findings about a diff, and an abandoned diff does not exist.
-    if state.get("pending_plan_notes") and rt.cfg.plan_addendum_path:
-        update.update(_publish_plan_notes(state, rt, stage))
+    # Claim the keys before the branch is cut; a key another run has taken
+    # or a person has closed sends the stage back to the planner.
+    if rt.ledger is not None:
+        taken = _keys_not_open(rt, stage, state)
+        if taken:
+            queued = len(state.get("stage_queue") or [])
+            rt.log(
+                f"[precheck] {stage.id}: back to the planner — "
+                f"{', '.join(taken)} no longer open"
+                + (f"; {queued} queued stage(s) discarded with it" if queued else "")
+            )
+            return {**update, **_taken_key_failure(state, stage, taken)}
+        _claim_keys(rt, stage, state)
 
     # Cut or resume the child branch. Anything on it is quarantined: nothing
     # reaches the project branch without passing the review gate.
@@ -1539,10 +1543,11 @@ def review(state: RunState, rt: Runtime) -> dict:
         stage=stage,
         cfg=rt.cfg,
         diff=diff,
-        plan=rt.plan,
+        plan_text=rt.plan_text(),
         completed=state.get("completed") or [],
-        progress_log=rt.live_progress_log,
+        projection=rt.projection(),
         agent_context=_conventions(state, rt),
+        proposed=_proposed_resolutions(rt, stage),
     )
 
     rt.log(f"[review] {stage.id}: calling reviewer")
@@ -1630,6 +1635,7 @@ def review(state: RunState, rt: Runtime) -> dict:
         # three times. Written by `advance` if the stage lands, and dropped
         # with the stage if it never does.
         "pending_observations": [o.model_dump() for o in outcome.observations],
+        "pending_resolved": list(outcome.resolved),
     }
 
     if outcome.verdict == "blocked":
@@ -1887,55 +1893,6 @@ def advance(state: RunState, rt: Runtime) -> dict:
     # it would not be for code — this is markdown at a configured path, written
     # by CodeGantry from structured planner output, not a model editing
     # the repository. The guards exist to catch the executor wandering.
-    plan_sha = state.get("plan_sha") or state.get("base_sha") or ""
-
-    def read_plan(path: str) -> str | None:
-        """A plan document as it stood at `plan_sha`.
-
-        Read from the commit rather than the worktree because that is the
-        revision the planner was shown and cited line numbers against. The
-        worktree has moved: this very function runs after a stage landed, and
-        the log itself is a plan document that grows on every landing.
-        """
-        try:
-            return rt.git.show_file(plan_sha, path)
-        except GitError:
-            return None
-
-    # What landed, first, and from the reviewer — the only participant that saw
-    # the diff. Everything after this in the file was written before the work.
-    landed = append_outcome(
-        rt.cfg.target_repo,
-        rt.cfg.plan_addendum_path,
-        stage_id=stage.id,
-        # The dedicated record, falling back to the verdict rationale for a
-        # reviewer that has not been asked for one. Better a gate-shaped entry
-        # than none.
-        summary=state.get("review_record") or state.get("review_summary") or "",
-    )
-    if landed is not None:
-        rt.log(f"[advance] recorded what {stage.id} landed, in the reviewer's words")
-
-    # The planner's notes are not written here any more — `precheck` publishes
-    # them when it cuts the branch, because their truth does not depend on this
-    # stage landing. What remains is the reviewer's findings.
-    #
-    # The reviewer's findings, after the planner's and into the same file. Both
-    # answer "what does the plan not yet know?"; they differ in who noticed and
-    # in what about. Written only on landing, so a finding from a stage that
-    # was abandoned never enters the record.
-    seen = append_observations(
-        rt.cfg.target_repo,
-        rt.cfg.plan_addendum_path,
-        state.get("pending_observations") or [],
-        stage_id=stage.id,
-    )
-    if seen is not None:
-        rt.log(
-            f"[advance] recorded {len(state.get('pending_observations') or [])} "
-            f"reviewer observation(s) in {seen.relative_to(rt.cfg.target_repo)}"
-        )
-
     # Commit anything the executor left uncommitted, then squash the whole
     # child branch onto the project branch as one commit. The executor's
     # intermediate commits — some of them red, since it commits before testing
@@ -1953,41 +1910,19 @@ def advance(state: RunState, rt: Runtime) -> dict:
             f"{', '.join(stripped)}"
         )
 
-    # The reviewer's entries — what landed, and its out-of-scope findings — are
-    # written to the worktree and committed a few lines below, so anything that
-    # raises in between leaves them modified and uncommitted. The next resume
-    # re-enters at verify, whose scope guard sees a plan document changed by a
-    # stage and routes it to the planner as the executor wandering into the
-    # record of its own work — a diagnosis that is wrong, and that the planner
-    # cannot act on because it did not happen.
-    #
-    # The planner's notes used to be in here too and are now committed by
-    # `precheck` before the branch is cut, so they are outside this transaction
-    # on purpose and need no unwinding. What is left is everything written by
-    # the participant that saw the diff, which is exactly what this landing is
-    # allowed to lose if the landing fails.
-    #
-    # `squash_merge` already restores the project branch if its own commit
-    # fails. This covers the other half: either the stage lands or the tree is
-    # as advance found it.
-    try:
-        rt.git.commit_all(f"[{stage.id}] wip")
-        merge_sha = rt.git.squash_merge(
-            branch,
-            rt.cfg.project_branch,
-            # Same text the progress log gets, and for the same reason: it is
-            # the only account written by a participant that saw the diff.
-            _commit_message(
-                stage,
-                state.get("review_record") or state.get("review_summary") or "",
-            ),
-        )
-    except Exception:
-        if (landed is not None or seen is not None) and rt.cfg.plan_addendum_path:
-            rt.log("[advance] landing failed; unwinding the plan note")
-            rt.git.revert_paths(start_sha, [rt.cfg.plan_addendum_path])
-        raise
+    rt.git.commit_all(f"[{stage.id}] wip")
+    merge_sha = rt.git.squash_merge(
+        branch,
+        rt.cfg.project_branch,
+        _commit_message(
+            stage,
+            state.get("review_record") or state.get("review_summary") or "",
+            trailers=_landing_trailers(rt, stage, state, start_sha),
+        ),
+    )
     rt.git.delete_branch(branch)
+    if rt.ledger is not None:
+        _record_landing(rt, stage, state, merge_sha or rt.git.head_sha())
 
     usage = state.get("stage_usage") or {}
     result = {
@@ -2014,6 +1949,8 @@ def advance(state: RunState, rt: Runtime) -> dict:
         "review_record": state.get("review_record"),
         "verify_failures": [],
         "planner_notes": list(state.get("planner_notes") or []),
+        "plan_keys": list(stage.plan_keys),
+        "resolves": list(state.get("pending_resolved") or []),
         "config_hash": state.get("config_hash", ""),
         "prompt_tokens": usage.get("prompt_tokens", 0),
         "cached_tokens": usage.get("cached_tokens", 0),
@@ -2060,7 +1997,7 @@ def advance(state: RunState, rt: Runtime) -> dict:
         # Cleared here, by the only node that writes them, rather than by the
         # per-stage reset — which `plan` also applies, over the notes it has
         # just accumulated.
-        "pending_plan_notes": [],
+        "pending_resolved": [],
         "pending_observations": [],
         "stage_index": state["stage_index"] + 1,
         "revision": 0,
@@ -2358,17 +2295,15 @@ def stale_excerpts(git, stage) -> list[str]:
     return moved
 
 
-def _queue_from_batch(cfg, git, first, extra_fields: list[dict]) -> tuple[list[dict], list[str]]:
+def _queue_from_batch(
+    cfg, git, first, extra_fields: list[dict], *, ledger: Ledger | None = None
+) -> tuple[list[dict], list[str]]:
     """The stages to hold behind the one being started, and what was trimmed.
 
-    No orthogonality pass any more — see `stale_excerpts`. What is left is the
-    cap, which is the operator's policy rather than a safety property, and the
-    conversion through `stage_from_planner` so an executable field cannot ride
-    in on a batched stage.
-
-    `first` is unused now and kept in the signature deliberately: the caller
-    passes the stage being started, and a checker that needs it again is one
-    change away.
+    The cap is the operator's policy; the conversion through
+    `stage_from_planner` keeps an executable field off a batched stage; and
+    every queued stage is validated against the ledger the way the head is,
+    because a queued stage that cites no key would fail only when reached.
     """
     if not extra_fields:
         return [], []
@@ -2395,9 +2330,18 @@ def _queue_from_batch(cfg, git, first, extra_fields: list[dict]) -> tuple[list[d
         base = git.rev_parse("HEAD")
     except GitError:  # pragma: no cover - defensive
         base = ""
+    known_keys, open_ids = ledger_references(ledger)
     queued = []
     for fields in extra_fields:
         stage = cfg.stage_from_planner(fields)
+        problems = validate_stage(
+            stage, cfg, known_keys=known_keys, open_findings=open_ids
+        )
+        if problems:
+            notes.append(
+                f"queued stage `{stage.id}` was dropped: " + "; ".join(problems)
+            )
+            continue
         queued.append({**stage.model_dump(), "excerpt_base_sha": base})
     return queued, notes
 
@@ -2703,71 +2647,6 @@ def _rework_or_plan(
     }
 
 
-def _publish_plan_notes(state: RunState, rt: Runtime, stage: Stage) -> dict:
-    """Write the planner's notes to the log and commit them, on this branch.
-
-    Committed rather than left in the worktree because `precheck` is about to
-    cut a branch, and an uncommitted plan document would be swept into the
-    stage's diff and reported by the scope guard as the executor editing the
-    record of its own work — a diagnosis that is wrong and that the planner
-    cannot act on.
-
-    Cleared on the way out. The notes accumulate across a redraw, and a
-    revision re-enters `precheck`, so without clearing them the second cut
-    republishes everything the first one already wrote.
-    """
-    plan_sha = state.get("plan_sha") or state.get("base_sha") or ""
-
-    def read_plan(path: str) -> str | None:
-        try:
-            return rt.git.show_file(plan_sha, path)
-        except GitError:
-            return None
-
-    notes = state.get("pending_plan_notes") or []
-
-    # First, and outside everything below, because these go somewhere else
-    # entirely: the work directory, uncommitted, read by nobody. A note the
-    # planner classed `out_of_scope` is a real defect in code this plan is not
-    # about, and the progress log is spliced live into every later prompt — so
-    # logging it is how a plan grows work nobody asked for. Written before the
-    # early return, or a stage whose notes were *all* out of scope would file
-    # none of them.
-    findings = append_findings(rt.project.project_dir, notes, stage_id=stage.id)
-    if findings is not None:
-        rt.log(
-            f"[precheck] {len(out_of_scope(notes))} finding(s) outside this plan "
-            f"recorded in {findings}"
-        )
-
-    logged = in_scope(notes)
-    written = append_notes(
-        rt.cfg.target_repo,
-        rt.cfg.plan_addendum_path,
-        notes,
-        stage_id=stage.id,
-        read_plan=read_plan,
-        plan_sha=plan_sha,
-    )
-    if written is None:
-        return {"pending_plan_notes": []}
-
-    # Onto the project branch explicitly. On a revision `precheck` re-enters
-    # with HEAD still on the previous attempt's stage branch, which
-    # `cut_stage_branch(fresh=True)` is about to delete — committing the note
-    # there would lose it in precisely the case this move exists to fix.
-    # `cut_stage_branch` checks out the same branch a few lines later, so this
-    # assumes nothing new about the state of the tree.
-    if rt.git.current_branch() != rt.cfg.project_branch:
-        rt.git.checkout(rt.cfg.project_branch)
-    rt.git.commit_all(f"[{stage.id}] plan observations from deriving this stage")
-    rt.log(
-        f"[precheck] recorded {len(logged)} plan observation(s) in "
-        f"{written.relative_to(rt.cfg.target_repo)}"
-    )
-    return {"pending_plan_notes": []}
-
-
 def _first_line(stage: Stage) -> str:
     text = stage.instruction or stage.command or stage.id
     return text.strip().splitlines()[0][:70]
@@ -2882,33 +2761,34 @@ def _roles_for_record(cfg) -> tuple[tuple[str, str, str], ...]:
     )
 
 
-def _commit_message(stage: Stage, record: str) -> str:
-    """The landing commit: subject, blank line, wrapped body.
+def _commit_message(
+    stage: Stage, record: str, *, trailers: list[tuple[str, str]] = ()
+) -> str:
+    """The landing commit: what was asked, what landed, and git trailers.
 
-    It used to be `[{stage.id}] {instruction[:70]}` and nothing else — a
-    subject cut mid-word, no body, describing the stage's *intent*, since the
-    instruction is written before the work.
-
-    The subject is now the id alone. It is not a slug of some title the tooling
-    threw away: the planner authors it in that form directly, so the truncated
-    remainder was repeating in prose what the identifier already said, at the
-    cost of pushing the subject past 72 columns.
-
-    The reviewer's account of what the stage actually did is the only
-    description written by a participant that has seen the diff, and it was
-    already in hand here, going to the progress log and nowhere else. Putting
-    it in the commit is what makes `git log` on the project branch answer what
-    happened rather than what was asked for — which is the same argument the
-    addendum's docstring makes for preferring the fact to the claim.
-
-    `decode_escapes` for the reason the addendum uses it — a double-escaped
-    `\\u2014` otherwise lands in the commit looking like a bug in this tool —
-    and so that the commit body and the progress-log entry are the same bytes
-    rather than two renderings of one string that could drift.
+    Asked and landed are kept apart and labelled, because the instruction is
+    written before the work and the reviewer's record after it. The trailers
+    carry what a later reader rebuilds the ledger from: keys, resolved
+    findings, which model held which role, the config, the base commit.
     """
     subject = f"[{stage.id}]"
+    asked = "\n\n".join(
+        part for part in (
+            stage.instruction or "",
+            f"Constraints: {stage.constraints}" if stage.constraints else "",
+            f"Acceptance: {stage.acceptance}" if stage.acceptance else "",
+        ) if part
+    )
+    sections = []
+    if asked:
+        sections.append("Asked:\n\n" + _wrap_body(clip_for_model(asked, 1500)))
     body = _wrap_body(record)
-    return f"{subject}\n\n{body}" if body else subject
+    if body:
+        sections.append("Landed:\n\n" + body)
+    trailer_lines = "\n".join(f"{key}: {value}" for key, value in trailers if value)
+    if trailer_lines:
+        sections.append(trailer_lines)
+    return "\n\n".join([subject, *sections]) if sections else subject
 
 
 def _wrap_body(record: str) -> str:
@@ -2935,3 +2815,178 @@ def _wrap_body(record: str) -> str:
             )
         )
     return "\n\n".join(out)
+
+
+_ESCAPE = re.compile(r"(?<!\\)\\u([0-9a-fA-F]{4})")
+
+
+def decode_escapes(text: str) -> str:
+    """`\\u2014` written literally becomes the character it meant.
+
+    A model that double-escapes a non-ASCII character emits a backslash
+    followed by `u2014`, which would land in a commit looking like a bug in
+    this tool. A sequence already escaped by a preceding backslash is left
+    alone.
+    """
+    return _ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), text or "")
+
+
+def open_findings(
+    ledger: Ledger | None,
+    git,
+    notes: list[dict],
+    *,
+    by: str,
+    stage_id: str | None,
+    run_id: str | None,
+    log=None,
+) -> int:
+    """Open one finding per planner note. Returns how many were opened."""
+    if ledger is None or not notes:
+        return 0
+    views = ledger.views()
+    try:
+        at_sha = git.head_sha()
+    except GitError:
+        at_sha = None
+    opened = 0
+    for note in notes:
+        key = (note.get("key") or "").strip()
+        node = views.nodes.get(key)
+        if node is None or node.retired:
+            if log:
+                log(f"[ledger] note on unknown key {key!r} filed without a key")
+            key = ""
+        claim = "\n\n".join(
+            part for part in (
+                decode_escapes(note.get("finding") or "").strip(),
+                decode_escapes(note.get("observation") or "").strip(),
+            ) if part
+        )
+        total = (note.get("total") or "").strip()
+        ledger.open_finding(
+            keys=[key] if key else [],
+            by=by,
+            claim=claim,
+            needs=note.get("needs") or "pipeline",
+            total=None if total.lower() in ("", "none") else total,
+            subject=(note.get("subject") or "").strip() or None,
+            at_sha=at_sha,
+            stage_id=stage_id,
+            run_id=run_id,
+        )
+        opened += 1
+    return opened
+
+
+def _keys_not_open(rt: Runtime, stage: Stage, state: RunState) -> list[str]:
+    """Keys the stage cites that are not open, unless this very stage holds them."""
+    views = rt.views()
+    taken = []
+    for key in stage.plan_keys:
+        current = views.state(key)
+        if current.state == "open":
+            continue
+        if (
+            current.state == "claimed"
+            and current.run_id == rt.paths.run_id
+            and current.stage_id == stage.id
+        ):
+            continue
+        taken.append(f"{key} ({current.state})")
+    return taken
+
+
+def _claim_keys(rt: Runtime, stage: Stage, state: RunState) -> None:
+    views = rt.views()
+    for key in stage.plan_keys:
+        current = views.state(key)
+        if (
+            current.state == "claimed"
+            and current.run_id == rt.paths.run_id
+            and current.stage_id == stage.id
+        ):
+            continue
+        rt.ledger.append(CLAIMED, key=key, stage_id=stage.id, run_id=rt.paths.run_id)
+
+
+def _taken_key_failure(state: RunState, stage: Stage, taken: list[str]) -> dict:
+    """Back to the planner: a key this stage was drawn from is no longer open."""
+    queue = list(state.get("stage_queue") or [])
+    detail = (
+        "This stage names plan keys that are no longer open: "
+        + ", ".join(taken)
+        + ". Another run may have claimed them, or a person may have landed or "
+        "struck them since the stage was drawn. Read the ledger section and "
+        "draw the next piece of work."
+    )
+    if queue:
+        behind = ", ".join(f"`{s.get('id')}`" for s in queue)
+        detail += (
+            f"\n\nThe stages queued behind it — {behind} — have been discarded "
+            "with it."
+        )
+    return {
+        **_planner_failure(
+            state, "plan_keys", "a plan key the stage cites is no longer open", detail
+        ),
+        "stage_queue": [],
+    }
+
+
+def _proposed_resolutions(rt: Runtime, stage: Stage) -> list[tuple[str, str]]:
+    """The findings the planner proposed this stage settles, with their claims."""
+    if rt.ledger is None or not stage.resolves:
+        return []
+    findings = rt.views().findings
+    return [
+        (fid, findings[fid].claim.splitlines()[0] if findings[fid].claim else "")
+        for fid in stage.resolves
+        if fid in findings
+    ]
+
+
+def _landing_trailers(rt: Runtime, stage: Stage, state: RunState, start_sha: str) -> list[tuple[str, str]]:
+    return [
+        ("Plan-Keys", " ".join(stage.plan_keys)),
+        ("Resolves", " ".join(state.get("pending_resolved") or [])),
+        ("Planner-Model", rt.cfg.planner.model),
+        ("Executor-Model", state.get("stage_executor_model") or rt.cfg.executor.model),
+        ("Reviewer-Model", rt.cfg.reviewer.model),
+        ("Config", state.get("config_hash", "")),
+        ("Stage-Base", start_sha),
+        ("Bay", rt.ledger.origin if rt.ledger is not None else ""),
+    ]
+
+
+def _record_landing(rt: Runtime, stage: Stage, state: RunState, merge_sha: str) -> None:
+    """Landed keys, confirmed resolutions, and the reviewer's observations as findings."""
+    views = rt.views()
+    summary = state.get("review_summary") or ""
+    for key in stage.plan_keys:
+        current = views.state(key)
+        if current.state == "landed" and current.sha == merge_sha:
+            continue
+        rt.ledger.append(
+            LANDED, key=key, sha=merge_sha, stage_id=stage.id, run_id=rt.paths.run_id,
+            evidence=summary,
+        )
+    for finding_id in state.get("pending_resolved") or []:
+        rt.ledger.append(
+            FINDING_RESOLVED, sha=merge_sha, stage_id=stage.id, run_id=rt.paths.run_id,
+            finding_id=finding_id,
+        )
+    for observation in state.get("pending_observations") or []:
+        where = (observation.get("file") or "").strip()
+        finding = (observation.get("finding") or "").strip()
+        detail = (observation.get("detail") or "").strip()
+        rt.ledger.open_finding(
+            keys=[], by="reviewer",
+            claim="\n\n".join(p for p in (f"{where}: {finding}" if where else finding, detail) if p),
+            needs="human", at_sha=merge_sha, stage_id=stage.id, run_id=rt.paths.run_id,
+        )
+    rt.log(
+        f"[advance] ledger: {len(stage.plan_keys)} key(s) landed, "
+        f"{len(state.get('pending_resolved') or [])} finding(s) resolved, "
+        f"{len(state.get('pending_observations') or [])} observation(s) opened"
+    )

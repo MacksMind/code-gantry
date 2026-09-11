@@ -85,9 +85,10 @@ def as_test_tools(data: dict) -> dict:
     splits on whitespace into argv.
     """
     data = dict(data)
-    # Defaulted here rather than at each call site: `scoped_test_tool` is
-    # required, so every fixture needs one, and a default that lives in one
-    # place cannot be the one somebody forgot.
+    # Defaulted here rather than at each call site: `scoped_test_tool` and
+    # `ledger` are both required, so every fixture needs them, and a default
+    # that lives in one place cannot be the one somebody forgot.
+    data.setdefault("ledger", {"key_prefix": "p"})
     if data.get("scoped_test_tool"):
         data.pop("scoped_test_command", None)
         return data
@@ -333,6 +334,8 @@ class TestPlannerPartition:
             "acceptance",
             "forbidden_patterns",
             "must_not_remain",
+            "plan_keys",
+            "resolves",
             "test_paths",
             "require_new_tests",
             # An adjective about the work, and the plainest entry on the list:
@@ -489,12 +492,12 @@ class TestThePlannerMayNotAuthorCode:
     def test_a_fenced_block_in_the_instruction_is_a_problem(self):
         cfg = parse_config(minimal())
         stage = a_stage(instruction="Do it:\n\n```ruby\nx = 1\n```\n")
-        assert any("read_excerpts" in p for p in validate_stage(stage, cfg))
+        assert any("read_excerpts" in p for p in validate_stage(stage, cfg, known_keys=None, open_findings=None))
 
     def test_the_fence_need_not_name_a_language(self):
         cfg = parse_config(minimal())
         stage = a_stage(instruction="Do it:\n\n```\nx = 1\n```\n")
-        assert validate_stage(stage, cfg) != []
+        assert validate_stage(stage, cfg, known_keys=None, open_findings=None) != []
 
     def test_inline_backticks_are_left_alone(self):
         # Naming an identifier is a property, not authored code, and the
@@ -505,49 +508,49 @@ class TestThePlannerMayNotAuthorCode:
             instruction="`SORTABLE_FIELDS` must name only fields that exist; "
             "see `models/thing` around the declaration."
         )
-        assert validate_stage(stage, cfg) == []
+        assert validate_stage(stage, cfg, known_keys=None, open_findings=None) == []
 
     def test_the_message_says_where_the_code_should_go_instead(self):
         # A prohibition with no alternative gets satisfied by deleting the
         # context the executor needed rather than by moving it.
         cfg = parse_config(minimal())
         stage = a_stage(instruction="```\nx = 1\n```")
-        problems = validate_stage(stage, cfg)
+        problems = validate_stage(stage, cfg, known_keys=None, open_findings=None)
         assert any("read_excerpts" in p for p in problems)
 
 
 class TestValidateStage:
     def test_a_good_stage_has_no_problems(self):
         cfg = parse_config(minimal())
-        assert validate_stage(a_stage(), cfg) == []
+        assert validate_stage(a_stage(), cfg, known_keys=None, open_findings=None) == []
 
     def test_agent_stage_requires_an_instruction(self):
         cfg = parse_config(minimal())
-        problems = validate_stage(a_stage(instruction=None), cfg)
+        problems = validate_stage(a_stage(instruction=None), cfg, known_keys=None, open_findings=None)
         assert any("instruction" in p for p in problems)
 
     def test_edit_files_required(self):
         # The scope guard is meaningless without it.
         cfg = parse_config(minimal())
-        problems = validate_stage(a_stage(edit_files=[]), cfg)
+        problems = validate_stage(a_stage(edit_files=[]), cfg, known_keys=None, open_findings=None)
         assert any("edit_files" in p for p in problems)
 
     def test_unsafe_stage_id_rejected(self):
         # Stage ids become git refs and directory names.
         cfg = parse_config(minimal())
-        problems = validate_stage(a_stage(id="bad/id"), cfg)
+        problems = validate_stage(a_stage(id="bad/id"), cfg, known_keys=None, open_findings=None)
         assert any("git ref" in p for p in problems)
 
     def test_bad_forbidden_pattern_rejected(self):
         cfg = parse_config(minimal())
-        problems = validate_stage(a_stage(forbidden_patterns=["unclosed(["]), cfg)
+        problems = validate_stage(a_stage(forbidden_patterns=["unclosed(["]), cfg, known_keys=None, open_findings=None)
         assert any("regex" in p for p in problems)
 
     def test_unverifiable_stage_rejected(self):
         cfg = minimal()
         del cfg["full_test_command"]
         cfg = parse_config({**cfg, "stage_defaults": {"checks": ["true"]}})
-        problems = validate_stage(a_stage(checks=[]), cfg)
+        problems = validate_stage(a_stage(checks=[]), cfg, known_keys=None, open_findings=None)
         assert any("verifies it" in p for p in problems)
 
     def test_every_command_a_stage_can_run_is_denylisted(self):
@@ -701,24 +704,24 @@ class TestAStageMustBePossible:
 
     def test_requiring_tests_without_room_to_write_them_is_rejected(self):
         cfg = parse_config(minimal(test_file_patterns=["spec/**/*_spec.rb"]))
-        problems = validate_stage(self._stage(cfg), cfg)
+        problems = validate_stage(self._stage(cfg), cfg, known_keys=None, open_findings=None)
         assert any("require_new_tests" in p for p in problems)
 
     def test_naming_a_spec_in_edit_files_satisfies_it(self):
         cfg = parse_config(minimal(test_file_patterns=["spec/**/*_spec.rb"]))
         stage = self._stage(cfg, edit_files=["app/thing.rb", "spec/thing_spec.rb"])
-        assert not [p for p in validate_stage(stage, cfg) if "require_new_tests" in p]
+        assert not [p for p in validate_stage(stage, cfg, known_keys=None, open_findings=None) if "require_new_tests" in p]
 
     def test_a_glob_covering_specs_satisfies_it(self):
         # `spec/**` is how a planner usually says it.
         cfg = parse_config(minimal(test_file_patterns=["spec/**/*_spec.rb"]))
         stage = self._stage(cfg, edit_files=["app/thing.rb", "spec/**"])
-        assert not [p for p in validate_stage(stage, cfg) if "require_new_tests" in p]
+        assert not [p for p in validate_stage(stage, cfg, known_keys=None, open_findings=None) if "require_new_tests" in p]
 
     def test_a_stage_not_requiring_tests_is_unaffected(self):
         cfg = parse_config(minimal(test_file_patterns=["spec/**/*_spec.rb"]))
         stage = self._stage(cfg, require_new_tests=False)
-        assert not [p for p in validate_stage(stage, cfg) if "require_new_tests" in p]
+        assert not [p for p in validate_stage(stage, cfg, known_keys=None, open_findings=None) if "require_new_tests" in p]
 
 
 class TestAgentContextDocuments:

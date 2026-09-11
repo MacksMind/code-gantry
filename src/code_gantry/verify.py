@@ -21,6 +21,8 @@ force to a planner intervention, which costs more than an executor attempt.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import hashlib
 import re
 from dataclasses import dataclass, field
@@ -32,7 +34,6 @@ from code_gantry.commands import CommandResult, CommandRunner
 from code_gantry.config import ProjectConfig, Stage
 from code_gantry.gitops import Git, GitError
 from code_gantry.globs import matches_any
-from code_gantry.plandoc import resolve_plan_tree
 
 
 
@@ -331,54 +332,36 @@ def out_of_scope_paths(changed: list[str], ctx) -> list[str]:
 
 
 def _is_plan_document(path: str, ctx: _Context) -> bool:
-    """Is this one of the documents the planner is drawing from?
+    """Is this something the run reads to decide what to do?
 
-    Exactly the resolved tree — root plus linked children — rather than a
-    directory glob, because a plan root commonly sits in `docs/` beside
-    unrelated files that stages may legitimately touch.
-
-    The addendum counts as one, even though a run does add to it. It is
-    written by CodeGantry from the planner's structured output, at
-    advance time, outside any stage's diff — so it never appears here legally.
-    An executor edit to it is the executor wandering into the record of its own
-    work, which is exactly the thing to catch.
+    The config, because its commands run unattended; the agent-context
+    documents, because the planner reads them for what the machine can do;
+    and anything under the work dir, which holds the ledger the planner draws
+    from. The plan itself no longer lives in the tree, so the executor cannot
+    reach it any other way.
     """
-    addendum = ctx.cfg.plan_addendum_path
-    if addendum and (path == addendum or path.startswith(addendum.rstrip("/") + "/")):
-        return True
-
-    # The config itself, which now lives inside the repository it describes.
-    # `checks`, the test commands and `setup_command` are arbitrary operator shell
-    # that runs unattended; before the move they sat in a repository no stage
-    # could reach, and after it they are one `edit_files` glob away. The same
-    # sentence as the agent-context documents below, with the most force it
-    # gets: a stage able to edit this one chooses what the machine runs.
     config_rel = ctx.cfg.config_rel_path
     if config_rel and path == config_rel:
         return True
 
-    # The agent-context documents, for the same reason and with more force: the
-    # planner reads them for what the machine can do, so a stage able to edit
-    # one could retire its own constraints — "the pipeline cannot run bundle
-    # install" is exactly the kind of sentence that lives in them.
     if path in ctx.cfg.effective_agent_context:
         return True
 
-    root = ctx.cfg.plan_root
-    if path == root:
+    work_dir = _work_dir_rel(ctx.cfg)
+    if work_dir and (path == work_dir or path.startswith(work_dir + "/")):
         return True
+    return False
 
-    # Resolving the tree costs a `git show` per document, and verify runs on
-    # every attempt. Almost every stage touches only code, so skip the work
-    # unless a changed path is even in the right directory.
-    root_dir = root.rsplit("/", 1)[0] if "/" in root else ""
-    if root_dir and not path.startswith(root_dir + "/"):
-        return False
-    if not ctx.plan_sha:
-        return False
 
-    tree = resolve_plan_tree(ctx.git, root, ctx.plan_sha)
-    return any(child.path == path for child in tree.children)
+def _work_dir_rel(cfg) -> str | None:
+    """The work dir as a repo-relative path, or None when it sits outside."""
+    work_dir, repo = getattr(cfg, "work_dir", None), getattr(cfg, "target_repo", None)
+    if not work_dir or not repo:
+        return None
+    try:
+        return Path(work_dir).resolve().relative_to(Path(repo).resolve()).as_posix()
+    except ValueError:
+        return None
 
 
 def _layer_scope(ctx: _Context, outcome: VerifyOutcome):
@@ -409,13 +392,13 @@ def _layer_scope(ctx: _Context, outcome: VerifyOutcome):
         return _fail(
             Layer.SCOPE,
             Route.PLANNER,
-            "the stage edited the plan it is being drawn from",
-            f"These are plan documents and no stage may change them:\n{listed}\n\n"
-            "The plan states what the work is; a stage that rewrites it while "
-            "doing the work removes the only fixed thing it is measured "
-            "against. Redraw the stage without them. If the plan is genuinely "
-            "wrong, say so in `reasoning` and block — correcting it is a "
-            "human's decision, not this run's.",
+            "the stage edited what the run reads to decide what to do",
+            f"No stage may change these:\n{listed}\n\n"
+            "They are what the work is measured against — the config, the "
+            "repository's conventions, or the run's own record. Redraw the "
+            "stage without them. If one is genuinely wrong, say so in "
+            "`reasoning` and block — correcting it is a human's decision, not "
+            "this run's.",
             out_of_scope_paths=sorted(plan_edits),
         )
 

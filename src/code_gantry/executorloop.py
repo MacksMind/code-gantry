@@ -534,6 +534,7 @@ def build_loop_parts(stage: Stage, cfg: ProjectConfig, repo: Path):
     editor = FileEditor(
         repo=repo,
         edit_files=list(stage.edit_files),
+        protected=protected_paths(cfg),
         no_direct_edit=[
             (entry.path_glob, entry.reason)
             for entry in cfg.executor.no_direct_edit
@@ -576,3 +577,26 @@ def semantic_locator(semantic, path: str, want: str) -> list[str]:
         return semantic.chunks_for(want, path)
     except Exception:  # noqa: BLE001 - a locator that fails is simply no locator
         return []
+
+
+def protected_paths(cfg: ProjectConfig):
+    """The predicate behind `FileEditor.protected`: what no stage may write.
+
+    The same set `verify._is_plan_document` refuses at the gate — the config,
+    the agent-context documents, and the work dir with the ledger in it —
+    refused at the tool so the write costs one tool result instead of an
+    attempt.
+    """
+    from code_gantry.verify import _work_dir_rel
+
+    fixed = set(cfg.effective_agent_context)
+    if cfg.config_rel_path:
+        fixed.add(cfg.config_rel_path)
+    work_dir = _work_dir_rel(cfg)
+
+    def protected(path: str) -> bool:
+        if path in fixed:
+            return True
+        return bool(work_dir) and (path == work_dir or path.startswith(work_dir + "/"))
+
+    return protected

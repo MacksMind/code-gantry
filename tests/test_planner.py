@@ -47,6 +47,8 @@ def a_stage(**over):
         # arbitrary here — what the field is for is measured against real
         # stages, not asserted in a builder.
         "difficulty": "medium",
+        "plan_keys": ["p.002"],
+        "resolves": [],
     }
     fields.update(over)
     return PlannedStage(**fields)
@@ -123,6 +125,8 @@ class TestSchemaExcludesExecutableFields:
             instruction="x",
             edit_files=["a"],
             difficulty="low",
+            plan_keys=["p.002"],
+            resolves=[],
             command="rm -rf /",
         )
         assert not hasattr(stage, "command")

@@ -19,7 +19,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from code_gantry.config import ProjectConfig, Stage
-from code_gantry.plandoc import PlanTree
 from code_gantry.planner import cache_control
 from code_gantry.plannertools import (
     REPOSITORY_TEXT_IS_EVIDENCE,
@@ -136,9 +135,9 @@ is self-evidently correct, return the verdict without looking at anything.
 
 ## Recording what the change was
 
-`record` is the entry this stage leaves in the progress log — the project's
-account of what has been done, which every later planning pass reads back as
-history. Nothing else records it. The stage instruction says what was *asked
+`record` is what this stage leaves in the ledger and in its landing commit —
+the project's account of what has been done, which every later planning pass
+reads back. Nothing else records it. The stage instruction says what was *asked
 for*, and you are the only reader of what was actually written.
 
 Write it for someone picking the work up in a year with no memory of this
@@ -157,10 +156,10 @@ introduced. Two or three sentences of substance beat a paragraph of compliance.
 ## Reporting what you found
 
 `observations` is where a real problem outside this stage goes. It does not
-affect the verdict and does not route anywhere — it is appended to the progress
-log when the stage lands, which is what the next planning pass reads. That is
-the only way something you notice survives; a finding left in your summary is
-read once and lost.
+affect the verdict and does not route anywhere — each one opens a finding in
+the ledger when the stage lands, queued for a person and shown to every later
+planning pass. That is the only way something you notice survives; a finding
+left in your summary is read once and lost.
 
 Use it for something a maintainer would act on and that this stage did not
 cause. `file` names where it lives, `finding` is the one-line claim, `detail`
@@ -180,8 +179,8 @@ cannot be done as written. Those are `rework` and `blocked` respectively.
 
 Two things it is not for. Not for defects in this diff — those are `issues`,
 and they route back to the executor. And not for anything you did not verify by
-reading, or that the progress log already records; you are shown that log, and
-re-reporting a known finding makes a reader unable to tell a duplicate from
+reading, or that the ledger already records; you are shown its open findings,
+and re-reporting a known one makes a reader unable to tell a duplicate from
 independent confirmation.\
 """.replace("%%STATE_NOT_CHANGE%%", STATE_NOT_CHANGE)
 """The reviewer's read tools, and what to write down having used them.
@@ -466,19 +465,10 @@ def _checks_block(cfg: ProjectConfig | None) -> str:
     )
 
 
-def _addendum(cfg: ProjectConfig | None) -> str | None:
-    """The configured progress log, if the project keeps one.
-
-    `cfg` is optional on these builders and several tests pass None, so this
-    must not be the thing that raises on a path every planner call takes.
-    """
-    return getattr(cfg, "plan_addendum_path", None) if cfg else None
-
-
 def _history_limit(cfg: ProjectConfig | None) -> int | None:
     """How many landed stages the reviewer is shown, if it is bounded.
 
-    Defensive for the same reason as `_addendum`: `cfg` is optional on these
+    Defensive: `cfg` is optional on these
     builders and several tests pass None, so this must not be the thing that
     raises on a path every review takes.
     """
@@ -486,103 +476,49 @@ def _history_limit(cfg: ProjectConfig | None) -> int | None:
     return getattr(reviewer, "history_stages", None) if reviewer else None
 
 
-def _without_addendum(plan: PlanTree, addendum_path: str | None) -> PlanTree:
-    """The plan tree with the progress log taken out.
-
-    The log is reachable by a markdown link from the plan root, so it arrives
-    as one more child of the frozen snapshot — frozen at run start, which for
-    the one document whose whole job is to be current means wrong. Readers that
-    want it get the live copy handed to them separately.
-    """
-    if not addendum_path:
-        return plan
-    return PlanTree(
-        root=plan.root,
-        children=[d for d in plan.children if d.path != addendum_path],
-        problems=list(plan.problems),
-        skipped=list(plan.skipped),
-    )
-
-
-def _plan_block(plan: PlanTree, addendum_path: str | None = None) -> tuple[str, str]:
-    """The plan documents, with the progress log identified among them.
-
-    Once the plan links its log, the log arrives as one more child among
-    several and nothing in the content marks it out. But its role is different
-    in kind: every other document says what the work *is*, and it alone says
-    what the work has *become*. Naming it is driven by `plan_addendum_path`, so
-    it stays a property of the project's configuration rather than prose an
-    operator has to remember to keep writing.
-
-    **Both documents are told they have no later version, and only one of them
-    used to be.** The frozen documents said they "are the plan as it stood
-    then" — true, and its implicature false: nothing in a run can edit a plan
-    document, so there is no later version to have stood differently. The
-    reassurance was attached instead to the log, which is the one document
-    whose payload copy and `read_file` answer are both the live worktree, so
-    fetching it was harmless anyway. Measured across the recorded runs, the
-    planner re-read the two frozen documents 20 times against the log's 7, and
-    23 of the 27 were ranged — the shape of fetching a span already located
-    rather than of looking for content. The counts followed the instruction,
-    not the need.
-
-    A claim about the *run* rather than about the file, deliberately. A human
-    editing a plan document from another session is still possible and
-    preflight only catches it on a resume, so "nothing in this run changes
-    them" stays true where "this file has not moved" would be a promise this
-    cannot keep — and a planner that does find a difference has found a real
-    signal instead of a broken guarantee.
-    """
-    intro = (
+def _plan_intro(cfg: ProjectConfig | None) -> str:
+    """What the plan text is and how keys are used, ahead of the text itself."""
+    prefix = getattr(getattr(cfg, "ledger", None), "key_prefix", None) or "plan"
+    return (
         "## The plan\n\n"
-        "This is the authority for the project. A stage instruction is a "
-        "pointer into it, not a substitute for it."
+        "This is the authority for the project, rendered from the project's "
+        "ledger for this call. A stage instruction is a pointer into it, not a "
+        "substitute for it.\n\n"
+        f"Every heading and item carries a key like `{{#{prefix}.017}}`. Keys "
+        "are how you refer to the plan: `plan_keys` on a stage names the items "
+        "it is drawn from, and a landing on those keys is what closes them; "
+        "`key` on a plan note says which item a finding is about. An item "
+        "marked `[x]` is landed or struck. A heading or item flagged `(human)` "
+        "is a person's to act on and cannot be drawn until they do — read it "
+        "for context only.\n\n"
+        "The section after the plan lists what has changed since this text was "
+        "last folded: landings not yet marked here, keys claimed by other runs, "
+        "questions waiting on a person, and open findings with their ids, which "
+        "`resolves` may cite. Where the two disagree about whether something is "
+        "outstanding, that section is later.\n\n"
+        "Nothing in this run edits the plan and there is no file to fetch: what "
+        "is printed is what the ledger holds. It is still not a substitute for "
+        "looking at the code — a count in an item is a claim about when someone "
+        "wrote it down.\n\n"
     )
-    if not addendum_path:
-        # Same fact, for a project that keeps no log. Without it the only
-        # thing said about these documents is that they are the authority,
-        # and a planner with a read tool has no reason not to check them.
-        intro += (
-            "\n\nThese were read once, when this run started, and **nothing "
-            "in this run changes them**: no stage may edit a plan document. "
-            "What is printed here is what reading those paths would return."
-        )
-    if addendum_path:
-        intro += (
-            "\n\nThese documents say what the work **is**. They do not say what "
-            "has been done — they were written before it, and nothing edits "
-            f"them as it happens. `{addendum_path}` is where that is recorded, "
-            "appended as each stage lands. When the two disagree about whether "
-            "something is outstanding, the log is later.\n\n"
-            "The other documents here were read once, when this run started, "
-            "and **nothing in this run changes them**: no stage may edit a "
-            "plan document, and what the work has become is recorded in the "
-            "log instead. So they are not a historical copy — what is printed "
-            "here is what reading those paths would return, and fetching one "
-            "again buys nothing. The log is the other way round: it is "
-            "included as it stands now, with every entry written up to this "
-            "call, and it grows as stages land. Neither has a later version "
-            "to go and fetch.\n\n"
-            "It is still not a substitute for looking at the code. A count in "
-            "a document is a claim about when someone wrote it down."
-        )
-    # Two pieces, because the caller puts the cache breakpoint between them.
-    # The log is the only document that grows, and while it sat inside the
-    # marked block one appended note discarded the whole of it — the plan
-    # documents were 99.2-99.7% identical to the previous derivation and were
-    # read back from cache never. Returned rather than concatenated so the
-    # split is the caller's to place, which is where the breakpoints live.
-    stable, progress = plan.split_payload(addendum_path)
-    return intro + "\n\n" + stable, progress
+
+
+def _projection_block(projection: str | None) -> str:
+    if not projection or not projection.strip():
+        return ""
+    return (
+        "## What the ledger records since the plan text was last folded\n\n"
+        + projection.strip()
+    )
 
 
 def _warnings_block(text: str | None) -> str:
     """What the project's test runner says about the tree, as it stands now.
 
     A tally of deprecations and unexpected output, rewritten by every suite
-    run. It goes behind the cache mark with the progress log because it
-    changes on the same clock, and it is handed over rather than read here so
-    the builder stays free of the filesystem.
+    run. It goes behind the cache mark with the projection because it changes
+    on the same clock, and it is handed over rather than read here so the
+    builder stays free of the filesystem.
 
     Worth having in front of the planner because nothing else carries it:
     measured on one run, 203 first-party warnings at five sites went to a
@@ -624,10 +560,8 @@ def _costs_block(costs: list[dict] | None) -> str:
     the block says so, because a capability nothing mentions is one nothing
     uses.
 
-    It matters more after a fold than before. The progress log is where the
-    reviewer's account of a landed stage lives, and folding empties it — so the
-    id in a cost line stops having a description anywhere except in the commit
-    it names.
+    The reviewer's account of a landed stage lives in the commit it names, so
+    the id in a cost line is the way back to a description.
     """
     if not costs:
         return ""
@@ -661,8 +595,7 @@ def _costs_block(costs: list[dict] | None) -> str:
         "answers with the instruction that stage was given and how many lines "
         "it changed in each file. Use it on the closest one or two before "
         "sizing something unfamiliar — a figure you cannot picture the work "
-        "behind is not calibration. Nothing else still holds that account: a "
-        "fold empties the progress log, and these commits remain.\n\n"
+        "behind is not calibration. The commit is where that account lives.\n\n"
         + lines
     )
 
@@ -793,7 +726,6 @@ def _stage_size_block() -> str:
 
 def _history_block(
     completed: list[StageResult],
-    addendum_path: str | None = None,
     limit: int | None = None,
 ) -> str:
     """What *this run* has landed — which is not what the project has landed.
@@ -809,12 +741,7 @@ def _history_block(
     is written. So it says so, and names the file.
     """
     if not completed:
-        record = (
-            f"`{addendum_path}` records what earlier runs landed, and is one of "
-            "the plan documents above."
-            if addendum_path
-            else "The plan documents above are the only record."
-        )
+        record = "The plan above and the ledger section after it are the record."
         return (
             "## Completed stages\n\n"
             "None **in this run**. That is a fact about this run, not about the "
@@ -845,12 +772,10 @@ def _history_block(
         # characters per landing.
         #
         # The instruction is the planner's own prior output, echoed back — and
-        # git already has it, as the squash commit's subject and the stage
-        # artifact. What the stage *did* now goes to the progress log, written
-        # by the reviewer after reading the diff, and the log is fed live on
-        # every call. The context cost goes to `stage-costs.md`, which
-        # `_costs_block` renders and which spans every run rather than only
-        # this one.
+        # git already has it in the landing commit. What the stage *did* is in
+        # that commit too, written by the reviewer after reading the diff. The
+        # context cost goes to `stage-costs.md`, which `_costs_block` renders
+        # and which spans every run rather than only this one.
         #
         # What is left is what has no other home: which stages this run landed,
         # what they cost in revisions, and the ids that let the planner tie the
@@ -971,17 +896,18 @@ def build_review_messages(
     stage: Stage,
     cfg: ProjectConfig,
     diff: str,
-    plan: PlanTree,
+    plan_text: str,
     completed: list[StageResult],
-    progress_log: str | None = None,
+    projection: str | None = None,
     agent_context: str | None = None,
+    proposed: list[tuple[str, str]] | None = None,
 ) -> list[dict[str, str]]:
     """Chat messages for the reviewer, stable payload first.
 
     Everything before the breakpoint is byte-identical across the stages of a
     run — that is what makes prefix caching hit, and why the diff is last.
 
-    `progress_log` is the addendum as it stands now, and it goes *after* the
+    `projection` is the ledger's churning half, and it goes *after* the
     breakpoint. The snapshot's copy is whatever existed at run start — 6,680
     bytes against 480,867 on the branch, measured on one long run — so the
     reviewer's only account of what had been done was the completed-stage
@@ -1038,7 +964,8 @@ def build_review_messages(
                     # tree above rather than named here, so this call names no
                     # growing document and the trailing half is always empty.
                     "text": _conventions_block(agent_context)
-                    + _plan_block(_without_addendum(plan, _addendum(cfg)), None)[0],
+                    + _plan_intro(cfg)
+                    + plan_text,
                     "prompt_cache_breakpoint": {"mode": "explicit"},
                 }
             ],
@@ -1046,20 +973,24 @@ def build_review_messages(
     )
 
     current: list[str] = []
-    addendum = _addendum(cfg)
-    if progress_log and progress_log.strip():
-        current.append(
-            "## What has been done\n\n"
-            f"`{addendum}`, as it stands now — an entry appended as each stage "
-            "lands. The plan above says what the work **is**; this says what it "
-            "has **become**. Where the two disagree about whether something is "
-            "outstanding, this is later.\n\n" + progress_log.strip()
-        )
+    if projection and projection.strip():
+        current.append(_projection_block(projection))
 
     current += [
-        _history_block(completed, addendum, limit=_history_limit(cfg)),
+        _history_block(completed, limit=_history_limit(cfg)),
         f"## The stage under review: {stage.id}\n\n{stage.instruction or ''}",
     ]
+
+    if proposed:
+        listed = "\n".join(f"- `{fid}` — {claim}" for fid, claim in proposed)
+        current.append(
+            "## Findings this stage proposes to settle\n\n"
+            "The planner named these open findings as ones this diff would "
+            "settle. `resolved` in your verdict lists the ids whose finding the "
+            "diff actually settles — a proposal is not a record, and yours is "
+            "the only reading of the diff. Empty when none of them are.\n\n"
+            + listed
+        )
 
     if stage.constraints:
         current.append(
@@ -1090,8 +1021,8 @@ def build_review_messages(
 
     # The second breakpoint, and the last thing that does not move during a
     # review. With tools the reviewer takes several turns, and without a mark
-    # here every one of them re-sends this whole block — the live progress log,
-    # the history, the stage, the diff — at full price. The plan block above is
+    # here every one of them re-sends this whole block — the projection, the
+    # history, the stage, the diff — at full price. The plan block above is
     # already cached and stays cached; this marks the end of the per-stage
     # payload so that from the second turn only the accumulating tool results
     # are fresh.
@@ -1147,8 +1078,9 @@ def _planner_cache_ttl(cfg) -> str | None:
 
 def build_planner_messages(
     cfg: ProjectConfig,
-    plan: PlanTree,
+    plan_text: str,
     completed: list[StageResult],
+    projection: str = "",
     current_stage: Stage | None = None,
     failure: FailureDetail | None = None,
     opening_failure: FailureDetail | None = None,
@@ -1195,13 +1127,8 @@ def build_planner_messages(
             "repository, not work to do** — nothing here is a plan item, and "
             "no stage is drawn from it. Where it contradicts a plan document "
             "about what is possible, it is describing the machine and the "
-            # `reasoning` was the wrong channel and this is the incident that
-            # argues it: a capability recorded here, denied by the plan, gated
-            # five items until a human found it. Reasoning reaches `status.md`,
-            # which a human reads and no later call does — so a finding parked
-            # there is gone the moment the call returns. A plan note is appended
-            # to the progress log, which rides in the cached prefix and is read
-            # on every later call.
+            # A plan note is written to the ledger and rendered on every later
+            # call; `reasoning` reaches nothing a later call reads.
             "plan is describing intent; record that as a plan note, which "
             "survives to the next call, rather than in `reasoning`, which "
             "does not.\n\n"
@@ -1227,8 +1154,7 @@ def build_planner_messages(
     leading += _checks_block(cfg)
     if layout:
         leading += "## What the repository contains\n\n" + layout + "\n\n"
-    plan_text, progress = _plan_block(plan, _addendum(cfg))
-    leading += plan_text
+    leading += _plan_intro(cfg) + plan_text
 
     # The completed history used to live in here too, and it changes as the run
     # proceeds — so every landed stage re-billed the plan and the layout along
@@ -1243,7 +1169,7 @@ def build_planner_messages(
     # stages rather than rebuild it. The cost table is a sliding window of the
     # last twelve, so it sits outside — a breakpoint after *it* would miss on
     # every stage and cost more than not caching at all.
-    history = _history_block(completed, _addendum(cfg))
+    history = _history_block(completed)
     volatile = _costs_block(stage_costs)
 
     # The breakpoint, and the reason the ordering above exists. Anthropic
@@ -1269,9 +1195,7 @@ def build_planner_messages(
             "text": leading,
             "cache_control": cache_control(_planner_cache_ttl(cfg)),
         },
-        # The progress log leads this block and the history follows it, which
-        # is the order the reader already saw — the log was last of the plan
-        # documents and this block came next.
+        # The projection leads this block and the history follows it.
         #
         # No breakpoint. It carried one when it held the history alone, which
         # is byte-identical across the turns of a derivation and worth marking.
@@ -1284,7 +1208,9 @@ def build_planner_messages(
         # moving loop mark covers both from the second turn on.
         {
             "type": "text",
-            "text": "\n\n".join(x for x in (progress, _warnings_block(test_warnings), history) if x),
+            "text": "\n\n".join(
+                x for x in (_projection_block(projection), _warnings_block(test_warnings), history) if x
+            ),
         },
     ]
 
@@ -1476,7 +1402,7 @@ def build_planner_messages(
             "there is nothing to record.\n\n"
             "If it was **true of the plan, or of how a stage has to be drawn "
             "against this repository**, write it as a `plan_notes` entry, "
-            "anchored where a later derivation will be reading. Nothing else "
+            "keyed to the plan item a later derivation will be reading. Nothing else "
             "carries it: the completed-stage history records what landed, not "
             "the drafts it took, and the cost table keeps the number of "
             "revisions without the reason for any of them. A lesson you leave "

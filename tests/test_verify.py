@@ -1124,172 +1124,43 @@ class TestResumeDoesNotLookLikeAStall:
         assert out.failed_layer is Layer.PROGRESS
 
 
-class TestThePlanIsNotEditable:
-    """A stage may not rewrite the plan it is being drawn from.
+class TestWhatTheRunReadsIsNotEditable:
+    """The predicate behind the scope guard: config, conventions, work dir.
 
-    Harmless while the planner was blind. Now it reads the plan tree and also
-    chooses `edit_files`, so nothing structural stops it declaring the plan in
-    scope and having the executor amend the instructions it will be judged
-    against next cycle. Over an unattended run that is goalpost drift with a
-    green suite behind it.
-
-    Plan maintenance belongs to a separate pass driven by git history — a human
-    decision about what the work has become, not a side effect of doing it.
+    The plan itself no longer lives in the tree, so the executor cannot reach
+    it; what it can reach is the config, the agent-context documents, and the
+    work dir with the ledger in it.
     """
 
-    def _fixture(self, repo, edit_files):
-        (repo / "docs").mkdir(exist_ok=True)
-        (repo / "docs" / "plan.md").write_text("# Plan\n\nstep one\n")
-        g = Git(repo)
-        g.commit_all("plan")
-        cfg, stage = build(
-            repo,
-            stage_overrides={"edit_files": edit_files},
-            plan_root="docs/plan.md",
-        )
-        return cfg, stage, g.head_sha()
+    def _ctx(self, repo, **over):
+        from types import SimpleNamespace
 
-    def test_a_stage_may_not_edit_the_plan_root(self, repo):
-        cfg, stage, sha = self._fixture(repo, ["docs/**"])
-        (repo / "docs" / "plan.md").write_text("# Plan\n\nrewritten\n")
-        out = verify(repo, cfg, stage, sha)
-        assert not out.passed
-        assert out.failed_layer is Layer.SCOPE
-        assert "plan" in out.summary.lower()
+        cfg, _ = build(repo, **over)
+        return cfg, SimpleNamespace(cfg=cfg)
 
-    def test_declaring_the_plan_in_scope_does_not_help(self, repo):
-        # The point: this is not enforced by the planner's restraint.
-        cfg, stage, sha = self._fixture(repo, ["docs/plan.md"])
-        (repo / "docs" / "plan.md").write_text("# Plan\n\nrewritten\n")
-        out = verify(repo, cfg, stage, sha)
-        assert not out.passed
-        assert out.failed_layer is Layer.SCOPE
+    def test_the_work_dir_is_protected(self, repo):
+        from code_gantry.verify import _is_plan_document
 
-    def test_ordinary_files_are_unaffected(self, repo):
-        cfg, stage, sha = self._fixture(repo, ["app.py"])
-        (repo / "app.py").write_text("changed\n")
-        out = verify(repo, cfg, stage, sha)
-        assert out.passed or out.failed_layer is not Layer.SCOPE
+        cfg, ctx = self._ctx(repo)
+        rel = str(cfg.work_dir.relative_to(cfg.target_repo))
+        assert _is_plan_document(f"{rel}/ledger.db", ctx)
+        assert _is_plan_document(rel, ctx)
 
+    def test_the_conventions_and_the_config_are_protected(self, repo):
+        from code_gantry.verify import _is_plan_document
 
-class TestThePlanIsReadFromTheBranchBeingWorkedOn:
-    """Plan documents are read at the project branch, not at `base_ref`.
+        cfg, ctx = self._ctx(repo)
+        cfg = cfg.model_copy(update={"config_rel_path": "docs/code_gantry.yaml"})
+        ctx.cfg = cfg
+        assert _is_plan_document("AGENTS.md", ctx)
+        assert _is_plan_document("docs/code_gantry.yaml", ctx)
 
-    `base_sha` answers "what has this run changed"; it was also answering
-    "which commit are the plan documents in", and those are not the same
-    question. On a long-lived project branch the plan is maintained alongside
-    the work — restructured, folded, corrected — and none of that reaches
-    `main` until the branch merges, which on a months-long migration is the
-    end. Anchoring reads to `base_ref` made every such edit invisible to the
-    run that motivated it, and made a document set that had moved on the branch
-    fail plan resolution outright.
+    def test_the_plan_root_and_ordinary_files_are_not(self, repo):
+        from code_gantry.verify import _is_plan_document
 
-    So reads follow the branch and measurement stays on the base.
-    """
-
-    def _fixture(self, repo, run_git):
-        docs = repo / "docs"
-        docs.mkdir(exist_ok=True)
-        (docs / "plan.md").write_text("# Plan\n\nSee [the child](child.md).\n")
-        g = Git(repo)
-        g.commit_all("plan")
-        base_sha = g.head_sha()
-
-        run_git(repo, "checkout", "-qb", "proj")
-        (docs / "child.md").write_text("# Child\n\nstep one\n")
-        g.commit_all("a plan child that only exists on the project branch")
-
-        cfg, stage = build(
-            repo,
-            stage_overrides={"edit_files": ["docs/**"]},
-            plan_root="docs/plan.md",
-        )
-        return cfg, stage, base_sha, g.head_sha()
-
-    def test_a_child_added_on_the_project_branch_is_protected(self, repo, run_git):
-        cfg, stage, base_sha, plan_sha = self._fixture(repo, run_git)
-        (repo / "docs" / "child.md").write_text("# Child\n\nrewritten\n")
-        out = verify(
-            repo, cfg, stage, plan_sha, base_sha=base_sha, plan_sha=plan_sha
-        )
-        assert not out.passed
-        assert out.failed_layer is Layer.SCOPE
-
-    def test_reading_at_the_base_would_not_see_it(self, repo, run_git):
-        # The behaviour being replaced, kept because it is the whole argument
-        # for the second sha: resolve at the base and the child is not a plan
-        # document, so an executor may quietly rewrite it.
-        cfg, stage, base_sha, plan_sha = self._fixture(repo, run_git)
-        (repo / "docs" / "child.md").write_text("# Child\n\nrewritten\n")
-        out = verify(
-            repo, cfg, stage, plan_sha, base_sha=base_sha, plan_sha=base_sha
-        )
-        assert out.passed
-
-
-class TestTheAddendumIsNotTheExecutorsToWrite:
-    """The addendum records what a run did. A stage must not edit it.
-
-    It lives inside the plan directory and CodeGantry does append to it —
-    from the planner's structured output, at advance time, outside any stage's
-    diff. So it never appears in a scope check legally, and an executor edit to
-    it is the executor reaching into the record of its own work.
-    """
-
-    def _fixture(self, repo):
-        (repo / "docs" / "addendum").mkdir(parents=True, exist_ok=True)
-        (repo / "docs" / "plan.md").write_text("# Plan\n\nstep one\n")
-        (repo / "docs" / "addendum" / "log.md").write_text("# Done so far\n")
-        g = Git(repo)
-        g.commit_all("plan and addendum")
-        cfg, stage = build(
-            repo,
-            stage_overrides={"edit_files": ["docs/**"]},
-            plan_root="docs/plan.md",
-            plan_addendum_path="docs/addendum",
-        )
-        return cfg, stage, g.head_sha()
-
-    def test_a_stage_may_not_edit_the_addendum(self, repo):
-        cfg, stage, sha = self._fixture(repo)
-        (repo / "docs" / "addendum" / "log.md").write_text("# Done\n\nfabricated\n")
-        out = verify(repo, cfg, stage, sha)
-        assert not out.passed
-        assert out.failed_layer is Layer.SCOPE
-
-
-class TestAnUncommittedAddendumWouldPoisonTheNextStage:
-    """Why the addendum is committed at once rather than at the end of a run.
-
-    Batching the commits would be tidier — one commit per landed stage is a
-    stated property, and a note-heavy run doubles the commit count. But the
-    file is written into the working tree, and the next stage's scope guard
-    diffs the working tree against its start sha. An uncommitted addendum
-    therefore shows up as a plan document modified by a stage that never
-    touched it, and the stage fails for something CodeGantry did.
-    """
-
-    def test_an_uncommitted_addendum_fails_the_next_stage(self, repo):
-        (repo / "docs" / "addendum").mkdir(parents=True, exist_ok=True)
-        (repo / "docs" / "plan.md").write_text("# Plan\n")
-        g = Git(repo)
-        g.commit_all("plan")
-        sha = g.head_sha()
-
-        cfg, stage = build(
-            repo,
-            stage_overrides={"edit_files": ["app.py"]},
-            plan_root="docs/plan.md",
-            plan_addendum_path="docs/addendum",
-        )
-        # The stage does its own work...
-        edit(repo)
-        # ...and CodeGantry left an addendum behind, uncommitted.
-        (repo / "docs" / "addendum" / "plan-addendum.md").write_text("# Notes\n")
-
-        out = verify(repo, cfg, stage, sha)
-        assert not out.passed
-        assert out.failed_layer is Layer.SCOPE
+        cfg, ctx = self._ctx(repo, plan_root="docs/plan.md")
+        assert not _is_plan_document("docs/plan.md", ctx)
+        assert not _is_plan_document("app.py", ctx)
 
 
 class TestAgentContextIsNotAStagesToEdit:

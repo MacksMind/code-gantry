@@ -55,10 +55,10 @@ class TestTheSchema:
         from code_gantry.planner import PlannedStage
 
         for value in ("low", "medium", "high"):
-            spec = PlannedStage(id="s", instruction="i", edit_files=["a.rb"], difficulty=value)
+            spec = PlannedStage(id="s", instruction="i", edit_files=["a.rb"], plan_keys=["p.002"], resolves=[], difficulty=value)
             assert spec.difficulty == value
         with pytest.raises(Exception):
-            PlannedStage(id="s", instruction="i", edit_files=["a.rb"], difficulty="trivial")
+            PlannedStage(id="s", instruction="i", edit_files=["a.rb"], plan_keys=["p.002"], resolves=[], difficulty="trivial")
 
     def test_the_description_rejects_diff_size(self):
         """A model can see file counts, so the description has to say that is

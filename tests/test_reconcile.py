@@ -27,9 +27,10 @@ from test_config import SCOPED_TOOL_YAML
 def project(tmp_path, monkeypatch):
     """A target repo with a plan, and a project config pointing at it."""
     repo = tmp_path / "target"
-    (repo / "docs" / "addendum").mkdir(parents=True)
+    (repo / "docs").mkdir(parents=True)
     (repo / "app").mkdir()
-    (repo / "docs" / "plan.md").write_text("# Plan\n\n1. Convert 24 call sites.\n")
+    (repo / ".gitignore").write_text(".code_gantry/\n")
+    (repo / "docs" / "plan.md").write_text("# Plan\n\n- [ ] **Convert 24 call sites.**\n")
     (repo / "app" / "thing.rb").write_text("render text: 'x'\n")
     for args in (
         ["init", "-q", "-b", "main"],
@@ -52,7 +53,6 @@ target_repo: {repo}
 base_ref: main
 project_branch: work
 plan_root: docs/plan.md
-plan_addendum_path: docs/addendum
 full_test_command: "true"
 executor:
   model: m
@@ -61,6 +61,8 @@ planner:
   repo_access: true
 reviewer:
   model: gpt-5.5
+ledger:
+  key_prefix: p
 scoped_test_tool: scoped_suite
 project_tools:
   - name: scoped_suite
@@ -71,9 +73,13 @@ project_tools:
     roles: ['executor']
 """
     )
-    # PROJECTS_ROOT is a relative path bound as a default argument at import
-    # time, so patching the module attribute does nothing. Chdir instead.
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CODE_GANTRY_ACTOR", "mack")
+    result = CliRunner().invoke(
+        cli.main, ["plan", "import", "docs/plan.md", "--config", "projects/demo/config.yaml"],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0, result.output
     return repo, projects
 
 
@@ -100,10 +106,20 @@ def stub_planner(monkeypatch, notes, *, reader=object()):
 
 
 A_NOTE = {
-    "plan_path": "PLAN.md",
-    "anchor": "1. Convert 24 call sites",
+    "kind": "progress",
+    "key": "p.002",
+    "subject": "remaining call sites",
+    "total": "0 remaining",
+    "needs": "pipeline",
+    "finding": "",
     "observation": "search finds 0 remaining in app/",
 }
+
+
+def findings(repo):
+    from code_gantry.ledger import read_ledger
+
+    return read_ledger(repo / "docs" / ".code_gantry" / "ledger.db").views().open_findings()
 
 
 class TestItActuallyRuns:
@@ -115,27 +131,29 @@ class TestItActuallyRuns:
         assert result.exit_code == 0, result.output
         assert "1 commit(s)" in result.output
 
-    def test_the_observation_is_written_to_the_addendum(self, project, monkeypatch):
+    def test_the_observation_opens_a_finding_on_its_key(self, project, monkeypatch):
         repo, _ = project
         stub_planner(monkeypatch, [A_NOTE])
-        CliRunner().invoke(cli.main, ["reconcile", "projects/demo/config.yaml"])
-        written = (repo / "docs" / "addendum" / "plan-addendum.md").read_text()
-        assert "search finds 0 remaining" in written
-        assert "1. Convert 24 call sites" in written
+        result = CliRunner().invoke(cli.main, ["reconcile", "projects/demo/config.yaml"])
+        assert "1 finding(s) opened" in result.output
+        (finding,) = findings(repo)
+        assert finding.keys == ["p.002"] and finding.by == "reconcile"
+        assert "search finds 0 remaining" in finding.claim
+        assert finding.total == "0 remaining"
 
     def test_dry_run_writes_nothing(self, project, monkeypatch):
         repo, _ = project
         stub_planner(monkeypatch, [A_NOTE])
         result = CliRunner().invoke(cli.main, ["reconcile", "projects/demo/config.yaml", "--dry-run"])
         assert "search finds 0 remaining" in result.output
-        assert not (repo / "docs" / "addendum" / "plan-addendum.md").exists()
+        assert findings(repo) == []
 
     def test_nothing_to_add_says_so_and_writes_nothing(self, project, monkeypatch):
         repo, _ = project
         stub_planner(monkeypatch, [])
         result = CliRunner().invoke(cli.main, ["reconcile", "projects/demo/config.yaml"])
         assert "nothing to add" in result.output
-        assert not (repo / "docs" / "addendum" / "plan-addendum.md").exists()
+        assert findings(repo) == []
 
 
 class TestItRefusesWhenItCannotWork:
@@ -155,8 +173,9 @@ class TestTheDiffIsAgainstBaseRef:
         # release branch must be reconciled against that, not against whatever
         # this project happens to call it.
         repo = tmp_path / "t"
-        (repo / "docs" / "addendum").mkdir(parents=True)
-        (repo / "docs" / "plan.md").write_text("# Plan\n")
+        (repo / "docs").mkdir(parents=True)
+        (repo / ".gitignore").write_text(".code_gantry/\n")
+        (repo / "docs" / "plan.md").write_text("# Plan\n\n- [ ] **an item**\n")
         for args in (
             ["init", "-q", "-b", "develop"],
             ["config", "user.email", "t@example.com"],
@@ -172,13 +191,18 @@ class TestTheDiffIsAgainstBaseRef:
         (projects / "demo").mkdir(parents=True)
         (projects / "demo" / "config.yaml").write_text(
             f"target_repo: {repo}\nbase_ref: develop\nproject_branch: work\n"
-            "plan_root: docs/plan.md\nplan_addendum_path: docs/addendum\n"
+            "plan_root: docs/plan.md\nledger:\n  key_prefix: p\n"
             'full_test_command: "true"\nexecutor:\n  model: m\n'
             "planner:\n  model: claude-opus-5\n  repo_access: true\n"
             "reviewer:\n  model: gpt-5.5\n"
             + SCOPED_TOOL_YAML
         )
         monkeypatch.chdir(tmp_path)
+        imported = CliRunner().invoke(
+            cli.main, ["plan", "import", "docs/plan.md", "--config", "projects/demo/config.yaml"],
+            catch_exceptions=False,
+        )
+        assert imported.exit_code == 0, imported.output
 
         stub = stub_planner(monkeypatch, [])
         CliRunner().invoke(cli.main, ["reconcile", "projects/demo/config.yaml"])
@@ -262,7 +286,7 @@ class TestAnUnverifiedVerdictIsRefused:
         repo, _ = project
         result = CliRunner().invoke(cli.main, ["reconcile", "projects/demo/config.yaml"])
         assert result.exit_code != 0
-        assert not (repo / "docs" / "addendum" / "plan-addendum.md").exists()
+        assert findings(repo) == []
 
     def test_a_verdict_backed_by_reads_is_accepted(self, project, monkeypatch):
         stub_planner(monkeypatch, [])
@@ -316,30 +340,19 @@ class TestAFailedCallIsNotAVerdict:
         assert "without reading anything" in result.output
 
 
-class TestThePlanDirectoryIsNotWork:
-    """Editing the plan is not progress against it.
-
-    Reconcile diffs base against the branch, and that range carries everything
-    the branch ever did — including a restructure of the plan corpus itself.
-    Asked what the branch accomplished, the planner dutifully reported the
-    document set being relocated, the cross-refs being rewritten, and the
-    citation lines in the log's own earlier entries going stale. Three of six
-    entries, all true, none of them work.
-
-    The log rides in the prompt prefix on every planning step now, so that is a
-    standing cost rather than a one-off tidy-up. Cheaper to say what does not
-    count than to move commits onto base so the diff stops showing them.
-    """
+class TestTheReconcilePromptCarriesTheLedger:
+    """The planner is handed the plan and the projection, and asked to key its notes."""
 
     def _prompt_text(self):
         from code_gantry.cli import _load, _reconcile_prompt
 
         cfg = _load(Path("projects/demo/config.yaml"))
-        return _reconcile_prompt(cfg)[0]["content"]
+        return _reconcile_prompt(cfg, "# Plan {#p.001}\n\n- [ ] {#p.002} **THE ITEM**\n", "### Open findings\n\n- `f-x-1` on {#p.002} — by planner: a claim")[0]["content"]
 
-    def test_it_names_the_plan_directory(self, project):
-        assert "docs" in self._prompt_text()
+    def test_it_carries_the_plan_text_and_the_projection(self, project):
+        text = self._prompt_text()
+        assert "THE ITEM" in text and "`f-x-1`" in text
 
-    def test_it_says_document_changes_are_not_progress(self, project):
+    def test_it_asks_for_keyed_totals(self, project):
         text = self._prompt_text().lower()
-        assert "not progress" in text or "not work" in text
+        assert "key each" in text and "total" in text

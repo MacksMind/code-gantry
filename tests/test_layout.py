@@ -111,35 +111,23 @@ class TestReachesThePlanner:
     """Wiring, not formatting. The block is worthless if it never arrives."""
 
     def test_the_layout_is_in_the_planner_prompt(self):
-        from code_gantry.plandoc import PlanDocument, PlanTree
         from code_gantry.prompts import build_planner_messages
 
-        plan = PlanTree(
-            root=PlanDocument(path="p.md", content="do the thing"),
-            children=[],
-            problems=[],
-            skipped=[],
-        )
+        plan = "# Plan {#p.001}\n\n- [ ] {#p.002} **do the thing**\n"
         messages = build_planner_messages(
-            cfg=None, plan=plan, completed=[], layout="- `src/` (1)\n  src/calc.py"
+            cfg=None, plan_text=plan, completed=[], layout="- `src/` (1)\n  src/calc.py"
         )
         assert "src/calc.py" in _leading(messages)
 
     def test_it_leads_so_it_stays_cacheable(self):
         # It is read once at the base sha and never changes, so it belongs in
         # the stable prefix with the plan — not beside the per-call material.
-        from code_gantry.plandoc import PlanDocument, PlanTree
         from code_gantry.prompts import build_planner_messages
 
-        plan = PlanTree(
-            root=PlanDocument(path="p.md", content="do the thing"),
-            children=[],
-            problems=[],
-            skipped=[],
-        )
+        plan = "# Plan {#p.001}\n\n- [ ] {#p.002} **do the thing**\n"
         messages = build_planner_messages(
             cfg=None,
-            plan=plan,
+            plan_text=plan,
             completed=[],
             layout="LAYOUT_MARKER",
         )
@@ -150,14 +138,8 @@ class TestReachesThePlanner:
         assert "LAYOUT_MARKER" not in messages[0]["content"][-1]["text"]
 
     def test_a_repo_with_no_layout_still_builds_a_prompt(self):
-        from code_gantry.plandoc import PlanDocument, PlanTree
         from code_gantry.prompts import build_planner_messages
 
-        plan = PlanTree(
-            root=PlanDocument(path="p.md", content="do the thing"),
-            children=[],
-            problems=[],
-            skipped=[],
-        )
-        messages = build_planner_messages(cfg=None, plan=plan, completed=[], layout="")
+        plan = "# Plan {#p.001}\n\n- [ ] {#p.002} **do the thing**\n"
+        messages = build_planner_messages(cfg=None, plan_text=plan, completed=[], layout="")
         assert _leading(messages).strip()

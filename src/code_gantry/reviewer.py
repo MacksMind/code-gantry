@@ -118,6 +118,11 @@ class ReviewVerdict(BaseModel):
     record: str
     issues: list[Issue]
     observations: list[Observation] = []
+    # Which of the stage's proposed `resolves` the diff actually settles, by
+    # finding id. Required: the stage's list is a proposal and this is the
+    # record, written by the only participant that saw the diff. Empty when
+    # none of them are settled, which is an answer.
+    resolved: list[str]
 
 
 def _record_usage(outcome, usage, turns) -> None:
@@ -163,6 +168,9 @@ class ReviewOutcome:
     # back to the executor; these route nowhere and are written to the
     # progress log when the stage lands.
     observations: list[Observation] = field(default_factory=list)
+    # Finding ids the reviewer confirmed the diff settles. See
+    # `ReviewVerdict.resolved`.
+    resolved: list[str] = field(default_factory=list)
     # One reading per turn, in order. `usage` sums the loop and cannot say
     # where a cached prefix stops matching: measured on a live run, cached
     # tokens per turn sat pinned near 200,000 against a peak prompt of
@@ -186,6 +194,7 @@ class ReviewOutcome:
             "record": self.record,
             "issues": [i.model_dump() for i in self.issues],
             "observations": [o.model_dump() for o in self.observations],
+            "resolved": list(self.resolved),
             "tool_calls": list(self.tool_calls),
             # The same ledger by tool. It reaches `run.log` as a summary
             # line and reached no structured artifact, so every count
@@ -533,6 +542,7 @@ class OpenAIReviewer:
             record=getattr(parsed, "record", "") or "",
             issues=list(parsed.issues),
             observations=list(getattr(parsed, "observations", None) or []),
+            resolved=list(getattr(parsed, "resolved", None) or []),
             usage=usage,
             # Beside `usage`, because this is the exit every approved review
             # takes — the four `_record_usage` sites above are all failure

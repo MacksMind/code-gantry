@@ -36,7 +36,6 @@ from pathlib import Path
 
 import click
 
-from code_gantry.addendum import append_notes
 from code_gantry.configversion import blob_sha, problem_resuming
 from code_gantry.config import ConfigError, ProjectConfig, load_config
 from code_gantry.discover import derive_target_repo, draft_config
@@ -49,7 +48,7 @@ from code_gantry.driver import (
     load_state,
     open_checkpointer,
 )
-from code_gantry.plandoc import resolve_plan_tree, snapshot_tree
+from code_gantry.ledger import open_ledger, read_ledger
 from code_gantry.planner import make_planner
 from code_gantry.preflight import format_checks, run_preflight
 from code_gantry.report import build_report
@@ -266,9 +265,9 @@ def reconcile(config_path: Path | None, dry_run: bool) -> None:
     cfg, project = _project_for(config_path)
     git = Git(cfg.target_repo)
 
-    if not cfg.plan_addendum_path and not dry_run:
+    if cfg.ledger is None:
         raise click.ClickException(
-            "no plan_addendum_path configured; nowhere to record observations"
+            "no `ledger:` section in the config; nowhere to record observations"
         )
 
     planner = make_planner(cfg.planner, cfg.target_repo, cfg.project_tools)
@@ -280,11 +279,24 @@ def reconcile(config_path: Path | None, dry_run: bool) -> None:
 
     landed = git.commits_between(cfg.base_ref, cfg.project_branch)
     click.echo(
-        f"reconciling {cfg.plan_root} against {len(landed)} commit(s) on "
+        f"reconciling the ledger against {len(landed)} commit(s) on "
         f"{cfg.project_branch}"
     )
 
-    outcome = planner.plan(_reconcile_prompt(cfg))
+    from code_gantry.render import render_plan, render_projection
+
+    views = read_ledger(project.ledger).views()
+    if not views.documents():
+        raise click.ClickException(
+            f"the ledger at {project.ledger} holds no plan; import one first"
+        )
+    outcome = planner.plan(
+        _reconcile_prompt(
+            cfg,
+            render_plan(views),
+            render_projection(views, note_chars=cfg.ledger.note_chars),
+        )
+    )
 
     # A failed call is not a verdict. This was learned the hard way: an expired
     # API key produced `blocked` with an empty tool log, which the first
@@ -315,78 +327,68 @@ def reconcile(config_path: Path | None, dry_run: bool) -> None:
 
     click.echo(f"\n{len(outcome.plan_notes)} observation(s):")
     for note in outcome.plan_notes:
-        click.echo(f"\n  {note.get('plan_path')}")
-        if note.get("anchor"):
-            click.echo(f"    plan says: {note['anchor']}")
+        click.echo(f"\n  {note.get('key')} — {note.get('subject')}")
         click.echo(f"    observed:  {note.get('observation')}")
 
     if dry_run:
         click.echo("\n--dry-run: nothing written")
         return
 
-    written = append_notes(
-        cfg.target_repo,
-        cfg.plan_addendum_path,
-        outcome.plan_notes,
-        stage_id="reconcile",
-    )
-    click.echo(f"\nrecorded in {written}")
-    click.echo(
-        "Not committed: read it, then commit it yourself. Folding these into "
-        "the plan documents is a separate judgement."
-    )
+    from code_gantry.ledgercli import actor, origin
+    from code_gantry.nodes import open_findings
+
+    led = open_ledger(project.ledger, origin=origin(), actor=actor())
+    try:
+        opened = open_findings(led, git, outcome.plan_notes, by="reconcile",
+                               stage_id="reconcile", run_id=None)
+    finally:
+        led.close()
+    click.echo(f"\n{opened} finding(s) opened in {project.ledger}")
 
 
-def _reconcile_prompt(cfg: ProjectConfig) -> list[dict]:
-    """The reconcile instruction — catch the progress log up with the branch.
+def _reconcile_prompt(cfg: ProjectConfig, plan_text: str, projection: str) -> list[dict]:
+    """The reconcile instruction — catch the ledger up with the branch.
 
     Runs outside a stage, so it is the one place that can record work landed
-    before the log existed, or by a run whose planner did not write an entry.
+    before the ledger existed, or by hand, or by someone else.
     """
-    log = cfg.plan_addendum_path or "the progress log"
-    plan_dir = cfg.plan_root.rsplit("/", 1)[0] if "/" in cfg.plan_root else "."
+    from code_gantry.prompts import _plan_intro, _projection_block
+
     return [
         {
             "role": "user",
             "content": (
-                f"The branch {cfg.project_branch!r} carries work that "
-                f"{cfg.base_ref!r} does not, and the progress log may not "
-                "record all of it. Catch the log up.\n\n"
-                f"**Read `{log}` first.** It is the record of what has already "
-                "been reported, and re-reporting something it covers is the "
-                "one way this pass does damage — a reader cannot tell a "
+                _plan_intro(cfg)
+                + plan_text
+                + "\n\n"
+                + (_projection_block(projection) + "\n\n" if projection.strip() else "")
+                + f"The branch {cfg.project_branch!r} carries work that "
+                f"{cfg.base_ref!r} does not, and the ledger may not record all "
+                "of it. Catch it up.\n\n"
+                "**Read the open findings above first.** Re-reporting one is "
+                "the one way this pass does damage — a reader cannot tell a "
                 "duplicate from a second, independent confirmation.\n\n"
-                f"Then read the plan, starting at `{cfg.plan_root}` and the "
-                "documents it links. Use `git_diff` between "
+                "Use `git_diff` between "
                 f"{cfg.base_ref} and {cfg.project_branch} to see what the "
                 "branch actually did, and `search` to check the plan's "
                 "specific claims — counts, file lists, 'occurrences across N "
-                "files' — against the code as it is now. A count in a document "
+                "files' — against the code as it is now. A count in an item "
                 "is a claim about the moment someone wrote it; the code is the "
                 "fact.\n\n"
-                f"**Changes under `{plan_dir}/` are not progress and are not "
-                "work.** The branch range carries every edit the plan corpus "
-                "has ever had — documents renamed or relocated, cross-refs "
-                "rewritten, entries added to the log itself. All of it will "
-                "show up in the diff and none of it advances a plan step. "
-                "Report what changed in the *code*, and what that means for "
-                "the plan. Ignore what changed in the plan.\n\n"
                 "Return `project_complete`, and put every finding in "
-                "`plan_notes` — one entry per plan step whose state the log "
+                "`plan_notes` — one entry per plan item whose state the ledger "
                 "does not yet reflect: work that has been done, a count that "
-                "has moved, a claim that was wrong when written. State where "
-                "the step stands now, as a total.\n\n"
-                "`plan_notes` is the entire output of this pass. It is the "
-                "only part that gets written to the log; a finding described "
-                "in your reasoning and left out of `plan_notes` is discarded. "
-                "Do not propose a stage; nothing is being built here.\n\n"
+                "has moved, a claim that was wrong when written. Key each to "
+                "the item, and state where it stands now, as a total.\n\n"
+                "`plan_notes` is the entire output of this pass. A finding "
+                "described in your reasoning and left out of `plan_notes` is "
+                "discarded. Do not propose a stage; nothing is being built "
+                "here.\n\n"
                 "Report only what you verified against the code. A note nobody "
                 "can check is worse than none, because someone will act on it."
             ),
         }
     ]
-
-
 
 
 @main.command()
@@ -455,19 +457,19 @@ def run(config_path: Path | None, run_id: str | None, skip_preflight_tests: bool
     # for an attempt the operator later wants to inspect.
     previous_gc = git.disable_gc()
     base_sha = git.ensure_project_branch(cfg.project_branch, cfg.base_ref)
-    # Read the plan from the project branch, not the base. A long migration
-    # maintains its documents on the branch for months and merges once at the
-    # end; reading at base_ref shows the plan as it was before any of that.
+    # The commit the repository's own documents — conventions, operations,
+    # layout — are read at: the project branch, where they are maintained.
     plan_sha = git.rev_parse(cfg.project_branch)
 
-    # Snapshot it as it stands at run start. The reviewer and planner judge
-    # against this snapshot, so nothing is substituted underneath them mid-run.
-    tree = resolve_plan_tree(git, cfg.plan_root, plan_sha)
-    if not tree.ok:
-        click.echo("plan could not be resolved:\n" + "\n".join(tree.problems), err=True)
+    documents = read_ledger(project.ledger).views().documents()
+    if not documents:
+        click.echo(
+            f"the ledger at {project.ledger} holds no plan; import one with "
+            "`code-gantry plan import`",
+            err=True,
+        )
         git.restore_gc(previous_gc)
         sys.exit(EXIT_FAILED)
-    snapshot_tree(tree, project.plan_snapshot)
 
     state = new_state(
         run_id=run_id,
@@ -484,7 +486,7 @@ def run(config_path: Path | None, run_id: str | None, skip_preflight_tests: bool
 
     click.echo(
         f"\nrun {run_id} on {cfg.project_branch} "
-        f"(plan: {len(tree.documents)} document(s))\n"
+        f"(plan: {len(documents)} document(s) in the ledger)\n"
     )
     try:
         code = _drive(cfg, project, paths, state, _warnings(checks))
@@ -619,8 +621,7 @@ def resume(config_path: Path | None, run_id: str | None, reset_progress_budget: 
 
     checks = run_preflight(cfg, project_dir=project, run_tests=False, for_resume=True,
                             config_path=config_path,
-                            recorded_base_sha=saved.get("base_sha", ""),
-                            recorded_plan_sha=saved.get("plan_sha", ""))
+                            recorded_base_sha=saved.get("base_sha", ""))
     click.echo(format_checks(checks))
     if any(c.blocking for c in checks):
         click.echo("\npreflight failed; nothing was resumed", err=True)
@@ -702,6 +703,7 @@ def _drive(
     # operator actually tails.
     for warning in warnings or []:
         log(f"[preflight] {warning}")
+    rt = None
     try:
         rt = build_runtime(
             cfg,
@@ -765,6 +767,8 @@ def _drive(
         log.close()
         tools.close()
         conn.close()
+        if rt is not None and rt.ledger is not None:
+            rt.ledger.close()
 
     # The path, not the document. Same reasoning as the log line above: the
     # report is a file to open, and reprinting sixty lines of markdown under a
