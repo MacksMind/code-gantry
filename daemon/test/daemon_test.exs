@@ -106,6 +106,15 @@ defmodule CodeGantryDaemonTest do
     assert {"resume", ^id} = second
   end
 
+  test "a primary copy without mk-bay leaves the bay failed and the daemon up", %{root: root, host: host, state: state} do
+    File.rm!(Path.join([host.primary, "bin", "mk-bay"]))
+    {:ok, pid} = Bay.start_link({host, hd(host.bays)})
+    wait_for(fn -> String.contains?(status(state), "bay1 failed") end)
+    assert Process.alive?(pid)
+    assert status(state) =~ "no bin/mk-bay"
+    refute File.exists?(Path.join(root, "calls"))
+  end
+
   test "the sync loop runs the ledger sync and records the result", %{root: root, host: host, state: state} do
     File.write!(Path.join(root, "exit"), "0")
     {:ok, _} = Sync.start_link(host)

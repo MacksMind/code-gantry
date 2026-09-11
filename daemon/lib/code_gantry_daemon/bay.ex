@@ -32,21 +32,33 @@ defmodule CodeGantryDaemon.Bay do
   def handle_continue(:ensure_checkout, %{host: host, bay: bay} = state) do
     dir = Host.bay_dir(host, bay)
 
-    unless File.dir?(dir) do
-      Logger.info("#{bay.name}: making #{dir}")
-      Status.put(bay.name, :making, nil)
+    cond do
+      File.dir?(dir) ->
+        {:noreply, state, {:continue, :launch}}
 
-      args = ["bin/mk-bay", bay.name, Integer.to_string(bay.offset)] ++ if(host.branch, do: [host.branch], else: [])
-      {out, status} = Command.run(args, host.primary, Host.env(host))
+      not File.regular?(Path.join([host.primary, "bin", "mk-bay"])) ->
+        # A bay that cannot be made is reported and left alone: the daemon
+        # stays up for the bays it can run and the status file says why.
+        why = "no bin/mk-bay in #{host.primary}; is the primary copy on the project branch and pulled?"
+        Logger.error("#{bay.name}: #{why}")
+        Status.put(bay.name, :failed, why)
+        {:noreply, state}
 
-      if status != 0 do
-        Logger.error("#{bay.name}: mk-bay failed (#{status}):\n#{out}")
-        Status.put(bay.name, :failed, "mk-bay exited #{status}")
-        throw({:stop, :mk_bay_failed})
-      end
+      true ->
+        Logger.info("#{bay.name}: making #{dir}")
+        Status.put(bay.name, :making, nil)
+        args = ["bin/mk-bay", bay.name, Integer.to_string(bay.offset)] ++ if(host.branch, do: [host.branch], else: [])
+
+        case Command.run(args, host.primary, Host.env(host)) do
+          {_out, 0} ->
+            {:noreply, state, {:continue, :launch}}
+
+          {out, status} ->
+            Logger.error("#{bay.name}: mk-bay exited #{status}:\n#{out}")
+            Status.put(bay.name, :failed, "mk-bay exited #{status}; see the daemon log")
+            {:noreply, state}
+        end
     end
-
-    {:noreply, state, {:continue, :launch}}
   end
 
   def handle_continue(:launch, %{host: host, bay: bay} = state) do
