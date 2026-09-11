@@ -992,6 +992,11 @@ class ProjectConfig(_Strict):
     # nothing model-supplied to keep out of a shell, so this stays a string and
     # an operator's `a && b` keeps working.
     full_test_command: str | None = None
+    # The host lock the full suite runs under. Every run on the host that
+    # names the same lock waits for the suite to finish before starting its
+    # own, whichever project it belongs to: the suite takes every core, so a
+    # second copy buys no throughput. Null runs it unserialised.
+    full_test_lock: str | None = "full-suite"
     # The same suite, taking a selection — named as an entry in
     # `project_tools`, because this one *is* called by a model.
     #
@@ -1331,6 +1336,14 @@ class ProjectConfig(_Strict):
 
     def stage_branch(self, index: int, stage_id: str) -> str:
         return f"{self.stage_branch_namespace}/{index:03d}-{stage_id}"
+
+    def exclusive_commands(self) -> dict[str, str]:
+        """Command text to the host lock it runs under. The runner takes the
+        lock by command text, so this is the one place a command is tied to
+        a lock name."""
+        if self.full_test_command and self.full_test_lock:
+            return {self.full_test_command: self.full_test_lock}
+        return {}
 
     def all_commands(self) -> list[tuple[str, str]]:
         """Every executable string in the config, as (where, command).

@@ -1304,6 +1304,10 @@ can forget.
 - The denylist applies regardless of operator approval.
 - `command_timeout_seconds` bounds every declared command, not only the
   executor subprocess.
+- `full_test_lock` names a host lock the full suite runs under, whichever
+  run or project starts it. The suite takes every core, so two at once buy
+  nothing; the wait is recorded apart from the suite's own duration and the
+  log names the holder.
 - `gc.auto=0` for the run's duration, so the reflog can recover a discarded
   attempt.
 - Branch identity is asserted as a verify layer on every stage, and a failure

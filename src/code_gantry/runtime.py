@@ -421,6 +421,7 @@ def build_runtime(
         cwd=cfg.target_repo,
         timeout=cfg.limits.command_timeout_seconds,
         log=logger,
+        exclusive=cfg.exclusive_commands(),
     )
     # An operator-declared tool is argv, and until now only the executor had
     # anything to spawn it with — so a project could offer the planner a tool

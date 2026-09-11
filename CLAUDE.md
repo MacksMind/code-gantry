@@ -816,6 +816,12 @@ site goes quietly missing.
   commands reach the work through `docker compose exec`, and killing that client
   kills the client. Aim cleanup narrowly — a pattern broad enough to catch the
   workers is broad enough to catch the entrypoint.
+- **One suite per host at a time.** `full_test_lock` maps the suite command
+  to a host lock in `CommandRunner.exclusive`, keyed by command text, so every
+  path that runs the suite — the executor's cycle, verify, the re-test after
+  a pull, preflight — waits on the same file under `host_lock_dir()`. The
+  wait is `waited_seconds`, never `duration_seconds`, and the log names the
+  holder. The lock dies with its holder, so nothing is cleaned up by hand.
 - **The projection is the churning half and it sits after the mark.** The
   rendered plan is block 0 and changes only at a fold or a plan edit; what has
   changed since sits in block 1, bounded by open keys times `note_chars`. The

@@ -403,3 +403,117 @@ class TestOutputPreparedForAModel:
 
         assert len(clip_for_model("x " * 50_000, 500)) <= 600
 
+
+
+class TestTheHostLock:
+    """A command mapped to a lock name waits for every other holder of that
+    name on the host, and records the wait apart from its own duration."""
+
+    def test_two_holders_of_one_name_run_one_after_the_other(self, tmp_path):
+        import threading
+
+        locks = tmp_path / "locks"
+        first = CommandRunner(
+            cwd=tmp_path, timeout=30, exclusive={"sleep 0.8": "suite"}, lock_dir=locks
+        )
+        second = CommandRunner(
+            cwd=tmp_path, timeout=30, exclusive={"true": "suite"}, lock_dir=locks
+        )
+        t = threading.Thread(target=first.run, args=("sleep 0.8",))
+        t.start()
+        import time
+
+        time.sleep(0.2)
+        r = second.run("true")
+        t.join()
+        assert r.ok
+        assert r.waited_seconds >= 0.4
+        assert r.duration_seconds < 0.4, "the wait is not the command's duration"
+
+    def test_a_different_name_does_not_wait(self, tmp_path):
+        import threading
+
+        locks = tmp_path / "locks"
+        first = CommandRunner(
+            cwd=tmp_path, timeout=30, exclusive={"sleep 0.8": "suite"}, lock_dir=locks
+        )
+        other = CommandRunner(
+            cwd=tmp_path, timeout=30, exclusive={"true": "lint"}, lock_dir=locks
+        )
+        t = threading.Thread(target=first.run, args=("sleep 0.8",))
+        t.start()
+        import time
+
+        time.sleep(0.2)
+        r = other.run("true")
+        t.join()
+        assert r.waited_seconds == 0
+
+    def test_an_unmapped_command_takes_no_lock(self, tmp_path):
+        locks = tmp_path / "locks"
+        runner = CommandRunner(
+            cwd=tmp_path, timeout=30, exclusive={"sleep 1": "suite"}, lock_dir=locks
+        )
+        r = runner.run("true")
+        assert r.waited_seconds == 0
+        assert not locks.exists()
+
+    def test_the_log_names_the_holder_and_the_wait(self, tmp_path):
+        import threading
+        import time
+
+        locks = tmp_path / "locks"
+        lines = []
+        first = CommandRunner(
+            cwd=tmp_path, timeout=30, exclusive={"sleep 0.8": "suite"}, lock_dir=locks
+        )
+        second = CommandRunner(
+            cwd=tmp_path, timeout=30, exclusive={"true": "suite"}, lock_dir=locks,
+            log=lines.append,
+        )
+        t = threading.Thread(target=first.run, args=("sleep 0.8",))
+        t.start()
+        time.sleep(0.2)
+        second.run("true")
+        t.join()
+        assert any(
+            "waiting for the 'suite' lock" in line and f"pid {os.getpid()}: sleep 0.8" in line
+            for line in lines
+        ), lines
+        assert any("after waiting" in line for line in lines), lines
+
+    def test_the_lock_survives_the_holder_only_as_long_as_the_holder(self, tmp_path):
+        """The lock is released by the kernel with the process, so a run that
+        died holding it leaves nothing for the next one to clean up."""
+        import subprocess
+        import time
+
+        locks = tmp_path / "locks"
+        locks.mkdir()
+        holder = subprocess.Popen(
+            [
+                sys.executable, "-c",
+                "import fcntl,time,sys; h=open(sys.argv[1],'a+'); "
+                "fcntl.flock(h, fcntl.LOCK_EX); print('held', flush=True); time.sleep(30)",
+                str(locks / "suite.lock"),
+            ],
+            stdout=subprocess.PIPE, text=True,
+        )
+        assert holder.stdout.readline().strip() == "held"
+        holder.kill()
+        holder.wait()
+        runner = CommandRunner(
+            cwd=tmp_path, timeout=30, exclusive={"true": "suite"}, lock_dir=locks
+        )
+        started = time.monotonic()
+        r = runner.run("true")
+        assert r.ok and time.monotonic() - started < 5
+
+    def test_the_default_lock_dir_is_per_user_and_outside_any_checkout(self, monkeypatch, tmp_path):
+        from code_gantry.commands import host_lock_dir
+
+        monkeypatch.delenv("CODE_GANTRY_LOCK_DIR", raising=False)
+        d = host_lock_dir()
+        assert d.name == "locks" and d.parent.name == f"code-gantry-{os.getuid()}"
+        monkeypatch.setenv("CODE_GANTRY_LOCK_DIR", str(tmp_path / "elsewhere"))
+        assert host_lock_dir() == tmp_path / "elsewhere"

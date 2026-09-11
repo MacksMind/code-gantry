@@ -824,3 +824,19 @@ class TestThePlannerOutputBudgetIsASetting:
         p = AnthropicPlanner(self._cfg(max_tokens=51_000).planner, client=Client())
         p.plan([{"role": "user", "content": "x"}])
         assert sent["max_tokens"] == 51_000
+
+
+class TestTheFullSuiteLock:
+    def test_the_suite_is_locked_under_one_name_by_default(self):
+        cfg = parse_config(as_test_tools(minimal()))
+        assert cfg.full_test_lock == "full-suite"
+        assert cfg.exclusive_commands() == {cfg.full_test_command: "full-suite"}
+
+    def test_null_runs_the_suite_unserialised(self):
+        cfg = parse_config(as_test_tools({**minimal(), "full_test_lock": None}))
+        assert cfg.exclusive_commands() == {}
+
+    def test_two_projects_can_name_one_lock(self):
+        a = parse_config(as_test_tools({**minimal(), "full_test_lock": "host"}))
+        b = parse_config(as_test_tools({**minimal(), "full_test_command": "make check", "full_test_lock": "host"}))
+        assert set(a.exclusive_commands().values()) == set(b.exclusive_commands().values()) == {"host"}

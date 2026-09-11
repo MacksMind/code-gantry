@@ -9,10 +9,13 @@ path exists in the other direction.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import os
 import re
 import signal
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -192,6 +195,9 @@ class CommandResult:
     stderr: str
     duration_seconds: float
     timed_out: bool = False
+    # Time spent waiting for a host lock before the command started. Outside
+    # `duration_seconds`, so a queue never reads as a slow suite.
+    waited_seconds: float = 0.0
 
     @property
     def ok(self) -> bool:
@@ -245,9 +251,28 @@ class CommandResult:
         return f"$ {self.command}\nexit {self.exit_code}"
 
 
+def host_lock_dir() -> Path:
+    """Where this host's command locks live: one directory per user, outside
+    every checkout, so two runs in two checkouts contend for the same file.
+    `CODE_GANTRY_LOCK_DIR` overrides it."""
+    override = os.environ.get("CODE_GANTRY_LOCK_DIR")
+    if override:
+        return Path(override)
+    return Path(tempfile.gettempdir()) / f"code-gantry-{os.getuid()}" / "locks"
+
+
 class CommandRunner:
     """Runs shell command strings in a target repo, with a timeout that takes
-    the whole process group with it."""
+    the whole process group with it.
+
+    `exclusive` maps a command to the name of a host lock it must hold while
+    it runs. The full suite is the case: it takes every core, so a second
+    copy on the host buys no throughput and doubles the memory, and every
+    run on the host serialises on the one name. The lock is an advisory
+    file lock, released by the kernel when its holder exits, so a crashed
+    run leaves nothing to clean up. The wait has no ceiling of its own: the
+    holder's command timeout bounds it.
+    """
 
     def __init__(
         self,
@@ -256,12 +281,48 @@ class CommandRunner:
         env: dict[str, str] | None = None,
         max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS,
         log: Callable[[str], None] | None = None,
+        exclusive: dict[str, str] | None = None,
+        lock_dir: Path | None = None,
     ):
         self.cwd = Path(cwd)
         self.timeout = timeout
         self.max_output_chars = max_output_chars
         self._extra_env = env or {}
         self._log = log
+        self.exclusive = dict(exclusive or {})
+        self._lock_dir = lock_dir
+
+    @contextlib.contextmanager
+    def _holding(self, label: str, log):
+        """Hold the host lock `label` maps to, if any, for the block. Yields a
+        one-element list that carries the seconds spent waiting."""
+        waited = [0.0]
+        name = self.exclusive.get(label)
+        if not name:
+            yield waited
+            return
+        lock_dir = self._lock_dir or host_lock_dir()
+        lock_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = lock_dir / f"{name}.lock"
+        with open(path, "a+") as handle:
+            started = time.monotonic()
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                handle.seek(0)
+                holder = handle.read().strip() or "another process"
+                if log:
+                    log(f"waiting for the {name!r} lock, held by {holder}")
+                fcntl.flock(handle, fcntl.LOCK_EX)
+                waited[0] = time.monotonic() - started
+            handle.seek(0)
+            handle.truncate()
+            handle.write(f"pid {os.getpid()}: {' '.join(label.split())}")
+            handle.flush()
+            try:
+                yield waited
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
 
     def _env(self) -> dict[str, str]:
         env = dict(os.environ)
@@ -313,12 +374,44 @@ class CommandRunner:
         log=_INHERIT,
     ) -> CommandResult:
         effective_timeout = self.timeout if timeout is None else timeout
-        started = time.monotonic()
+        sink = self._log if log is _INHERIT else log
 
         env = self._env()
         if extra_env:
             env.update(extra_env)
 
+        with self._holding(label, sink) as waited:
+            started = time.monotonic()
+            proc, stdout, stderr, timed_out = self._communicate(
+                target, shell, env, effective_timeout
+            )
+            duration = time.monotonic() - started
+
+        result = CommandResult(
+            command=label,
+            exit_code=proc.returncode if proc.returncode is not None else -1,
+            stdout=truncate_middle(stdout or "", self.max_output_chars),
+            stderr=truncate_middle(stderr or "", self.max_output_chars),
+            duration_seconds=duration,
+            timed_out=timed_out,
+            waited_seconds=waited[0],
+        )
+
+        if sink:
+            # Collapsed for the log line only. The run log is one line per
+            # event and is read by skimming, and an argv element may hold a
+            # whole shell script. `result.command` keeps the command whole:
+            # this is a rendering, not a record.
+            one_line = " ".join(label.split())
+            queued = f" after waiting {waited[0]:.1f}s" if waited[0] else ""
+            if timed_out:
+                sink(f"$ {one_line}\n  timed out after {duration:.1f}s{queued}")
+            else:
+                sink(f"$ {one_line}\n  exit {result.exit_code} in {duration:.1f}s{queued}")
+
+        return result
+
+    def _communicate(self, target, shell: bool, env: dict, timeout: float):
         # start_new_session puts the child in its own process group so a
         # timeout can kill everything it spawned. Killing only the shell
         # leaves docker/bundler/pytest children holding resources.
@@ -342,7 +435,7 @@ class CommandRunner:
 
         timed_out = False
         try:
-            stdout, stderr = proc.communicate(timeout=effective_timeout)
+            stdout, stderr = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
             self._kill_group(proc)
@@ -352,39 +445,7 @@ class CommandRunner:
             except subprocess.TimeoutExpired:  # pragma: no cover - defensive
                 proc.kill()
                 stdout, stderr = "", ""
-
-        duration = time.monotonic() - started
-        result = CommandResult(
-            command=label,
-            exit_code=proc.returncode if proc.returncode is not None else -1,
-            stdout=truncate_middle(stdout or "", self.max_output_chars),
-            stderr=truncate_middle(stderr or "", self.max_output_chars),
-            duration_seconds=duration,
-            timed_out=timed_out,
-        )
-
-        sink = self._log if log is _INHERIT else log
-        if sink:
-            # Collapsed for the log line only. The run log is one line per
-            # event and is read by skimming; an argv element may now hold a
-            # whole shell script, because a declared tool written as
-            # `sh -c '<script>'` with the model's values arriving as positional
-            # parameters is how an operator resolves something before reading
-            # under it without giving up the argv safety property. Joined
-            # naively, one such call put five lines into the timeline and the
-            # `exit 0` belonged to whichever of them came last.
-            #
-            # `run_argv`'s docstring said the joined label and the list "can
-            # only disagree by whitespace in an element", which was true right
-            # up until an element could contain a newline. `result.command`
-            # keeps the command whole: this is a rendering, not a record.
-            one_line = " ".join(label.split())
-            if timed_out:
-                sink(f"$ {one_line}\n  timed out after {duration:.1f}s")
-            else:
-                sink(f"$ {one_line}\n  exit {result.exit_code} in {duration:.1f}s")
-
-        return result
+        return proc, stdout, stderr, timed_out
 
     def run_all(
         self, commands: Sequence[str], timeout: int | None = None

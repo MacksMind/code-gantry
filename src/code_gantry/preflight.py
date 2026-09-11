@@ -72,7 +72,9 @@ def run_preflight(
     for_resume: bool = False,
 ) -> list[Check]:
     runner = runner or CommandRunner(
-        cwd=cfg.target_repo, timeout=cfg.limits.command_timeout_seconds
+        cwd=cfg.target_repo,
+        timeout=cfg.limits.command_timeout_seconds,
+        exclusive=cfg.exclusive_commands(),
     )
     git = Git(cfg.target_repo)
     checks: list[Check] = []
