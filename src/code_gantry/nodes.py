@@ -20,10 +20,13 @@ from __future__ import annotations
 import json
 import re
 import textwrap
+import hashlib
+import os
 import time
 from datetime import datetime
 from pathlib import Path
 
+from code_gantry import hostlock
 from code_gantry.commands import clip_for_model
 from code_gantry.cachekey import cache_key
 from code_gantry.config import ProjectConfig, Stage, validate_stage
@@ -42,6 +45,12 @@ from code_gantry.ledger import (
     Ledger,
     apply_fold,
     should_fold,
+    FINDING_CLAIMED,
+    FINDING_RELEASED,
+    STAGE_DERIVED,
+    STAGE_DONE,
+    STAGE_DROPPED,
+    STAGE_TAKEN,
 )
 # The gate's clip, under the name thirteen call sites here already use.
 # Imported rather than redefined: the budget and the helper are one
@@ -308,367 +317,381 @@ def plan(state: RunState, rt: Runtime) -> dict:
         rt.log(f"[plan] folded {written} mark(s) into the plan text")
         plan_text, projection = rt.plan_text(), rt.projection()
 
-    messages = build_planner_messages(
-        cfg=rt.cfg,
-        plan_text=plan_text,
-        projection=projection,
-        completed=state.get("completed") or [],
-        current_stage=stage,
-        failure=state.get("last_failure"),
-        opening_failure=state.get("opening_failure"),
-        gate_history=_gate_history(state, rt),
-        revision=state.get("revision", 0),
-        interventions_used=state.get("planner_interventions", 0),
-        interventions_max=limits.max_planner_interventions,
-        layout=rt.layout(state.get("plan_sha") or state.get("base_sha") or ""),
-        agent_context=_planner_context(state, rt),
-        stage_costs=recent_stage_costs(rt.project.project_dir),
-        # The runner's own tally, read live for the same reason the plan is:
-        # it describes the tree, and the stages being drawn are what change
-        # it. Behind the cache mark, on the same clock as the progress log.
-        test_warnings=rt.live_test_warnings,
-        # Only when a stage is under revision: deriving a new one has no branch
-        # and nothing to reconcile. Read from the same sha the reviewer's diff
-        # is taken from, because the point of showing it is that the two agree.
-        stage_diff=_stage_diff(state, rt) if stage else None,
-        # What is already drawn and waiting, so it is not derived twice — a
-        # second copy of a queued stage collides with the first and one is
-        # discarded, which is a whole stage of planning for nothing.
-        stage_queue=state.get("stage_queue") or [],
-        batch_notes=state.get("batch_notes") or [],
-    )
+    # One derivation at a time against this ledger, and a look at what is
+    # already drawn before paying for one: the second bay to arrive finds the
+    # first bay's stages waiting and takes one instead of drawing them again.
+    with hostlock.hold(_planner_lock(rt), f"planner, run {rt.paths.run_id}", rt.log) as waited:
+        if waited[0]:
+            rt.log(f"[plan] waited {waited[0]:.0f}s for the planner lock")
+        if stage is None:
+            taken = _take_derived(rt, state)
+            if taken is not None:
+                return taken
+            plan_text, projection = rt.plan_text(), rt.projection()
 
-    rt.log(f"[plan] {'revising ' + stage.id if stage else 'deriving next stage'}")
-
-    # Before the call, because everything in it is known now and because the
-    # one time it is wanted is when the call does not come back. The executor
-    # has had `sent-prompt.md` for exactly this reason; the planner has had
-    # nothing, and a 400 rejecting a prompt as too long left no way to find out
-    # what was in it. An hour of reconstruction from `config.yaml` and the plan
-    # tree accounted for 575,633 characters of a prompt the provider measured
-    # at 1,077,433 tokens, and reconstruction cannot be made to converge —
-    # a prompt is assembled from a dozen optional inputs and the missing one is
-    # by definition the one you did not think to pass.
-    #
-    # Sizes beside the text, because the question asked of this file is almost
-    # always "which block is enormous" rather than "what does it say".
-    rt.write_artifact(
-        state.get("stage_index", 0),
-        stage.id if stage else "plan",
-        state.get("revision", 0),
-        _attempt(state),
-        "planner-prompt.md",
-        _render_sent_prompt(messages),
-    )
-
-    started = time.time()
-    outcome = rt.planner.plan(messages)
-    planned_for = max(time.time() - started, 0.0)
-
-    if outcome.tool_calls:
-        # What it looked at, before what it decided. A stage drawn from six
-        # reads and a search is a different artefact from one drawn from
-        # nothing, and only this line distinguishes them afterwards.
-        #
-        # `read` counts what came back, and refusals are reported beside it
-        # rather than folded into it. Counting this line is how the 25-call
-        # ceiling was found to be binding on 24 of 65 steps, and a count that
-        # quietly included denied calls would have answered that question
-        # wrongly while looking exactly as authoritative.
-        # A count, not the list. Each call is now logged as it returns, so
-        # repeating them here would be the same bytes twice — and the reason
-        # they were held to the end no longer applies, since holding them was
-        # what made a 19-minute derivation opaque. The full list stays in
-        # `planner.json`, which is what the measurements read.
-        refused = len(outcome.tool_calls) - outcome.reads_answered
-        detail = render_counts(outcome.tool_counts or {})
-        rt.log(
-            f"[plan] read {outcome.reads_answered} thing(s)"
-            + (f", {refused} refused" if refused else "")
-            + f" over {planned_for:.0f}s"
-            + (f": {detail}" if detail else "")
-            + _spent(rt.planner)
+        messages = build_planner_messages(
+            cfg=rt.cfg,
+            plan_text=plan_text,
+            projection=projection,
+            completed=state.get("completed") or [],
+            current_stage=stage,
+            failure=state.get("last_failure"),
+            opening_failure=state.get("opening_failure"),
+            gate_history=_gate_history(state, rt),
+            revision=state.get("revision", 0),
+            interventions_used=state.get("planner_interventions", 0),
+            interventions_max=limits.max_planner_interventions,
+            layout=rt.layout(state.get("plan_sha") or state.get("base_sha") or ""),
+            agent_context=_planner_context(state, rt),
+            stage_costs=recent_stage_costs(rt.project.project_dir),
+            # The runner's own tally, read live for the same reason the plan is:
+            # it describes the tree, and the stages being drawn are what change
+            # it. Behind the cache mark, on the same clock as the progress log.
+            test_warnings=rt.live_test_warnings,
+            # Only when a stage is under revision: deriving a new one has no branch
+            # and nothing to reconcile. Read from the same sha the reviewer's diff
+            # is taken from, because the point of showing it is that the two agree.
+            stage_diff=_stage_diff(state, rt) if stage else None,
+            # What is already drawn and waiting, so it is not derived twice — a
+            # second copy of a queued stage collides with the first and one is
+            # discarded, which is a whole stage of planning for nothing.
+            stage_queue=state.get("stage_queue") or [],
+            batch_notes=state.get("batch_notes") or [],
         )
 
-    usage = accumulate_usage(
-        state.get("run_usage"),
-        **usage_deltas("planner_", outcome.usage),
-    )
+        rt.log(f"[plan] {'revising ' + stage.id if stage else 'deriving next stage'}")
 
-    append_status(
-        rt.project.project_dir,
-        stage_index=state.get("stage_index", 0),
-        stage_id=stage.id if stage else None,
-        revision=state.get("revision", 0),
-        verdict=outcome.verdict,
-        entry=outcome.status_entry,
-        reasoning=outcome.reasoning,
-    )
-    rt.write_artifact(
-        state.get("stage_index", 0),
-        stage.id if stage else "plan",
-        state.get("revision", 0),
-        _attempt(state),
-        "planner.json",
-        json.dumps(
-            {
-                "verdict": outcome.verdict,
-                "reasoning": outcome.reasoning,
-                # Every field of the structured response, and the completeness
-                # is the point: this artifact is what anyone reaches for to ask
-                # what the planner returned on a call. It used to omit three —
-                # `status_entry`, `additional_stages` and the deferral list —
-                # and the omission was silent, so a question answered from here
-                # got a confident wrong answer instead of a missing one.
-                "status_entry": outcome.status_entry,
-                "additional_stages": outcome.additional_stage_fields,
-                "revision_mode": outcome.revision_mode,
-                "stage": outcome.stage_fields,
-                "usage": {
-                    "prompt_tokens": outcome.usage.prompt_tokens,
-                    "cached_tokens": outcome.usage.cached_tokens,
-                    # Billed above base rate. A prefix written on every call and
-                    # never read back costs more than no caching at all, and the
-                    # run totals average that away — per call is where it shows.
-                    "cache_write_tokens": outcome.usage.cache_write_tokens,
-                    # The part of the line above that cost 2x rather than
-                    # 1.25x. Recorded beside its total because a sum of two
-                    # rates cannot be re-derived from the sum afterwards, and
-                    # this artifact is what a later cost question is asked of.
-                    "cache_write_1h_tokens": outcome.usage.cache_write_1h_tokens,
-                    "completion_tokens": outcome.usage.completion_tokens,
-                    # The one figure here that is not a total: the largest
-                    # single call of the loop. The others say what the
-                    # derivation cost; this says how close it came to the
-                    # window it has to fit inside, which is the question the
-                    # read budgets exist to answer and the one nothing was
-                    # recording when a call was rejected at 1,103,000 tokens.
-                    "peak_prompt_tokens": outcome.usage.peak_prompt_tokens,
-                },
-                # Both recorded even when empty, and that is the point. An
-                # absent key cannot be told apart from a feature that never
-                # ran, and "the planner looked and had nothing to say" is a
-                # different fact from "the planner did not look" — one is the
-                # plan being accurate, the other is a bug.
-                "tool_calls": list(outcome.tool_calls),
-                # And what the semantic index actually said, which the line
-                # above cannot carry. Every other read here is reproducible
-                # from its path and the sha; a semantic hit depends on an
-                # index, a cutoff and an embedding model, so the same question
-                # later returns something else and the record was the only
-                # copy there was ever going to be.
-                "semantic_results": list(outcome.semantic_results),
-                "tool_counts": dict(outcome.tool_counts),
-                "reads_answered": outcome.reads_answered,
-                "plan_notes": list(outcome.plan_notes),
-                "client_failure": outcome.failed,
-                # Present only when we rejected an answer the model did give.
-                # Null for a refusal or a transport failure, where the verdict
-                # above is the whole of what happened.
-                "rejected_answer": outcome.raw,
-                # Always present, null included, and the same shape the other
-                # two roles write. A block used to say only that there was no
-                # verdict; this says what came back instead.
-                "turn_end": outcome.turn_end,
-            },
-            indent=2,
-        ),
-    )
+        # Before the call, because everything in it is known now and because the
+        # one time it is wanted is when the call does not come back. The executor
+        # has had `sent-prompt.md` for exactly this reason; the planner has had
+        # nothing, and a 400 rejecting a prompt as too long left no way to find out
+        # what was in it. An hour of reconstruction from `config.yaml` and the plan
+        # tree accounted for 575,633 characters of a prompt the provider measured
+        # at 1,077,433 tokens, and reconstruction cannot be made to converge —
+        # a prompt is assembled from a dozen optional inputs and the missing one is
+        # by definition the one you did not think to pass.
+        #
+        # Sizes beside the text, because the question asked of this file is almost
+        # always "which block is enormous" rather than "what does it say".
+        rt.write_artifact(
+            state.get("stage_index", 0),
+            stage.id if stage else "plan",
+            state.get("revision", 0),
+            _attempt(state),
+            "planner-prompt.md",
+            _render_sent_prompt(messages),
+        )
 
-    notes = list(state.get("planner_notes") or [])
-    notes.append(f"{outcome.verdict}: {outcome.reasoning}")
-    base = {
-        "run_usage": usage,
-        # And onto the stage, which is what makes a per-stage figure possible
-        # for the participant that spends most of the money. Accumulated for
-        # the same reason `plan_seconds` is: a revision is more planning for
-        # the same stage.
-        "stage_usage": accumulate_usage(
-            state.get("stage_usage"),
+        started = time.time()
+        outcome = rt.planner.plan(messages)
+        planned_for = max(time.time() - started, 0.0)
+
+        if outcome.tool_calls:
+            # What it looked at, before what it decided. A stage drawn from six
+            # reads and a search is a different artefact from one drawn from
+            # nothing, and only this line distinguishes them afterwards.
+            #
+            # `read` counts what came back, and refusals are reported beside it
+            # rather than folded into it. Counting this line is how the 25-call
+            # ceiling was found to be binding on 24 of 65 steps, and a count that
+            # quietly included denied calls would have answered that question
+            # wrongly while looking exactly as authoritative.
+            # A count, not the list. Each call is now logged as it returns, so
+            # repeating them here would be the same bytes twice — and the reason
+            # they were held to the end no longer applies, since holding them was
+            # what made a 19-minute derivation opaque. The full list stays in
+            # `planner.json`, which is what the measurements read.
+            refused = len(outcome.tool_calls) - outcome.reads_answered
+            detail = render_counts(outcome.tool_counts or {})
+            rt.log(
+                f"[plan] read {outcome.reads_answered} thing(s)"
+                + (f", {refused} refused" if refused else "")
+                + f" over {planned_for:.0f}s"
+                + (f": {detail}" if detail else "")
+                + _spent(rt.planner)
+            )
+
+        usage = accumulate_usage(
+            state.get("run_usage"),
             **usage_deltas("planner_", outcome.usage),
-        ),
-        "planner_notes": notes,
-        # Accumulated rather than assigned: a revision is more planning for the
-        # same stage, and every path out of this node carries the total.
-        "plan_seconds": state.get("plan_seconds", 0.0) + planned_for,
-    }
-
-    # Published when found: a note is true whether or not the stage lands.
-    opened = open_findings(
-        rt.ledger, rt.git, outcome.plan_notes, by="planner",
-        stage_id=stage.id if stage else (outcome.stage_fields or {}).get("id"),
-        run_id=rt.paths.run_id,
-        log=rt.log,
-    )
-    if opened:
-        rt.log(f"[plan] opened {opened} finding(s)")
-
-    if outcome.verdict == "project_complete":
-        rt.log("[plan] project complete")
-        return {**base, "next_hop": "finalize"}
-
-    if outcome.verdict == "blocked":
-        return {
-            **base,
-            **_escalate("planner", f"The planner blocked the run: {outcome.reasoning}"),
-        }
-
-    new_stage = rt.cfg.stage_from_planner(outcome.stage_fields or {})
-    known_keys, open_ids = ledger_references(rt.ledger)
-    problems = validate_stage(
-        new_stage, rt.cfg, known_keys=known_keys, open_findings=open_ids,
-        key_scope=rt.key_scope,
-    )
-    if problems:
-        # A malformed spec is the planner's error to fix, and this used to
-        # escalate to a human on the first occurrence — which the comment here
-        # already argued against and the code did anyway. A stage that fails
-        # validation is the definition of a stage drawn wrongly, which is the
-        # planner's tier of the three.
-        #
-        # It became worth fixing when `validate_stage` started rejecting a
-        # fenced code block in the instruction. That rule asks a model to break
-        # a strong habit, and one slip stopping an unattended overnight run is
-        # a bad trade for a redraw that costs one planner call.
-        #
-        # `current` is deliberately not set: the stage does not exist, nothing
-        # was cut for it, and anything keying off a stage in flight must not
-        # see one. The counter is what bounds this — the redraw is a planner
-        # pass that landed nothing, which is exactly what
-        # `max_interventions_without_landing` counts.
-        rt.log(
-            f"[plan] rejected its own stage spec ({len(problems)} problem(s)); "
-            "redrawing"
         )
-        return {
-            **base,
-            "planner_interventions": state.get("planner_interventions", 0) + 1,
-            "interventions_since_landing": stuck + charge,
-            "last_failure": _failure_detail(
-                "validation",
-                "the stage spec it produced did not pass validation",
-                "\n".join(f"- {p}" for p in problems),
+
+        append_status(
+            rt.project.project_dir,
+            stage_index=state.get("stage_index", 0),
+            stage_id=stage.id if stage else None,
+            revision=state.get("revision", 0),
+            verdict=outcome.verdict,
+            entry=outcome.status_entry,
+            reasoning=outcome.reasoning,
+        )
+        rt.write_artifact(
+            state.get("stage_index", 0),
+            stage.id if stage else "plan",
+            state.get("revision", 0),
+            _attempt(state),
+            "planner.json",
+            json.dumps(
+                {
+                    "verdict": outcome.verdict,
+                    "reasoning": outcome.reasoning,
+                    # Every field of the structured response, and the completeness
+                    # is the point: this artifact is what anyone reaches for to ask
+                    # what the planner returned on a call. It used to omit three —
+                    # `status_entry`, `additional_stages` and the deferral list —
+                    # and the omission was silent, so a question answered from here
+                    # got a confident wrong answer instead of a missing one.
+                    "status_entry": outcome.status_entry,
+                    "additional_stages": outcome.additional_stage_fields,
+                    "revision_mode": outcome.revision_mode,
+                    "stage": outcome.stage_fields,
+                    "usage": {
+                        "prompt_tokens": outcome.usage.prompt_tokens,
+                        "cached_tokens": outcome.usage.cached_tokens,
+                        # Billed above base rate. A prefix written on every call and
+                        # never read back costs more than no caching at all, and the
+                        # run totals average that away — per call is where it shows.
+                        "cache_write_tokens": outcome.usage.cache_write_tokens,
+                        # The part of the line above that cost 2x rather than
+                        # 1.25x. Recorded beside its total because a sum of two
+                        # rates cannot be re-derived from the sum afterwards, and
+                        # this artifact is what a later cost question is asked of.
+                        "cache_write_1h_tokens": outcome.usage.cache_write_1h_tokens,
+                        "completion_tokens": outcome.usage.completion_tokens,
+                        # The one figure here that is not a total: the largest
+                        # single call of the loop. The others say what the
+                        # derivation cost; this says how close it came to the
+                        # window it has to fit inside, which is the question the
+                        # read budgets exist to answer and the one nothing was
+                        # recording when a call was rejected at 1,103,000 tokens.
+                        "peak_prompt_tokens": outcome.usage.peak_prompt_tokens,
+                    },
+                    # Both recorded even when empty, and that is the point. An
+                    # absent key cannot be told apart from a feature that never
+                    # ran, and "the planner looked and had nothing to say" is a
+                    # different fact from "the planner did not look" — one is the
+                    # plan being accurate, the other is a bug.
+                    "tool_calls": list(outcome.tool_calls),
+                    # And what the semantic index actually said, which the line
+                    # above cannot carry. Every other read here is reproducible
+                    # from its path and the sha; a semantic hit depends on an
+                    # index, a cutoff and an embedding model, so the same question
+                    # later returns something else and the record was the only
+                    # copy there was ever going to be.
+                    "semantic_results": list(outcome.semantic_results),
+                    "tool_counts": dict(outcome.tool_counts),
+                    "reads_answered": outcome.reads_answered,
+                    "plan_notes": list(outcome.plan_notes),
+                    "client_failure": outcome.failed,
+                    # Present only when we rejected an answer the model did give.
+                    # Null for a refusal or a transport failure, where the verdict
+                    # above is the whole of what happened.
+                    "rejected_answer": outcome.raw,
+                    # Always present, null included, and the same shape the other
+                    # two roles write. A block used to say only that there was no
+                    # verdict; this says what came back instead.
+                    "turn_end": outcome.turn_end,
+                },
+                indent=2,
             ),
-            "next_hop": "plan",
+        )
+
+        notes = list(state.get("planner_notes") or [])
+        notes.append(f"{outcome.verdict}: {outcome.reasoning}")
+        base = {
+            "run_usage": usage,
+            # And onto the stage, which is what makes a per-stage figure possible
+            # for the participant that spends most of the money. Accumulated for
+            # the same reason `plan_seconds` is: a revision is more planning for
+            # the same stage.
+            "stage_usage": accumulate_usage(
+                state.get("stage_usage"),
+                **usage_deltas("planner_", outcome.usage),
+            ),
+            "planner_notes": notes,
+            # Accumulated rather than assigned: a revision is more planning for the
+            # same stage, and every path out of this node carries the total.
+            "plan_seconds": state.get("plan_seconds", 0.0) + planned_for,
         }
 
-    if outcome.verdict == "revise":
-        interventions = state.get("planner_interventions", 0) + 1
-        keep_branch = outcome.revision_mode == "extend"
-        rt.log(
-            f"[plan] revising {new_stage.id} (revision "
-            f"{state.get('revision', 0) + 1}, {outcome.revision_mode})"
+        # Published when found: a note is true whether or not the stage lands.
+        opened = open_findings(
+            rt.ledger, rt.git, outcome.plan_notes, by="planner",
+            stage_id=stage.id if stage else (outcome.stage_fields or {}).get("id"),
+            run_id=rt.paths.run_id,
+            log=rt.log,
         )
+        if opened:
+            rt.log(f"[plan] opened {opened} finding(s)")
 
-        # The queue is unaffected work and is kept, but a revision can widen
-        # scope into it. Re-checked rather than discarded: the invariant needs
-        # re-checking, not forgetting.
-        requeued, dropped_by_revision = _requeue_after_revision(
-            rt.cfg, rt.git, new_stage, state.get("stage_queue") or []
+        if outcome.verdict == "project_complete":
+            rt.log("[plan] project complete")
+            return {**base, "next_hop": "finalize"}
+
+        if outcome.verdict == "blocked":
+            return {
+                **base,
+                **_escalate("planner", f"The planner blocked the run: {outcome.reasoning}"),
+            }
+
+        new_stage = rt.cfg.stage_from_planner(outcome.stage_fields or {})
+        known_keys, open_ids = ledger_references(rt.ledger)
+        problems = validate_stage(
+            new_stage, rt.cfg, known_keys=known_keys, open_findings=open_ids,
+            key_scope=rt.key_scope,
         )
-        for note in dropped_by_revision:
+        if problems:
+            # A malformed spec is the planner's error to fix, and this used to
+            # escalate to a human on the first occurrence — which the comment here
+            # already argued against and the code did anyway. A stage that fails
+            # validation is the definition of a stage drawn wrongly, which is the
+            # planner's tier of the three.
+            #
+            # It became worth fixing when `validate_stage` started rejecting a
+            # fenced code block in the instruction. That rule asks a model to break
+            # a strong habit, and one slip stopping an unattended overnight run is
+            # a bad trade for a redraw that costs one planner call.
+            #
+            # `current` is deliberately not set: the stage does not exist, nothing
+            # was cut for it, and anything keying off a stage in flight must not
+            # see one. The counter is what bounds this — the redraw is a planner
+            # pass that landed nothing, which is exactly what
+            # `max_interventions_without_landing` counts.
+            rt.log(
+                f"[plan] rejected its own stage spec ({len(problems)} problem(s)); "
+                "redrawing"
+            )
+            return {
+                **base,
+                "planner_interventions": state.get("planner_interventions", 0) + 1,
+                "interventions_since_landing": stuck + charge,
+                "last_failure": _failure_detail(
+                    "validation",
+                    "the stage spec it produced did not pass validation",
+                    "\n".join(f"- {p}" for p in problems),
+                ),
+                "next_hop": "plan",
+            }
+
+        if outcome.verdict == "revise":
+            interventions = state.get("planner_interventions", 0) + 1
+            keep_branch = outcome.revision_mode == "extend"
+            rt.log(
+                f"[plan] revising {new_stage.id} (revision "
+                f"{state.get('revision', 0) + 1}, {outcome.revision_mode})"
+            )
+
+            # The queue is unaffected work and is kept, but a revision can widen
+            # scope into it. Re-checked rather than discarded: the invariant needs
+            # re-checking, not forgetting.
+            requeued, dropped_by_revision = _requeue_after_revision(
+                rt.cfg, rt.git, new_stage, state.get("stage_queue") or []
+            )
+            for note in dropped_by_revision:
+                rt.log(f"[plan] {note}")
+
+            update = {
+                **base,
+                **fresh_revision_fields(),
+                "current": {
+                    **new_stage.model_dump(),
+                    "derived_id": (state.get("current") or {}).get("derived_id", ""),
+                    **evidence_surviving_a_revision(state.get("current"), keep_branch),
+                },
+                "revision": state.get("revision", 0) + 1,
+                "planner_interventions": interventions,
+                "interventions_since_landing": stuck + charge,
+                "stage_queue": requeued,
+                "batch_notes": dropped_by_revision,
+            }
+
+            if not keep_branch:
+                # The approach was wrong: discard the branch and re-cut from the
+                # project tip on the way through precheck.
+                update["stage_branch"] = None
+                update["stage_start_sha"] = ""
+                update["next_hop"] = "precheck"
+            else:
+                # Scope was merely too narrow. Anything the planner declined to
+                # adopt is reverted; the rest of the stage's work survives.
+                _revert_unadopted(state, rt, new_stage)
+                # Re-entering at verify is what makes that survival mean anything.
+                # `extend` asserts the approach was right, so what is on the branch
+                # is the revised stage's work already done — possibly all of it.
+                # Routing onward to the executor hands a finished diff to a model
+                # holding an instruction that still describes it as undone, and
+                # "make this change" has no safe reading once the change is already
+                # true: one stage answered it by deleting the line above its target,
+                # to produce a diff. The gates read state rather than intent, so ask
+                # them instead. If the revision did add work, residue or the tests
+                # fail and route to the executor then, with the gap named.
+                #
+                # Nothing precheck does is owed here. `preconditions` are operator-
+                # only, so a revision cannot have changed them and they passed
+                # already; setup runs inside verify; the branch is kept by
+                # construction; and the clean-tree check exempts revisions.
+                update["next_hop"] = "verify"
+
+            return update
+
+        # next_stage
+        index = state.get("stage_index", 0)
+        if stage is not None:
+            # A predecessor inserted in front of a failing stage takes its slot; the
+            # failing stage's work is abandoned rather than half-merged.
+            interventions = state.get("planner_interventions", 0) + 1
+        else:
+            interventions = state.get("planner_interventions", 0)
+
+        # The rest of a batch, if the planner offered one. Checked here rather
+        # than in the planner because the check resolves globs against the files
+        # that exist, and only this side of the boundary can list them.
+        queue, dropped_from_batch = _queue_from_batch(
+            rt.cfg, rt.git, new_stage, outcome.additional_stage_fields,
+            ledger=rt.ledger, key_scope=rt.key_scope,
+        )
+        # Everything this derivation produced, named, on one line and on every
+        # derivation. Two lines said this before — the stage about to run, and a
+        # count of the rest *if there were any* — so a derivation that returned one
+        # stage said nothing about being a batch of one. That is the reading the
+        # question is actually about: `additional_stages` was added to amortise a
+        # seven-minute planner call over several stages, and whether it is doing
+        # so is answered by the distribution, which cannot be recovered from a log
+        # that only speaks up when the answer is greater than one.
+        new_stage, queue = _record_derivation(rt, new_stage, queue)
+        rt.log(f"[plan] derived: " + ", ".join([new_stage.id, *(s["id"] for s in queue)]))
+        for note in dropped_from_batch:
+            # Logged rather than swallowed. A batch quietly shrinking is how a
+            # feature that is not working looks exactly like one that is.
             rt.log(f"[plan] {note}")
 
-        update = {
+        derived = {
             **base,
-            **fresh_revision_fields(),
-            "current": {
-                **new_stage.model_dump(),
-                **evidence_surviving_a_revision(state.get("current"), keep_branch),
-            },
-            "revision": state.get("revision", 0) + 1,
+            **fresh_stage_fields(),
+            "current": new_stage.model_dump(),
+            "revision": 0,
+            "stage_index": index,
             "planner_interventions": interventions,
-            "interventions_since_landing": stuck + charge,
-            "stage_queue": requeued,
-            "batch_notes": dropped_by_revision,
+            "stage_queue": queue,
+            # Replaced, not appended: these describe the batch just derived, and
+            # the call that reads them has now happened. Carrying them forward
+            # would report one overlap on every derivation for the rest of the run.
+            "batch_notes": dropped_from_batch,
+            "next_hop": "precheck",
         }
 
-        if not keep_branch:
-            # The approach was wrong: discard the branch and re-cut from the
-            # project tip on the way through precheck.
-            update["stage_branch"] = None
-            update["stage_start_sha"] = ""
-            update["next_hop"] = "precheck"
-        else:
-            # Scope was merely too narrow. Anything the planner declined to
-            # adopt is reverted; the rest of the stage's work survives.
-            _revert_unadopted(state, rt, new_stage)
-            # Re-entering at verify is what makes that survival mean anything.
-            # `extend` asserts the approach was right, so what is on the branch
-            # is the revised stage's work already done — possibly all of it.
-            # Routing onward to the executor hands a finished diff to a model
-            # holding an instruction that still describes it as undone, and
-            # "make this change" has no safe reading once the change is already
-            # true: one stage answered it by deleting the line above its target,
-            # to produce a diff. The gates read state rather than intent, so ask
-            # them instead. If the revision did add work, residue or the tests
-            # fail and route to the executor then, with the gap named.
-            #
-            # Nothing precheck does is owed here. `preconditions` are operator-
-            # only, so a revision cannot have changed them and they passed
-            # already; setup runs inside verify; the branch is kept by
-            # construction; and the clean-tree check exempts revisions.
-            update["next_hop"] = "verify"
-
-        return update
-
-    # next_stage
-    index = state.get("stage_index", 0)
-    if stage is not None:
-        # A predecessor inserted in front of a failing stage takes its slot; the
-        # failing stage's work is abandoned rather than half-merged.
-        interventions = state.get("planner_interventions", 0) + 1
-    else:
-        interventions = state.get("planner_interventions", 0)
-
-    # The rest of a batch, if the planner offered one. Checked here rather
-    # than in the planner because the check resolves globs against the files
-    # that exist, and only this side of the boundary can list them.
-    queue, dropped_from_batch = _queue_from_batch(
-        rt.cfg, rt.git, new_stage, outcome.additional_stage_fields,
-        ledger=rt.ledger, key_scope=rt.key_scope,
-    )
-    # Everything this derivation produced, named, on one line and on every
-    # derivation. Two lines said this before — the stage about to run, and a
-    # count of the rest *if there were any* — so a derivation that returned one
-    # stage said nothing about being a batch of one. That is the reading the
-    # question is actually about: `additional_stages` was added to amortise a
-    # seven-minute planner call over several stages, and whether it is doing
-    # so is answered by the distribution, which cannot be recovered from a log
-    # that only speaks up when the answer is greater than one.
-    rt.log(f"[plan] derived: " + ", ".join([new_stage.id, *(s["id"] for s in queue)]))
-    for note in dropped_from_batch:
-        # Logged rather than swallowed. A batch quietly shrinking is how a
-        # feature that is not working looks exactly like one that is.
-        rt.log(f"[plan] {note}")
-
-    derived = {
-        **base,
-        **fresh_stage_fields(),
-        "current": new_stage.model_dump(),
-        "revision": 0,
-        "stage_index": index,
-        "planner_interventions": interventions,
-        "stage_queue": queue,
-        # Replaced, not appended: these describe the batch just derived, and
-        # the call that reads them has now happened. Carrying them forward
-        # would report one overlap on every derivation for the rest of the run.
-        "batch_notes": dropped_from_batch,
-        "next_hop": "precheck",
-    }
-
-    # The third checkpoint, and the one an operator actually feels. The flag is
-    # read at the top of this node too, but a pause requested *during* a
-    # derivation arrives after that read — so the stage this call just produced
-    # would be cut, run, reviewed and landed before the next read. Measured
-    # once: a pause at 00:29:59 was followed by a stage derived at 00:31:28 and
-    # landed fifteen minutes later.
-    #
-    # Nothing has run here, so the tree is as clean as it is between stages,
-    # and the derived stage is held rather than discarded — re-deriving it
-    # would cost another planner call for an answer already in hand.
-    paused = _pause_escalation(rt.paths.pause_flag, state, rt.cfg, "precheck")
-    return {**derived, **paused} if paused else derived
+        # The third checkpoint, and the one an operator actually feels. The flag is
+        # read at the top of this node too, but a pause requested *during* a
+        # derivation arrives after that read — so the stage this call just produced
+        # would be cut, run, reviewed and landed before the next read. Measured
+        # once: a pause at 00:29:59 was followed by a stage derived at 00:31:28 and
+        # landed fifteen minutes later.
+        #
+        # Nothing has run here, so the tree is as clean as it is between stages,
+        # and the derived stage is held rather than discarded — re-deriving it
+        # would cost another planner call for an answer already in hand.
+        paused = _pause_escalation(rt.paths.pause_flag, state, rt.cfg, "precheck")
+        return {**derived, **paused} if paused else derived
 
 
 def _revert_unadopted(state: RunState, rt: Runtime, revised: Stage) -> None:
@@ -765,8 +788,10 @@ def precheck(state: RunState, rt: Runtime) -> dict:
         rt.log(
             f"[precheck] {stage.id}: back to the planner — "
             f"{', '.join(moved)} changed since it was quoted"
-            + (f"; {queued} queued stage(s) discarded with it" if queued else "")
+            + (f"; {queued} queued stage(s) left in the ledger" if queued else "")
         )
+        if rt.ledger is not None:
+            _drop_derived(rt, stage, "stale excerpts: " + ", ".join(moved))
         return {**update, **_stale_excerpt_failure(state, stage, moved)}
 
     for command in stage.preconditions:
@@ -804,16 +829,17 @@ def precheck(state: RunState, rt: Runtime) -> dict:
     # Claim the keys before the branch is cut; a key another run has taken
     # or a person has closed sends the stage back to the planner.
     if rt.ledger is not None:
-        taken = _keys_not_open(rt, stage, state)
+        taken = _references_taken(rt, stage, state)
         if taken:
             queued = len(state.get("stage_queue") or [])
             rt.log(
                 f"[precheck] {stage.id}: back to the planner — "
-                f"{', '.join(taken)} no longer open"
-                + (f"; {queued} queued stage(s) discarded with it" if queued else "")
+                f"{', '.join(taken)} not available"
+                + (f"; {queued} queued stage(s) left in the ledger" if queued else "")
             )
+            _drop_derived(rt, stage, "references taken: " + ", ".join(taken))
             return {**update, **_taken_key_failure(state, stage, taken)}
-        _claim_keys(rt, stage, state)
+        _claim_references(rt, stage, state)
 
     # Cut or resume the child branch. Anything on it is quarantined: nothing
     # reaches the project branch without passing the review gate.
@@ -2033,7 +2059,13 @@ def advance(state: RunState, rt: Runtime) -> dict:
     # A stage from the same derivation, if one is waiting. Merged after the
     # landing so `stage_index` is the landed one's when it is read, and before
     # the pause so an operator's stop still wins.
-    landed = {**landed, **_next_from_queue(state, landed["stage_index"] - 1)}
+    landed = {
+        **landed,
+        **_next_from_queue(
+            state, landed["stage_index"] - 1,
+            views=rt.views() if rt.ledger is not None else None,
+        ),
+    }
 
     # Merged onto the landing, never in place of it. The stage is squash-merged
     # and on the branch whatever the run does next; replacing this update with
@@ -2415,7 +2447,7 @@ def _no_change_reason(turns_exhausted: bool, turns: int) -> str:
     )
 
 
-def _next_from_queue(state: RunState, landed_index: int) -> dict:
+def _next_from_queue(state: RunState, landed_index: int, views=None) -> dict:
     """Where the run goes after a stage lands: the next queued one, or the planner.
 
     The whole saving of a batch. One derivation answered for several stages, so
@@ -2431,6 +2463,14 @@ def _next_from_queue(state: RunState, landed_index: int) -> dict:
     of both without any of the three losing what the others wrote.
     """
     queue = list(state.get("stage_queue") or [])
+    # A queued stage another run has taken, or that was dropped, is skipped:
+    # the ledger's record of it is the one that counts.
+    if views is not None:
+        queue = [
+            s for s in queue
+            if not s.get("derived_id")
+            or (views.derived.get(s["derived_id"]) or _absent).status == "derived"
+        ]
     if not queue:
         return {"next_hop": "plan"}
     head, rest = queue[0], queue[1:]
@@ -2904,56 +2944,144 @@ def open_findings(
     return opened
 
 
-def _keys_not_open(rt: Runtime, stage: Stage, state: RunState) -> list[str]:
-    """Keys the stage cites that are not open, unless this very stage holds them."""
+class _Absent:
+    status = "dropped"
+
+
+_absent = _Absent()
+
+
+def _references_taken(rt: Runtime, stage: Stage, state: RunState) -> list[str]:
+    """What stops this stage from starting: keys and findings it is drawn
+    against that are not available, unless this very stage holds them; and
+    its own drawn record, if another run took it first."""
     views = rt.views()
-    taken = []
-    for key in stage.plan_keys:
-        current = views.state(key)
-        if current.state == "open":
-            continue
-        if (
-            current.state == "claimed"
-            and current.run_id == rt.paths.run_id
-            and current.stage_id == stage.id
-        ):
-            continue
-        taken.append(f"{key} ({current.state})")
+    taken = views.references_available(
+        stage.plan_keys, stage.resolves, scope=rt.key_scope,
+        run_id=rt.paths.run_id, stage_id=stage.id,
+    )
+    if stage.derived_id:
+        record = views.derived.get(stage.derived_id)
+        if record is not None and record.status == "taken" and record.taken_run != rt.paths.run_id:
+            taken.append(f"{stage.derived_id} (taken by {record.taken_run})")
+        elif record is not None and record.status in ("done", "dropped"):
+            taken.append(f"{stage.derived_id} ({record.status})")
     return taken
 
 
-def _claim_keys(rt: Runtime, stage: Stage, state: RunState) -> None:
+def _claim_references(rt: Runtime, stage: Stage, state: RunState) -> None:
+    """Hold every key and finding the stage is drawn against, and its drawn
+    record, for this run and stage. Idempotent across a resume."""
     views = rt.views()
+    run_id, pid = rt.paths.run_id, os.getpid()
     for key in stage.plan_keys:
         current = views.state(key)
-        if (
-            current.state == "claimed"
-            and current.run_id == rt.paths.run_id
-            and current.stage_id == stage.id
-        ):
+        if current.state == "claimed" and current.run_id == run_id and current.stage_id == stage.id:
             continue
-        rt.ledger.append(CLAIMED, key=key, stage_id=stage.id, run_id=rt.paths.run_id)
+        rt.ledger.append(CLAIMED, key=key, stage_id=stage.id, run_id=run_id, pid=pid, bay=bay_id(rt))
+    for fid in stage.resolves:
+        finding = views.findings.get(fid)
+        if finding is not None and finding.claimed_run == run_id and finding.claimed_stage == stage.id:
+            continue
+        rt.ledger.append(FINDING_CLAIMED, stage_id=stage.id, run_id=run_id, finding_id=fid, pid=pid, bay=bay_id(rt))
+    if stage.derived_id:
+        record = views.derived.get(stage.derived_id)
+        if record is not None and record.status == "derived":
+            rt.ledger.append(STAGE_TAKEN, stage_id=stage.id, run_id=run_id, derived_id=stage.derived_id, pid=pid, bay=bay_id(rt))
+
+
+def _drop_derived(rt: Runtime, stage: Stage, reason: str) -> None:
+    """Withdraw the stage's drawn record: it goes back to the planner, so the
+    record must not wait for another run to take it."""
+    if not stage.derived_id or rt.ledger is None:
+        return
+    record = rt.views().derived.get(stage.derived_id)
+    if record is not None and record.status in ("derived", "taken"):
+        rt.ledger.append(STAGE_DROPPED, stage_id=stage.id, run_id=rt.paths.run_id, derived_id=stage.derived_id, reason=reason)
+
+
+def _planner_lock(rt: Runtime) -> str:
+    """One planner at a time per ledger file: the lock is named for the file."""
+    digest = hashlib.sha1(str(rt.project.ledger.resolve()).encode()).hexdigest()[:12]
+    return f"planner-{digest}"
+
+
+def _take_derived(rt: Runtime, state: RunState) -> dict | None:
+    """A stage already drawn and waiting whose references are available
+    inside this run's scope, as the update that starts it; None when there is
+    none. Taking it costs no planner call."""
+    if rt.ledger is None:
+        return None
+    views = rt.views()
+    for record in views.derived_waiting():
+        if views.references_available(record.keys, record.findings, scope=rt.key_scope):
+            continue
+        try:
+            stage = Stage.model_validate({**record.fields, "derived_id": record.id})
+        except Exception as e:  # noqa: BLE001 - a record nothing can read is dropped, not fatal
+            rt.ledger.append(STAGE_DROPPED, stage_id=record.stage_id, run_id=rt.paths.run_id, derived_id=record.id, reason=f"unreadable: {e}")
+            continue
+        rt.log(f"[plan] took {stage.id} ({record.id}), drawn by {record.by_run or 'another run'}")
+        return {
+            **fresh_stage_fields(),
+            "current": stage.model_dump(),
+            "revision": 0,
+            "stage_index": state.get("stage_index", 0),
+            "stage_queue": [],
+            "batch_notes": [],
+            "next_hop": "precheck",
+        }
+    return None
+
+
+def _record_derivation(rt: Runtime, head: Stage, queue: list[dict]) -> tuple[Stage, list[dict]]:
+    """Write the batch to the ledger as drawn stages, the head first, and hand
+    back the head and queue carrying their record ids."""
+    if rt.ledger is None:
+        return head, queue
+    try:
+        base = rt.git.rev_parse("HEAD")
+    except GitError:  # pragma: no cover - defensive
+        base = None
+    run_id = rt.paths.run_id
+    event = rt.ledger.append(
+        STAGE_DERIVED, stage_id=head.id, run_id=run_id, sha=base,
+        fields=head.model_dump(), keys=list(head.plan_keys), findings=list(head.resolves),
+        batch=None, rank=0,
+    )
+    head = head.model_copy(update={"derived_id": event.derived_id})
+    recorded = []
+    for rank, fields in enumerate(queue, start=1):
+        sibling = rt.ledger.append(
+            STAGE_DERIVED, stage_id=fields.get("id"), run_id=run_id,
+            sha=fields.get("excerpt_base_sha") or base,
+            fields=fields, keys=list(fields.get("plan_keys") or []),
+            findings=list(fields.get("resolves") or []),
+            batch=event.derived_id, rank=rank,
+        )
+        recorded.append({**fields, "derived_id": sibling.derived_id})
+    return head, recorded
 
 
 def _taken_key_failure(state: RunState, stage: Stage, taken: list[str]) -> dict:
     """Back to the planner: a key this stage was drawn from is no longer open."""
     queue = list(state.get("stage_queue") or [])
     detail = (
-        "This stage names plan keys that are no longer open: "
+        "This stage is drawn against references that are not available: "
         + ", ".join(taken)
-        + ". Another run may have claimed them, or a person may have landed or "
-        "struck them since the stage was drawn. Read the ledger section and "
-        "draw the next piece of work."
+        + ". Another run may hold them, or a person may have landed or struck "
+        "them since the stage was drawn. Read the ledger section and draw "
+        "the next piece of work."
     )
     if queue:
         behind = ", ".join(f"`{s.get('id')}`" for s in queue)
         detail += (
-            f"\n\nThe stages queued behind it — {behind} — have been discarded "
-            "with it."
+            f"\n\nThe stages queued behind it — {behind} — stay drawn in the "
+            "ledger for a run to take; do not draw them again."
         )
     return {
         **_planner_failure(
-            state, "plan_keys", "a plan key the stage cites is no longer open", detail
+            state, "plan_keys", "a reference the stage is drawn against is not available", detail
         ),
         "stage_queue": [],
     }
@@ -3003,11 +3131,22 @@ def _record_landing(rt: Runtime, stage: Stage, state: RunState, merge_sha: str) 
             LANDED, key=key, sha=merge_sha, stage_id=stage.id, run_id=rt.paths.run_id,
             evidence=summary,
         )
-    for finding_id in state.get("pending_resolved") or []:
+    resolved = list(state.get("pending_resolved") or [])
+    for finding_id in resolved:
         rt.ledger.append(
             FINDING_RESOLVED, sha=merge_sha, stage_id=stage.id, run_id=rt.paths.run_id,
             finding_id=finding_id,
         )
+    # A finding the stage held and the reviewer did not confirm goes back to
+    # open rather than staying held by a stage that has finished.
+    for finding_id in stage.resolves:
+        finding = views.findings.get(finding_id)
+        if finding_id not in resolved and finding is not None and finding.claimed_run == rt.paths.run_id:
+            rt.ledger.append(FINDING_RELEASED, stage_id=stage.id, run_id=rt.paths.run_id, finding_id=finding_id, reason="not confirmed by the reviewer")
+    if stage.derived_id:
+        record = views.derived.get(stage.derived_id)
+        if record is not None and record.status == "taken":
+            rt.ledger.append(STAGE_DONE, stage_id=stage.id, run_id=rt.paths.run_id, sha=merge_sha, derived_id=stage.derived_id)
     for observation in state.get("pending_observations") or []:
         where = (observation.get("file") or "").strip()
         finding = (observation.get("finding") or "").strip()

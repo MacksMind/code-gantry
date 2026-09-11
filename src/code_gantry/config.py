@@ -640,6 +640,9 @@ class Stage(_Strict):
     resolves: list[str] = []
 
     # --- machinery-recorded ---
+    # The ledger's record of this stage as drawn, `d-<origin>-<seq>`, set when
+    # the run records or takes it; empty for a stage that predates the record.
+    derived_id: str = ""
     # The commit the planner's excerpt line numbers were chosen against, set by
     # `plan` on every stage it queues behind the one it starts.
     #
@@ -1579,10 +1582,11 @@ def validate_stage(
     where = f"stage {stage.id!r}"
 
     if known_keys is not None:
-        if not stage.plan_keys:
+        if not stage.plan_keys and not stage.resolves:
             problems.append(
-                f"{where}: plan_keys is empty — name the key of every plan item "
-                "this stage is drawn from"
+                f"{where}: drawn from nothing — name the key of every plan item "
+                "this stage is drawn from in plan_keys, or the open finding it "
+                "settles in resolves"
             )
         for key in stage.plan_keys:
             if key not in known_keys:

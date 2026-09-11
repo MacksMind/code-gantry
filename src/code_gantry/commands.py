@@ -10,16 +10,17 @@ path exists in the other direction.
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import os
 import re
 import signal
 import subprocess
-import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
+
+from code_gantry import hostlock
+from code_gantry.hostlock import lock_dir as host_lock_dir  # noqa: F401 - the runner's callers know it by this name
 
 # Enough to see a test summary and a stack trace without carrying a whole
 # suite's chatter into graph state or a prompt.
@@ -251,16 +252,6 @@ class CommandResult:
         return f"$ {self.command}\nexit {self.exit_code}"
 
 
-def host_lock_dir() -> Path:
-    """Where this host's command locks live: one directory per user, outside
-    every checkout, so two runs in two checkouts contend for the same file.
-    `CODE_GANTRY_LOCK_DIR` overrides it."""
-    override = os.environ.get("CODE_GANTRY_LOCK_DIR")
-    if override:
-        return Path(override)
-    return Path(tempfile.gettempdir()) / f"code-gantry-{os.getuid()}" / "locks"
-
-
 class CommandRunner:
     """Runs shell command strings in a target repo, with a timeout that takes
     the whole process group with it.
@@ -292,37 +283,12 @@ class CommandRunner:
         self.exclusive = dict(exclusive or {})
         self._lock_dir = lock_dir
 
-    @contextlib.contextmanager
     def _holding(self, label: str, log):
-        """Hold the host lock `label` maps to, if any, for the block. Yields a
-        one-element list that carries the seconds spent waiting."""
-        waited = [0.0]
+        """Hold the host lock `label` maps to, if any, for the block."""
         name = self.exclusive.get(label)
         if not name:
-            yield waited
-            return
-        lock_dir = self._lock_dir or host_lock_dir()
-        lock_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        path = lock_dir / f"{name}.lock"
-        with open(path, "a+") as handle:
-            started = time.monotonic()
-            try:
-                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                handle.seek(0)
-                holder = handle.read().strip() or "another process"
-                if log:
-                    log(f"waiting for the {name!r} lock, held by {holder}")
-                fcntl.flock(handle, fcntl.LOCK_EX)
-                waited[0] = time.monotonic() - started
-            handle.seek(0)
-            handle.truncate()
-            handle.write(f"pid {os.getpid()}: {' '.join(label.split())}")
-            handle.flush()
-            try:
-                yield waited
-            finally:
-                fcntl.flock(handle, fcntl.LOCK_UN)
+            return contextlib.nullcontext([0.0])
+        return hostlock.hold(name, label, log, self._lock_dir)
 
     def _env(self) -> dict[str, str]:
         env = dict(os.environ)

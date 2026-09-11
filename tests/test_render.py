@@ -92,3 +92,35 @@ class TestRenderProjection:
     def test_is_byte_identical_for_equal_views(self, led):
         led.append(LANDED, key="p.003", sha="abc")
         assert render_projection(led.views(), note_chars=200) == render_projection(led.views(), note_chars=200)
+
+
+class TestTheProjectionShowsWhatIsDrawnAndHeld:
+    def test_a_waiting_stage_is_listed_and_a_taken_one_is_not(self, led):
+        from code_gantry.ledger import STAGE_DERIVED, STAGE_TAKEN
+
+        did = led.append(
+            STAGE_DERIVED, stage_id="fix-routes", run_id="r1", fields={"id": "fix-routes"},
+            keys=["p.003"], findings=[], batch=None, rank=0,
+        ).derived_id
+        text = render_projection(led.views(), note_chars=600)
+        assert "### Drawn and waiting for a run to take them" in text
+        assert f"- `{did}` **fix-routes** on {{#p.003}} — drawn by r1" in text
+        led.append(STAGE_TAKEN, run_id="r2", derived_id=did, pid=1)
+        assert "Drawn and waiting" not in render_projection(led.views(), note_chars=600)
+
+    def test_a_waiting_stage_outside_the_scope_is_not_listed(self, led):
+        from code_gantry.ledger import STAGE_DERIVED
+
+        led.append(
+            STAGE_DERIVED, stage_id="fix-routes", run_id="r1", fields={"id": "fix-routes"},
+            keys=["p.003"], findings=[], batch=None, rank=0,
+        )
+        assert "fix-routes" not in render_projection(led.views(), note_chars=600, scope={"p.004"})
+        assert "fix-routes" in render_projection(led.views(), note_chars=600, scope={"p.003"})
+
+    def test_a_held_finding_says_who_holds_it(self, led):
+        from code_gantry.ledger import FINDING_CLAIMED
+
+        fid = led.open_finding(keys=["p.003"], by="reviewer", claim="a loose end").finding_id
+        led.append(FINDING_CLAIMED, run_id="r7", stage_id="s", finding_id=fid, pid=1)
+        assert f"- `{fid}` on {{#p.003}} — by reviewer (held by r7): a loose end" in render_projection(led.views(), note_chars=600)

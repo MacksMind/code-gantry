@@ -2367,10 +2367,13 @@ class TestTheBatchBlockIsSizedByTheSetting:
         # And the causality, so a stale excerpt is not read as bad luck.
         assert "your own doing" in text
 
-    def test_it_says_batched_stages_may_build_on_each_other(self):
+    def test_it_says_batched_stages_are_independent(self):
+        # A batch is taken a stage at a time by whichever run is free, so no
+        # stage may assume another of the batch has landed.
         text = self._leading(5).lower()
-        assert "may assume the earlier ones happened" in text
-        assert "share files freely" in text
+        assert "they are independent" in text
+        assert "no stage may assume another stage of the batch has landed" in text
+        assert "may assume the earlier ones happened" not in text
 
     def test_the_invitation_is_absent_when_batching_is_off(self):
         assert "orthogonal" not in self._leading(1).lower()

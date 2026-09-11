@@ -13,12 +13,19 @@ from code_gantry.ledger import (
     ANSWER,
     BLOCKED,
     CLAIMED,
+    FINDING_CLAIMED,
     FINDING_FOLDED,
+    FINDING_RELEASED,
     FINDING_RESOLVED,
     LANDED,
     NODE_MARKED,
     NODE_RETIRED,
     RELEASED,
+    STAGE_DERIVED,
+    STAGE_DONE,
+    STAGE_DROPPED,
+    STAGE_RELEASED,
+    STAGE_TAKEN,
     STRUCK,
     Event,
     LedgerError,
@@ -376,3 +383,118 @@ class TestScope:
             resolve_scope(led.views(), ["p.001"])
         with pytest.raises(LedgerError, match="'p.999' is not a key"):
             resolve_scope(led.views(), ["p.999"])
+
+
+class TestDrawnStages:
+    def _drawn(self, led, stage_id="s1", keys=("p.001",), findings=(), batch=None, rank=0, run_id="r1"):
+        return led.append(
+            STAGE_DERIVED, stage_id=stage_id, run_id=run_id, fields={"id": stage_id},
+            keys=list(keys), findings=list(findings), batch=batch, rank=rank,
+        ).derived_id
+
+    def test_a_record_moves_from_derived_through_taken_to_done(self, led):
+        plant(led, "p.001")
+        did = self._drawn(led)
+        assert [d.id for d in led.views().derived_waiting()] == [did]
+        led.append(STAGE_TAKEN, run_id="r1", derived_id=did, pid=42)
+        record = led.views().derived[did]
+        assert record.status == "taken" and record.taken_run == "r1" and record.taken_pid == 42
+        assert led.views().derived_waiting() == []
+        led.append(STAGE_DONE, run_id="r1", derived_id=did)
+        assert led.views().derived[did].status == "done"
+
+    def test_released_returns_it_and_dropped_ends_it(self, led):
+        plant(led, "p.001")
+        did = self._drawn(led)
+        led.append(STAGE_TAKEN, run_id="r1", derived_id=did, pid=42)
+        led.append(STAGE_RELEASED, derived_id=did)
+        assert led.views().derived[did].status == "derived"
+        led.append(STAGE_DROPPED, derived_id=did, reason="stale")
+        assert led.views().derived[did].status == "dropped"
+        assert led.views().derived[did].reason == "stale"
+        led.append(STAGE_TAKEN, run_id="r2", derived_id=did, pid=43)
+        assert led.views().derived[did].status == "dropped", "a dropped record cannot be taken"
+
+    def test_waiting_is_ordered_by_batch_and_rank(self, led):
+        plant(led, "p.001", "p.002", "p.003")
+        head = self._drawn(led, "head", ("p.001",))
+        second = self._drawn(led, "second", ("p.002",), batch=head, rank=1)
+        third = self._drawn(led, "third", ("p.003",), batch=head, rank=2)
+        assert [d.stage_id for d in led.views().derived_waiting()] == ["head", "second", "third"]
+
+
+class TestReferencesAvailable:
+    def test_open_keys_and_open_findings_are_available(self, led):
+        plant(led, "p.001")
+        fid = led.open_finding(keys=["p.001"], by="reviewer", claim="x").finding_id
+        assert led.views().references_available(["p.001"], [fid]) == []
+
+    def test_a_claimed_key_is_not_unless_this_stage_holds_it(self, led):
+        plant(led, "p.001")
+        led.append(CLAIMED, key="p.001", run_id="r1", stage_id="s")
+        views = led.views()
+        assert views.references_available(["p.001"], []) == ["p.001 (claimed)"]
+        assert views.references_available(["p.001"], [], run_id="r1", stage_id="s") == []
+
+    def test_a_held_finding_is_not_unless_this_stage_holds_it(self, led):
+        plant(led, "p.001")
+        fid = led.open_finding(keys=["p.001"], by="reviewer", claim="x").finding_id
+        led.append(FINDING_CLAIMED, run_id="r1", stage_id="s", finding_id=fid, pid=1)
+        views = led.views()
+        assert views.references_available([], [fid]) == [f"{fid} (held by r1)"]
+        assert views.references_available([], [fid], run_id="r1", stage_id="s") == []
+        led.append(FINDING_RELEASED, finding_id=fid)
+        assert led.views().references_available([], [fid]) == []
+
+    def test_a_landed_key_is_not_but_a_finding_on_it_may_be(self, led):
+        plant(led, "p.001", "p.002")
+        led.append(LANDED, key="p.001", sha="abc", run_id="r1", stage_id="s")
+        fid = led.open_finding(keys=["p.001"], by="reviewer", claim="after the fact").finding_id
+        views = led.views()
+        assert views.references_available(["p.001"], []) == ["p.001 (landed)"]
+        assert views.references_available([], [fid]) == []
+
+    def test_the_scope_bounds_both(self, led):
+        plant(led, "p.001", "p.002")
+        fid = led.open_finding(keys=["p.002"], by="reviewer", claim="x").finding_id
+        views = led.views()
+        assert views.references_available(["p.001"], [fid], scope={"p.001"}) == [f"{fid} (outside this run's scope)"]
+        assert views.references_available(["p.002"], [], scope={"p.001"}) == ["p.002 (outside this run's scope)"]
+
+
+class TestClaimsAreLeases:
+    def _hold_everything(self, led, run_id, pid):
+        plant(led, f"k-{run_id}")
+        led.append(CLAIMED, key=f"k-{run_id}", run_id=run_id, stage_id="s", pid=pid)
+        fid = led.open_finding(keys=[f"k-{run_id}"], by="reviewer", claim="x").finding_id
+        led.append(FINDING_CLAIMED, run_id=run_id, stage_id="s", finding_id=fid, pid=pid)
+        did = led.append(STAGE_DERIVED, stage_id="s", run_id=run_id, fields={"id": "s"}, keys=[f"k-{run_id}"], findings=[], batch=None, rank=0).derived_id
+        led.append(STAGE_TAKEN, run_id=run_id, derived_id=did, pid=pid)
+        return fid, did
+
+    def test_a_dead_holder_on_this_host_is_released(self, led):
+        from code_gantry.ledger import release_dead_holders
+
+        fid, did = self._hold_everything(led, "dead", 111)
+        fid2, did2 = self._hold_everything(led, "alive", 222)
+        assert release_dead_holders(led, alive=lambda pid: pid == 222) == 3
+        views = led.views()
+        assert views.state("k-dead").state == "open"
+        assert views.findings[fid].claimed_run is None
+        assert views.derived[did].status == "derived"
+        assert views.state("k-alive").state == "claimed"
+        assert views.findings[fid2].claimed_run == "alive"
+        assert views.derived[did2].status == "taken"
+
+    def test_another_hosts_holder_and_the_run_itself_are_left_alone(self, tmp_path):
+        from code_gantry.ledger import release_dead_holders
+
+        path = tmp_path / "shared.db"
+        theirs = open_ledger(path, origin="host-b", actor="b")
+        self._hold_everything(theirs, "remote", 333)
+        mine = open_ledger(path, origin="host-a", actor="a")
+        self._hold_everything(mine, "me", 444)
+        assert release_dead_holders(mine, alive=lambda pid: False, keep_run="me") == 0
+        views = mine.views()
+        assert views.state("k-remote").state == "claimed"
+        assert views.state("k-me").state == "claimed"

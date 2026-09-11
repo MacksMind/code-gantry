@@ -542,11 +542,25 @@ mark. When the projection grows past `ledger.fold_ratio` of the plan text the
 run folds: marks and answered findings move into the node bodies, with no
 model and no commit.
 
-**A stage cites keys.** `plan_keys` names the items it is drawn from; precheck
-claims them and a landing closes them. `resolves` proposes open findings the
-diff will settle, and the reviewer's `resolved` list is what actually closes
-them. A finding a planner note opens carries `needs: pipeline` or
-`needs: human`; the human ones sit in a queue until answered.
+**A stage is drawn against keys or findings.** `plan_keys` names the items
+it is drawn from; precheck claims them and a landing closes them. `resolves`
+names open findings the diff will settle; precheck holds those too, and the
+reviewer's `resolved` list is what actually closes them, the rest going back
+to open. A stage may be drawn from a finding alone, with no plan key, which is
+how work on an item that has already landed is done. A finding a planner note
+opens carries `needs: pipeline` or `needs: human`; the human ones sit in a
+queue until answered.
+
+**A derivation is recorded before it runs.** Every stage the planner draws is
+written to the ledger as a drawn stage, and a run takes one that is waiting
+before it calls the planner, so a run that dies before landing, or a second
+bay, picks up what was drawn rather than drawing it again. Stages in one batch
+are independent and may be taken in any order by any run. One planner runs at
+a time against a ledger file, under a host lock named for the file, and a run
+checks the queue again once it holds the lock. A claim is a lease: it carries
+the process that holds it, and a run starting on the host releases what runs
+that have exited still held. `ledger derived` lists what is waiting and
+`ledger drop <id>` withdraws one.
 
 Operator commands:
 
@@ -556,7 +570,8 @@ Operator commands:
 - `ledger show [--open|--claimed|--blocked|--landed] [key]`,
   `ledger findings [--for-human]`, `ledger answer <id> fold|discard|debt|raise
   [--text …]`, `ledger claim|release|land|strike|block|unblock <key> …`,
-  `ledger fold`, `ledger render [--projection]`.
+  `ledger fold`, `ledger render [--projection]`, `ledger derived [--all]`,
+  `ledger drop <id> [--reason …]`.
 
 **Several bays on one host share one file.** `ledger.path` is resolved
 against the config's directory with `~` and `${VAR}` expanded, so a tracked

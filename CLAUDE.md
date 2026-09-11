@@ -953,7 +953,14 @@ miss another bay's claim; `transaction()` holds the write lock across a read
 and the writes it decides, which is what keeps a fold from being written
 twice. A run's `key_scope` is fixed at start, carried in the checkpoint, and
 applied at three seams: the renderers mark what is outside it, `validate_stage`
-refuses a stage citing outside it, and nothing else needs to know. `planmodel.py`
+refuses a stage citing outside it, and nothing else needs to know. A
+derivation is written as `stage.derived` records before anything runs, and
+`plan` takes a waiting record before it calls the planner, under a host lock
+named for the ledger file with the queue checked again once held, so a killed
+run or a second bay never pays for the same derivation twice. Claims on keys
+and findings carry the holder's pid; `release_dead_holders` gives back what a
+run that exited on this host still held. `hostlock.py` is the one lock; the
+runner and `plan` both take theirs through it. `planmodel.py`
 reads Markdown into the tree and renders it back; `render.py` produces the two
 halves the planner is sent; `ledgercli.py` is the operator's `plan …` and
 `ledger …`. The pipeline's writes are in `nodes.py`: findings at derivation,

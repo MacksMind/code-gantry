@@ -43,6 +43,14 @@ FINDING_ANSWERED = "finding.answered"
 FINDING_RESOLVED = "finding.resolved"
 FINDING_SUPERSEDED = "finding.superseded"
 FINDING_FOLDED = "finding.folded"
+FINDING_CLAIMED = "finding.claimed"
+FINDING_RELEASED = "finding.released"
+# A stage the planner drew, from derivation until a run lands or drops it.
+STAGE_DERIVED = "stage.derived"
+STAGE_TAKEN = "stage.taken"
+STAGE_RELEASED = "stage.released"
+STAGE_DROPPED = "stage.dropped"
+STAGE_DONE = "stage.done"
 
 KEY_STATE_KINDS = frozenset({CLAIMED, RELEASED, LANDED, STRUCK, BLOCKED, ANSWER})
 NODE_KINDS = frozenset({"document", "section", "item"})
@@ -93,6 +101,11 @@ class Event:
         """The id a `finding.opened` event confers: unique across origins for free."""
         return f"f-{self.origin}-{self.seq}"
 
+    @property
+    def derived_id(self) -> str:
+        """The id a `stage.derived` event confers, by the same rule."""
+        return f"d-{self.origin}-{self.seq}"
+
 
 # --------------------------------------------------------------------------
 # Views
@@ -130,6 +143,9 @@ class KeyState:
     answer: str | None = None
     reason: str | None = None  # why a key was struck
     evidence: str | None = None
+    # The claim's holder, so a claim can be found to have outlived its run.
+    origin: str | None = None
+    pid: int | None = None
 
 
 @dataclass
@@ -150,7 +166,34 @@ class Finding:
     answer_text: str | None = None
     target_key: str | None = None
     resolved_sha: str | None = None
+    # A stage drawn against this finding holds it, as a claim holds a key.
+    claimed_run: str | None = None
+    claimed_stage: str | None = None
+    claimed_origin: str | None = None
+    claimed_pid: int | None = None
     superseded_by: str | None = None
+
+
+@dataclass
+class DerivedStage:
+    """A stage the planner drew, waiting in the ledger for a run to take it."""
+
+    id: str
+    stage_id: str
+    fields: dict
+    keys: list[str]
+    findings: list[str]
+    base_sha: str | None
+    batch: str | None  # the head's id for a stage drawn behind it
+    rank: int
+    by_run: str | None
+    origin: str
+    at: str
+    status: str = "derived"  # derived | taken | done | dropped
+    taken_run: str | None = None
+    taken_origin: str | None = None
+    taken_pid: int | None = None
+    reason: str | None = None
 
 
 @dataclass
@@ -158,6 +201,7 @@ class Views:
     nodes: dict[str, Node] = field(default_factory=dict)
     key_states: dict[str, KeyState] = field(default_factory=dict)
     findings: dict[str, Finding] = field(default_factory=dict)
+    derived: dict[str, DerivedStage] = field(default_factory=dict)
 
     # -- tree -------------------------------------------------------------
 
@@ -217,6 +261,42 @@ class Views:
 
     def findings_on(self, key: str) -> list[Finding]:
         return [f for f in self.findings.values() if key in f.keys]
+
+    def derived_waiting(self) -> list[DerivedStage]:
+        """Stages drawn and not yet taken, a batch at a time in the order drawn."""
+        return sorted(
+            (d for d in self.derived.values() if d.status == "derived"),
+            key=lambda d: (d.at, d.batch or d.id, d.rank, d.id),
+        )
+
+    def references_available(
+        self, keys, findings, *, scope: set[str] | None = None,
+        run_id: str | None = None, stage_id: str | None = None,
+    ) -> list[str]:
+        """What stops a stage drawn against `keys` and `findings` from
+        starting: each reference that is not open, or is held by another
+        stage. Empty means it may start. A reference this very stage holds
+        does not count against it."""
+        taken: list[str] = []
+        for key in keys:
+            state = self.state(key)
+            mine = state.state == "claimed" and state.run_id == run_id and state.stage_id == stage_id
+            if state.state != "open" and not mine:
+                taken.append(f"{key} ({state.state})")
+            elif scope is not None and key not in scope:
+                taken.append(f"{key} (outside this run's scope)")
+        for fid in findings:
+            finding = self.findings.get(fid)
+            if finding is None or finding.status not in ("open", "answered"):
+                taken.append(f"{fid} ({finding.status if finding else 'unknown'})")
+                continue
+            held = finding.claimed_run is not None
+            mine = held and finding.claimed_run == run_id and finding.claimed_stage == stage_id
+            if held and not mine:
+                taken.append(f"{fid} (held by {finding.claimed_run})")
+            elif scope is not None and finding.keys and not set(finding.keys) <= scope:
+                taken.append(f"{fid} (outside this run's scope)")
+        return taken
 
 
 def build_views(events: list[Event]) -> Views:
@@ -312,6 +392,44 @@ def _apply(views: Views, event: Event) -> None:
         finding = views.findings.get(body.get("finding_id", ""))
         if finding and finding.status == "answered":
             finding.status = "folded"
+    elif kind == FINDING_CLAIMED:
+        finding = views.findings.get(body.get("finding_id", ""))
+        if finding:
+            finding.claimed_run = event.run_id
+            finding.claimed_stage = event.stage_id
+            finding.claimed_origin = event.origin
+            finding.claimed_pid = body.get("pid")
+    elif kind == FINDING_RELEASED:
+        finding = views.findings.get(body.get("finding_id", ""))
+        if finding:
+            finding.claimed_run = finding.claimed_stage = None
+            finding.claimed_origin = finding.claimed_pid = None
+    elif kind == STAGE_DERIVED:
+        views.derived[event.derived_id] = DerivedStage(
+            id=event.derived_id, stage_id=event.stage_id or "",
+            fields=dict(body.get("fields") or {}), keys=list(body.get("keys") or []),
+            findings=list(body.get("findings") or []), base_sha=event.sha,
+            batch=body.get("batch"), rank=int(body.get("rank", 0)),
+            by_run=event.run_id, origin=event.origin, at=event.at,
+        )
+    elif kind == STAGE_TAKEN:
+        d = views.derived.get(body.get("derived_id", ""))
+        if d and d.status == "derived":
+            d.status = "taken"
+            d.taken_run, d.taken_origin, d.taken_pid = event.run_id, event.origin, body.get("pid")
+    elif kind == STAGE_RELEASED:
+        d = views.derived.get(body.get("derived_id", ""))
+        if d and d.status == "taken":
+            d.status = "derived"
+            d.taken_run = d.taken_origin = d.taken_pid = None
+    elif kind == STAGE_DROPPED:
+        d = views.derived.get(body.get("derived_id", ""))
+        if d and d.status in ("derived", "taken"):
+            d.status, d.reason = "dropped", body.get("reason")
+    elif kind == STAGE_DONE:
+        d = views.derived.get(body.get("derived_id", ""))
+        if d and d.status == "taken":
+            d.status = "done"
 
 
 def _apply_key_state(views: Views, event: Event) -> None:
@@ -323,6 +441,7 @@ def _apply_key_state(views: Views, event: Event) -> None:
         state = KeyState(
             key=key, state="claimed", actor=actor, run_id=event.run_id,
             stage_id=event.stage_id, since=event.at,
+            origin=event.origin, pid=body.get("pid"),
         )
     elif event.kind == RELEASED:
         state = KeyState(key=key, state="open", actor=actor, since=event.at)
@@ -702,6 +821,35 @@ def apply_fold(ledger: Ledger, *, actor: str | None = None) -> int:
         for kind, key, body in proposed:
             ledger.append(kind, key=key or None, actor=actor, **body)
     return len(proposed)
+
+
+def release_dead_holders(ledger: Ledger, *, alive: Callable[[int], bool], keep_run: str | None = None) -> int:
+    """Give back every claim, finding and taken stage held by a run of this
+    ledger's origin whose process is gone. A claim is a lease from a live
+    run; the kernel cannot release it as it does a file lock, so the next
+    run on the host does. Holders on other hosts are left alone: their
+    liveness cannot be read from here. Returns how many were released."""
+    def dead(origin, pid, run_id) -> bool:
+        if run_id and run_id == keep_run:
+            return False
+        return origin == ledger.origin and pid is not None and not alive(int(pid))
+
+    released = 0
+    with ledger.transaction():
+        views = ledger.views()
+        for key, state in views.key_states.items():
+            if state.state == "claimed" and dead(state.origin, state.pid, state.run_id):
+                ledger.append(RELEASED, key=key, run_id=state.run_id, stage_id=state.stage_id, reason="holder exited")
+                released += 1
+        for finding in views.findings.values():
+            if finding.claimed_run and dead(finding.claimed_origin, finding.claimed_pid, finding.claimed_run):
+                ledger.append(FINDING_RELEASED, finding_id=finding.id, run_id=finding.claimed_run, reason="holder exited")
+                released += 1
+        for d in views.derived.values():
+            if d.status == "taken" and dead(d.taken_origin, d.taken_pid, d.taken_run):
+                ledger.append(STAGE_RELEASED, derived_id=d.id, run_id=d.taken_run, reason="holder exited")
+                released += 1
+    return released
 
 
 def resolve_scope(views: Views, names) -> set[str]:

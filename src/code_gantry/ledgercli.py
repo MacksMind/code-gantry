@@ -27,6 +27,7 @@ from code_gantry.ledger import (
     apply_fold,
     open_ledger,
     read_ledger,
+    STAGE_DROPPED,
 )
 from code_gantry.plandoc import extract_links
 from code_gantry.planmodel import export_markdown, import_documents, parse_markdown
@@ -337,6 +338,35 @@ _state_command("land", LANDED, "Record that a key landed as a commit: KEY SHA.",
 _state_command("strike", STRUCK, "Close a key without work: KEY REASON.", text_option="reason")
 _state_command("block", BLOCKED, "Hold a key on a question for a person: KEY QUESTION.", text_option="question")
 _state_command("unblock", ANSWER, "Answer a blocked key: KEY TEXT.", text_option="text")
+
+
+@ledger.command("derived")
+@click.option("--all", "everything", is_flag=True, help="Taken, done and dropped ones too.")
+@config_option
+def ledger_derived(everything, config_path) -> None:
+    """Stages the planner has drawn: waiting, or with --all every one."""
+    _, _, led = _cfg_and_ledger(config_path, write=False)
+    views = led.views()
+    rows = views.derived.values() if everything else views.derived_waiting()
+    for d in sorted(rows, key=lambda d: (d.at, d.id)):
+        who = f" by {d.taken_run}" if d.status == "taken" and d.taken_run else ""
+        why = f": {d.reason}" if d.reason else ""
+        refs = " ".join([*d.keys, *d.findings]) or "-"
+        click.echo(f"{d.id} {d.status:8}{who}{why} {d.stage_id} on {refs} (drawn by {d.by_run or '?'})")
+
+
+@ledger.command("drop")
+@click.argument("derived_id")
+@click.option("--reason", default="dropped by hand")
+@config_option
+def ledger_drop(derived_id, reason, config_path) -> None:
+    """Withdraw a drawn stage so no run takes it."""
+    _, _, led = _cfg_and_ledger(config_path, write=True)
+    d = led.views().derived.get(derived_id)
+    if d is None or d.status not in ("derived", "taken"):
+        raise click.ClickException(f"no waiting or taken stage {derived_id}")
+    led.append(STAGE_DROPPED, derived_id=derived_id, reason=reason)
+    click.echo(f"{derived_id} dropped")
 
 
 @ledger.command("fold")

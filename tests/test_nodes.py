@@ -20,7 +20,7 @@ from code_gantry.commands import CommandRunner
 from code_gantry.config import Stage, parse_config
 from code_gantry.executor import ExecutionResult
 from code_gantry.gitops import Git, GitError
-from code_gantry.ledger import CLAIMED, LANDED, open_ledger, read_ledger
+from code_gantry.ledger import CLAIMED, FINDING_CLAIMED, LANDED, open_ledger, read_ledger
 from code_gantry.planmodel import import_documents, parse_markdown
 from code_gantry.planner import PlannerOutcome, PlannerUsage
 from code_gantry.reviewer import Issue, ReviewOutcome, TokenUsage
@@ -3750,3 +3750,159 @@ class TestTheRunScope:
         out = nodes.plan(state, rt)
         assert "outside this run's scope" in json.dumps(out), out
         assert (out.get("current") or {}).get("plan_keys") != [THE_OTHER_ITEM]
+
+
+class _NoPlanner:
+    """A planner that must not be called."""
+
+    def plan(self, messages):
+        raise AssertionError("the planner was called")
+
+
+class TestDerivedStagesInTheLedger:
+    """A derivation is recorded before it runs, so a run that dies, or a
+    second bay, takes what was drawn rather than drawing it again."""
+
+    def _batch(self):
+        return StubPlanner([
+            PlannerOutcome(
+                "next_stage", "next", "e",
+                stage_fields=planned_stage(),
+                additional_stage_fields=[planned_stage(id="second", plan_keys=[THE_OTHER_ITEM])],
+            )
+        ])
+
+    def _make(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path, planner=self._batch())
+        # `make` takes the stub under the same name as the config section.
+        rt.cfg = rt.cfg.model_copy(
+            update={"planner": rt.cfg.planner.model_copy(update={"max_batch_stages": 3})}
+        )
+        return rt.cfg, rt, state
+
+    def _second_run(self, rt, state):
+        from dataclasses import replace
+
+        from code_gantry.ledger import open_ledger
+        from code_gantry.runtime import RunPaths
+
+        paths = RunPaths(rt.project, "r2")
+        paths.ensure()
+        other = replace(
+            rt, paths=paths, planner=_NoPlanner(),
+            ledger=open_ledger(rt.project.ledger, origin="test-host", actor="run:r2"),
+        )
+        return other, {**state, "run_id": "r2"}
+
+    def test_a_batch_is_recorded_and_the_head_is_taken_at_precheck(self, repo, tmp_path):
+        cfg, rt, state = self._make(repo, tmp_path)
+        out = nodes.plan(state, rt)
+        records = rt.views().derived
+        assert [d.status for d in records.values()] == ["derived", "derived"]
+        head_id = out["current"]["derived_id"]
+        assert records[head_id].stage_id == "extract" and records[head_id].rank == 0
+        assert out["stage_queue"][0]["derived_id"] in records
+        state = {**state, **out}
+        nodes.precheck(state, rt)
+        assert rt.views().derived[head_id].status == "taken"
+        assert rt.views().derived[head_id].taken_run == "r1"
+
+    def test_a_second_run_takes_the_waiting_stage_instead_of_deriving(self, repo, tmp_path):
+        cfg, rt, state = self._make(repo, tmp_path)
+        first = {**state, **nodes.plan(state, rt)}
+        nodes.precheck(first, rt)
+        other, other_state = self._second_run(rt, state)
+        out = nodes.plan(other_state, other)
+        assert out["next_hop"] == "precheck"
+        assert out["current"]["id"] == "second"
+        nodes.precheck({**other_state, **out}, other)
+        record = other.views().derived[out["current"]["derived_id"]]
+        assert record.status == "taken" and record.taken_run == "r2"
+        # The first run's own queue no longer offers it.
+        promoted = nodes._next_from_queue(first, 0, views=rt.views())
+        assert promoted["next_hop"] == "plan"
+
+    def test_nothing_waiting_means_the_planner_is_called(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path, planner=StubPlanner([
+            PlannerOutcome("next_stage", "next", "e", stage_fields=planned_stage())
+        ]))
+        out = nodes.plan(state, rt)
+        assert out["current"]["id"] == "extract"
+
+    def test_the_landing_closes_the_record(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path, planner=StubPlanner([
+            PlannerOutcome("next_stage", "next", "e", stage_fields=planned_stage())
+        ]))
+        state = {**state, **nodes.plan(state, rt)}
+        state = {**state, **nodes.precheck(state, rt)}
+        (repo / "app.py").write_text("stage work\n")
+        state = {**state, **nodes.review(state, rt)}
+        nodes.advance(state, rt)
+        assert rt.views().derived[state["current"]["derived_id"]].status == "done"
+
+    def test_the_planner_lock_is_held_per_ledger(self, repo, tmp_path, monkeypatch):
+        locks = tmp_path / "locks"
+        monkeypatch.setenv("CODE_GANTRY_LOCK_DIR", str(locks))
+        cfg, rt, state = make(repo, tmp_path, planner=StubPlanner([
+            PlannerOutcome("next_stage", "next", "e", stage_fields=planned_stage())
+        ]))
+        nodes.plan(state, rt)
+        files = list(locks.glob("planner-*.lock"))
+        assert len(files) == 1 and "planner, run r1" in files[0].read_text()
+
+
+class TestAStageDrawnFromAFinding:
+    def _finding(self, rt):
+        return rt.ledger.open_finding(keys=[THE_ITEM], by="reviewer", claim="a loose end").finding_id
+
+    def test_it_needs_no_plan_key_and_holds_the_finding(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        fid = self._finding(rt)
+        rt.planner = StubPlanner([PlannerOutcome(
+            "next_stage", "next", "e", stage_fields=planned_stage(plan_keys=[], resolves=[fid]),
+        )])
+        out = nodes.plan(state, rt)
+        assert out["next_hop"] == "precheck", out
+        state = {**state, **out}
+        nodes.precheck(state, rt)
+        finding = rt.views().findings[fid]
+        assert finding.claimed_run == "r1" and finding.claimed_stage == "extract"
+
+    def test_a_finding_another_run_holds_sends_the_stage_back(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        fid = self._finding(rt)
+        rt.ledger.append(FINDING_CLAIMED, stage_id="elsewhere", run_id="r9", finding_id=fid, pid=1)
+        rt.planner = StubPlanner([PlannerOutcome(
+            "next_stage", "next", "e", stage_fields=planned_stage(plan_keys=[], resolves=[fid]),
+        )])
+        state = {**state, **nodes.plan(state, rt)}
+        out = nodes.precheck(state, rt)
+        assert out["next_hop"] == "plan"
+        assert "held by r9" in json.dumps(out)
+
+    def test_an_unconfirmed_finding_is_released_at_landing(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        fid = self._finding(rt)
+        rt.planner = StubPlanner([PlannerOutcome(
+            "next_stage", "next", "e", stage_fields=planned_stage(plan_keys=[], resolves=[fid]),
+        )])
+        state = {**state, **nodes.plan(state, rt)}
+        state = {**state, **nodes.precheck(state, rt)}
+        (repo / "app.py").write_text("stage work\n")
+        state = {**state, **nodes.review(state, rt)}
+        out = nodes.advance(state, rt)
+        assert out["next_hop"] != "escalate"
+        finding = rt.views().findings[fid]
+        assert finding.status == "open" and finding.claimed_run is None
+
+    def test_drawn_from_nothing_is_refused(self):
+        from code_gantry.config import validate_stage
+
+        cfg = parse_config(as_test_tools({
+            "target_repo": "/tmp/x", "base_ref": "main", "project_branch": "p", "plan_root": "PLAN.md",
+            "full_test_command": "true", "executor": {"model": "m"},
+            "planner": {"model": "claude-opus-5"}, "reviewer": {"model": "gpt-5.5"},
+        }))
+        stage = cfg.stage_from_planner(planned_stage(plan_keys=[], resolves=[]))
+        problems = validate_stage(stage, cfg, known_keys={THE_ITEM}, open_findings=set())
+        assert any("drawn from nothing" in p for p in problems)

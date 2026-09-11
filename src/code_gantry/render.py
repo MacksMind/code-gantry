@@ -113,10 +113,20 @@ def render_projection(
         key=lambda f: f.id,
     )
 
+    waiting = [
+        f"- `{d.id}` **{d.stage_id}** on "
+        + (", ".join(f"{{#{k}}}" for k in d.keys) or "no key")
+        + (f", settling {', '.join(f'`{f}`' for f in d.findings)}" if d.findings else "")
+        + f" — drawn by {d.by_run or 'a run'}"
+        for d in views.derived_waiting()
+        if scope is None or set(d.keys) <= scope
+    ]
+
     sections: list[tuple[str, list[str]]] = [
         ("Landed since the plan text was last folded", landed),
         ("Struck", struck),
         ("Claimed", claimed),
+        ("Drawn and waiting for a run to take them", waiting),
         ("Blocked, waiting on a person", blocked),
         ("Answered", answered),
         ("Open findings", [_finding_line(f, views, note_chars) for f in open_findings]),
@@ -136,7 +146,8 @@ def _finding_line(finding: Finding, views: Views, note_chars: int, *, answered=F
     needs = " (needs a person)" if finding.needs == "human" else ""
     claim = clip_for_model(finding.claim, note_chars).strip()
     total = f" [{finding.total}]" if finding.total else ""
-    line = f"- `{finding.id}` on {keys} — by {finding.by}{needs}: {claim}{total}"
+    held = f" (held by {finding.claimed_run})" if finding.claimed_run else ""
+    line = f"- `{finding.id}` on {keys} — by {finding.by}{needs}{held}: {claim}{total}"
     if answered:
         line += f" → {finding.disposition}"
         if finding.answer_text:

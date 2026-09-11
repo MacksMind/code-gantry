@@ -296,3 +296,33 @@ class TestRunScope:
         assert result.exit_code != 0
         assert "--scope: 'p.999' is not a key" in result.output
         assert not seen
+
+
+class TestDrawnStagesOnTheCommandLine:
+    def _drawn(self, paths):
+        from code_gantry.ledger import STAGE_DERIVED
+
+        writer = open_ledger(paths.ledger, origin="test-host", actor="run:1")
+        return writer.append(
+            STAGE_DERIVED, stage_id="fix-routes", run_id="run-1", fields={"id": "fix-routes"},
+            keys=["p.004"], findings=[], batch=None, rank=0,
+        ).derived_id
+
+    def test_derived_lists_what_is_waiting(self, project):
+        repo, config, paths, sha = project
+        imported(project)
+        did = self._drawn(paths)
+        result = run("ledger", "derived")
+        assert result.exit_code == 0, result.output
+        assert f"{did} derived  fix-routes on p.004 (drawn by run-1)" in result.output
+
+    def test_drop_withdraws_it(self, project):
+        repo, config, paths, sha = project
+        imported(project)
+        did = self._drawn(paths)
+        result = run("ledger", "drop", did, "--reason", "not wanted")
+        assert result.exit_code == 0, result.output
+        assert run("ledger", "derived").output.strip() == ""
+        assert f"{did} dropped : not wanted" in run("ledger", "derived", "--all").output
+        again = run("ledger", "drop", did)
+        assert again.exit_code != 0

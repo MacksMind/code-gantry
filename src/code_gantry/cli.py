@@ -48,7 +48,7 @@ from code_gantry.driver import (
     load_state,
     open_checkpointer,
 )
-from code_gantry.ledger import LedgerError, open_ledger, read_ledger, resolve_scope
+from code_gantry.ledger import LedgerError, open_ledger, read_ledger, release_dead_holders, resolve_scope
 from code_gantry.planner import make_planner
 from code_gantry.preflight import format_checks, run_preflight
 from code_gantry.report import build_report
@@ -704,6 +704,16 @@ def _warnings(checks) -> list[str]:
     ]
 
 
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def _drive(
     cfg: ProjectConfig,
     project: ProjectPaths,
@@ -738,6 +748,12 @@ def _drive(
         # Said once, in the timeline, so the file is discoverable without
         # knowing it exists. A log nobody can find is not visibility.
         log(f"[run] tool reads are streaming to {paths.tool_log}")
+        if rt.ledger is not None:
+            # Claims are leases from live runs; a run that died on this host
+            # left its keys, findings and taken stages held.
+            freed = release_dead_holders(rt.ledger, alive=_pid_alive, keep_run=paths.run_id)
+            if freed:
+                log(f"[run] released {freed} claim(s) held by runs that have exited")
         if rt.key_scope:
             log(f"[run] scope: {len(rt.key_scope)} key(s): {' '.join(sorted(rt.key_scope))}")
         final = drive(
