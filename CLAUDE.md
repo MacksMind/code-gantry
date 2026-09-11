@@ -69,6 +69,16 @@ the candidate stays a branch a rework can amend. The same landing serves a
 person's pull request, with the failure returned to whoever authored the
 candidate.
 
+**The BEAM mesh is control, never state (decided 2026-09-11).** Daemons may
+form a distributed-Erlang mesh for status, start and stop, liveness and log
+streaming; a laptop joins as a hidden node dialing the Spark, and a cloud
+host later dials the same way. Everything that must be right — plan, claims,
+drawn stages, greens, landings — moves through the git remote and is
+correct with no daemon anywhere. A landed change under `daemon/` is
+hot-loaded by each daemon at its own safe point, with `code_change`
+carrying GenServer state; Python workers restart from new code at a stage
+boundary. That is how the self-improvement loop reaches both languages.
+
 **Test bed (2026-09).** The Spark (this host, a DGX with 121 GB unified
 memory, hostname `spark`) and the operator's MacBook, which can SSH to the
 Spark and never the reverse. Multi-host is proven between those two before
