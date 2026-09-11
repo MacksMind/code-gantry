@@ -89,7 +89,12 @@ under the shared cookie qualifies, an SSH session does not. Multi-host is
 proven between those two before any cloud host. On the Spark: `/home/you/projects/app/acme_app` is
 the primary copy, still running as a bay for now, and `acme_app-bay2`
 is the second bay, ports offset by 100. The technical-debt project's ledger
-is `~/.local/share/code_gantry/acme_app/technical-debt.db`. The Rails 5
+is `~/.local/share/code-gantry/acme_app/technical-debt.db`, the old
+spelling until the stop. Credentials are per repository, one file at the
+target's root, `<repo>/.code_gantry/env`, ignored there and named by every
+project's config as `../../.code_gantry/env` (landed as add9a0a in the
+target on 2026-09-11); a repository is one client. What a run writes stays
+per project under `docs/<project>/.code_gantry/`. Never host-level. The Rails 5
 project still keeps its ledger under its work dir. Remote landing is on for
 technical-debt, off for Rails 5.
 
@@ -160,13 +165,7 @@ Waiting on the operator:
   run started on the old code is live, `/tmp/code_gantry-<uid>` is a symlink
   to the old lock directory so old and new runs share one set of locks;
   remove the link then.
-- Credentials are per repository (decided 2026-09-11): one file at the
-  target's root, `<repo>/.code_gantry/env`, ignored there, shared by every
-  project in that repository since a repository is one client; both configs
-  point at it with `env_file: ../../.code_gantry/env`, technical-debt stops
-  reaching into the Rails 5 project's directory, and `bin/mk-bay` copies
-  that one file into a new bay. What a run writes stays per project under
-  `docs/<project>/.code_gantry/`. Never host-level.
+
 - A `checks` entry in the technical-debt config, backed by a script in the
   target's `bin/`, failing on a quoted path after an HTTP verb in an added
   line under `spec/requests/`: three reviewer reworks on 2026-09-11 were
