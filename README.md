@@ -570,7 +570,10 @@ Operator commands:
   `plan edit <key> [--owner pipeline]`, `plan retire <key>`.
 - `ledger show [--open|--claimed|--blocked|--landed] [key]`,
   `ledger findings [--for-human]`, `ledger answer <id> fold|discard|debt|raise
-  [--text …]`, `ledger claim|release|land|strike|block|unblock <key> …`,
+  [--text …] [--target …]` — `fold` writes the text into the plan at the next
+  fold, `discard` closes the finding, `debt` makes it an item under the
+  target section and closes it, `raise` keeps it open for a person; any
+  finding, in any order — `ledger claim|release|land|strike|block|unblock <key> …`,
   `ledger fold`, `ledger render [--projection]`, `ledger derived [--all]`,
   `ledger drop <id> [--reason …]`.
 

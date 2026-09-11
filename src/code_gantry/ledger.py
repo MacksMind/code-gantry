@@ -125,10 +125,15 @@ class Finding:
     opened_at: str = ""
     stage_id: str | None = None
     run_id: str | None = None
-    status: str = "open"  # open | answered | resolved | superseded | folded
+    # open | answered | folded | discarded | debt | resolved | superseded.
+    # `answered` is a `fold` waiting for the fold seam; `raise` leaves the
+    # finding open and hands it to a person.
+    status: str = "open"
     disposition: str | None = None
     answer_text: str | None = None
     target_key: str | None = None
+    # The item a `debt` answer wrote under its target.
+    entry_key: str | None = None
     resolved_sha: str | None = None
     # A stage drawn against this finding holds it, as a claim holds a key.
     claimed_run: str | None = None
@@ -345,12 +350,24 @@ def _apply(views: Views, event: Event) -> None:
                     other.superseded_by = finding.id
         views.findings[finding.id] = finding
     elif kind == FINDING_ANSWERED:
+        # Each disposition means something here, so every writer of the
+        # event — a CLI, a daemon, a reply from a phone — gets one result.
         finding = views.findings.get(body.get("finding_id", ""))
         if finding and finding.status == "open":
-            finding.status = "answered"
-            finding.disposition = body.get("disposition")
+            disposition = body.get("disposition")
+            finding.disposition = disposition
             finding.answer_text = body.get("text")
             finding.target_key = body.get("target_key")
+            if disposition == "discard":
+                finding.status = "discarded"
+            elif disposition == "debt":
+                finding.status = "debt"
+                finding.entry_key = body.get("entry_key")
+            elif disposition == "raise":
+                # Still open, and now a person's: the next answer is theirs.
+                finding.needs = "human"
+            else:
+                finding.status = "answered"
     elif kind == FINDING_RESOLVED:
         finding = views.findings.get(body.get("finding_id", ""))
         if finding and finding.status in ("open", "answered"):
@@ -643,10 +660,36 @@ class Ledger:
             raise LedgerError(f"unknown disposition {disposition!r}")
         if finding_id not in self.views().findings:
             raise LedgerError(f"no finding {finding_id}")
-        return self.append(
-            FINDING_ANSWERED, actor=actor, finding_id=finding_id,
-            disposition=disposition, text=text, target_key=target_key,
-        )
+        if disposition != "debt":
+            return self.append(
+                FINDING_ANSWERED, actor=actor, finding_id=finding_id,
+                disposition=disposition, text=text, target_key=target_key,
+            )
+        # `debt` is two events: the entry the finding becomes, written as an
+        # item under the target section with the next key of that section's
+        # prefix, and the answer naming it. Under one lock, so two answers
+        # cannot take one key.
+        if not target_key:
+            raise LedgerError("`debt` needs a target: the section the entry goes under")
+        if not text:
+            raise LedgerError("`debt` needs text: the entry itself")
+        with self.transaction():
+            views = self.views()
+            target = views.nodes.get(target_key)
+            if target is None or target.retired:
+                raise LedgerError(f"no such target {target_key}")
+            if target.kind not in ("section", "document"):
+                raise LedgerError(f"{target_key} is an item; a debt entry goes under a section")
+            prefix = target_key.rpartition(".")[0] or target_key
+            entry_key = views.next_key(prefix)
+            self.upsert_node(
+                entry_key, parent=target_key, position=len(views.children(target_key)),
+                kind="item", title=text, owner="human", actor=actor,
+            )
+            return self.append(
+                FINDING_ANSWERED, actor=actor, finding_id=finding_id,
+                disposition=disposition, text=text, target_key=target_key, entry_key=entry_key,
+            )
 
     def close(self) -> None:
         self.store.close()

@@ -476,6 +476,18 @@ site goes quietly missing.
   idiom applied to the whole record. Every event names the origin that wrote it,
   and the store assigns one sequence per ledger, so an id built from it is
   unique on its own and a replay is everything after N.
+- **A disposition means something in the views, never in a verb.** `fold`,
+  `discard`, `debt` and `raise` are interpreted by `_apply`, so the CLI, a
+  daemon, a phone and `claude -p` write one event and get one result; a
+  `debt` answer is two events, the entry's upsert and the answer naming it,
+  under one lock. Findings are answered one at a time in any order; the
+  fold derives a set from the views, and nothing in the ledger is a
+  cursor. Three of the four dispositions were recorded and interpreted by
+  nothing for as long as only `fold` had a consumer.
+- **The event vocabulary is the contract between the languages.** Both
+  write the table, so a kind or a field is added and never changes
+  meaning; an unknown kind is ignored by an older reader, a changed one is
+  not. Any change here is a decision, dated in this file.
 - **A fold is a rendering policy, not a document edit.** Landings and answered
   findings move from the projection into the node bodies when the projection
   outgrows `ledger.fold_ratio` of the plan text; the run does it at the

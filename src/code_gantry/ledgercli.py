@@ -288,11 +288,14 @@ def ledger_findings(for_human, everything, config_path) -> None:
 @ledger.command("answer")
 @click.argument("finding_id")
 @click.argument("disposition", type=click.Choice(["fold", "discard", "debt", "raise"]))
-@click.option("--text", default=None, help="What to write, for `fold`; the entry, for `debt`.")
-@click.option("--target", default=None, help="Key the text is written under (default: the finding's first key).")
+@click.option("--text", default=None, help="For `fold`, the sentence the plan carries; for `debt`, the entry; for `raise`, why a person must decide.")
+@click.option("--target", default=None, help="For `fold`, the key the text is written under (default: the finding's first key); for `debt`, the section the entry goes under.")
 @config_option
 def ledger_answer(finding_id, disposition, text, target, config_path) -> None:
-    """A person's disposition of a finding."""
+    """A disposition of one finding, in any order: `fold` writes the text
+    into the plan at the next fold; `discard` closes it; `debt` makes it an
+    item under the target section and closes it; `raise` keeps it open and
+    hands it to a person."""
     _, _, led = _cfg_and_ledger(config_path, write=True)
     if disposition == "fold" and not text:
         raise click.ClickException("`fold` needs --text: the sentence the plan should carry")

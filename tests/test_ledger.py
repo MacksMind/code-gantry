@@ -320,6 +320,71 @@ class TestFold:
         assert led.views().nodes["k.001"].marks == []
 
 
+class TestDispositions:
+    """Every disposition means something in the views, so whoever writes the
+    answer — the CLI, a daemon, a reply from a phone — gets the same result.
+    Findings are answered one at a time in any order; nothing here is a
+    cursor."""
+
+    def test_discard_closes_the_finding_and_it_leaves_the_projection(self, led):
+        from code_gantry.render import render_projection
+
+        plant(led, "k.001")
+        f = led.open_finding(keys=["k.001"], by="planner", claim="not worth it")
+        led.answer_finding(f.finding_id, disposition="discard", text="duplicate of k.002")
+        finding = led.views().findings[f.finding_id]
+        assert finding.status == "discarded"
+        assert f.finding_id not in render_projection(led.views(), note_chars=600)
+        assert apply_fold(led) == 0
+
+    def test_raise_hands_the_finding_to_a_person_and_keeps_it_open(self, led):
+        plant(led, "k.001")
+        f = led.open_finding(keys=["k.001"], by="reviewer", claim="which?")
+        led.answer_finding(f.finding_id, disposition="raise", text="two readings; a person decides")
+        finding = led.views().findings[f.finding_id]
+        assert (finding.status, finding.needs) == ("open", "human")
+        assert finding.answer_text == "two readings; a person decides"
+        assert finding in led.views().open_findings()
+        # Answered again, by the person this time, it closes like any other.
+        led.answer_finding(f.finding_id, disposition="discard")
+        assert led.views().findings[f.finding_id].status == "discarded"
+
+    def test_debt_writes_an_entry_under_the_target_and_closes_the_finding(self, led):
+        plant(led, "k.001")
+        led.upsert_node("k.900", parent=None, position=9, kind="section", title="Technical debt")
+        f = led.open_finding(keys=["k.001"], by="planner", claim="the old helper lingers")
+        led.answer_finding(f.finding_id, disposition="debt", text="Remove the old helper once nothing calls it", target_key="k.900")
+        views = led.views()
+        finding = views.findings[f.finding_id]
+        assert finding.status == "debt"
+        entry = views.nodes[finding.entry_key]
+        assert (entry.parent, entry.kind, entry.title, entry.owner) == ("k.900", "item", "Remove the old helper once nothing calls it", "human")
+        assert entry.key == "k.901"
+        assert views.state(entry.key).state == "open", "a debt entry is drawable like any item"
+        assert f.finding_id not in [x.id for x in views.open_findings()]
+        assert apply_fold(led) == 0
+
+    def test_debt_needs_a_target_section_and_an_entry(self, led):
+        plant(led, "k.001")
+        f = led.open_finding(keys=["k.001"], by="planner", claim="x")
+        with pytest.raises(LedgerError, match="target"):
+            led.answer_finding(f.finding_id, disposition="debt", text="an entry")
+        with pytest.raises(LedgerError, match="text"):
+            led.answer_finding(f.finding_id, disposition="debt", target_key="k.001")
+        with pytest.raises(LedgerError, match="section"):
+            led.answer_finding(f.finding_id, disposition="debt", text="an entry", target_key="k.001")
+
+    def test_two_debt_answers_take_two_keys(self, led):
+        plant(led, "k.001", "k.002")
+        led.upsert_node("k.900", parent=None, position=9, kind="section", title="Technical debt")
+        a = led.open_finding(keys=["k.001"], by="planner", claim="a")
+        b = led.open_finding(keys=["k.002"], by="planner", claim="b")
+        led.answer_finding(a.finding_id, disposition="debt", text="first", target_key="k.900")
+        led.answer_finding(b.finding_id, disposition="debt", text="second", target_key="k.900")
+        entries = [n for n in led.views().children("k.900")]
+        assert [(n.key, n.title, n.position) for n in entries] == [("k.901", "first", 0), ("k.902", "second", 1)]
+
+
 class TestOneFileSeveralBays:
     """Two bays open one file. Each must see the other's writes without being
     told, and a fold must not be written twice."""
