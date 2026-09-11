@@ -48,6 +48,7 @@ from code_gantry.driver import (
     load_state,
     open_checkpointer,
 )
+from code_gantry import nodes
 from code_gantry.ledger import LedgerError, open_ledger, read_ledger, release_dead_holders, resolve_scope
 from code_gantry.planner import make_planner
 from code_gantry.preflight import format_checks, run_preflight
