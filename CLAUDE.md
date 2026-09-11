@@ -71,8 +71,9 @@ candidate.
 
 **The BEAM mesh is control, never state (decided 2026-09-11).** Daemons may
 form a distributed-Erlang mesh for status, start and stop, liveness and log
-streaming; a laptop joins as a hidden node dialing the Spark, and a cloud
-host later dials the same way. Everything that must be right — plan, claims,
+streaming; either side may dial, since the cookie is the only credential,
+and a laptop still joins as a hidden node because it comes and goes; a cloud
+host later joins the same way. Everything that must be right — plan, claims,
 drawn stages, greens, landings — moves through the git remote and is
 correct with no daemon anywhere. A landed change under `daemon/` is
 hot-loaded by each daemon at its own safe point, with `code_change`
@@ -80,9 +81,12 @@ carrying GenServer state; Python workers restart from new code at a stage
 boundary. That is how the self-improvement loop reaches both languages.
 
 **Test bed (2026-09).** The Spark (this host, a DGX with 121 GB unified
-memory, hostname `spark`) and the operator's MacBook, which can SSH to the
-Spark and never the reverse. Multi-host is proven between those two before
-any cloud host. On the Spark: `/home/you/projects/app/acme_app` is
+memory, hostname `spark`) and the operator's MacBook. The two reach each
+other over Tailscale in both directions; what is one-way is credentials:
+the Spark holds no private keys, so SSH is Mac-to-Spark only, and anything
+the Spark initiates toward the Mac must need no key — a BEAM connection
+under the shared cookie qualifies, an SSH session does not. Multi-host is
+proven between those two before any cloud host. On the Spark: `/home/you/projects/app/acme_app` is
 the primary copy, still running as a bay for now, and `acme_app-bay2`
 is the second bay, ports offset by 100. The technical-debt project's ledger
 is `~/.local/share/code-gantry/acme_app/technical-debt.db`. The Rails 5
