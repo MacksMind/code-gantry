@@ -19,6 +19,88 @@ to a child must clear the variable it asks about and never borrow a real
 credential's name. An unscoped `os.environ` write makes the result depend on
 which xdist worker ran it.
 
+## Direction and standing decisions
+
+This section is the project's memory. It is here rather than in any
+session's notes because the notes live on one machine and this file lives in
+git. Update it when a decision changes; date the entries.
+
+**Working agreements with the operator.** Do the named action first and
+propose extras after. `code_gantry.yaml` in a target repository takes field
+changes only, with the rationale in the commit message. Commit and push this
+repository's own changes without asking. Comments and docstrings state the
+rule, not the incident; the incidents are in git history. Watch for code in
+the wrong layer and for duplication that comes from not having thought
+through pluggability. No role is ever tied to a wire. Tests pin generated
+facts and which prompt file is present, never a sentence of prose.
+
+**Vocabulary (decided 2026-09-11).** A *bay* is a checkout plus its
+containers on a host, named `<repo>-bayN` and made by the target's
+`bin/mk-bay`, on offset ports. The plain-named checkout on a host is the
+*primary repo copy*, the person's, never a bay, and the only one that may
+bring up the default ports. A *run* occupies a bay. A *key* names a plan
+node. The *ledger* is the per-host SQLite record holding the plan tree, key
+states, findings and drawn stages; on a host with several bays it is one file
+outside every checkout, named by `ledger.path`, and every bay reads and
+writes it. An *origin* is the writer of a ledger's events, one per host,
+named explicitly rather than defaulted once there is more than one host.
+
+**Topology.** Hosts never address each other. Code moves through the git
+remote: every landing is a squash, `pull --rebase`, a re-run of the suite
+only if the pull brought commits, and a fast-forward push of the project
+branch alone. The ledger moves through the same remote: each origin's
+events are an append-only JSON-lines file on `refs/code-gantry/ledger/<origin>`,
+built with plumbing and never touching a work tree, pushed only by its
+owner, fetched by everyone at run start, at the plan node, at precheck and at
+advance, and on the daemon's clock. A central database exists only ever as a
+replica. Scopes are per host; within a host, bays share the drawn-stage
+queue under the planner lock, so no scope is needed between them.
+
+**Test bed (2026-09).** The Spark (this host, a DGX with 121 GB unified
+memory, hostname `spark`) and the operator's MacBook, which can SSH to the
+Spark and never the reverse. Multi-host is proven between those two before
+any cloud host. On the Spark: `/home/you/projects/app/acme_app` is
+the primary copy, still running as a bay for now, and `acme_app-bay2`
+is the second bay, ports offset by 100. The technical-debt project's ledger
+is `~/.local/share/code-gantry/acme_app/technical-debt.db`. The Rails 5
+project still keeps its ledger under its work dir. Remote landing is on for
+technical-debt, off for Rails 5.
+
+**Sequence.** (1) the ledger holds the plan — landed; (2) bays behind one
+ledger, the suite and planner locks, drawn stages, leases — landed; (3) the
+per-host daemon: an Elixir Mix application under `daemon/`, started with one
+command, reading `~/.config/code-gantry/host.exs`, supervising `code-gantry
+run` per bay, making a missing bay with `bin/mk-bay`, syncing the ledger
+refs on a clock, answering `bin/daemon status`; toolchain pinned with
+`.tool-versions` and `mise`, since the Spark's packaged Elixir is 1.14 on OTP
+24 and the Mac's would be newer — in progress; (4) ledger sync over the git
+refs and preflight deduplication through a `suite.green` event, skipped per
+origin — next; (5) remote bays and scopes at placement; (6) an observer role
+that writes findings only; (7) CodeGantry improving itself from its own run
+artifacts. The daemon adds uptime, capacity, reload at the pause seam and a
+view, never a correctness property: a run started by hand with no daemon
+must behave the same.
+
+**Measured facts worth keeping.** Through OpenRouter, Fable 5.1 on the
+Messages wire drops the schema and refuses tools; on Responses it carries both
+and never caches; on chat completions it carries schema, strict tools, effort
+and a one-hour cache, and it serves the full planner prompt. The local
+Flash-Next executor took about four times Luna's median wall clock per
+attempt on one stage and serves one request at a time, which makes it the
+wrong executor for more than one bay; the technical-debt project runs Luna.
+Two bays landed from one derivation on 2026-09-11 with the suite lock
+holding on first contention.
+
+**Operating this host.** The Claude Code harness stops its own background
+tasks on a "low memory" reading that page cache alone can trigger; it killed
+runs and suites here while the machine had 100 GB available. Start a run
+with `nohup` in a terminal, never as a harness background task, and do not
+run this repository's suite while a bay is in preflight. `pkill -f` and
+`pgrep -f` match the shell that runs them; anchor patterns. `pytest -q`
+under xdist prints no summary; read the exit code. Tests that drive the
+plan node must set `CODE_GANTRY_LOCK_DIR`, or they litter the host's lock
+directory.
+
 ## Invariants
 
 **The planner may never author an executable field.** Enforced twice: the
