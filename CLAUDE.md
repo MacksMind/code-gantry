@@ -1102,6 +1102,15 @@ shell wins.
 `executor.py` is only what shapes an attempt before it starts — read budget,
 excerpts, conventions — plus `run_script_stage`.
 
+`daemon/` is the per-host daemon, an Elixir Mix application with no
+dependencies: `Host` reads the host file, `Bay` supervises one run per bay
+and makes a missing bay with the target's `bin/mk-bay`, `Sync` runs the
+ledger sync on a clock, `Status` writes the status file. It drives the CLI
+through `host.command` and never through anything else, so its tests run
+against a fake CLI. The CLI's exit codes are its contract: 0 finished, 1
+failed before or outside a stage, 2 escalated, 3 paused; anything else is a
+crash and is resumed.
+
 `scripts/smoke.py` stands up one HTTP server for all three roles and no binary
 on `PATH`. A test asserts the old stub executable is gone, because that is the
 sort of thing that grows back.

@@ -38,3 +38,8 @@ projects/*/*.out
 # is on disk only when the network is unreachable.
 model-prices.json
 scratchpad/
+
+# Elixir
+daemon/_build/
+daemon/deps/
+daemon/.elixir_ls/

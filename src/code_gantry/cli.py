@@ -57,8 +57,11 @@ from code_gantry.runlog import RunLog
 from code_gantry.runtime import ProjectPaths, RunPaths, build_runtime
 from code_gantry.state import new_state, resume_input
 
-EXIT_OK = 0
-EXIT_FAILED = 1
+# How a run ended, for whoever started it: the daemon reads these.
+EXIT_OK = 0          # the plan is complete
+EXIT_FAILED = 1      # stopped before or outside a stage: preflight, config, no plan
+EXIT_ESCALATED = 2   # a stage stopped for a person
+EXIT_PAUSED = 3      # the operator asked it to stop between stages
 
 
 @click.group()
@@ -818,7 +821,12 @@ def _drive(
 
 
 def _exit_code(state: dict) -> int:
-    return EXIT_FAILED if state.get("status") != "complete" else EXIT_OK
+    """The run's end as an exit code: complete, paused, escalated, or failed."""
+    if state.get("status") == "complete":
+        return EXIT_OK
+    if state.get("status") == "escalated":
+        return EXIT_PAUSED if state.get("failure_layer") == "paused" else EXIT_ESCALATED
+    return EXIT_FAILED
 
 
 def _load(config_path: Path) -> ProjectConfig:

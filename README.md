@@ -643,6 +643,39 @@ it. Effort buys reasoning tokens, billed at the ordinary output rate, so its
 whole cost is already in the completion count — what was missing was the label
 saying which effort produced it.
 
+## The daemon
+
+`bin/daemon start` runs the per-host daemon, an Elixir application under
+`daemon/`, detached from the terminal. It reads `~/.config/code-gantry/host.exs`,
+which names this machine and what it holds:
+
+```elixir
+[
+  origin: "spark",
+  code_gantry: "/home/you/projects/code-gantry",
+  primary: "/home/you/projects/app/acme_app",
+  config: "docs/technical_debt/code_gantry.yaml",
+  sync_seconds: 120,
+  bays: [
+    [name: "bay1", offset: 100],
+    [name: "bay2", offset: 200, scope: ["td.010"]]
+  ]
+]
+```
+
+For each bay it makes the checkout beside the primary copy with the target's
+`bin/mk-bay` if it is missing, then runs `code-gantry run` there under a run
+id it chose, with `CODE_GANTRY_ORIGIN` set to the host's origin. A run that
+finishes, fails, escalates or pauses stops its bay and the status file says
+which; a run that dies is resumed under the same id after a backoff. Every
+`sync_seconds` it runs `code-gantry ledger sync`. `bin/daemon status` prints
+the status file, `bin/daemon logs` follows the daemon's log, and each bay's
+run output is in `~/.local/state/code-gantry/daemon/<bay>.log`.
+
+The daemon holds no state the ledger does not hold, and a run started by
+hand behaves the same without it. The toolchain is pinned in
+`.tool-versions`; `mise install` gives every host the same Elixir.
+
 ## The prompts
 
 Every standing sentence a model is sent lives in the repository's top-level
