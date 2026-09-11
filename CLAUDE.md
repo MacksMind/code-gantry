@@ -39,22 +39,31 @@ containers on a host, named `<repo>-bayN` and made by the target's
 `bin/mk-bay`, on offset ports. The plain-named checkout on a host is the
 *primary repo copy*, the person's, never a bay, and the only one that may
 bring up the default ports. A *run* occupies a bay. A *key* names a plan
-node. The *ledger* is the per-host SQLite record holding the plan tree, key
-states, findings and drawn stages; on a host with several bays it is one file
-outside every checkout, named by `ledger.path`, and every bay reads and
-writes it. An *origin* is the writer of a ledger's events, one per host,
-named explicitly rather than defaulted once there is more than one host.
+node. The *ledger* is the record holding the plan tree, key states,
+findings and drawn stages, derived from one append-only sequence of
+events. A project's ledger is one name, `ledger.name` (`<repo>/<project>`),
+in a DynamoDB table every host writes (decided 2026-09-11); `ledger.path`
+is the older shape, a SQLite file on one host. An *origin* names the host
+that wrote an event, set by `CODE_GANTRY_ORIGIN`.
 
-**Topology.** Hosts never address each other. Code moves through the git
-remote: every landing is a squash, `pull --rebase`, a re-run of the suite
-only if the pull brought commits, and a fast-forward push of the project
-branch alone. The ledger moves through the same remote: each origin's
-events are an append-only JSON-lines file on `refs/code_gantry/ledger/<origin>`,
-built with plumbing and never touching a work tree, pushed only by its
-owner, fetched by everyone at run start, at the plan node, at precheck and at
-advance, and on the daemon's clock. A central database exists only ever as a
-replica. Scopes are per host; within a host, bays share the drawn-stage
-queue under the planner lock, so no scope is needed between them.
+**Topology (revised 2026-09-11).** Hosts never address each other. Code
+moves through the git remote: every landing is a squash, `pull --rebase`,
+a re-run of the suite only if the pull brought commits, and a fast-forward
+push of the project branch alone. The record of the work is one DynamoDB
+table every host writes directly, through `ledgerstore.py`: a host that can
+reach the models can reach the table, and a host that cannot — a closed
+laptop, an RV off cellular — is idle, so there is nothing to reconcile and
+no merge rule to write. The table and the credentials come from the
+repository's credentials file (`CODE_GANTRY_LEDGER_TABLE` and the AWS
+variables), never from config; `infra/` provisions them with CDK as the
+stack `CodeGantry`; the ledger's IAM user can append and read and not
+delete, which makes the log append-only by policy. The earlier design —
+one JSON-lines file per origin on `refs/code_gantry/ledger/<origin>`,
+synced at four seams and on the daemon's clock, "a central database only
+ever as a replica" — rested on a disconnected host keeping working; it
+cannot, because the models are on the internet, and the operator struck
+it. Scopes are per host; within a host, bays share the drawn-stage queue
+under the planner lock, so no scope is needed between them.
 
 **Landing across hosts is optimistic, never leased (decided 2026-09-11).**
 Rebase, test, push; a push the remote refuses after a green suite is a
@@ -69,13 +78,17 @@ the candidate stays a branch a rework can amend. The same landing serves a
 person's pull request, with the failure returned to whoever authored the
 candidate.
 
-**The BEAM mesh is control, never state (decided 2026-09-11).** Daemons may
-form a distributed-Erlang mesh for status, start and stop, liveness and log
-streaming; either side may dial, since the cookie is the only credential,
-and a laptop still joins as a hidden node because it comes and goes; a cloud
-host later joins the same way. Everything that must be right — plan, claims,
-drawn stages, greens, landings — moves through the git remote and is
-correct with no daemon anywhere. A landed change under `daemon/` is
+**Project state in the table, orchestration state in the daemons
+(decided by the operator 2026-09-11, replacing "the mesh is control, never
+state", which had been a constraint handed to him rather than a choice).**
+Project state — plan, claims as leases, drawn stages, findings, greens,
+landings — is the table's, written by runs directly and correct with no
+daemon anywhere. Orchestration state — placements, which run is live in
+which bay, host capacity and code version, pause and resume intent, the
+nudge that a landing just happened — is the daemons', in Mnesia once the
+mesh forms, each host the single writer of its own bay records, so a
+partition there delays and never loses. Daemons may dial either way, since
+the cookie is the only credential; a laptop joins as a hidden node. A landed change under `daemon/` is
 hot-loaded by each daemon at its own safe point, with `code_change`
 carrying GenServer state; Python workers restart from new code at a stage
 boundary. That is how the self-improvement loop reaches both languages.
@@ -89,8 +102,10 @@ under the shared cookie qualifies, an SSH session does not. Multi-host is
 proven between those two before any cloud host. On the Spark: `/home/you/projects/app/acme_app` is
 the primary copy, still running as a bay for now, and `acme_app-bay2`
 is the second bay, ports offset by 100. The technical-debt project's ledger
-is `~/.local/share/code-gantry/acme_app/technical-debt.db`, the old
-spelling until the stop. Credentials are per repository, one file at the
+is still the SQLite file `~/.local/share/code-gantry/acme_app/technical-debt.db`
+on each host until the stop, when the Spark's copy is imported into the
+table with `code-gantry ledger import` and `ledger.name` replaces
+`ledger.path` in the config. Credentials are per repository, one file at the
 target's root, `<repo>/.code_gantry/env`, ignored there and named by every
 project's config as `../../.code_gantry/env` (landed as add9a0a in the
 target on 2026-09-11); a repository is one client. What a run writes stays
@@ -128,8 +143,10 @@ stretch while a second run shared the machine. The bay's compose now sets
 `SE_NODE_SESSION_TIMEOUT: 1800` (target commit c72a331a1, ahead of origin
 until the Mac lands). `bin/daemon retry <bay>` (6879534) relaunches a
 stopped bay with no restart, and the clock sync reads a bay's config,
-never the primary's (c18d7dc); (4) ledger sync over the git refs
-and preflight deduplication through `suite.green` — landed; (5) remote bays and scopes at placement; (6) an observer role
+never the primary's (c18d7dc); (4) the ledger in a DynamoDB table every host writes — `ledgerstore.py`
+under `ledger.py`, the refs and their sync deleted, `ledger import` for the
+old files — landed 2026-09-11 (d2c8284) in place of the ref sync, and
+preflight deduplication through `suite.green` — landed; (5) remote bays and scopes at placement; (6) an observer role
 that writes findings only; (7) CodeGantry improving itself from its own run
 artifacts. The daemon adds uptime, capacity, reload at the pause seam and a
 view, never a correctness property: a run started by hand with no daemon
@@ -219,18 +236,20 @@ Waiting on the operator:
   `remote_landing`. Measured 2026-09-11: zero `suite.green` events in 20
   landings, because every Spark bay predates c3e5bf8 — the reader has
   never had a record to read.
-- The technical-debt config's `ledger.path` still spells
-  `~/.local/share/code-gantry/…`; every other host path is `code_gantry`
-  now (decided 2026-09-11: one spelling for directories, the command name
-  stays `code-gantry`). Move the file and the field at the stop. Until no
-  run started on the old code is live, `/tmp/code_gantry-<uid>` is a symlink
-  to the old lock directory so old and new runs share one set of locks;
-  remove the link then. The same runs push their ledger to the hyphenated
-  `refs/code-gantry/ledger/host-b`; the `code_gantry` ref that current
-  code fetches advances only when synced by hand from the Spark (`uv run
-  code-gantry ledger sync --config <target config>` with
-  `CODE_GANTRY_ORIGIN=host-b`) until those runs stop; delete the old
-  ref on GitHub then.
+- At the stop: import the Spark's SQLite ledger, which holds every
+  origin's events, into the table once (`code-gantry ledger import <file>`
+  with a config naming `ledger.name`), set
+  `ledger.name: acme_app/technical-debt` in place of `ledger.path`
+  (a field change in the target's config, rationale in the commit), delete
+  both ledger refs on GitHub (`refs/code-gantry/ledger/host-b` and
+  `refs/code_gantry/ledger/host-b`), and remove the `/tmp/code_gantry-<uid>`
+  lock symlink. Until then the Spark's live runs, on code from before all
+  of this, keep writing their file and their hyphenated ref; a Mac run on
+  current code reads whatever `ledger.name` or `ledger.path` its config
+  says, and the Mac's file is a stale copy of the Spark's.
+- The green-tracking split (tree fact from any origin; a host fact a red
+  suite proves as well; pull before preflight) is now a change against the
+  table rather than the refs; still the operator's call.
 
 - A `checks` entry in the technical-debt config, backed by a script in the
   target's `bin/`, failing on a quoted path after an HTTP verb in an added
@@ -305,10 +324,9 @@ whole marked block, so put churn *after* the mark, not last inside it. A
 breakpoint after content that changes every call costs more than none.
 
 **The pipeline pushes only the configured project branch, fast-forward, and
-only under `remote_landing`.** `Git.push` has no force flag and `precheck` and
-`advance` are its only callers. The one other push is `Git.push_ref`, which
-refuses any name outside `refs/code_gantry/` — the ledger refs, built with
-plumbing and never a branch — so it cannot become a second way to move code. After a squash the bay pulls with rebase,
+only under `remote_landing`.** `Git.push` has no force flag, `precheck` and
+`advance` are its only callers, and there is no other push: the ledger no
+longer travels by ref. After a squash the bay pulls with rebase,
 re-runs the full suite only if the pull brought commits — two landings each
 verified on their own tree were never verified together — and pushes; a
 refused push pulls again; a conflict or a red combined tree escalates with the
@@ -455,9 +473,9 @@ site goes quietly missing.
 - **State is derived from events, never stored.** The ledger's tree, key states
   and findings are rebuilt from one append-only table on read, so no status
   column can disagree with the history that produced it — the `gate_history`
-  idiom applied to the whole record. Every event names the origin that wrote it
-  and its sequence within that origin, so a later exchange between hosts is a
-  fetch, not a merge.
+  idiom applied to the whole record. Every event names the origin that wrote it,
+  and the store assigns one sequence per ledger, so an id built from it is
+  unique on its own and a replay is everything after N.
 - **A fold is a rendering policy, not a document edit.** Landings and answered
   findings move from the projection into the node bodies when the projection
   outgrows `ledger.fold_ratio` of the plan text; the run does it at the
@@ -1220,21 +1238,25 @@ it pushed when the stage's full suite passed and the publication did not
 escalate. Preflight skips a tree this origin has proven and never one another
 origin has: the tree fact travels, the environment fact does not.
 
-`ledgersync.py` carries a ledger between hosts: our origin's events to
-`refs/code_gantry/ledger/<origin>` on the remote, every origin's ref fetched
-and ingested with origin and sequence kept, so the same log can be ingested
-any number of times. `sync_at` is the exchange at a seam — it logs a failure
-rather than raising, since the local ledger is this host's record and the
-remote is a replica — called by `nodes._sync_ledger` inside a run and by
-`cli.run` before preflight, where a fresh host first needs the plan.
+`ledgerstore.py` is the store under the ledger: `SqliteStore`, a file on
+one host, and `DynamoStore`, one table every host writes, behind one
+contract — one sequence per ledger assigned at append, `events_after(N)`,
+and `exclusive()` holding one writer across a read and the writes it
+decides (the file's write lock; a lock item with an expiry, released by
+expiring it, since the credential cannot delete). The Dynamo store speaks
+to its table through five operations; `MemoryTable` answers them for the
+suite and `Boto3Table` for the real thing, which one test proves against
+the deployed table when the credentials are in the environment and skips
+otherwise. `ledger_for` picks the store from `ledger.name` or
+`ledger.path`, and is the one place a ledger is opened from a config.
 
-`ledger.py` is the record: one append-only `events` table, views derived from
-it, `open_ledger` the only creator, `read_ledger` never creating. Views are
-rebuilt when SQLite's `data_version` moves, because several bays share one
-file through `ledger.path` and a cache that knew only its own writes would
-miss another bay's claim; `transaction()` holds the write lock across a read
-and the writes it decides, which is what keeps a fold from being written
-twice. A run's `key_scope` is fixed at start, carried in the checkpoint, and
+`ledger.py` is the record: one append-only sequence of events, views
+derived from it. It keeps the events it has read and asks the store only
+for what follows, so another host's claim is seen on the next read;
+`transaction()` takes the store's exclusive lock and refreshes inside it,
+which is what keeps a fold from being written twice. `import_old_file`
+copies a file from before one sequence per ledger, rewriting the finding
+and derived-stage ids its bodies name. A run's `key_scope` is fixed at start, carried in the checkpoint, and
 applied at three seams: the renderers mark what is outside it, `validate_stage`
 refuses a stage citing outside it, and nothing else needs to know. A
 derivation is written as `stage.derived` records before anything runs, and
@@ -1298,8 +1320,10 @@ excerpts, conventions — plus `run_script_stage`.
 
 `daemon/` is the per-host daemon, an Elixir Mix application with no
 dependencies: `Host` reads the host file, `Bay` supervises one run per bay
-and makes a missing bay with the target's `bin/mk-bay`, `Sync` runs the
-ledger sync on a clock, `Status` writes the status file. It drives the CLI
+and makes a missing bay with the target's `bin/mk-bay`, `Status` writes
+the status file, `Control` holds the verbs a person says to a running
+daemon — `retry` today — reached by `bin/daemon` over the daemon's named
+node and cookie. It carries no ledger state. It drives the CLI
 through `host.command` and never through anything else, so its tests run
 against a fake CLI. The CLI's exit codes are its contract: 0 finished, 1
 failed before or outside a stage, 2 escalated, 3 paused; anything else is a
