@@ -104,6 +104,42 @@ artifacts. The daemon adds uptime, capacity, reload at the pause seam and a
 view, never a correctness property: a run started by hand with no daemon
 must behave the same.
 
+**Build order and open decisions (kept current; last 2026-09-11).** The
+queue of what to build next, in order, and what waits on the operator. A
+session picks up from here; a decision the operator makes moves from the
+second list into the first or is struck.
+
+Build next, in order:
+1. The landing reorder: one candidate commit on the stage branch, rebase
+   onto the pulled tip, one full suite there, fast-forward and push; retries
+   bounded by a config field; the verify layer's full suite moves into
+   publication. Then a rebase conflict as a rework rather than an escalation.
+2. The MacBook as a host: pull, `mise install`, host file, `bin/daemon
+   start`; the first cross-host sync and the first Mac landing.
+3. The daemon's control plane: distributed-Erlang mesh with the Mac as a
+   hidden node; one status view across hosts; start and stop from anywhere;
+   liveness for leases; hot reload of `daemon/` at a safe point.
+4. The decision queue reachable from Telegram: every finding with
+   `needs: human`, every escalated or paused run, every candidate waiting on
+   a person, delivered as a message with the reply that answers it — answer,
+   release, drop, resume, pause — writing the same ledger events and CLI
+   calls a person at a terminal would. No human-in-the-loop Markdown
+   document; the ledger's findings are the queue and Telegram is a client of
+   it, served by the daemon.
+5. Pull requests as candidates: intake, review comments as the rework
+   channel, keys on a pull request closing plan items, branch protection
+   routing merges through the orchestrator.
+6. The observer role that writes findings only, and CodeGantry improving
+   itself from its own run artifacts, both languages.
+
+Waiting on the operator:
+- Whether the executor comparison, Flash-Next against Luna, is worth a
+  measured run once the Spark is idle, or whether Luna stands.
+- Whether to enable `remote_landing` for the Rails 5 project and move its
+  ledger beside technical-debt's.
+- When the current two-bay run should stop, so the primary copy can be
+  handed back and `acme_app-bay1` made in its place.
+
 **Measured facts worth keeping.** Through OpenRouter, Fable 5.1 on the
 Messages wire drops the schema and refuses tools; on Responses it carries both
 and never caches; on chat completions it carries schema, strict tools, effort
