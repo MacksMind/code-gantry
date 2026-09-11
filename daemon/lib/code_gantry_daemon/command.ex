@@ -27,12 +27,15 @@ defmodule CodeGantryDaemon.Command do
   @doc "Run `argv` to completion in `cwd`; returns `{output, status}`."
   def run(argv, cwd, env) do
     [program | args] = argv
+    path = executable(program, cwd)
 
-    System.cmd(executable(program, cwd), args,
-      cd: cwd,
-      env: env,
-      stderr_to_stdout: true
-    )
+    System.cmd(path, args, cd: cwd, env: env, stderr_to_stdout: true)
+  rescue
+    e in ErlangError ->
+      # Spawning failed before the program ran: the path, its interpreter or
+      # the directory. Answered like a program that could not start.
+      {"could not start #{Enum.join(argv, " ")} in #{cwd}: #{inspect(e.original)} " <>
+         "(the path, its first line's interpreter, or the directory is missing)", 127}
   end
 
   # A program named with a path is taken from `cwd`; a bare name from PATH.

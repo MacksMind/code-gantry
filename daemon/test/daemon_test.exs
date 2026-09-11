@@ -115,6 +115,17 @@ defmodule CodeGantryDaemonTest do
     refute File.exists?(Path.join(root, "calls"))
   end
 
+  test "a program that cannot be spawned reads as a failed command", %{root: root, host: host} do
+    alias CodeGantryDaemon.Command
+    {out, status} = Command.run(["bin/does-not-exist"], host.primary, [])
+    assert status == 127 and out =~ "could not start bin/does-not-exist"
+    File.write!(Path.join([host.primary, "bin", "bad-interp"]), "#!/nowhere/bash\necho hi\n")
+    File.chmod!(Path.join([host.primary, "bin", "bad-interp"]), 0o755)
+    {out, status} = Command.run(["bin/bad-interp"], host.primary, [])
+    assert status == 127 and out =~ "interpreter"
+    _ = root
+  end
+
   test "the sync loop runs the ledger sync and records the result", %{root: root, host: host, state: state} do
     File.write!(Path.join(root, "exit"), "0")
     {:ok, _} = Sync.start_link(host)
