@@ -853,6 +853,13 @@ run is live: several modules are imported inside functions to break cycles, so
 an unloaded module was read from disk when first needed, putting new code in
 front of an old class in memory.
 
+`promptfiles.py` reads `prompts/`: `render(name, **fields)` fills a file's
+placeholders and refuses one the code did not supply; `text(name)` is the same
+for a file that takes none. `prompts.py` assembles the reviewer's and the
+executor's messages and the planner's user message; the planner's system
+prompt is assembled in `planner.py` beside the capability paragraphs it
+generates from the declared tools.
+
 `dialects.py` replaced role-decides-wire. Two dialects, RESPONSES and MESSAGES;
 `dialect_for(model)` answers RESPONSES for an unclassified family, because a
 router can resolve to anything and an unknown model must not end a run. A

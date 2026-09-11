@@ -643,6 +643,23 @@ it. Effort buys reasoning tokens, billed at the ordinary output rate, so its
 whole cost is already in the completion count — what was missing was the label
 saying which effort produced it.
 
+## The prompts
+
+Every standing sentence a model is sent lives in the repository's top-level
+`prompts/` directory as Markdown, one file per block: `prompts/planner/`,
+`prompts/reviewer/`, `prompts/executor/`, and `prompts/shared/` for what more
+than one role carries. Edit them by hand. The code decides which files a
+call carries and in what order, and fills each file's `$name` placeholders
+with what is generated from config or state — a cap, a list of files, a
+diff. A file may not name a placeholder the code does not supply: the first
+render refuses it and names the file. A literal dollar sign is written `$$`.
+`CODE_GANTRY_PROMPTS` names another directory, for trying an edit without
+touching the checkout.
+
+The tests pin the seam and not the words: that every file is carried by some
+builder, that every placeholder is filled, and that an edit reaches the
+model. Rewording a file breaks nothing.
+
 ## Safety
 
 - Refuses to continue a run whose config has changed, by the file's git blob

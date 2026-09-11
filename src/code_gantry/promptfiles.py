@@ -40,8 +40,8 @@ def _read(path: str) -> str:
     return Path(path).read_text(encoding="utf-8")
 
 
-def text(name: str) -> str:
-    """The file's text, without its final newline."""
+def raw(name: str) -> str:
+    """The file's text as written, without its final newline."""
     path = prompts_dir() / f"{name}.md"
     if not path.is_file():
         raise FileNotFoundError(f"no prompt file {name!r} under {prompts_dir()}")
@@ -49,7 +49,7 @@ def text(name: str) -> str:
 
 
 def placeholders(name: str) -> set[str]:
-    return set(Template(text(name)).get_identifiers())
+    return set(Template(raw(name)).get_identifiers())
 
 
 def render(name: str, **fields) -> str:
@@ -57,7 +57,7 @@ def render(name: str, **fields) -> str:
     not supply is an error naming the file, so an edit that invents one is
     caught at the first render rather than shipped to a model."""
     try:
-        return Template(text(name)).substitute(fields)
+        return Template(raw(name)).substitute(fields)
     except KeyError as e:
         raise KeyError(
             f"prompt file {name}.md names ${e.args[0]}, which the code does not "
@@ -65,6 +65,12 @@ def render(name: str, **fields) -> str:
         ) from None
     except ValueError as e:
         raise ValueError(f"prompt file {name}.md: {e}; write a literal dollar sign as $$") from None
+
+
+def text(name: str) -> str:
+    """A file the code fills nothing into. Rendered all the same, so a
+    placeholder added by hand is refused rather than sent."""
+    return render(name)
 
 
 def forget() -> None:
