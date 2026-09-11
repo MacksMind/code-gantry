@@ -14,6 +14,9 @@ defmodule CodeGantryDaemon.Application do
   def start(_type, _args) do
     host = Host.load!(System.get_env("CODE_GANTRY_HOST_FILE") || Host.path())
     File.mkdir_p!(Host.state_dir())
+    # The address `bin/daemon` talks to. Written by the daemon rather than
+    # computed by the script, so the two cannot disagree about the hostname.
+    File.write!(Path.join(Host.state_dir(), "node"), Atom.to_string(node()) <> "\n")
 
     children =
       [

@@ -9,6 +9,11 @@ defmodule CodeGantryDaemon.Bay do
   outside a stage, 2 escalated, 3 paused — all four stop the bay and say so
   in the status file, since each wants a person — and anything else is a
   crash, resumed after a backoff.
+
+  A person answers through `retry/1`, reached by `bin/daemon retry <bay>`.
+  How the last run ended decides what a retry is: a run that failed or
+  finished has nothing to continue, so a new run starts; one that escalated,
+  paused or died is resumed under its id, since its stage is still there.
   """
   use GenServer
   require Logger
@@ -21,9 +26,20 @@ defmodule CodeGantryDaemon.Bay do
 
   def via(name), do: {:global, {__MODULE__, name}}
 
+  @doc """
+  Launch again. `{:ok, mode, run_id}` names what was started; a bay with a
+  run live refuses with its id, since the run is the thing to talk to.
+  """
+  def retry(name) do
+    case GenServer.whereis(via(name)) do
+      nil -> {:error, :no_such_bay}
+      pid -> GenServer.call(pid, :retry)
+    end
+  end
+
   @impl true
   def init({host, bay}) do
-    state = %{host: host, bay: bay, port: nil, log: nil, run_id: nil, crashes: 0, mode: :run}
+    state = %{host: host, bay: bay, port: nil, log: nil, run_id: nil, crashes: 0, mode: :run, last: nil}
     Status.put(bay.name, :starting, nil)
     {:ok, state, {:continue, :ensure_checkout}}
   end
@@ -97,33 +113,56 @@ defmodule CodeGantryDaemon.Bay do
       0 ->
         Logger.info("#{bay.name}: run #{state.run_id} finished")
         Status.put(bay.name, :finished, state.run_id)
-        {:noreply, state}
+        {:noreply, %{state | last: :finished}}
 
       1 ->
         Logger.warning("#{bay.name}: run #{state.run_id} failed before or outside a stage (exit 1)#{last_lines(bay)}")
         Status.put(bay.name, :failed, state.run_id)
-        {:noreply, state}
+        {:noreply, %{state | last: :failed}}
 
       2 ->
         Logger.warning("#{bay.name}: run #{state.run_id} escalated to a person#{last_lines(bay)}")
         Status.put(bay.name, :escalated, state.run_id)
-        {:noreply, state}
+        {:noreply, %{state | last: :escalated}}
 
       3 ->
         Logger.info("#{bay.name}: run #{state.run_id} paused")
         Status.put(bay.name, :paused, state.run_id)
-        {:noreply, state}
+        {:noreply, %{state | last: :paused}}
 
       other ->
         wait = Enum.at(@backoff_seconds, min(state.crashes, length(@backoff_seconds) - 1))
         Logger.warning("#{bay.name}: run #{state.run_id} died (exit #{other}); resuming in #{wait}s")
         Status.put(bay.name, :crashed, state.run_id)
         Process.send_after(self(), :relaunch, wait * 1000)
-        {:noreply, %{state | crashes: state.crashes + 1, mode: :resume}}
+        {:noreply, %{state | crashes: state.crashes + 1, mode: :resume, last: :crashed}}
     end
   end
 
+  # A backoff that fires after a person already relaunched must not start a
+  # second run in the bay.
+  def handle_info(:relaunch, %{port: port} = state) when is_port(port), do: {:noreply, state}
   def handle_info(:relaunch, state), do: {:noreply, state, {:continue, :launch}}
+  def handle_info(_other, state), do: {:noreply, state}
+
+  @impl true
+  def handle_call(:retry, _from, %{port: port} = state) when is_port(port) do
+    {:reply, {:error, {:running, state.run_id}}, state}
+  end
+
+  # Never launched: the checkout is what to try again.
+  def handle_call(:retry, _from, %{run_id: nil} = state) do
+    {:reply, {:ok, :run, nil}, state, {:continue, :ensure_checkout}}
+  end
+
+  def handle_call(:retry, _from, state) do
+    {mode, run_id} =
+      if state.last in [:escalated, :paused, :crashed],
+        do: {:resume, state.run_id},
+        else: {:run, new_run_id(state.bay, state.run_id)}
+
+    {:reply, {:ok, mode, run_id}, %{state | mode: mode, run_id: run_id, crashes: 0}, {:continue, :launch}}
+  end
 
   # The exit code says which kind of end; the run's own output says why.
   # Its last lines travel into the daemon log beside the verdict, so a
@@ -141,7 +180,6 @@ defmodule CodeGantryDaemon.Bay do
     end
   end
 
-  def handle_info(_other, state), do: {:noreply, state}
 
   @impl true
   def terminate(_reason, %{port: port}) when is_port(port) do
@@ -153,8 +191,18 @@ defmodule CodeGantryDaemon.Bay do
 
   def terminate(_reason, _state), do: :ok
 
-  defp new_run_id(bay) do
-    stamp = Calendar.strftime(DateTime.utc_now(), "%Y%m%d-%H%M%S")
-    "#{stamp}-#{bay.name}"
+  # A run id is the second the run started in this bay, so two runs never
+  # share one: a retry inside the same second waits for the next.
+  defp new_run_id(bay, previous \\ nil) do
+    now = DateTime.utc_now()
+    id = "#{Calendar.strftime(now, "%Y%m%d-%H%M%S")}-#{bay.name}"
+
+    if id == previous do
+      {ms, _} = now.microsecond
+      Process.sleep(1000 - div(ms, 1000))
+      new_run_id(bay, previous)
+    else
+      id
+    end
   end
 end

@@ -24,6 +24,7 @@ defmodule CodeGantryDaemonTest do
     #!/usr/bin/env bash
     echo "argv: $*" >> "#{root}/calls"
     echo "line one"
+    while [ -f "#{root}/hold" ]; do sleep 0.1; done
     exit "$(cat "#{root}/exit" 2>/dev/null || echo 0)"
     """)
     File.chmod!(fake, 0o755)
@@ -144,5 +145,57 @@ defmodule CodeGantryDaemonTest do
     {:ok, _} = Sync.start_link(host)
     wait_for(fn -> String.contains?(status(state), "sync ok") end)
     assert calls(root) =~ "argv: ledger sync --config #{Path.join(host.primary, "cfg.yaml")}"
+  end
+
+  describe "retry" do
+    defp launches(root) do
+      Regex.scan(~r/argv: (run|resume) \S+ (?:--run-id )?(\S+)/, calls(root))
+      |> Enum.map(fn [_, verb, id] -> {verb, id} end)
+    end
+
+    test "a failed run told to try again starts a new run", %{root: root, host: host, state: state} do
+      File.write!(Path.join(root, "exit"), "1")
+      {:ok, _} = Bay.start_link({host, hd(host.bays)})
+      wait_for(fn -> String.contains?(status(state), "bay1 failed") end)
+      File.write!(Path.join(root, "exit"), "0")
+      assert {:ok, :run, id} = Bay.retry("bay1")
+      wait_for(fn -> String.contains?(status(state), "bay1 finished #{id}") end)
+      assert [{"run", first}, {"run", ^id}] = launches(root)
+      assert first != id
+    end
+
+    test "an escalated run told to try again is resumed under its id", %{root: root, host: host, state: state} do
+      File.write!(Path.join(root, "exit"), "2")
+      {:ok, _} = Bay.start_link({host, hd(host.bays)})
+      wait_for(fn -> String.contains?(status(state), "bay1 escalated") end)
+      File.write!(Path.join(root, "exit"), "0")
+      assert {:ok, :resume, id} = Bay.retry("bay1")
+      wait_for(fn -> String.contains?(status(state), "bay1 finished") end)
+      assert [{"run", ^id}, {"resume", ^id}] = launches(root)
+    end
+
+    test "a running bay refuses and names its run", %{root: root, host: host, state: state} do
+      File.write!(Path.join(root, "hold"), "")
+      {:ok, _} = Bay.start_link({host, hd(host.bays)})
+      wait_for(fn -> String.contains?(status(state), "bay1 running") end)
+      assert {:error, {:running, id}} = Bay.retry("bay1")
+      assert id =~ ~r/-bay1$/
+      File.rm!(Path.join(root, "hold"))
+      wait_for(fn -> String.contains?(status(state), "bay1 finished") end)
+      assert length(launches(root)) == 1
+    end
+
+    test "a bay the host file does not name is refused" do
+      assert {:error, :no_such_bay} = Bay.retry("bay9")
+    end
+
+    test "the control line says what happened", %{root: root, host: host, state: state} do
+      alias CodeGantryDaemon.Control
+      File.write!(Path.join(root, "exit"), "1")
+      {:ok, _} = Bay.start_link({host, hd(host.bays)})
+      wait_for(fn -> String.contains?(status(state), "bay1 failed") end)
+      assert Control.retry("bay1") =~ ~r/^bay1: run \d{8}-\d{6}-bay1 started$/
+      assert Control.retry("bay9") == "no bay named bay9 in the host file"
+    end
   end
 end
