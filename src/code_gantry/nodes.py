@@ -325,6 +325,15 @@ def plan(state: RunState, rt: Runtime) -> dict:
         if waited[0]:
             rt.log(f"[plan] waited {waited[0]:.0f}s for the planner lock")
         _sync_ledger(rt, "plan")
+        if stage is not None and rt.ledger is not None:
+            elsewhere = _held_elsewhere(rt, stage)
+            if elsewhere:
+                # A resume can arrive holding a stage another run took in the
+                # meantime; revising it would spend a planner call on work
+                # that is already someone else's.
+                rt.log(f"[plan] letting go of {stage.id}: {', '.join(elsewhere)}")
+                stage = None
+                state = {**state, "current": None, "revision": 0}
         if stage is None:
             taken = _take_derived(rt, state)
             if taken is not None:
@@ -2980,6 +2989,12 @@ def _references_taken(rt: Runtime, stage: Stage, state: RunState) -> list[str]:
     return taken
 
 
+def _held_elsewhere(rt: Runtime, stage: Stage) -> list[str]:
+    """The stage's keys, findings or drawn record, where another run holds
+    them or they are closed; empty when this run may go on with it."""
+    return _references_taken(rt, stage, {})
+
+
 def _claim_references(rt: Runtime, stage: Stage, state: RunState) -> None:
     """Hold every key and finding the stage is drawn against, and its drawn
     record, for this run and stage. Idempotent across a resume."""
@@ -3084,26 +3099,18 @@ def _record_derivation(rt: Runtime, head: Stage, queue: list[dict]) -> tuple[Sta
 
 
 def _taken_key_failure(state: RunState, stage: Stage, taken: list[str]) -> dict:
-    """Back to the planner: a key this stage was drawn from is no longer open."""
-    queue = list(state.get("stage_queue") or [])
-    detail = (
-        "This stage is drawn against references that are not available: "
-        + ", ".join(taken)
-        + ". Another run may hold them, or a person may have landed or struck "
-        "them since the stage was drawn. Read the ledger section and draw "
-        "the next piece of work."
-    )
-    if queue:
-        behind = ", ".join(f"`{s.get('id')}`" for s in queue)
-        detail += (
-            f"\n\nThe stages queued behind it — {behind} — stay drawn in the "
-            "ledger for a run to take; do not draw them again."
-        )
+    """Back to the plan node with no stage in hand: what this stage was drawn
+    against is held elsewhere, so the run takes or draws another. Not a
+    planner failure — nothing was drawn wrongly and no intervention is spent."""
     return {
-        **_planner_failure(
-            state, "plan_keys", "a reference the stage is drawn against is not available", detail
-        ),
+        "current": None,
         "stage_queue": [],
+        "batch_notes": [
+            f"stage {stage.id!r} was not started: {', '.join(taken)}; "
+            "another run holds it or it is closed"
+        ],
+        "last_failure": None,
+        "next_hop": "plan",
     }
 
 

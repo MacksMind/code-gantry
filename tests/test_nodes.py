@@ -3193,15 +3193,17 @@ class TestKeysAreClaimedWhenTheStageIsCut:
         claims = [e for e in rt.ledger.events() if e.kind == CLAIMED]
         assert len(claims) == 1
 
-    def test_a_key_landed_elsewhere_sends_the_stage_back_to_the_planner(self, repo, tmp_path):
+    def test_a_key_landed_elsewhere_sends_the_run_back_to_take_or_draw(self, repo, tmp_path):
         cfg, rt, state = make(repo, tmp_path)
         rt.ledger.append(LANDED, key=THE_ITEM, sha="abc1234def", stage_id="someone-else")
         state = {**state, "current": planned_stage(), "stage_queue": [planned_stage(id="behind", plan_keys=[THE_OTHER_ITEM])]}
         out = nodes.precheck(state, rt)
-        assert out["next_hop"] == "plan"
-        assert out["failure_layer"] == "plan_keys"
+        # Back to the plan node with nothing in hand: it takes or draws
+        # another, at no intervention. The note carries what was refused.
+        assert out["next_hop"] == "plan" and out["current"] is None
+        assert "failure_layer" not in out and "planner_interventions" not in out
         assert out["stage_queue"] == []
-        assert THE_ITEM in out["last_failure"]["detail"]
+        assert any(THE_ITEM in n for n in out["batch_notes"])
 
     def test_a_key_claimed_by_another_run_is_refused_too(self, repo, tmp_path):
         cfg, rt, state = make(repo, tmp_path)
@@ -3927,3 +3929,32 @@ class TestAStageDrawnFromAFinding:
         stage = cfg.stage_from_planner(planned_stage(plan_keys=[], resolves=[]))
         problems = validate_stage(stage, cfg, known_keys={THE_ITEM}, open_findings=set())
         assert any("drawn from nothing" in p for p in problems)
+
+
+class TestAStageHeldElsewhere:
+    """A stage whose references another run holds is let go of, never
+    revised: a bounce at precheck and a resume arriving with it both end at
+    the plan node taking or drawing something else, at no planner cost."""
+
+    def _two_runs(self, repo, tmp_path):
+        helper = TestDerivedStagesInTheLedger()
+        cfg, rt, state = helper._make(repo, tmp_path)
+        first = {**state, **nodes.plan(state, rt)}
+        first = {**first, **nodes.precheck(first, rt)}
+        other, other_state = helper._second_run(rt, state)
+        return rt, first, other, other_state
+
+    def test_a_bounce_spends_no_intervention_and_returns_to_take(self, repo, tmp_path):
+        rt, first, other, other_state = self._two_runs(repo, tmp_path)
+        stale = {**other_state, "current": first["current"], "stage_index": 0}
+        out = nodes.precheck(stale, other)
+        assert out["next_hop"] == "plan" and out["current"] is None
+        assert "planner_interventions" not in out
+        assert any("was not started" in n for n in out["batch_notes"])
+
+    def test_the_plan_node_lets_go_and_takes_the_next_waiting_stage(self, repo, tmp_path):
+        rt, first, other, other_state = self._two_runs(repo, tmp_path)
+        stale = {**other_state, "current": first["current"], "revision": 1, "stage_index": 0}
+        out = nodes.plan(stale, other)
+        assert out["current"]["id"] == "second", out.get("current")
+        assert out["next_hop"] == "precheck"
