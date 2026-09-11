@@ -222,6 +222,54 @@ def _work_dir_is_ignored(cfg: ProjectConfig, git: Git) -> Check:
     )
 
 
+def _fetched_from_origin(git: Git, name: str, why: str) -> Check | None:
+    """Take a branch origin has and this checkout does not, or say nothing."""
+    if not git.remote_has_branch(name):
+        return None
+    label = f"branch {name!r} fetched from origin"
+    try:
+        sha = git.fetch_branch(name)
+    except GitError as e:
+        return Check(label, False, str(e))
+    return Check(label, True, f"{sha[:12]}; not in this checkout, and {why}", fatal=False)
+
+
+def _adopt_missing_branches(cfg: ProjectConfig, git: Git) -> list[Check]:
+    """Branches this checkout never had, which origin does.
+
+    A bay is cloned from its host's primary repo copy, so it holds only the
+    branches that copy had locally. On a host that has never run the project
+    the base ref can be absent, and the project branch with it: the base is
+    then unreachable and the run cannot start, and `ensure_project_branch`
+    would cut the project branch afresh from the base, landing on top of
+    nothing while every landing already on origin stayed behind.
+
+    The project branch is adopted only under `remote_landing`, which is what
+    makes origin its home. Without it the branch is this host's own and a
+    same-named branch on the remote belongs to somebody else.
+    """
+    if not git.remote_exists():
+        return []
+    checks: list[Check] = []
+    if git.ref_sha(cfg.base_ref) is None:
+        checks.append(
+            _fetched_from_origin(
+                git,
+                cfg.base_ref,
+                "a bay holds only the branches the copy it was cloned from had",
+            )
+        )
+    if cfg.remote_landing and not git.branch_exists(cfg.project_branch):
+        checks.append(
+            _fetched_from_origin(
+                git,
+                cfg.project_branch,
+                "cutting it afresh from the base would land on top of nothing",
+            )
+        )
+    return [c for c in checks if c is not None]
+
+
 def _repo_checks(cfg: ProjectConfig, git: Git, *, for_resume: bool) -> list[Check]:
     checks = [_ripgrep_check()]
 
@@ -258,6 +306,8 @@ def _repo_checks(cfg: ProjectConfig, git: Git, *, for_resume: bool) -> list[Chec
                 "begin from a known state so its diffs mean something",
             )
         )
+
+    checks.extend(_adopt_missing_branches(cfg, git))
 
     try:
         base_sha = git.rev_parse(cfg.base_ref)

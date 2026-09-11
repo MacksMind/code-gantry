@@ -15,6 +15,7 @@ from test_nodes import THE_ITEM, THE_OTHER_ITEM, make, planned_stage, with_stage
 from code_gantry import nodes
 from code_gantry.config import parse_config
 from code_gantry.gitops import Git, GitError
+from code_gantry.preflight import run_preflight
 
 
 def sh(cwd, *args):
@@ -275,3 +276,84 @@ class TestALandingRecordsItsGreenSuite:
         cfg, rt, state, out = self._land_after_a_green_suite(repo, tmp_path, full_test_command="test ! -e poison.txt")
         assert out["next_hop"] == "escalate"
         assert not [e for e in rt.ledger.events() if e.kind == SUITE_GREEN]
+
+
+class TestAFreshHostTakesBranchesFromOrigin:
+    """A bay is cloned from its host's primary repo copy, so it holds only the
+    branches that copy had locally. On a host that has never run the project
+    both the base ref and the project branch can be absent, and only origin
+    has them."""
+
+    def bay(self, tmp_path, bare, name="bay1"):
+        path = tmp_path / name
+        sh(tmp_path, "clone", "-q", "--single-branch", "--branch", "main", str(bare), str(path))
+        return path
+
+    def checks(self, path, **over):
+        fields = {
+            "target_repo": str(path),
+            "base_ref": "elsewhere",
+            "project_branch": "proj",
+            "full_test_command": "true",
+            **over,
+        }
+        cfg = parse_config(minimal(**fields))
+        return run_preflight(
+            cfg,
+            run_tests=False,
+            check_models=False,
+            check_approval=False,
+            check_endpoint=False,
+        )
+
+    @pytest.fixture
+    def bare_with_a_base(self, origin, repo):
+        bare, other = origin
+        sh(repo, "branch", "elsewhere", "main")
+        sh(repo, "push", "-q", "origin", "elsewhere")
+        return bare
+
+    def named(self, checks, name):
+        return [c for c in checks if name in c.name]
+
+    def test_the_base_ref_is_fetched_and_the_check_line_says_so(self, tmp_path, bare_with_a_base):
+        path = self.bay(tmp_path, bare_with_a_base)
+        assert not Git(path).branch_exists("elsewhere")
+        checks = self.checks(path, remote_landing=True)
+        fetched = self.named(checks, "'elsewhere' fetched from origin")
+        assert fetched and fetched[0].ok, [(c.name, c.detail) for c in checks]
+        assert self.named(checks, "base_ref")[0].ok
+        assert Git(path).rev_parse("elsewhere") == sh(bare_with_a_base, "rev-parse", "elsewhere")
+
+    def test_the_project_branch_is_taken_from_origin_not_cut_from_the_base(
+        self, tmp_path, bare_with_a_base, origin
+    ):
+        bare, other = origin
+        theirs = other_lands(other)
+        path = self.bay(tmp_path, bare_with_a_base)
+        checks = self.checks(path, remote_landing=True)
+        assert self.named(checks, "'proj' fetched from origin")[0].ok
+        assert Git(path).rev_parse("proj") == theirs, "their landings are not discarded"
+
+    def test_without_remote_landing_the_project_branch_is_left_to_this_host(
+        self, tmp_path, bare_with_a_base, origin
+    ):
+        bare, other = origin
+        other_lands(other)
+        path = self.bay(tmp_path, bare_with_a_base)
+        checks = self.checks(path)
+        assert not self.named(checks, "'proj' fetched from origin")
+        assert not Git(path).branch_exists("proj")
+        assert self.named(checks, "base_ref")[0].ok, "the base is fetched either way"
+
+    def test_a_base_ref_origin_does_not_have_either_still_fails(self, tmp_path, origin):
+        bare, other = origin
+        path = self.bay(tmp_path, bare)
+        checks = self.checks(path, remote_landing=True)
+        base = self.named(checks, "base_ref")[0]
+        assert base.blocking
+        assert not self.named(checks, "'elsewhere' fetched from origin")
+
+    def test_branches_already_here_are_not_fetched(self, repo, tmp_path, bare_with_a_base):
+        checks = self.checks(repo, base_ref="main", remote_landing=True)
+        assert not self.named(checks, "fetched from origin")

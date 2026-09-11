@@ -725,6 +725,21 @@ class Git:
         proc = self._run("ls-remote", "--heads", remote, branch, check=False)
         return proc.returncode == 0 and bool(proc.stdout.strip())
 
+    def fetch_branch(self, name: str, remote: str = "origin") -> str:
+        """Bring a branch the remote has and this checkout does not into
+        `refs/heads/<name>`, and return its sha.
+
+        Fast-forward only, like every fetch here: git refuses to move a local
+        branch that has diverged, so this can only ever add what is missing.
+        """
+        proc = self._run("fetch", "-q", remote, f"{name}:{name}", check=False)
+        if proc.returncode != 0:
+            raise GitError(
+                f"fetch of {name!r} from {remote!r} failed: "
+                f"{proc.stderr.strip() or proc.stdout.strip()}"
+            )
+        return self.rev_parse(name)
+
     def pull_rebase(self, branch: str, remote: str = "origin") -> bool:
         """Rebase the checked-out `branch` onto the remote's copy.
 
