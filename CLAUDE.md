@@ -130,7 +130,9 @@ Build next, in order:
    the take-before-derive queue, the sync clock, status); leave what is
    bound to a provider, a repository or a gate (model clients and dialects,
    gates, edit tools, git, the ledger's derivations). Prompts are files read
-   per call and need no reload at all.
+   per call, so they need no restart, but they reach another host only by
+   that same fetch: a landed prompt change is live everywhere one interval
+   after it lands, and out of sync until then.
 4. The decision queue reachable from Telegram: every finding with
    `needs: human`, every escalated or paused run, every candidate waiting on
    a person, delivered as a message with the reply that answers it — answer,
