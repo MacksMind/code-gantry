@@ -100,14 +100,17 @@ technical-debt, off for Rails 5.
 
 **Sequence.** (1) the ledger holds the plan — landed; (2) bays behind one
 ledger, the suite and planner locks, drawn stages, leases — landed; (3) the
-per-host daemon: an Elixir Mix application under `daemon/`, started with one
-command, reading `~/.config/code_gantry/host.exs`, supervising `code-gantry
-run` per bay, making a missing bay with `bin/mk-bay`, syncing the ledger
-refs on a clock, answering `bin/daemon status`; toolchain pinned with
-`.tool-versions` and `mise`, since the Spark's packaged Elixir is 1.14 on OTP
-24 and the Mac's would be newer — in progress; (4) ledger sync over the git
-refs and preflight deduplication through a `suite.green` event, skipped per
-origin — next; (5) remote bays and scopes at placement; (6) an observer role
+per-host daemon: an Elixir Mix application under `daemon/`, started with
+`bin/daemon start`, reading `~/.config/code_gantry/host.exs`, supervising
+`code-gantry run` per bay, making a missing bay with `bin/mk-bay`, syncing
+the ledger refs on a clock, answering `bin/daemon status`; toolchain pinned
+with `.tool-versions` and `mise` as a floor (the Spark's packaged Elixir is
+1.14 on OTP 24, the Mac runs 1.20) — landed, tested against a fake CLI, not
+yet run for real on the Spark; its first Mac start failed to spawn
+`bin/mk-bay` with `enoent` although the path and file are right, cause
+still open (interpreter line or the Mac's spawn), and a spawn failure now
+reads as a failed bay in the status file; (4) ledger sync over the git refs
+and preflight deduplication through `suite.green` — landed; (5) remote bays and scopes at placement; (6) an observer role
 that writes findings only; (7) CodeGantry improving itself from its own run
 artifacts. The daemon adds uptime, capacity, reload at the pause seam and a
 view, never a correctness property: a run started by hand with no daemon
@@ -178,8 +181,14 @@ and a one-hour cache, and it serves the full planner prompt. The local
 Flash-Next executor took about four times Luna's median wall clock per
 attempt on one stage and serves one request at a time, which makes it the
 wrong executor for more than one bay; the technical-debt project runs Luna.
-Two bays landed from one derivation on 2026-09-11 with the suite lock
-holding on first contention.
+Two bays ran together on 2026-09-11 for three hours: nine landings on
+`technical-debt` through origin, one derivation feeding both bays, the
+suite lock and the planner lock holding on first contention, a bay taking
+a drawn stage after waiting 530 s for the other's derivation, and one
+bounce on a stage both held that exposed and fixed three defects (head
+taken at derivation, a bounce dropping only its own record, a bounce never
+becoming a revision). The reviewer reworked three stages for the same
+route-helper convention; the fix is a mechanical check, listed above.
 
 **Operating this host.** The Claude Code harness stops its own background
 tasks on a "low memory" reading that page cache alone can trigger; it killed
