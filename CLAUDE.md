@@ -122,7 +122,15 @@ Build next, in order:
    start`; the first cross-host sync and the first Mac landing.
 3. The daemon's control plane: distributed-Erlang mesh with the Mac as a
    hidden node; one status view across hosts; start and stop from anywhere;
-   liveness for leases; hot reload of `daemon/` at a safe point.
+   liveness for leases; hot reload of `daemon/` at a safe point. The daemon
+   also fetches and fast-forwards its own code-gantry checkout at that
+   point and starts the next worker from it, so one landing reaches every
+   host without anyone pulling. Decide here what Python moves into Elixir:
+   move a piece when its reason to change is the daemon's (locks, leases,
+   the take-before-derive queue, the sync clock, status); leave what is
+   bound to a provider, a repository or a gate (model clients and dialects,
+   gates, edit tools, git, the ledger's derivations). Prompts are files read
+   per call and need no reload at all.
 4. The decision queue reachable from Telegram: every finding with
    `needs: human`, every escalated or paused run, every candidate waiting on
    a person, delivered as a message with the reply that answers it — answer,
