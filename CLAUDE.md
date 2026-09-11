@@ -153,7 +153,9 @@ Build next, in order:
    verb is in (2026-09-11): the daemon starts as `--sname code_gantry_daemon`
    with a cookie under its state dir, writes its node name beside the
    status file, and `bin/daemon retry` is an `--rpc-eval` into `Control`;
-   status, stop and the mesh go through that same door. The daemon
+   status, stop and the mesh go through that same door. Bay names are
+   registered locally, never in `:global`, which would kill one of two
+   `bay1`s on the first connection between daemons. The daemon
    also fetches and fast-forwards its own code-gantry checkout at that
    point and starts the next worker from it, so one landing reaches every
    host without anyone pulling. Decide here what Python moves into Elixir:
@@ -175,7 +177,23 @@ Build next, in order:
    channel, keys on a pull request closing plan items, branch protection
    routing merges through the orchestrator.
 6. The observer role that writes findings only, and CodeGantry improving
-   itself from its own run artifacts, both languages.
+   itself from its own run artifacts, both languages. Decided 2026-09-11:
+   the operator is a fourth role, `claude -p` spawned by the daemon on
+   the events a person used to watch for — a bay exiting 1 or 2, a
+   finding with `needs: human`, a red preflight suite — with a prompt
+   file, a bounded remit (read and measure anything; findings on the
+   ledger; `retry`; a candidate branch, never the project branch) and a
+   transcript per invocation. Its work on CodeGantry is accounted
+   separately from the target project's: its records, ledger and costs
+   live under CodeGantry's own project, and the target's run holds only
+   the finding that pointed at it. The Claude Code CLI is installed and
+   authenticated on the Spark and the Mac. A landing to code-gantry is
+   picked up by every host from the remote — fast-forward, verify on the
+   host's toolchain, hot-load Elixir, pause and resume every bay when
+   Python changed — and a nudge over the mesh, sent after the push, only
+   shortens the wait; `bin/daemon reload` loads local code into one
+   daemon for a test and never nudges. A laptop catches up on wake,
+   detected by the VM's time-offset monitor.
 
 Waiting on the operator:
 - Whether the executor comparison, Flash-Next against Luna, is worth a
