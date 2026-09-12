@@ -2,8 +2,10 @@ defmodule CodeGantryDaemon.Bay do
   @moduledoc """
   One bay: its checkout exists, and a run occupies it.
 
-  The checkout is made with the target's `bin/mk-bay` from the primary copy
-  when it is missing. A run is `code-gantry run` under a run id the daemon
+  The checkout is made with the target's `bin/mk-bay` when it is missing —
+  run from the primary copy when that holds the script, else from another
+  bay of the same repository, since the primary is a person's checkout on
+  whatever branch they need and a bay is always on the project branch. A run is `code-gantry run` under a run id the daemon
   chose, so a run that dies can be resumed by name. How a run ends decides
   what happens next, by the CLI's exit code: 0 finished, 1 failed before or
   outside a stage, 2 escalated, 3 paused — all four stop the bay and say so
@@ -50,25 +52,29 @@ defmodule CodeGantryDaemon.Bay do
   @impl true
   def handle_continue(:ensure_checkout, %{host: host, bay: bay} = state) do
     dir = Host.bay_dir(host, bay)
+    source = mk_bay_source(host, dir)
 
     cond do
       File.dir?(dir) ->
         {:noreply, state, {:continue, :launch}}
 
-      not File.regular?(Path.join([host.primary, "bin", "mk-bay"])) ->
+      source == nil ->
         # A bay that cannot be made is reported and left alone: the daemon
         # stays up for the bays it can run and the status file says why.
-        why = "no bin/mk-bay in #{host.primary}; is the primary copy on the project branch and pulled?"
+        why = "no bin/mk-bay in #{host.primary} or in any bay of it; is one of them on the project branch and pulled?"
         Logger.error("#{bay.name}: #{why}")
         Status.put(bay.name, :failed, why)
         {:noreply, state}
 
       true ->
-        Logger.info("#{bay.name}: making #{dir}")
+        Logger.info("#{bay.name}: making #{dir} from #{source}")
         Status.put(bay.name, :making, nil)
         args = ["bin/mk-bay", bay.name, Integer.to_string(bay.offset)] ++ if(host.branch, do: [host.branch], else: [])
+        # The script names the bay after the checkout it runs from; told
+        # the repository's name, it names the bay after that instead.
+        env = Host.env(host) ++ [{"MK_BAY_PROJECT", Path.basename(host.primary)}]
 
-        case Command.run(args, host.primary, Host.env(host)) do
+        case Command.run(args, source, env) do
           {_out, 0} ->
             {:noreply, state, {:continue, :launch}}
 
@@ -196,6 +202,16 @@ defmodule CodeGantryDaemon.Bay do
 
   # A run id is the second the run started in this bay, so two runs never
   # share one: a retry inside the same second waits for the next.
+  # The first checkout of the repository that carries the script: the
+  # primary copy, then its bays in name order, never the bay being made.
+  defp mk_bay_source(host, dir) do
+    siblings = Path.wildcard(Path.join(Path.dirname(host.primary), Path.basename(host.primary) <> "-*"))
+
+    [host.primary | Enum.sort(siblings)]
+    |> Enum.reject(&(&1 == dir))
+    |> Enum.find(&File.regular?(Path.join([&1, "bin", "mk-bay"])))
+  end
+
   defp new_run_id(bay, previous \\ nil) do
     now = DateTime.utc_now()
     id = "#{Calendar.strftime(now, "%Y%m%d-%H%M%S")}-#{bay.name}"

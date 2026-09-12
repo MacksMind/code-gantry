@@ -9,7 +9,7 @@ defmodule CodeGantryDaemon.Application do
   """
   use Application
 
-  alias CodeGantryDaemon.{Host, Status, Bay}
+  alias CodeGantryDaemon.{Bay, Host, Placements, Status}
 
   @impl true
   def start(_type, _args) do
@@ -19,12 +19,24 @@ defmodule CodeGantryDaemon.Application do
     # computed by the script, so the two cannot disagree about the hostname.
     File.write!(Path.join(Host.state_dir(), "node"), Atom.to_string(node()) <> "\n")
 
-    children =
-      [
-        {Registry, keys: :unique, name: CodeGantryDaemon.Registry},
-        {Status, host}
-      ] ++ Enum.map(host.bays, fn bay -> Supervisor.child_spec({Bay, {host, bay}}, id: {Bay, bay.name}) end)
+    children = [
+      {Registry, keys: :unique, name: CodeGantryDaemon.Registry},
+      {Status, host},
+      {DynamicSupervisor, name: CodeGantryDaemon.Bays, strategy: :one_for_one}
+    ]
 
-    Supervisor.start_link(children, strategy: :one_for_one, name: CodeGantryDaemon.Supervisor)
+    {:ok, sup} = Supervisor.start_link(children, strategy: :one_for_one, name: CodeGantryDaemon.Supervisor)
+    start_bays(host)
+    {:ok, sup}
+  end
+
+  @doc "Every bay of this host — the host file's and the placed ones — as a running Bay."
+  def start_bays(host) do
+    for bay <- Placements.all(host), do: start_bay(host, bay)
+  end
+
+  @doc "One bay under the bays supervisor; a name already running is refused by its registration."
+  def start_bay(host, bay) do
+    DynamicSupervisor.start_child(CodeGantryDaemon.Bays, {Bay, {host, bay}})
   end
 end

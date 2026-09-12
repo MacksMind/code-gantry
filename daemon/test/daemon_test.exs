@@ -52,6 +52,7 @@ defmodule CodeGantryDaemonTest do
     on_exit(fn -> System.delete_env("CODE_GANTRY_DAEMON_STATE") end)
     {:ok, _} = Status.start_link(host)
     start_supervised!({Registry, keys: :unique, name: CodeGantryDaemon.Registry})
+    start_supervised!({DynamicSupervisor, name: CodeGantryDaemon.Bays, strategy: :one_for_one})
     %{root: root, host: host, state: state}
   end
 
@@ -151,6 +152,59 @@ defmodule CodeGantryDaemonTest do
     assert :global.whereis_name({Bay, "bay1"}) == :undefined
     assert :global.registered_names() == []
     File.rm!(Path.join(root, "hold"))
+  end
+
+  describe "place" do
+    alias CodeGantryDaemon.{Control, Placements}
+
+    test "placing a bay makes its checkout, starts a run, and is remembered", %{root: root, host: host, state: state} do
+      File.write!(Path.join(root, "exit"), "0")
+      line = Control.place("bay3", 300, ["p.002"])
+      assert line =~ ~r/^bay3: placed at offset 300/
+      wait_for(fn -> String.contains?(status(state), "bay3 finished") end)
+      assert calls(root) =~ "mk-bay bay3 300 work"
+      assert calls(root) =~ ~r/argv: run .*repo-bay3\/cfg.yaml --run-id \d{8}-\d{6}-bay3 --scope p.002/
+      # The placement outlives this daemon: the next start reads it back.
+      assert Enum.map(Placements.load(), & &1.name) == ["bay3"]
+      assert Enum.map(Placements.all(host), & &1.name) == ["bay1", "bay3"]
+    end
+
+    test "a name already placed, or in the host file, is refused", %{root: root, host: host} do
+      File.write!(Path.join(root, "hold"), "")
+      assert Control.place("bay3", 300) =~ ~r/^bay3: placed/
+      assert Control.place("bay3", 301) == "bay3 is already placed"
+      assert Control.place("bay1", 100) == "bay1 is already placed"
+      assert Enum.map(Placements.load(), & &1.offset) == [300]
+      File.rm!(Path.join(root, "hold"))
+      _ = host
+    end
+
+    test "a placement from an earlier start is a bay again", %{root: root, host: host, state: state} do
+      File.write!(Path.join(root, "exit"), "0")
+      :ok = Placements.add(%{name: "bay4", offset: 400, scope: []})
+      CodeGantryDaemon.Application.start_bays(host)
+      wait_for(fn -> String.contains?(status(state), "bay4 finished") end)
+      assert calls(root) =~ "mk-bay bay4 400 work"
+    end
+
+    test "with no mk-bay in the primary, an existing bay of the repo makes the new one", %{root: root, host: host, state: state} do
+      # The primary is a person's checkout, on whatever branch they need; a
+      # bay is always on the project branch and carries the script.
+      File.write!(Path.join(root, "exit"), "0")
+      File.rm!(Path.join([host.primary, "bin", "mk-bay"]))
+      existing = Path.join(Path.dirname(host.primary), "repo-bay1")
+      File.mkdir_p!(Path.join(existing, "bin"))
+      File.write!(Path.join([existing, "bin", "mk-bay"]), """
+      #!/usr/bin/env bash
+      echo "mk-bay-from-bay1 $* project=$MK_BAY_PROJECT" >> "#{root}/calls"
+      mkdir -p "$(dirname "#{host.primary}")/${MK_BAY_PROJECT}-$1"
+      """)
+      File.chmod!(Path.join([existing, "bin", "mk-bay"]), 0o755)
+      assert Control.place("bay5", 500) =~ ~r/^bay5: placed/
+      wait_for(fn -> String.contains?(status(state), "bay5 finished") end)
+      assert calls(root) =~ "mk-bay-from-bay1 bay5 500 work project=repo"
+      assert File.dir?(Path.join(Path.dirname(host.primary), "repo-bay5"))
+    end
   end
 
   describe "retry" do

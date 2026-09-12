@@ -21,6 +21,9 @@ defmodule CodeGantryDaemon.Status do
 
   def path, do: Path.join(Host.state_dir(), "status")
 
+  @doc "The host this daemon runs, as loaded at start."
+  def host, do: Agent.get(__MODULE__, & &1.host)
+
   defp write(%{host: host, rows: rows}) do
     lines =
       [

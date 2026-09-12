@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: bin/daemon start|stop|status|logs|retry <bay>
+# Usage: bin/daemon start|stop|status|logs|retry <bay>|place <bay> <port-offset> [scope-key ...]
 #
 # The per-host daemon, detached from the terminal that started it. Its
 # state lives under ~/.local/state/code_gantry/daemon: a pid file, the
@@ -16,6 +16,16 @@ COOKIE="$STATE/cookie"
 mkdir -p "$STATE"
 
 alive() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
+
+# A verb spoken to the running daemon: one expression evaluated on its node.
+rpc() {
+  alive || { echo "daemon not running" >&2; exit 1; }
+  local node; node="$(cat "$STATE/node" 2>/dev/null || true)"
+  case "$node" in
+    ""|nonode@nohost) echo "the running daemon has no node name; it predates the verbs — stop and start it once" >&2; exit 1 ;;
+  esac
+  exec elixir --sname "ctl-$$" --cookie "$(cat "$COOKIE")" --rpc-eval "$node" "$1"
+}
 
 case "${1:-}" in
   start)
@@ -40,15 +50,16 @@ case "${1:-}" in
     ;;
   retry)
     [ -n "${2:-}" ] || { echo "usage: bin/daemon retry <bay>" >&2; exit 2; }
-    alive || { echo "daemon not running" >&2; exit 1; }
-    NODE="$(cat "$STATE/node" 2>/dev/null || true)"
-    case "$NODE" in
-      ""|nonode@nohost) echo "the running daemon has no node name; it predates retry — stop and start it once" >&2; exit 1 ;;
-    esac
-    exec elixir --sname "ctl-$$" --cookie "$(cat "$COOKIE")" \
-      --rpc-eval "$NODE" "IO.puts CodeGantryDaemon.Control.retry(\"$2\")"
+    rpc "IO.puts CodeGantryDaemon.Control.retry(\"$2\")"
+    ;;
+  place)
+    [ -n "${2:-}" ] && [ -n "${3:-}" ] || { echo "usage: bin/daemon place <bay> <port-offset> [scope-key ...]" >&2; exit 2; }
+    [[ "$3" =~ ^[0-9]+$ ]] || { echo "the port offset must be a whole number" >&2; exit 2; }
+    SCOPE=""
+    for key in "${@:4}"; do SCOPE="$SCOPE\"$key\","; done
+    rpc "IO.puts CodeGantryDaemon.Control.place(\"$2\", $3, [${SCOPE%,}])"
     ;;
   *)
-    echo "usage: bin/daemon start|stop|status|logs|retry <bay>" >&2; exit 2
+    echo "usage: bin/daemon start|stop|status|logs|retry <bay>|place <bay> <port-offset> [scope-key ...]" >&2; exit 2
     ;;
 esac
