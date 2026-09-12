@@ -318,31 +318,53 @@ def plan(state: RunState, rt: Runtime) -> dict:
         rt.log(f"[plan] folded {written} mark(s) into the plan text")
         plan_text, projection = rt.plan_text(), rt.projection()
 
-    # One derivation at a time against this ledger anywhere, and a look at
-    # what is already drawn before paying for one: the second bay to arrive
+    if stage is not None and rt.ledger is not None:
+        elsewhere = _held_elsewhere(rt, stage)
+        if elsewhere:
+            # A resume can arrive holding a stage another run took in the
+            # meantime; revising it would spend a planner call on work that
+            # is already someone else's.
+            rt.log(f"[plan] letting go of {stage.id}: {', '.join(elsewhere)}")
+            stage = None
+            state = {**state, "current": None, "revision": 0}
+
+    # What is already drawn, before anything is paid for and before the
+    # planner semaphore is reached for at all: the second bay to arrive
     # finds the first bay's stages waiting and takes one instead of drawing
-    # them again. Through the daemon rather than this machine's own lock,
-    # because the bays that race are on different hosts — one project, one
-    # planner, whichever machine it runs on.
-    # A revision draws nothing from the open list, so it holds no semaphore
-    # and keeps no other bay waiting through its planner call.
+    # them again.
+    #
+    # Outside the semaphore, because taking is short and deriving is not.
+    # A stage becomes available in the middle of somebody's derivation when
+    # a run dies and the next run on its host gives its claims back — which
+    # is the run about to work it. Behind the semaphore that bay would sit
+    # out a whole planner call before it could pick up what it had just
+    # freed. `_take_derived` holds the ledger's own writer instead, which is
+    # what makes the check and the claim one act.
+    if stage is None:
+        taken = _take_derived(rt, state)
+        if taken is not None:
+            return taken
+
+    # One derivation at a time against this ledger anywhere. Through the
+    # daemon rather than this machine's own lock, because the bays that race
+    # are on different hosts — one project, one planner, whichever machine
+    # it runs on. A revision draws nothing from the open list, so it holds
+    # no semaphore and keeps no other bay waiting through its planner call.
+    #
+    # **Never taken while the ledger's writer is held.** The fold and the
+    # take both reach for that inside this, so a bay that blocked here
+    # holding it would wait for a deriver that is waiting for it.
     holding = (
         mesh.hold(_planner_lock(rt), f"{bay_id(rt)} {rt.paths.run_id}", rt.log)
         if stage is None else contextlib.nullcontext([0.0])
     )
     with holding as waited:
         if waited[0]:
-            rt.log(f"[plan] waited {waited[0]:.0f}s for the planner lock")
-        if stage is not None and rt.ledger is not None:
-            elsewhere = _held_elsewhere(rt, stage)
-            if elsewhere:
-                # A resume can arrive holding a stage another run took in the
-                # meantime; revising it would spend a planner call on work
-                # that is already someone else's.
-                rt.log(f"[plan] letting go of {stage.id}: {', '.join(elsewhere)}")
-                stage = None
-                state = {**state, "current": None, "revision": 0}
+            rt.log(f"[plan] waited {waited[0]:.0f}s for the planner semaphore")
         if stage is None:
+            # Asked again now it holds it: a derivation that finished while
+            # this bay waited has left stages nobody has taken, and drawing
+            # more would be paying for what is already there.
             taken = _take_derived(rt, state)
             if taken is not None:
                 return taken
@@ -3051,9 +3073,22 @@ def _planner_lock(rt: Runtime) -> str:
 def _take_derived(rt: Runtime, state: RunState) -> dict | None:
     """A stage already drawn and waiting whose references are available
     inside this run's scope, as the update that starts it; None when there is
-    none. Taking it costs no planner call."""
+    none. Taking it costs no planner call.
+
+    Held under the ledger's own writer, which is what makes looking and
+    claiming one act: the store refreshes inside it, so what is read is
+    still true when it is written against, and no other bay anywhere can
+    write between the two. Brief by construction — a read and a few
+    appends — which is why it is this and not the planner semaphore, whose
+    holder is away for the length of a planner call.
+    """
     if rt.ledger is None:
         return None
+    with rt.ledger.transaction():
+        return _take_derived_locked(rt, state)
+
+
+def _take_derived_locked(rt: Runtime, state: RunState) -> dict | None:
     views = rt.views()
     for record in views.derived_waiting():
         if views.references_available(record.keys, record.findings):

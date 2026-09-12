@@ -290,3 +290,40 @@ class TestWhoIsAlive:
         # caller that cannot ask must not conclude anything is dead.
         answered, live = mesh.live_runs()
         assert answered == set() and live == set()
+
+
+class TestTheTwoLocksAreNeverNested:
+    """The planner semaphore is held for the length of a planner call; the
+    ledger's writer is held for a read and a few appends. A bay that blocked
+    on the first while holding the second would be waiting for a deriver
+    that is waiting for it."""
+
+    def test_nothing_reaches_for_the_semaphore_holding_the_ledger_writer(self):
+        import ast
+
+        tree = ast.parse(Path("src/code_gantry/nodes.py").read_text())
+        inside: list[int] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.With):
+                continue
+            opens_a_transaction = any(
+                isinstance(i.context_expr, ast.Call)
+                and isinstance(i.context_expr.func, ast.Attribute)
+                and i.context_expr.func.attr == "transaction"
+                for i in node.items
+            )
+            if not opens_a_transaction:
+                continue
+            for child in ast.walk(node):
+                if (
+                    isinstance(child, ast.Call)
+                    and isinstance(child.func, ast.Attribute)
+                    and child.func.attr == "hold"
+                    and isinstance(child.func.value, ast.Name)
+                    and child.func.value.id == "mesh"
+                ):
+                    inside.append(child.lineno)
+        assert inside == [], (
+            f"nodes.py reaches for the mesh semaphore while holding the ledger's "
+            f"writer at line(s) {inside}; the two must never nest that way"
+        )

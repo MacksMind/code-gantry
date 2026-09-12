@@ -3753,6 +3753,22 @@ class TestDerivedStagesInTheLedger:
         )
         return rt.cfg, rt, state
 
+    def _asked(self, monkeypatch):
+        """What the plan node asks the mesh to hold, as it asks for it."""
+        import contextlib
+
+        from code_gantry import mesh
+
+        asked = []
+
+        @contextlib.contextmanager
+        def record(name, label, log=None):
+            asked.append((name, label))
+            yield [0.0]
+
+        monkeypatch.setattr(mesh, "hold", record)
+        return asked
+
     def _second_run(self, rt, state, run_id="r2"):
         from dataclasses import replace
 
@@ -3766,6 +3782,29 @@ class TestDerivedStagesInTheLedger:
             ledger=open_ledger(rt.project.ledger, origin="test-host", actor=f"run:{run_id}"),
         )
         return other, {**state, "run_id": run_id}
+
+    def test_a_waiting_stage_is_taken_without_reaching_for_the_planner(self, repo, tmp_path, monkeypatch):
+        # Claiming must not queue behind a derivation. The case is a run
+        # that died: the sweep that frees its stage runs at the next run's
+        # start, so the bay that frees it is the bay about to work it, and
+        # it would sit out somebody else's planner call first.
+        cfg, rt, state = self._make(repo, tmp_path)
+        nodes.plan(state, rt)
+
+        other, other_state = self._second_run(rt, state, "r2")
+        asked = self._asked(monkeypatch)
+        out = nodes.plan(other_state, other)
+
+        assert out["current"]["id"] == "second"
+        assert asked == [], "taking a stage waited on the planner semaphore"
+
+    def test_deriving_still_holds_the_planner(self, repo, tmp_path, monkeypatch):
+        # The other half: with nothing to take, the semaphore is what stops
+        # two hosts paying for one derivation.
+        cfg, rt, state = self._make(repo, tmp_path)
+        asked = self._asked(monkeypatch)
+        nodes.plan(state, rt)
+        assert [name for name, _ in asked] == [nodes._planner_lock(rt)]
 
     def test_taking_a_drawn_stage_is_what_claims_it(self, repo, tmp_path):
         # Two bays reaching the queue together used to be stopped by
