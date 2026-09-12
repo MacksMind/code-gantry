@@ -345,8 +345,12 @@ directory.
 **Operating the Mac.** Idle sleep on AC is one minute: `caffeinate -i -s
 -w <daemon pid>` after every `bin/daemon start`, or a suite stops when the
 lid does. A bay that stopped for a person is answered with `bin/daemon
-retry <bay>`; `stop` and `start` end every bay's run on the host, and a run
-killed mid-suite leaves its workers in the container. The daemon reads only
+retry <bay>`. **`stop` does not end the bays' runs**: it stops the daemon,
+and the `code-gantry` processes it started outlive it — measured, on both
+hosts, with three of four surviving. They have to be killed by pid
+afterwards, and a run killed mid-suite leaves its workers in the
+container. A `stop` that stops what it supervises is a verb the daemon
+owes. The daemon reads only
 the bays; the primary copy is the person's.
 
 ## Invariants
