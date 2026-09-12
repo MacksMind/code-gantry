@@ -3242,13 +3242,21 @@ def _claim_rework(rt: Runtime, state: RunState):
     views = rt.views()
     for rejection in views.rework_waiting():
         candidate = rejection.candidate
-        if not candidate.fields:
-            continue
         facts = candidate.landing or {}
+        # A candidate carries its own stage. One written before it did can
+        # still be recovered from its drawn record, which is what that
+        # replaced — worth the one branch, because the alternative is a
+        # rejection that is offered forever and can never be taken.
+        fields = candidate.fields
+        if not fields and facts.get("derived_id"):
+            record = views.derived.get(facts["derived_id"])
+            fields = record.fields if record is not None else None
+        if not fields:
+            continue
         if views.references_available(facts.get("keys") or [], facts.get("held") or []):
             continue
         try:
-            stage = Stage.model_validate(candidate.fields)
+            stage = Stage.model_validate(fields)
         except Exception:  # noqa: BLE001 - a record nothing can read is not a rework
             continue
         rt.ledger.append(

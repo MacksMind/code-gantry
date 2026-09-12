@@ -544,3 +544,34 @@ class TestAReworkThatConflicts:
         assert sh(bare, "show", "proj:app.py") == "theirs\nmine"
         assert rt.views().rejected == {}
         assert rt.views().pending_candidates() == []
+
+
+class TestACandidateFromBeforeItCarriedItsStage:
+    def test_it_is_recovered_from_the_drawn_record(self, repo, tmp_path, origin, a_daemon):
+        # Without this the rejection is offered forever and can never be
+        # taken, and its branch sits on the remote with nothing that will
+        # ever pick it up.
+        from code_gantry.ledger import CANDIDATE_REJECTED, STAGE_DERIVED
+        from test_nodes import planned_stage
+
+        cfg, rt, state = make(repo, tmp_path, **compose_cfg())
+        fields = planned_stage(id="old", plan_keys=[THE_ITEM])
+        event = rt.ledger.append(
+            STAGE_DERIVED, stage_id="old", run_id="r0", fields=fields,
+            keys=[THE_ITEM], findings=[], rank=0,
+        )
+        rt.ledger.append(
+            nodes.CANDIDATE_PUSHED, stage_id="old", run_id="r0", sha="deadbeef",
+            branch="proj-stage/000-old", base=rt.git.rev_parse("proj"),
+            landing={"keys": [THE_ITEM], "held": [], "derived_id": event.derived_id},
+        )
+        rt.ledger.append(
+            CANDIDATE_REJECTED, stage_id="old", run_id="r0",
+            branch="proj-stage/000-old", reason="red", sha=rt.git.rev_parse("proj"),
+        )
+
+        [rejection] = rt.views().rejected.values()
+        assert rejection.candidate.fields == {}, "this test is no longer about the old shape"
+        taken = nodes._claim_rework(rt, state)
+        assert taken is not None
+        assert taken[1].id == "old"
