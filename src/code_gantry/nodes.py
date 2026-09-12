@@ -319,12 +319,6 @@ def plan(state: RunState, rt: Runtime) -> dict:
         rt.log(f"[plan] folded {written} mark(s) into the plan text")
         plan_text, projection = rt.plan_text(), rt.projection()
 
-    # Before anything else this bay could do: landing is what every other
-    # bay's finished work is waiting on, and it is attempted rather than
-    # waited for, so a bay that cannot have it loses nothing by asking.
-    if stage is None:
-        _compose_if_free(rt)
-
     if stage is not None and rt.ledger is not None:
         elsewhere = _held_elsewhere(rt, stage)
         if elsewhere:
@@ -705,7 +699,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
         # seven-minute planner call over several stages, and whether it is doing
         # so is answered by the distribution, which cannot be recovered from a log
         # that only speaks up when the answer is greater than one.
-        new_stage, queue = _record_derivation(rt, new_stage, queue)
+        new_stage, queue = _record_derivation(rt, new_stage, queue, state)
         rt.log(f"[plan] derived: " + ", ".join([new_stage.id, *(s["id"] for s in queue)]))
         for note in dropped_from_batch:
             # Logged rather than swallowed. A batch quietly shrinking is how a
@@ -2012,7 +2006,14 @@ def advance(state: RunState, rt: Runtime) -> dict:
         # bay holds the landing semaphore, and the keys stay claimed until
         # that bay has composed it onto the project branch and pushed:
         # until then there is no tree anywhere that has this work in it.
+        # The two halves of landing a stage, and both of them are `advance`:
+        # make the candidate, then land what is pending if this bay can have
+        # the semaphore. Attempted rather than waited for, so a bay that
+        # cannot have it goes on to its next stage — and offers again when
+        # it finishes that one, which is what keeps a candidate from
+        # waiting long for somebody to notice it.
         merge_sha = _push_candidate(rt, stage, state, branch, start_sha, message)
+        _compose_if_free(rt)
         return _advance_result(state, rt, stage, start_sha, merge_sha, publication)
 
     merge_sha = rt.git.squash_merge(branch, rt.cfg.project_branch, message)
@@ -3044,16 +3045,27 @@ def _held_elsewhere(rt: Runtime, stage: Stage) -> list[str]:
 
 def _claim_references(rt: Runtime, stage: Stage, state: RunState) -> None:
     """Hold every key and finding the stage is drawn against, and its drawn
-    record, for this run and stage. Idempotent across a resume."""
+    record, for this run and stage. Idempotent across a resume.
+
+    **Never takes what another run holds.** A claim that overwrote one would
+    be a claim that steals, and the stage would go on to `precheck` reading
+    its own claim as proof it may start. What is held elsewhere is left
+    alone and `precheck` sends the stage back, which is the answer whether
+    the planner drew against a held reference or a bay reached it first.
+    """
     views = rt.views()
     run_id, pid = rt.paths.run_id, os.getpid()
     for key in stage.plan_keys:
         current = views.state(key)
+        if current.state == "claimed" and current.run_id != run_id:
+            continue
         if current.state == "claimed" and current.run_id == run_id and current.stage_id == stage.id:
             continue
         rt.ledger.append(CLAIMED, key=key, stage_id=stage.id, run_id=run_id, pid=pid, bay=bay_id(rt))
     for fid in stage.resolves:
         finding = views.findings.get(fid)
+        if finding is not None and finding.claimed_run and finding.claimed_run != run_id:
+            continue
         if finding is not None and finding.claimed_run == run_id and finding.claimed_stage == stage.id:
             continue
         rt.ledger.append(FINDING_CLAIMED, stage_id=stage.id, run_id=run_id, finding_id=fid, pid=pid, bay=bay_id(rt))
@@ -3158,11 +3170,24 @@ def _take_derived_locked(rt: Runtime, state: RunState) -> dict | None:
     return None
 
 
-def _record_derivation(rt: Runtime, head: Stage, queue: list[dict]) -> tuple[Stage, list[dict]]:
+def _record_derivation(rt: Runtime, head: Stage, queue: list[dict], state: RunState) -> tuple[Stage, list[dict]]:
     """Write the batch to the ledger as drawn stages, the head first, and hand
-    back the head and queue carrying their record ids."""
+    back the head and queue carrying their record ids.
+
+    Under the ledger's writer, and claiming the head's references before it
+    lets go, for the same reason `_take_derived` does: drawing and holding
+    are one act or they are a race. It is not enough that the planner
+    semaphore is usually held here — a revision that comes back as a
+    predecessor lands in this function having never taken it, because the
+    run entered `plan` with a stage in hand.
+    """
     if rt.ledger is None:
         return head, queue
+    with rt.ledger.transaction():
+        return _record_derivation_locked(rt, head, queue, state)
+
+
+def _record_derivation_locked(rt: Runtime, head: Stage, queue: list[dict], state: RunState) -> tuple[Stage, list[dict]]:
     try:
         base = rt.git.rev_parse("HEAD")
     except GitError:  # pragma: no cover - defensive
@@ -3174,12 +3199,10 @@ def _record_derivation(rt: Runtime, head: Stage, queue: list[dict]) -> tuple[Sta
         batch=None, rank=0,
     )
     head = head.model_copy(update={"derived_id": event.derived_id})
-    # The head is this run's to start: taken now, so no other run takes it
-    # between the derivation and this run's precheck.
-    rt.ledger.append(
-        STAGE_TAKEN, stage_id=head.id, run_id=run_id, derived_id=event.derived_id,
-        pid=os.getpid(), bay=bay_id(rt),
-    )
+    # The head is this run's to start: taken and its references held now, so
+    # no other run takes either between the derivation and this run's
+    # precheck.
+    _claim_references(rt, head, state)
     recorded = []
     for rank, fields in enumerate(queue, start=1):
         sibling = rt.ledger.append(

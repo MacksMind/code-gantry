@@ -57,8 +57,11 @@ class FakeDaemon:
                 if self.busy:
                     conn.sendall(f"busy {self.busy}\n".encode())
                     return
-                conn.sendall(b"held ref-2\n")
+                # Set before the answer goes out, not after: the client is
+                # released by the answer and can reach its assertions
+                # before this thread runs another line.
                 self.granted.set()
+                conn.sendall(b"held ref-2\n")
                 conn.recv(1)
                 self.closed.set()
                 return
@@ -74,8 +77,8 @@ class FakeDaemon:
             if self.grant_after:
                 conn.sendall(b"waiting another bay\n")
                 time.sleep(self.grant_after)
-            conn.sendall(b"held ref-1\n")
             self.granted.set()
+            conn.sendall(b"held ref-1\n")
             # The hold lasts exactly as long as the connection.
             conn.recv(1)
             self.closed.set()

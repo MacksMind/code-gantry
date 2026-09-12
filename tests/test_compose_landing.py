@@ -35,11 +35,16 @@ def compose_cfg(**over):
 
 
 def finish_a_stage(repo, tmp_path, **over):
+    """A stage pushed as a candidate, with the bay held back from composing
+    it: these are the tests about what pushing a candidate does."""
+    from unittest import mock
+
     cfg, rt, state = make(repo, tmp_path, **compose_cfg(**over))
     state = with_stage(state, rt)
     (repo / "app.py").write_text("stage work\n")
     state = {**state, "review_summary": "fine", "review_record": "did it"}
-    out = nodes.advance(state, rt)
+    with mock.patch.object(nodes, "_compose_if_free"):
+        out = nodes.advance(state, rt)
     return cfg, rt, state, out
 
 
@@ -123,13 +128,24 @@ class TestWhatAFinishedStageDoes:
         assert rt.views().pending_candidates() == []
 
 
-def a_candidate(repo, tmp_path, *, name, content, path="app.py", **over):
-    """One finished stage, pushed as a candidate and landing nothing."""
+def a_candidate(repo, tmp_path, *, name, content, path="app.py", land=False, **over):
+    """One finished stage, pushed as a candidate.
+
+    `land` is whether the bay is allowed to go on and compose, which it
+    ordinarily offers to do the moment it has pushed. The tests that are
+    about composing hold it back so they can say when, and with what.
+    """
+    from unittest import mock
+
     cfg, rt, state = make(repo, tmp_path, **compose_cfg(**over))
     state = with_stage(state, rt, id=name)
     (repo / path).write_text(content)
     state = {**state, "review_summary": "fine", "review_record": "did it"}
-    nodes.advance(state, rt)
+    if land:
+        nodes.advance(state, rt)
+    else:
+        with mock.patch.object(nodes, "_compose_if_free"):
+            nodes.advance(state, rt)
     return cfg, rt, state
 
 
@@ -264,3 +280,36 @@ class TestWhenTheBranchItselfIsRed:
         outcome = lander.compose(rt)
         assert outcome.escalation is not None
         assert "still red" in outcome.escalation["escalation_reason"]
+
+
+class TestWhenABayOffersToLand:
+    """Landing a stage is two halves of `advance` and nothing else's
+    business: make the candidate, then land what is pending if this bay can
+    have the semaphore."""
+
+    def test_finishing_a_stage_offers_to_land_what_is_pending(self, repo, tmp_path, origin, a_daemon):
+        bare, _ = origin
+        before = origin_tip(bare)
+        cfg, rt, state = a_candidate(repo, tmp_path, name="first", content="one\n", land=True)
+        assert origin_tip(bare) != before, "finishing a stage landed nothing"
+        assert sh(bare, "show", "proj:app.py") == "one"
+
+    def test_it_is_offered_from_advance_and_from_nowhere_else(self):
+        # Parsed rather than asserted in prose: the second half of a
+        # landing belongs to the node that does the first half.
+        import ast
+        from pathlib import Path
+
+        tree = ast.parse(Path("src/code_gantry/nodes.py").read_text())
+        callers = [
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+            and any(
+                isinstance(c, ast.Call)
+                and isinstance(c.func, ast.Name)
+                and c.func.id == "_compose_if_free"
+                for c in ast.walk(node)
+            )
+        ]
+        assert callers == ["advance"], callers

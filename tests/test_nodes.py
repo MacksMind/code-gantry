@@ -3825,6 +3825,37 @@ class TestDerivedStagesInTheLedger:
         record = rt.views().derived[took["current"]["derived_id"]]
         assert record.status == "taken" and record.taken_run == "r2"
 
+    def test_a_revision_that_comes_back_as_a_derivation_still_claims(self, repo, tmp_path):
+        # The planner, asked to revise a failing stage, can insert a
+        # predecessor in front of it instead. That arrives at the drawing
+        # code having never taken the planner semaphore, because the run
+        # entered `plan` with a stage in hand — so the drawing and the
+        # claiming have to hold something of their own.
+        cfg, rt, state = self._make(repo, tmp_path)
+        rt.planner = StubPlanner([PlannerOutcome(
+            "next_stage", "a predecessor", "e",
+            stage_fields=planned_stage(id="predecessor"),
+        )])
+        state = {**state, "current": planned_stage(id="failing"), "revision": 0,
+                 "last_failure": {"layer": "tests", "summary": "red"}}
+        out = nodes.plan(state, rt)
+
+        assert out["current"]["id"] == "predecessor"
+        record = rt.views().derived[out["current"]["derived_id"]]
+        assert record.status == "taken", "a stage was drawn and left for anyone to take"
+        for key in out["current"]["plan_keys"]:
+            assert rt.views().state(key).state == "claimed"
+
+    def test_a_claim_never_takes_what_another_run_holds(self, repo, tmp_path):
+        # Otherwise the stage reads its own claim in `precheck` as proof it
+        # may start, and two bays work one key.
+        cfg, rt, state = self._make(repo, tmp_path)
+        rt.ledger.append(CLAIMED, key=THE_ITEM, stage_id="elsewhere", run_id="r9", pid=1)
+        stage = Stage(**planned_stage(plan_keys=[THE_ITEM]))
+        nodes._claim_references(rt, stage, state)
+        held = rt.views().state(THE_ITEM)
+        assert held.run_id == "r9", "a claim stole a key another run was holding"
+
     def test_taking_a_stage_holds_the_keys_it_was_drawn_against(self, repo, tmp_path):
         # Not only the record: a second stage drawn against the same key
         # must not be startable either, and that is decided by the key's
