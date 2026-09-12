@@ -27,7 +27,7 @@ defmodule CodeGantryDaemon.Mesh do
   use GenServer
   require Logger
 
-  alias CodeGantryDaemon.{Host, Pickup, Records}
+  alias CodeGantryDaemon.{Host, Owned, Pickup}
 
   @retry_ms 30_000
 
@@ -67,7 +67,7 @@ defmodule CodeGantryDaemon.Mesh do
 
   def handle_info({:nodeup, node}, host) do
     Logger.info("mesh: #{node} joined")
-    Records.join(node)
+    Owned.join(node)
     # A host that has been away missed every nudge sent while it was gone,
     # and nobody will send another until the code moves again. So joining
     # is itself a reason to look, which is what keeps the fallback tick

@@ -3853,8 +3853,13 @@ class TestDerivedStagesInTheLedger:
             PlannerOutcome("next_stage", "next", "e", stage_fields=planned_stage())
         ]))
         nodes.plan(state, rt)
+        # With no daemon to ask, the semaphore falls back to this machine's
+        # own lock, which is where it is visible from here.
         files = list(locks.glob("planner-*.lock"))
-        assert len(files) == 1 and "planner, run r1" in files[0].read_text()
+        assert len(files) == 1, files
+        # The label is what a bay on another host is told it is waiting
+        # behind, so it names the bay and the run, not the word "planner".
+        assert "target r1" in files[0].read_text()
 
 
 class TestAStageDrawnFromAFinding:

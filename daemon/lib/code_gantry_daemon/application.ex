@@ -9,7 +9,7 @@ defmodule CodeGantryDaemon.Application do
   """
   use Application
 
-  alias CodeGantryDaemon.{Bay, Host, Mesh, Pickup, Placements, Status}
+  alias CodeGantryDaemon.{Bay, Host, Mesh, Pickup, Placements, Semaphore, Status}
 
   @impl true
   def start(_type, _args) do
@@ -29,7 +29,10 @@ defmodule CodeGantryDaemon.Application do
         # configured: `pickup_seconds: 0` turns off the clock, not the
         # ability to be told.
         {Mesh, host},
-        {Pickup, host}
+        {Pickup, host},
+        # After the mesh, so the first run to ask sees whatever peers are
+        # already reachable rather than only this host's own queue.
+        {Semaphore.Socket, host}
       ]
 
     {:ok, sup} = Supervisor.start_link(children, strategy: :one_for_one, name: CodeGantryDaemon.Supervisor)

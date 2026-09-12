@@ -7,7 +7,7 @@ defmodule CodeGantryDaemonTest do
   """
   use ExUnit.Case
 
-  alias CodeGantryDaemon.{Host, Bay, Mesh, Records, Status}
+  alias CodeGantryDaemon.{Control, Host, Bay, Mesh, Records, Semaphore, Status}
 
   setup do
     root = Path.join(System.tmp_dir!(), "cgd-#{System.os_time(:microsecond)}-#{System.unique_integer([:positive])}")
@@ -66,6 +66,24 @@ defmodule CodeGantryDaemonTest do
       fun.() -> :ok
       tries == 0 -> flunk("condition never held")
       true -> Process.sleep(100); wait_for(fun, tries - 1)
+    end
+  end
+
+  defp connect(path) do
+    {:ok, socket} = :gen_tcp.connect({:local, path}, 0, [:binary, packet: :line, active: false])
+    socket
+  end
+
+  defp acquire(path, name, label) do
+    socket = connect(path)
+    :ok = :gen_tcp.send(socket, "acquire #{name} #{label}\n")
+    socket
+  end
+
+  defp line(socket, timeout \\ 2_000) do
+    case :gen_tcp.recv(socket, 0, timeout) do
+      {:ok, data} -> String.trim(data)
+      other -> other
     end
   end
 
@@ -460,6 +478,149 @@ defmodule CodeGantryDaemonTest do
       Process.sleep(100)
       assert Process.alive?(pid)
       GenServer.stop(pid)
+    end
+  end
+
+
+
+  describe "the planner semaphore" do
+    setup do
+      origin = "s#{System.unique_integer([:positive])}"
+      :ok = Semaphore.start(origin)
+      on_exit(fn -> :mnesia.delete_table(Semaphore.table_for(origin)) end)
+      %{origin: origin}
+    end
+
+    test "a request nobody is ahead of is granted at once", %{origin: origin} do
+      ref = Semaphore.request(origin, "planner-abc", "bay1")
+      assert Semaphore.granted?("planner-abc", ref)
+    end
+
+    test "the older request holds it and the younger waits", %{origin: origin} do
+      first = Semaphore.request(origin, "planner-abc", "bay1", 1_000)
+      second = Semaphore.request(origin, "planner-abc", "bay2", 2_000)
+      assert Semaphore.granted?("planner-abc", first)
+      refute Semaphore.granted?("planner-abc", second)
+    end
+
+    test "a request in another host's table is seen, and can outrank this one", %{origin: origin} do
+      # The whole point: the lock this replaces could not see another
+      # machine at all, so two hosts derived against one ledger at once.
+      other = "s#{System.unique_integer([:positive])}"
+      :ok = Semaphore.start(other)
+      on_exit(fn -> :mnesia.delete_table(Semaphore.table_for(other)) end)
+
+      theirs = Semaphore.request(other, "planner-abc", "spark bay1", 1_000)
+      mine = Semaphore.request(origin, "planner-abc", "mac bay1", 2_000)
+
+      refute Semaphore.granted?("planner-abc", mine)
+      assert Semaphore.granted?("planner-abc", theirs)
+    end
+
+    test "releasing hands it to the next in line", %{origin: origin} do
+      first = Semaphore.request(origin, "planner-abc", "bay1", 1_000)
+      second = Semaphore.request(origin, "planner-abc", "bay2", 2_000)
+      :ok = Semaphore.release(origin, first)
+      assert Semaphore.granted?("planner-abc", second)
+    end
+
+    test "two requests made in the same instant still have exactly one holder", %{origin: origin} do
+      # Clocks on two hosts agree to the microsecond often enough, and a
+      # tie that both sides break differently is two planners.
+      a = Semaphore.request(origin, "planner-abc", "bay1", 5_000)
+      b = Semaphore.request(origin, "planner-abc", "bay2", 5_000)
+      assert Enum.count([a, b], &Semaphore.granted?("planner-abc", &1)) == 1
+    end
+
+    test "a name is a semaphore of its own", %{origin: origin} do
+      one = Semaphore.request(origin, "planner-abc", "bay1", 1_000)
+      two = Semaphore.request(origin, "planner-def", "bay2", 2_000)
+      assert Semaphore.granted?("planner-abc", one)
+      assert Semaphore.granted?("planner-def", two), "one project's derivation must not block another's"
+    end
+
+    test "what is held and who is behind it can be read from any host", %{origin: origin} do
+      name = "planner-#{origin}"
+      Semaphore.request(origin, name, "spark bay1", 1_000)
+      Semaphore.request(origin, name, "host-a bay2", 2_000)
+      line = Control.holds() |> String.split("\n") |> Enum.find(&String.starts_with?(&1, name))
+      assert line =~ "held by spark bay1"
+      assert line =~ "1 waiting: host-a bay2"
+    end
+
+    test "the holder says who it is, so a waiter can name what it waits for", %{origin: origin} do
+      Semaphore.request(origin, "planner-abc", "host-a bay1 run-7", 1_000)
+      assert %{label: "host-a bay1 run-7", origin: ^origin} = Semaphore.holder("planner-abc")
+    end
+  end
+
+
+  describe "the semaphore socket" do
+    setup %{host: host} do
+      # A name of this test's own. The tables are the VM's, so a name
+      # shared between tests is a queue shared between them.
+      origin = "s#{System.unique_integer([:positive])}"
+      host = %{host | origin: origin}
+      on_exit(fn -> :mnesia.delete_table(Semaphore.table_for(origin)) end)
+      start_supervised!({Semaphore.Socket, host})
+      %{origin: origin, host: host, path: Semaphore.Socket.path(), name: "planner-#{origin}"}
+    end
+
+    test "a run that asks for a free semaphore is told it holds it", %{path: path, name: name} do
+      socket = acquire(path, name, "bay1")
+      assert "held" <> _ = line(socket)
+      :gen_tcp.close(socket)
+    end
+
+    test "a second run waits, and is granted the moment the first lets go", %{path: path, name: name} do
+      first = acquire(path, name, "bay1")
+      assert "held" <> _ = line(first)
+
+      second = acquire(path, name, "bay2")
+      assert "waiting bay1" == line(second), "a waiter is told who it is behind"
+
+      # Nothing is granted while the first holds it.
+      assert {:error, :timeout} = line(second, 300)
+
+      :gen_tcp.close(first)
+      assert "held" <> _ = line(second, 5_000)
+      :gen_tcp.close(second)
+    end
+
+    test "a holder that dies releases what it held", %{path: path, name: name} do
+      # The property the whole design turns on. The run is killed, or the
+      # machine it ran on drops off; nothing gets a chance to say so.
+      test = self()
+
+      owner =
+        spawn(fn ->
+          socket = acquire(path, name, "bay1")
+          send(test, {:said, line(socket)})
+          receive do: (:never -> :ok)
+        end)
+
+      assert_receive {:said, "held" <> _}, 2_000
+      assert Semaphore.holder(name).label == "bay1"
+      Process.exit(owner, :kill)
+      wait_for(fn -> Semaphore.holder(name) == nil end)
+    end
+
+    test "a request nobody can read is refused rather than left hanging", %{path: path} do
+      socket = connect(path)
+      :ok = :gen_tcp.send(socket, "hello\n")
+      assert "error " <> _ = line(socket)
+    end
+
+    test "the socket is remade over a stale file a dead daemon left", %{host: host, path: path, name: name} do
+      # A unix socket outlives the process that made it, so a daemon that
+      # was killed leaves a path that binding refuses. Starting again must
+      # take it back rather than come up with no door.
+      stop_supervised!(Semaphore.Socket)
+      File.write!(path, "")
+      start_supervised!({Semaphore.Socket, host})
+      socket = acquire(path, name, "bay1")
+      assert "held" <> _ = line(socket)
+      :gen_tcp.close(socket)
     end
   end
 

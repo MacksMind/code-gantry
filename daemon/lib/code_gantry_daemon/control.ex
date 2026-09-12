@@ -6,7 +6,7 @@ defmodule CodeGantryDaemon.Control do
   answers from its own state, and the same verbs serve a mesh later.
   """
 
-  alias CodeGantryDaemon.{Application, Bay, Mesh, Pickup, Placements, Status}
+  alias CodeGantryDaemon.{Application, Bay, Mesh, Pickup, Placements, Semaphore, Status}
 
   @doc "The commit this daemon's checkout is at, and the node answering: what a pickup is confirmed by."
   def version(host \\ nil) do
@@ -37,6 +37,27 @@ defmodule CodeGantryDaemon.Control do
 
   @doc "Every bay on every host that has joined."
   def status, do: Status.render_all()
+
+  @doc """
+  What is held and who is waiting, across every host. A queue nobody can
+  see is a queue nobody can tell is stuck.
+  """
+  def holds do
+    case Semaphore.all() do
+      [] -> "nothing held"
+      entries -> entries |> Enum.group_by(& &1.name) |> Enum.sort() |> Enum.map_join("\n", &held_line/1)
+    end
+  end
+
+  defp held_line({name, entries}) do
+    [holder | waiting] = Enum.sort_by(entries, &{&1.at, &1.ref})
+    behind = if waiting == [], do: "", else: ", #{length(waiting)} waiting: " <> Enum.map_join(waiting, ", ", & &1.label)
+    "#{name} held by #{holder.label} (#{holder.origin}) since #{stamp(holder.at)}#{behind}"
+  end
+
+  defp stamp(at) do
+    at |> DateTime.from_unix!(:microsecond) |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+  end
 
   @doc "Compile and load the local checkout as it is: for a test on one host; fetches nothing, nudges nobody."
   def reload(host \\ nil), do: Pickup.reload(host || Status.host())
