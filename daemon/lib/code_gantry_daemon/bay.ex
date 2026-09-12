@@ -31,6 +31,27 @@ defmodule CodeGantryDaemon.Bay do
   # connection between two daemons; a verb reaches a bay through its node.
   def via(name), do: {:via, Registry, {CodeGantryDaemon.Registry, {__MODULE__, name}}}
 
+  @doc "The bays of this host with a run live."
+  def running(host) do
+    for bay <- CodeGantryDaemon.Placements.all(host),
+        pid = GenServer.whereis(via(bay.name)),
+        pid != nil,
+        GenServer.call(pid, :running?),
+        do: bay.name
+  end
+
+  @doc """
+  Ask the run in this bay to stop at its next seam, and resume it from the
+  new code when it has. `:pausing` when a run was asked; `:idle` when none
+  is live, in which case the bay's next run is on the new code anyway.
+  """
+  def pause_for_pickup(name) do
+    case GenServer.whereis(via(name)) do
+      nil -> :idle
+      pid -> GenServer.call(pid, :pause_for_pickup, 60_000)
+    end
+  end
+
   @doc """
   Launch again. `{:ok, mode, run_id}` names what was started; a bay with a
   run live refuses with its id, since the run is the thing to talk to.
@@ -44,8 +65,8 @@ defmodule CodeGantryDaemon.Bay do
 
   @impl true
   def init({host, bay}) do
-    state = %{host: host, bay: bay, port: nil, log: nil, run_id: nil, crashes: 0, mode: :run, last: nil}
-    Status.put(bay.name, :starting, nil)
+    state = %{host: host, bay: bay, port: nil, log: nil, run_id: nil, crashes: 0, mode: :run, last: nil, resume_after_pause: false}
+    Status.put(bay.name, :starting, nil, Host.project_of(host, bay))
     {:ok, state, {:continue, :ensure_checkout}}
   end
 
@@ -63,12 +84,12 @@ defmodule CodeGantryDaemon.Bay do
         # stays up for the bays it can run and the status file says why.
         why = "no bin/mk-bay in #{host.primary} or in any bay of it; is one of them on the project branch and pulled?"
         Logger.error("#{bay.name}: #{why}")
-        Status.put(bay.name, :failed, why)
+        Status.put(bay.name, :failed, why, Host.project_of(host, bay))
         {:noreply, state}
 
       true ->
         Logger.info("#{bay.name}: making #{dir} from #{source}")
-        Status.put(bay.name, :making, nil)
+        Status.put(bay.name, :making, nil, Host.project_of(host, bay))
         args = ["bin/mk-bay", bay.name, Integer.to_string(bay.offset)] ++ if(host.branch, do: [host.branch], else: [])
         # The script names the bay after the checkout it runs from; told
         # the repository's name, it names the bay after that instead.
@@ -80,7 +101,7 @@ defmodule CodeGantryDaemon.Bay do
 
           {out, status} ->
             Logger.error("#{bay.name}: mk-bay exited #{status}:\n#{out}")
-            Status.put(bay.name, :failed, "mk-bay exited #{status}; see the daemon log")
+            Status.put(bay.name, :failed, "mk-bay exited #{status}; see the daemon log", Host.project_of(host, bay))
             {:noreply, state}
         end
     end
@@ -99,7 +120,7 @@ defmodule CodeGantryDaemon.Bay do
     log_path = Path.join(Host.state_dir(), "#{bay.name}.log")
     Logger.info("#{bay.name}: #{Enum.join(args, " ")}")
     {port, log} = Command.start(Command.code_gantry(host, args), host.code_gantry, Host.env(host), log_path)
-    Status.put(bay.name, :running, run_id)
+    Status.put(bay.name, :running, run_id, Host.project_of(host, bay))
     {:noreply, %{state | port: port, log: log, run_id: run_id}}
   end
 
@@ -114,35 +135,43 @@ defmodule CodeGantryDaemon.Bay do
     {:noreply, state}
   end
 
-  def handle_info({port, {:exit_status, status}}, %{port: port, bay: bay} = state) do
+  def handle_info({port, {:exit_status, status}}, %{port: port, bay: bay, host: host} = state) do
     File.close(state.log)
     state = %{state | port: nil, log: nil}
 
     case status do
       0 ->
         Logger.info("#{bay.name}: run #{state.run_id} finished")
-        Status.put(bay.name, :finished, state.run_id)
+        Status.put(bay.name, :finished, state.run_id, Host.project_of(host, bay))
         {:noreply, %{state | last: :finished}}
 
       1 ->
         Logger.warning("#{bay.name}: run #{state.run_id} failed before or outside a stage (exit 1)#{last_lines(bay)}")
-        Status.put(bay.name, :failed, state.run_id)
+        Status.put(bay.name, :failed, state.run_id, Host.project_of(host, bay))
         {:noreply, %{state | last: :failed}}
 
       2 ->
         Logger.warning("#{bay.name}: run #{state.run_id} escalated to a person#{last_lines(bay)}")
-        Status.put(bay.name, :escalated, state.run_id)
+        Status.put(bay.name, :escalated, state.run_id, Host.project_of(host, bay))
         {:noreply, %{state | last: :escalated}}
+
+      3 when state.resume_after_pause ->
+        # Paused for a code pickup: the resume starts a new process, from
+        # the code now on disk.
+        Logger.info("#{bay.name}: run #{state.run_id} paused for the code pickup; resuming on the new code")
+        Status.put(bay.name, :resuming, state.run_id, Host.project_of(host, bay))
+        Process.send_after(self(), :relaunch, 1_000)
+        {:noreply, %{state | last: :paused, mode: :resume, resume_after_pause: false}}
 
       3 ->
         Logger.info("#{bay.name}: run #{state.run_id} paused")
-        Status.put(bay.name, :paused, state.run_id)
+        Status.put(bay.name, :paused, state.run_id, Host.project_of(host, bay))
         {:noreply, %{state | last: :paused}}
 
       other ->
         wait = Enum.at(@backoff_seconds, min(state.crashes, length(@backoff_seconds) - 1))
         Logger.warning("#{bay.name}: run #{state.run_id} died (exit #{other}); resuming in #{wait}s")
-        Status.put(bay.name, :crashed, state.run_id)
+        Status.put(bay.name, :crashed, state.run_id, Host.project_of(host, bay))
         Process.send_after(self(), :relaunch, wait * 1000)
         {:noreply, %{state | crashes: state.crashes + 1, mode: :resume, last: :crashed}}
     end
@@ -155,6 +184,17 @@ defmodule CodeGantryDaemon.Bay do
   def handle_info(_other, state), do: {:noreply, state}
 
   @impl true
+  def handle_call(:running?, _from, state), do: {:reply, is_port(state.port), state}
+
+  def handle_call(:pause_for_pickup, _from, %{port: port, host: host, bay: bay} = state) when is_port(port) do
+    config = Host.bay_config(host, bay)
+    {out, status} = Command.run(Command.code_gantry(host, ["pause", config, state.run_id, "--note", "code pickup"]), host.code_gantry, Host.env(host))
+    if status != 0, do: Logger.warning("#{bay.name}: pause for pickup exited #{status}: #{String.trim(out)}")
+    {:reply, :pausing, %{state | resume_after_pause: status == 0}}
+  end
+
+  def handle_call(:pause_for_pickup, _from, state), do: {:reply, :idle, state}
+
   def handle_call(:retry, _from, %{port: port} = state) when is_port(port) do
     {:reply, {:error, {:running, state.run_id}}, state}
   end

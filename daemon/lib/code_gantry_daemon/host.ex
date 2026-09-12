@@ -10,6 +10,8 @@ defmodule CodeGantryDaemon.Host do
         primary: "/home/you/projects/app/acme_app",
         config: "docs/technical_debt/code_gantry.yaml",
         branch: "technical-debt",                # optional; what a new bay starts on
+        code_branch: "elixir-daemon",            # optional; what the daemon picks its own code up from (default: the checkout's branch)
+        pickup_seconds: 120,                     # optional; 0 never picks up
         command: ["uv", "run", "code-gantry"],   # optional; what runs the CLI
         bays: [
           [name: "bay1", offset: 100],
@@ -18,7 +20,7 @@ defmodule CodeGantryDaemon.Host do
       ]
   """
 
-  defstruct [:origin, :code_gantry, :primary, :config, :branch, bays: [], command: ["uv", "run", "code-gantry"]]
+  defstruct [:origin, :code_gantry, :primary, :config, :branch, :code_branch, pickup_seconds: 120, bays: [], command: ["uv", "run", "code-gantry"]]
 
   def path, do: Path.join([System.user_home!(), ".config", "code_gantry", "host.exs"])
 
@@ -44,8 +46,17 @@ defmodule CodeGantryDaemon.Host do
       config: Keyword.fetch!(terms, :config),
       command: Keyword.get(terms, :command, ["uv", "run", "code-gantry"]),
       branch: Keyword.get(terms, :branch),
+      code_branch: Keyword.get(terms, :code_branch) || checkout_branch(Keyword.fetch!(terms, :code_gantry)),
+      pickup_seconds: Keyword.get(terms, :pickup_seconds, 120),
       bays: bays
     }
+  end
+
+  defp checkout_branch(dir) do
+    case System.cmd("git", ["rev-parse", "--abbrev-ref", "HEAD"], cd: Path.expand(dir), stderr_to_stdout: true) do
+      {out, 0} -> String.trim(out)
+      _ -> "main"
+    end
   end
 
   @doc "Where a bay's checkout is: beside the primary copy, named `<repo>-<bay>`."
@@ -53,7 +64,11 @@ defmodule CodeGantryDaemon.Host do
     Path.join(Path.dirname(primary), "#{Path.basename(primary)}-#{name}")
   end
 
-  def bay_config(host, bay), do: Path.join(bay_dir(host, bay), host.config)
+  @doc "The config a bay works: its own when placed with one, else the host's."
+  def bay_config(host, bay), do: Path.join(bay_dir(host, bay), Map.get(bay, :config) || host.config)
+
+  @doc "The project a bay works, as its config's directory is named: `docs/technical_debt/code_gantry.yaml` is `technical_debt`."
+  def project_of(host, bay), do: (Map.get(bay, :config) || host.config) |> Path.dirname() |> Path.basename()
 
   @doc "The environment every command the daemon runs is given."
   def env(%__MODULE__{origin: origin}) do

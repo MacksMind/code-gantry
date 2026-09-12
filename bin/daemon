@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: bin/daemon start|stop|status|logs|retry <bay>|place <bay> <port-offset>
+# Usage: bin/daemon start|stop|status|logs|retry <bay>|place <bay> <port-offset> [config]|pickup|reload
 #
 # The per-host daemon, detached from the terminal that started it. Its
 # state lives under ~/.local/state/code_gantry/daemon: a pid file, the
@@ -52,12 +52,18 @@ case "${1:-}" in
     [ -n "${2:-}" ] || { echo "usage: bin/daemon retry <bay>" >&2; exit 2; }
     rpc "IO.puts CodeGantryDaemon.Control.retry(\"$2\")"
     ;;
+  pickup)
+    rpc "IO.puts CodeGantryDaemon.Control.pickup()"
+    ;;
+  reload)
+    rpc "IO.puts CodeGantryDaemon.Control.reload()"
+    ;;
   place)
-    [ -n "${2:-}" ] && [ -n "${3:-}" ] || { echo "usage: bin/daemon place <bay> <port-offset>" >&2; exit 2; }
+    [ -n "${2:-}" ] && [ -n "${3:-}" ] || { echo "usage: bin/daemon place <bay> <port-offset> [config-path-in-the-checkout]" >&2; exit 2; }
     [[ "$3" =~ ^[0-9]+$ ]] || { echo "the port offset must be a whole number" >&2; exit 2; }
-    rpc "IO.puts CodeGantryDaemon.Control.place(\"$2\", $3)"
+    if [ -n "${4:-}" ]; then rpc "IO.puts CodeGantryDaemon.Control.place(\"$2\", $3, \"$4\")"; else rpc "IO.puts CodeGantryDaemon.Control.place(\"$2\", $3)"; fi
     ;;
   *)
-    echo "usage: bin/daemon start|stop|status|logs|retry <bay>|place <bay> <port-offset>" >&2; exit 2
+    echo "usage: bin/daemon start|stop|status|logs|retry <bay>|place <bay> <port-offset> [config]|pickup|reload" >&2; exit 2
     ;;
 esac

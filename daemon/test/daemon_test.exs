@@ -24,7 +24,8 @@ defmodule CodeGantryDaemonTest do
     #!/usr/bin/env bash
     echo "argv: $*" >> "#{root}/calls"
     echo "line one"
-    while [ -f "#{root}/hold" ]; do sleep 0.1; done
+    case "$1" in run|resume) while [ -f "#{root}/hold" ]; do sleep 0.1; done ;; esac
+    case "$1" in pause) exit 0 ;; esac
     exit "$(cat "#{root}/exit" 2>/dev/null || echo 0)"
     """)
     File.chmod!(fake, 0o755)
@@ -44,6 +45,8 @@ defmodule CodeGantryDaemonTest do
       primary: primary,
       config: "cfg.yaml",
       branch: "work",
+      code_branch: "work",
+      pickup_seconds: 0,
       command: [fake],
       bays: [%{name: "bay1", offset: 100}]
     }
@@ -204,6 +207,139 @@ defmodule CodeGantryDaemonTest do
       wait_for(fn -> String.contains?(status(state), "bay5 finished") end)
       assert calls(root) =~ "mk-bay-from-bay1 bay5 500 work project=repo"
       assert File.dir?(Path.join(Path.dirname(host.primary), "repo-bay5"))
+    end
+  end
+
+  describe "a placement's project" do
+    alias CodeGantryDaemon.{Control, Placements}
+
+    test "a bay placed with a config works that project", %{root: root, host: host, state: state} do
+      File.write!(Path.join(root, "exit"), "0")
+      line = Control.place("bay6", 600, "docs/rails_6/code_gantry.yaml")
+      assert line =~ ~r/^bay6: placed at offset 600 on docs\/rails_6\/code_gantry.yaml/
+      wait_for(fn -> String.contains?(status(state), "bay6 finished") end)
+      assert calls(root) =~ ~r/argv: run \S+repo-bay6\/docs\/rails_6\/code_gantry.yaml --run-id/
+      assert [%{name: "bay6", offset: 600, config: "docs/rails_6/code_gantry.yaml"}] = Placements.load()
+      assert status(state) =~ ~r/^bay6 finished \S+ since \S+ rails_6$/m
+    end
+  end
+
+  describe "pickup" do
+    alias CodeGantryDaemon.{Control, Pickup}
+
+    # A code-gantry checkout with a bare origin: `daemon/` is a tiny Mix
+    # project whose one module reports a version, `src/` stands in for the
+    # Python side. `other` is another host's clone, which pushes changes.
+    defp code_repo(root) do
+      bare = Path.join(root, "code-gantry.git")
+      cg = Path.join(root, "code-gantry")
+      other = Path.join(root, "other")
+      sh!(root, ["git", "init", "-q", "--bare", bare])
+      File.mkdir_p!(Path.join([cg, "daemon", "lib"]))
+      File.mkdir_p!(Path.join(cg, "src"))
+      File.write!(Path.join([cg, "daemon", "mix.exs"]), """
+      defmodule PickupProbe.MixProject do
+        use Mix.Project
+        def project, do: [app: :pickup_probe, version: "0.1.0", elixir: "~> 1.14", deps: []]
+      end
+      """)
+      write_probe(cg, 1)
+      File.write!(Path.join([cg, "src", "x.py"]), "x = 1\n")
+      File.write!(Path.join(cg, ".gitignore"), "daemon/_build/\n")
+      sh!(cg, ["git", "init", "-q", "-b", "work"])
+      sh!(cg, ["git", "config", "user.email", "t@example.com"])
+      sh!(cg, ["git", "config", "user.name", "T"])
+      sh!(cg, ["git", "config", "commit.gpgsign", "false"])
+      sh!(cg, ["git", "add", "-A"])
+      sh!(cg, ["git", "commit", "-qm", "one"])
+      sh!(cg, ["git", "remote", "add", "origin", bare])
+      sh!(cg, ["git", "push", "-q", "origin", "work"])
+      sh!(root, ["git", "clone", "-q", "-b", "work", bare, other])
+      sh!(other, ["git", "config", "user.email", "o@example.com"])
+      sh!(other, ["git", "config", "user.name", "O"])
+      sh!(other, ["git", "config", "commit.gpgsign", "false"])
+      {cg, other}
+    end
+
+    defp write_probe(dir, version, body \\ nil) do
+      File.write!(
+        Path.join([dir, "daemon", "lib", "probe.ex"]),
+        body || "defmodule PickupProbe do\n  def version, do: #{version}\nend\n"
+      )
+    end
+
+    defp other_pushes(other, fun) do
+      fun.()
+      sh!(other, ["git", "add", "-A"])
+      sh!(other, ["git", "commit", "-qm", "from elsewhere"])
+      sh!(other, ["git", "push", "-q", "origin", "work"])
+    end
+
+    defp sh!(cwd, [cmd | args]) do
+      {out, 0} = System.cmd(cmd, args, cd: cwd, stderr_to_stdout: true)
+      out
+    end
+
+    defp with_code(host, cg), do: %{host | code_gantry: cg, code_branch: "work"}
+
+    test "a pushed change under daemon/ is fetched, compiled and loaded into this VM", %{root: root, host: host, state: state} do
+      {cg, other} = code_repo(root)
+      host = with_code(host, cg)
+      assert Pickup.tick(host) =~ ~r/^code: at [0-9a-f]{12}$/
+      other_pushes(other, fn -> write_probe(other, 2) end)
+      line = Pickup.tick(host)
+      assert line =~ ~r/^code: [0-9a-f]{12} -> [0-9a-f]{12}; daemon: 1 module\(s\) loaded$/
+      assert PickupProbe.version() == 2
+      assert status(state) =~ ~r/code ok [0-9a-f]{12}/
+      assert sh!(cg, ["git", "rev-parse", "HEAD"]) == sh!(other, ["git", "rev-parse", "HEAD"])
+    end
+
+    test "a change under src/ pauses each running bay and resumes it on the new code", %{root: root, host: host, state: state} do
+      {cg, other} = code_repo(root)
+      host = with_code(host, cg)
+      Control.reload(host)
+      File.write!(Path.join(root, "hold"), "")
+      {:ok, _} = Bay.start_link({host, hd(host.bays)})
+      wait_for(fn -> String.contains?(status(state), "bay1 running") end)
+      other_pushes(other, fn -> File.write!(Path.join([other, "src", "x.py"]), "x = 2\n") end)
+      assert Pickup.tick(host) =~ ~r/python: 1 bay\(s\) pausing/
+      assert calls(root) =~ ~r/argv: pause \S+cfg.yaml \d{8}-\d{6}-bay1/
+      # The run reads the flag at its next seam and exits 3; the bay resumes it.
+      File.write!(Path.join(root, "exit"), "3")
+      File.rm!(Path.join(root, "hold"))
+      wait_for(fn -> calls(root) =~ ~r/argv: resume/ end)
+      [[_, id]] = Regex.scan(~r/argv: run \S+ --run-id (\S+)/, calls(root))
+      assert calls(root) =~ "argv: resume #{Path.join(Host.bay_dir(host, hd(host.bays)), "cfg.yaml")} #{id}"
+    end
+
+    test "a checkout with local changes is left alone and said so", %{root: root, host: host, state: state} do
+      {cg, other} = code_repo(root)
+      host = with_code(host, cg)
+      Control.reload(host)
+      File.write!(Path.join([cg, "src", "x.py"]), "x = 'mine'\n")
+      other_pushes(other, fn -> write_probe(other, 3) end)
+      assert Pickup.tick(host) =~ ~r/^code: held at [0-9a-f]{12}: local changes/
+      assert PickupProbe.version() == 1
+      assert status(state) =~ "code held"
+    end
+
+    test "a change that does not compile keeps the running code and says so", %{root: root, host: host, state: state} do
+      {cg, other} = code_repo(root)
+      host = with_code(host, cg)
+      Control.reload(host)
+      other_pushes(other, fn -> write_probe(other, 0, "defmodule PickupProbe do\n  def version, do:\nend\n") end)
+      assert Pickup.tick(host) =~ ~r/daemon: compile failed/
+      assert PickupProbe.version() == 1
+      assert status(state) =~ "code failed"
+    end
+
+    test "reload compiles and loads the local checkout without fetching", %{root: root, host: host} do
+      {cg, _other} = code_repo(root)
+      host = with_code(host, cg)
+      Pickup.tick(host)
+      write_probe(cg, 7)
+      assert Control.reload(host) =~ ~r/^code: local [0-9a-f]{12}\+dirty; daemon: 1 module\(s\) loaded$/
+      assert PickupProbe.version() == 7
     end
   end
 

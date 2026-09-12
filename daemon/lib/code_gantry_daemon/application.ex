@@ -9,7 +9,7 @@ defmodule CodeGantryDaemon.Application do
   """
   use Application
 
-  alias CodeGantryDaemon.{Bay, Host, Placements, Status}
+  alias CodeGantryDaemon.{Bay, Host, Pickup, Placements, Status}
 
   @impl true
   def start(_type, _args) do
@@ -19,11 +19,12 @@ defmodule CodeGantryDaemon.Application do
     # computed by the script, so the two cannot disagree about the hostname.
     File.write!(Path.join(Host.state_dir(), "node"), Atom.to_string(node()) <> "\n")
 
-    children = [
-      {Registry, keys: :unique, name: CodeGantryDaemon.Registry},
-      {Status, host},
-      {DynamicSupervisor, name: CodeGantryDaemon.Bays, strategy: :one_for_one}
-    ]
+    children =
+      [
+        {Registry, keys: :unique, name: CodeGantryDaemon.Registry},
+        {Status, host},
+        {DynamicSupervisor, name: CodeGantryDaemon.Bays, strategy: :one_for_one}
+      ] ++ if(host.pickup_seconds > 0, do: [{Pickup, host}], else: [])
 
     {:ok, sup} = Supervisor.start_link(children, strategy: :one_for_one, name: CodeGantryDaemon.Supervisor)
     start_bays(host)

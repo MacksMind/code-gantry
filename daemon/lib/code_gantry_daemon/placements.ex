@@ -41,7 +41,11 @@ defmodule CodeGantryDaemon.Placements do
   end
 
   defp bay(terms) do
-    %{name: Keyword.fetch!(terms, :name), offset: Keyword.fetch!(terms, :offset)}
+    base = %{name: Keyword.fetch!(terms, :name), offset: Keyword.fetch!(terms, :offset)}
+    case Keyword.get(terms, :config) do
+      nil -> base
+      config -> Map.put(base, :config, config)
+    end
   end
 
   defp write(bays) do
@@ -50,7 +54,8 @@ defmodule CodeGantryDaemon.Placements do
     text =
       "[\n" <>
         Enum.map_join(bays, ",\n", fn b ->
-          "  [name: #{inspect(b.name)}, offset: #{b.offset}]"
+          "  [name: #{inspect(b.name)}, offset: #{b.offset}" <>
+            if(Map.get(b, :config), do: ", config: #{inspect(b.config)}", else: "") <> "]"
         end) <> "\n]\n"
 
     tmp = path() <> ".tmp"

@@ -11,9 +11,9 @@ defmodule CodeGantryDaemon.Status do
 
   def start_link(host), do: Agent.start_link(fn -> %{host: host, rows: %{}} end, name: __MODULE__)
 
-  def put(name, state, detail) do
+  def put(name, state, detail, project \\ nil) do
     Agent.update(__MODULE__, fn s ->
-      s = put_in(s.rows[name], {state, detail, DateTime.utc_now()})
+      s = put_in(s.rows[name], {state, detail, DateTime.utc_now(), project})
       write(s)
       s
     end)
@@ -29,8 +29,9 @@ defmodule CodeGantryDaemon.Status do
       [
         "origin #{host.origin}  pid #{System.pid()}  written #{DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()}"
       ] ++
-        Enum.map(Enum.sort_by(rows, fn {k, _} -> to_string(k) end), fn {name, {state, detail, at}} ->
-          "#{name} #{state} #{detail || "-"} since #{DateTime.truncate(at, :second) |> DateTime.to_iso8601()}"
+        Enum.map(Enum.sort_by(rows, fn {k, _} -> to_string(k) end), fn {name, {state, detail, at, project}} ->
+          "#{name} #{state} #{detail || "-"} since #{DateTime.truncate(at, :second) |> DateTime.to_iso8601()}" <>
+            if(project, do: " #{project}", else: "")
         end)
 
     tmp = path() <> ".tmp"
