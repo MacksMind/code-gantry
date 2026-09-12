@@ -402,12 +402,26 @@ class TestSquashToACandidate:
     def test_the_author_date_is_when_the_work_was_done(self, repo):
         # Committed when it lands, authored when it was written. The gap
         # between the two is how long it waited to be composed.
+        #
+        # The work is dated explicitly rather than taken from the clock: a
+        # stage written and squashed in the same second says nothing about
+        # which date came from where, and a test that only passes when the
+        # two straddle a second boundary is a test that fails sometimes.
         g = Git(repo)
         base = self._stage(repo, g)
+        # `--date`, not the environment: an amend keeps the original author
+        # date and ignores GIT_AUTHOR_DATE unless told otherwise. Read back
+        # rather than compared to the literal, because git normalises what
+        # it stores and the test is about the date, not its spelling.
+        g._run("commit", "--amend", "--no-edit", "--date=2020-01-01T00:00:00+00:00")
         worked = g._out("log", "-1", "--format=%aI", "proj-stage/001-x")
+        assert worked.startswith("2020-01-01")
+
         sha = g.squash_to_candidate("proj-stage/001-x", base, "[001-x] work")
         assert g._out("log", "-1", "--format=%aI", sha) == worked
-        assert g._out("log", "-1", "--format=%cI", sha) != worked
+        assert not g._out("log", "-1", "--format=%cI", sha).startswith("2020-01-01"), (
+            "the candidate was committed when the work was done, not when it landed"
+        )
 
     def test_it_touches_neither_the_working_tree_nor_any_branch(self, repo):
         # No checkout, no index, no hooks: nothing to roll back if it
