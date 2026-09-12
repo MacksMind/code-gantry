@@ -225,6 +225,11 @@ def _history_block(
             line += f" (took {entry['revisions'] + 1} revisions)"
         if entry.get("merge_sha"):
             line += f"\n\nLanded as `{entry['merge_sha'][:12]}`."
+        elif entry.get("candidate_sha"):
+            # What stays true however the composition goes. This block is the
+            # cacheable prefix of every later call, so an entry that said
+            # "landed" and had to be corrected would rewrite the whole of it.
+            line += f"\n\nFinished and pushed as candidate `{entry['candidate_sha'][:12]}`."
         if entry.get("withheld_reads"):
             line += "\n" + render(
                 "planner/history_withheld", listed=", ".join(entry["withheld_reads"])

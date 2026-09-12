@@ -2052,7 +2052,14 @@ def _advance_result(state: RunState, rt: Runtime, stage: Stage, start_sha: str, 
         "executor_cost_usd": state.get("executor_cost_usd", 0.0),
         "withheld_reads": list(state.get("withheld_reads") or []),
         "base_sha": start_sha,
-        "merge_sha": merge_sha or rt.git.head_sha(),
+        # Null when nothing has landed, never the candidate's sha standing in
+        # for one. A candidate is a commit on a branch of its own that no
+        # composition has taken yet — and may never take, if it turns one
+        # red — so calling it the commit this stage landed as is a claim
+        # about the project branch that is not true, made to every reader of
+        # this record and to every planner call for the rest of the run.
+        "merge_sha": None if rt.cfg.compose_landings else (merge_sha or rt.git.head_sha()),
+        "candidate_sha": merge_sha if rt.cfg.compose_landings else None,
         "wall_seconds": max(time.time() - (state.get("stage_started_at") or 0), 0.0),
         # From precheck to here. `plan_seconds` is the derivation that
         # preceded it, which no per-stage figure counted before.
@@ -2093,7 +2100,10 @@ def _advance_result(state: RunState, rt: Runtime, stage: Stage, start_sha: str, 
             # What the planner said this would take, beside what it took.
             difficulty=stage.difficulty,
         )
-    rt.log(f"[advance] {stage.id} landed as {result['merge_sha'][:12]}")
+    if result["merge_sha"]:
+        rt.log(f"[advance] {stage.id} landed as {result['merge_sha'][:12]}")
+    elif result["candidate_sha"]:
+        rt.log(f"[advance] {stage.id} is a candidate at {result['candidate_sha'][:12]}, waiting to be composed")
 
     landed = {
         **fresh_stage_fields(),
@@ -2209,6 +2219,13 @@ def finalize(state: RunState, rt: Runtime) -> dict:
 
     approved = (completed[-1] or {}).get("merge_sha") or ""
     head = rt.git.head_sha()
+    if rt.cfg.compose_landings:
+        # The tip is not this run's to predict. Every bay moves the project
+        # branch when it holds the landing semaphore, so a tip that differs
+        # from anything this run produced is the arrangement working. What
+        # is still worth asking is the other half — that nothing outside the
+        # pipeline left changes in the tree.
+        approved = ""
     if approved and head != approved:
         return {
             **_escalate(
@@ -2229,7 +2246,10 @@ def finalize(state: RunState, rt: Runtime) -> dict:
                 + "\n".join(rt.git.uncommitted()),
             )
         }
-    rt.log(f"[finalize] tip is {approved}, the commit the last stage landed; tree clean")
+    rt.log(
+        f"[finalize] tip is {approved}, the commit the last stage landed; tree clean"
+        if approved else f"[finalize] tip is {head[:12]}; tree clean"
+    )
     return {"status": "complete", "next_hop": "end", **_session_elapsed(state)}
 
 

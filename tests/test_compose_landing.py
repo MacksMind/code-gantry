@@ -313,3 +313,43 @@ class TestWhenABayOffersToLand:
             )
         ]
         assert callers == ["advance"], callers
+
+
+class TestWhatTheRecordClaims:
+    """A record published from a run is a claim in every later prompt, and
+    `completed` is the cacheable prefix of the paid ones. A candidate is not
+    a landing: it is a commit on a branch of its own that no composition has
+    taken yet, and may never take."""
+
+    def test_a_candidate_is_not_recorded_as_a_landing(self, repo, tmp_path, origin):
+        cfg, rt, state, out = finish_a_stage(repo, tmp_path)
+        [entry] = out["completed"]
+        assert entry["merge_sha"] is None, "a stage claimed to have landed on the project branch"
+        assert entry["candidate_sha"], "the candidate went unrecorded"
+
+    def test_the_planner_is_told_it_is_a_candidate_and_not_a_landing(self, repo, tmp_path, origin):
+        from code_gantry.prompts import build_planner_messages
+
+        cfg, rt, state, out = finish_a_stage(repo, tmp_path)
+        messages = build_planner_messages(
+            cfg=cfg, plan_text="p", projection="", completed=out["completed"],
+            current_stage=None, failure=None, opening_failure=None, gate_history=[],
+            revision=0, interventions_used=0, interventions_max=5, layout="",
+        )
+        text = "\n".join(
+            block.get("text", "")
+            for message in messages
+            for block in (message.get("content") or [])
+            if isinstance(block, dict)
+        )
+        assert "Landed as" not in text
+        assert "pushed as candidate" in text.lower()
+
+    def test_a_run_that_ends_is_not_told_the_branch_moved_under_it(self, repo, tmp_path, origin):
+        # Every bay moves the project branch when it holds the landing
+        # semaphore, so a tip that differs from anything this run produced
+        # is the arrangement working rather than something outside it.
+        cfg, rt, state, out = finish_a_stage(repo, tmp_path)
+        final = nodes.finalize({**state, "completed": out["completed"]}, rt)
+        assert final.get("failure_layer") != "branch_moved", final
+        assert final["status"] == "complete"
