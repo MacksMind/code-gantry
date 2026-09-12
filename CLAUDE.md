@@ -366,10 +366,19 @@ provider behaviour has been wrong twice.
 whole marked block, so put churn *after* the mark, not last inside it. A
 breakpoint after content that changes every call costs more than none.
 
-**The pipeline pushes only the configured project branch, fast-forward, and
-only under `remote_landing`.** `Git.push` has no force flag, `precheck` and
-`advance` are its only callers, and there is no other push: the ledger no
-longer travels by ref. After a squash the bay pulls with rebase,
+**The pipeline pushes the configured project branch and the stage branches
+carrying candidates, fast-forward, and only under `remote_landing`.**
+`Git.push` has no force flag, `nodes` holds its only two call sites, and
+there is no other push: the ledger does not travel by ref. Under
+`compose_landings` a finished stage is squashed to one candidate commit on
+the base it was cut from (`squash_to_candidate`, built with `commit-tree`:
+no checkout, no index, no hooks, and the author date kept from the work)
+and pushed as its own branch, and the project branch is moved by nobody
+until a bay composes what is pending. That is what lets work travel between
+hosts without moving the one branch every bay reads; the keys stay claimed
+until the composition lands, because until then no tree anywhere has the
+work in it; and the next stage is cut from the same base rather than
+stacked on the one just finished. After a squash the bay pulls with rebase,
 re-runs the full suite only if the pull brought commits — two landings each
 verified on their own tree were never verified together — and pushes; a
 refused push pulls again; a conflict or a red combined tree escalates with the
