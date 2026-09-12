@@ -872,10 +872,11 @@ site goes quietly missing.
   daemon down or left a feature dormant while every module reported
   loaded. The third is closed: `Application.children/1` is the one list a
   daemon starts from, and `Application.reconcile/1` brings a running tree
-  up to it — called by the pickup after every load, so a new child
-  arrives the way every other change does, and a child that is present
-  but not running is dropped and started again, which makes it a repair
-  too. The other two are open, and `code_change` for a changed state
+  up to it — asked on every pickup, not only on a load, because **a
+  change to the pickup itself takes effect a pickup later**: the load
+  that carries new pickup code is run by the old module, so it cannot be
+  the load that acts on it. A child present but not running is dropped
+  and started again, so it repairs as well as adds. The other two are open, and `code_change` for a changed state
   shape still needs a restart at idle.
 - **A field removed from a model strands the run that persisted it.** `Stage` is
   `extra="forbid"`, so deleting a field raises on the next *resume*;

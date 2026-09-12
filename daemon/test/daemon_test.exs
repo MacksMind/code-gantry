@@ -323,11 +323,14 @@ defmodule CodeGantryDaemonTest do
       assert sh!(cg, ["git", "rev-parse", "HEAD"]) == sh!(other, ["git", "rev-parse", "HEAD"])
     end
 
-    test "a load brings the running tree up to the code it just loaded", %{root: root, host: host} do
+    test "the pickup starts a child the running tree lacks, whether or not code moved", %{root: root, host: host} do
       # The deficiency this closes: a version that declares a new child
-      # used to carry its code on a reload and leave the feature dormant
-      # until somebody restarted the host, which costs every run on it.
-      {cg, other} = code_repo(root)
+      # carried its code on a reload and left the feature dormant until
+      # somebody restarted the host, which costs every run on it. Asked on
+      # every look rather than only on a load, because a change to the
+      # pickup itself takes effect a pickup later — the load that carries
+      # this code cannot be the load that acts on it.
+      {cg, _other} = code_repo(root)
       host = %{with_code(host, cg) | origin: "s#{System.unique_integer([:positive])}"}
       on_exit(fn -> :mnesia.delete_table(Semaphore.table_for(host.origin)) end)
 
@@ -337,13 +340,13 @@ defmodule CodeGantryDaemonTest do
         type: :supervisor
       })
 
-      Pickup.tick(host)
-      other_pushes(other, fn -> write_probe(other, 2) end)
+      refute Process.whereis(Semaphore.Socket)
       line = Pickup.tick(host)
-
       assert line =~ "started"
       assert line =~ "CodeGantryDaemon.Semaphore.Socket"
-      assert Process.whereis(Semaphore.Socket), "the code was loaded and the child never started"
+      assert Process.whereis(Semaphore.Socket), "the pickup looked and left the child missing"
+
+      refute Pickup.tick(host) =~ "started", "a tree that is already right is left alone"
     end
 
     test "a change under src/ pauses each running bay and resumes it on the new code", %{root: root, host: host, state: state} do

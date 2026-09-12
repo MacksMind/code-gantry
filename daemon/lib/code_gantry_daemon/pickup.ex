@@ -62,6 +62,10 @@ defmodule CodeGantryDaemon.Pickup do
 
   @doc "One pickup, now. Answers a line saying what happened."
   def tick(host) do
+    look(host) <> reconciled(host)
+  end
+
+  defp look(host) do
     dir = host.code_gantry
     old = head(dir)
 
@@ -113,7 +117,22 @@ defmodule CodeGantryDaemon.Pickup do
     mark = if dirty?(dir), do: "+dirty", else: ""
     line = "code: local #{short(head(dir))}#{mark}" <> Enum.map_join(load_daemon(host), "", &("; " <> &1))
     Status.put(:code, :ok, "local #{short(head(dir))}#{mark}")
-    line
+    line <> reconciled(host)
+  end
+
+  # Every time the pickup looks, not only when it loads. Loading a module
+  # starts no process, so a version that declares a new child has it only
+  # once the running tree is brought up to match — and a change to the
+  # pickup itself takes effect a pickup later, so a load that carries this
+  # code cannot be the load that acts on it. Asking every time is what
+  # closes that gap, and what repairs a child that is missing for any
+  # other reason. It is a few calls against the supervisor when the tree
+  # is already right, which is almost always.
+  defp reconciled(host) do
+    case CodeGantryDaemon.Application.reconcile(host) do
+      [] -> ""
+      started -> "; started #{Enum.map_join(started, ", ", &inspect/1)}"
+    end
   end
 
   # -- the Elixir side ------------------------------------------------------
@@ -142,13 +161,7 @@ defmodule CodeGantryDaemon.Pickup do
           end
 
         _ = out
-        # Loading a module does not start a process. A version that
-        # declares a new child has it only once the running tree is
-        # brought up to match, and that must happen here rather than
-        # waiting for somebody to restart the host.
-        started = CodeGantryDaemon.Application.reconcile(host)
-        added = if started == [], do: "", else: ", started #{Enum.map_join(started, ", ", &inspect/1)}"
-        ["daemon: #{loaded} module(s) loaded#{added}"]
+        ["daemon: #{loaded} module(s) loaded"]
 
       {out, status} ->
         ["daemon: compile failed (#{status}): #{out |> String.trim() |> String.slice(0, 300)}"]
