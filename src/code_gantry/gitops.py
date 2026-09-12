@@ -23,6 +23,7 @@ A `--no-ff` merge would drag the red commits onto the project branch.
 from __future__ import annotations
 
 import re
+import os
 import subprocess
 from pathlib import Path, PurePosixPath
 
@@ -57,12 +58,16 @@ class Git:
     def __init__(self, repo: Path | str):
         self.repo = Path(repo)
 
-    def _run(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+    def _run(self, *args: str, check: bool = True, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
         proc = subprocess.run(
             ["git", *args],
             cwd=str(self.repo),
             capture_output=True,
             text=True,
+            # Merged, never replaced: git reads PATH, HOME and the ssh agent
+            # from here, and a call that handed it only the variable it cares
+            # about would work everywhere except where credentials are needed.
+            env={**os.environ, **env} if env else None,
             # A repository is not obliged to be UTF-8. Without this, one
             # Windows-1252 curly quote in one tracked file crashes the process
             # the moment any git command's output includes it — which happened
@@ -79,8 +84,8 @@ class Git:
             )
         return proc
 
-    def _out(self, *args: str) -> str:
-        return self._run(*args).stdout.strip()
+    def _out(self, *args: str, env: dict[str, str] | None = None) -> str:
+        return self._run(*args, env=env).stdout.strip()
 
     # --- inspection -----------------------------------------------------
 
@@ -677,6 +682,33 @@ class Git:
                 target = self.repo / path
                 if target.exists():
                     target.unlink()
+
+    def squash_to_candidate(self, child_branch: str, base_sha: str, message: str) -> str | None:
+        """The whole of a stage as one commit on the base it was cut from,
+        built as an object rather than merged into a checked-out branch.
+        Returns the new sha, or None when the stage changed nothing.
+
+        No checkout, no index and no hooks, so there is nothing to roll back
+        if it fails — which is most of what `squash_merge` has to defend
+        against. `git commit-tree` takes the branch's tree and one parent,
+        so the commit's diff against its base is exactly this stage's work
+        even when the project branch has moved underneath it. That is the
+        property the whole arrangement turns on: landing a candidate built
+        any other way would revert whatever landed while it was in flight.
+
+        Committed now and authored when the work was done, which is the last
+        commit on the branch. The gap between the two dates is how long the
+        stage waited to be composed, and `git log` reads it where a reader
+        expects to find it.
+        """
+        tree = self._out("rev-parse", f"{child_branch}^{{tree}}")
+        if tree == self._out("rev-parse", f"{base_sha}^{{tree}}"):
+            return None
+        authored = self._out("log", "-1", "--format=%aI", child_branch)
+        return self._out(
+            "commit-tree", tree, "-p", base_sha, "-m", message,
+            env={"GIT_AUTHOR_DATE": authored},
+        )
 
     def squash_merge(self, child_branch: str, project_branch: str, message: str) -> str | None:
         """Land a stage as exactly one commit on the project branch.

@@ -359,6 +359,87 @@ class TestSquashMerge:
         assert g.rev_parse("main") == base_before
 
 
+class TestSquashToACandidate:
+    """One commit carrying the whole of a stage, on the base it was cut
+    from — the form a stage travels in between the bay that did it and the
+    bay that lands it. Built as a commit object rather than merged into a
+    checked-out branch: no working tree, no index, no hooks, and the dates
+    are ours to set."""
+
+    def _stage(self, repo, g, name="proj-stage/001-x"):
+        g.ensure_project_branch("proj", "main")
+        base = g.head_sha()
+        g.cut_stage_branch(name, "proj")
+        for i in range(3):
+            (repo / "app.py").write_text(f"attempt {i}\n")
+            g.commit_all(f"intermediate {i}")
+        return base
+
+    def test_it_is_one_commit_on_the_base_carrying_the_whole_stage(self, repo):
+        g = Git(repo)
+        base = self._stage(repo, g)
+        sha = g.squash_to_candidate("proj-stage/001-x", base, "[001-x] do the thing")
+        assert sha
+        assert g.rev_parse(f"{sha}^") == base, "a candidate has exactly one parent, its base"
+        assert g.commit_subject(sha) == "[001-x] do the thing"
+        assert g._out("show", f"{sha}:app.py") == "attempt 2"
+
+    def test_it_carries_only_its_own_work_when_the_base_branch_has_moved(self, repo):
+        # The property the whole arrangement turns on. Another bay lands
+        # while this stage is in flight; the candidate must still be this
+        # stage's work and nothing else, or landing it would revert theirs.
+        g = Git(repo)
+        base = self._stage(repo, g)
+        g.checkout("proj")
+        (repo / "other.py").write_text("another bay landed\n")
+        g.commit_all("another bay")
+        g.checkout("proj-stage/001-x")
+
+        sha = g.squash_to_candidate("proj-stage/001-x", base, "[001-x] mine")
+        changed = g._out("diff", "--name-only", base, sha).split()
+        assert changed == ["app.py"], f"the candidate carried somebody else's work: {changed}"
+
+    def test_the_author_date_is_when_the_work_was_done(self, repo):
+        # Committed when it lands, authored when it was written. The gap
+        # between the two is how long it waited to be composed.
+        g = Git(repo)
+        base = self._stage(repo, g)
+        worked = g._out("log", "-1", "--format=%aI", "proj-stage/001-x")
+        sha = g.squash_to_candidate("proj-stage/001-x", base, "[001-x] work")
+        assert g._out("log", "-1", "--format=%aI", sha) == worked
+        assert g._out("log", "-1", "--format=%cI", sha) != worked
+
+    def test_it_touches_neither_the_working_tree_nor_any_branch(self, repo):
+        # No checkout, no index, no hooks: nothing to roll back if it
+        # fails, which is most of what `squash_merge` has to defend.
+        g = Git(repo)
+        base = self._stage(repo, g)
+        on = g.current_branch()
+        tip = g.head_sha()
+        g.squash_to_candidate("proj-stage/001-x", base, "[001-x] work")
+        assert g.current_branch() == on and g.head_sha() == tip
+        assert g._out("status", "--porcelain") == ""
+
+    def test_a_stage_that_changed_nothing_has_no_candidate(self, repo):
+        g = Git(repo)
+        g.ensure_project_branch("proj", "main")
+        base = g.head_sha()
+        g.cut_stage_branch("proj-stage/001-x", "proj")
+        assert g.squash_to_candidate("proj-stage/001-x", base, "[x] nothing") is None
+
+    def test_a_candidate_replays_onto_a_tip_that_has_moved(self, repo):
+        # What the lander does with it.
+        g = Git(repo)
+        base = self._stage(repo, g)
+        sha = g.squash_to_candidate("proj-stage/001-x", base, "[001-x] mine")
+        g.checkout("proj")
+        (repo / "other.py").write_text("another bay landed\n")
+        g.commit_all("another bay")
+        g._run("cherry-pick", sha)
+        assert (repo / "app.py").read_text() == "attempt 2\n"
+        assert (repo / "other.py").read_text() == "another bay landed\n"
+
+
 class TestRevertPaths:
     def test_reverts_only_the_named_paths(self, repo):
         # The scope-quarantine rule: hours of in-scope work must survive one
