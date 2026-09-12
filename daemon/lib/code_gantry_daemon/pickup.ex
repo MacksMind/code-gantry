@@ -142,7 +142,13 @@ defmodule CodeGantryDaemon.Pickup do
           end
 
         _ = out
-        ["daemon: #{loaded} module(s) loaded"]
+        # Loading a module does not start a process. A version that
+        # declares a new child has it only once the running tree is
+        # brought up to match, and that must happen here rather than
+        # waiting for somebody to restart the host.
+        started = CodeGantryDaemon.Application.reconcile(host)
+        added = if started == [], do: "", else: ", started #{Enum.map_join(started, ", ", &inspect/1)}"
+        ["daemon: #{loaded} module(s) loaded#{added}"]
 
       {out, status} ->
         ["daemon: compile failed (#{status}): #{out |> String.trim() |> String.slice(0, 300)}"]

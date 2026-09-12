@@ -7,7 +7,7 @@ defmodule CodeGantryDaemonTest do
   """
   use ExUnit.Case
 
-  alias CodeGantryDaemon.{Control, Host, Bay, Mesh, Records, Semaphore, Status}
+  alias CodeGantryDaemon.{Application, Control, Host, Bay, Mesh, Records, Semaphore, Status}
 
   setup do
     root = Path.join(System.tmp_dir!(), "cgd-#{System.os_time(:microsecond)}-#{System.unique_integer([:positive])}")
@@ -323,6 +323,29 @@ defmodule CodeGantryDaemonTest do
       assert sh!(cg, ["git", "rev-parse", "HEAD"]) == sh!(other, ["git", "rev-parse", "HEAD"])
     end
 
+    test "a load brings the running tree up to the code it just loaded", %{root: root, host: host} do
+      # The deficiency this closes: a version that declares a new child
+      # used to carry its code on a reload and leave the feature dormant
+      # until somebody restarted the host, which costs every run on it.
+      {cg, other} = code_repo(root)
+      host = %{with_code(host, cg) | origin: "s#{System.unique_integer([:positive])}"}
+      on_exit(fn -> :mnesia.delete_table(Semaphore.table_for(host.origin)) end)
+
+      start_supervised!(%{
+        id: :tree,
+        start: {Supervisor, :start_link, [[], [strategy: :one_for_one, name: CodeGantryDaemon.Supervisor]]},
+        type: :supervisor
+      })
+
+      Pickup.tick(host)
+      other_pushes(other, fn -> write_probe(other, 2) end)
+      line = Pickup.tick(host)
+
+      assert line =~ "started"
+      assert line =~ "CodeGantryDaemon.Semaphore.Socket"
+      assert Process.whereis(Semaphore.Socket), "the code was loaded and the child never started"
+    end
+
     test "a change under src/ pauses each running bay and resumes it on the new code", %{root: root, host: host, state: state} do
       {cg, other} = code_repo(root)
       host = with_code(host, cg)
@@ -631,6 +654,62 @@ defmodule CodeGantryDaemonTest do
       socket = acquire(path, name, "bay1")
       assert "held" <> _ = line(socket)
       :gen_tcp.close(socket)
+    end
+  end
+
+
+  describe "a reload brings the running tree up to the new code" do
+    setup %{host: host} do
+      # A tree of this test's own under the name the daemon uses, empty, so
+      # reconcile has something to add to.
+      origin = "s#{System.unique_integer([:positive])}"
+      host = %{host | origin: origin}
+
+      start_supervised!(%{
+        id: :tree,
+        start: {Supervisor, :start_link, [[], [strategy: :one_for_one, name: CodeGantryDaemon.Supervisor]]},
+        type: :supervisor
+      })
+
+      on_exit(fn -> :mnesia.delete_table(Semaphore.table_for(origin)) end)
+      %{host: host, origin: origin}
+    end
+
+    defp running, do: for({id, pid, _, _} <- Supervisor.which_children(CodeGantryDaemon.Supervisor), is_pid(pid), do: id)
+
+    test "a child this version declares and the running tree lacks is started", %{host: host} do
+      # The whole point: loading a module starts no process, so a hot
+      # reload would carry the code and leave the feature dormant until a
+      # restart — which costs every run on the host.
+      refute Semaphore.Socket in running()
+      started = Application.reconcile(host)
+      assert Semaphore.Socket in started
+      assert Semaphore.Socket in running()
+    end
+
+    test "a tree that is already right is left alone", %{host: host} do
+      Application.reconcile(host)
+      before = running()
+      assert Application.reconcile(host) == []
+      assert running() == before
+    end
+
+    test "a child that is present but not running is started again", %{host: host} do
+      Application.reconcile(host)
+      pid = Process.whereis(Semaphore.Socket)
+      # What a child that refused at boot looks like: still declared,
+      # nothing running. Reconcile is a repair, not only an addition.
+      :ok = Supervisor.terminate_child(CodeGantryDaemon.Supervisor, Semaphore.Socket)
+      refute Semaphore.Socket in running()
+      assert Semaphore.Socket in Application.reconcile(host)
+      assert Process.whereis(Semaphore.Socket) != pid
+      assert Semaphore.Socket in running()
+    end
+
+    test "what the daemon starts with and what a reload adds are one list", %{host: host} do
+      ids = Enum.map(Application.children(host), &Supervisor.child_spec(&1, []).id)
+      assert Semaphore.Socket in ids
+      assert Enum.uniq(ids) == ids, "a child declared twice is started twice"
     end
   end
 

@@ -3834,32 +3834,45 @@ class TestDerivedStagesInTheLedger:
         nodes.advance(state, rt)
         assert rt.views().derived[state["current"]["derived_id"]].status == "done"
 
-    def test_a_revision_holds_no_planner_lock(self, repo, tmp_path, monkeypatch):
-        from code_gantry import hostlock
+    def _asked(self, monkeypatch):
+        """What the plan node asks the mesh to hold, as it asks for it."""
+        import contextlib
 
-        names = []
-        real = hostlock.hold
-        monkeypatch.setattr(hostlock, "hold", lambda name, label, log=None, directory=None: names.append(name) or real(name, label, log, directory))
+        from code_gantry import meshlock
+
+        asked = []
+
+        @contextlib.contextmanager
+        def record(name, label, log=None):
+            asked.append((name, label))
+            yield [0.0]
+
+        monkeypatch.setattr(meshlock, "hold", record)
+        return asked
+
+    def test_a_revision_holds_no_planner_semaphore(self, repo, tmp_path, monkeypatch):
+        asked = self._asked(monkeypatch)
         planner = StubPlanner([PlannerOutcome("revise", "r", "e", stage_fields=planned_stage(), revision_mode="restart")])
         cfg, rt, state = make(repo, tmp_path, planner=planner)
         state = {**state, "current": planned_stage(), "last_failure": {"layer": "tests", "summary": "red"}}
         nodes.plan(state, rt)
-        assert not [n for n in names if n.startswith("planner-")], names
+        assert asked == [], "a revision draws nothing, so it must keep no other bay waiting"
 
-    def test_the_planner_lock_is_held_per_ledger(self, repo, tmp_path, monkeypatch):
-        locks = tmp_path / "locks"
-        monkeypatch.setenv("CODE_GANTRY_LOCK_DIR", str(locks))
+    def test_the_planner_semaphore_is_named_for_the_ledger(self, repo, tmp_path, monkeypatch):
+        asked = self._asked(monkeypatch)
         cfg, rt, state = make(repo, tmp_path, planner=StubPlanner([
             PlannerOutcome("next_stage", "next", "e", stage_fields=planned_stage())
         ]))
         nodes.plan(state, rt)
-        # With no daemon to ask, the semaphore falls back to this machine's
-        # own lock, which is where it is visible from here.
-        files = list(locks.glob("planner-*.lock"))
-        assert len(files) == 1, files
+        assert len(asked) == 1, asked
+        name, label = asked[0]
+        # The same ledger is the same name on every machine: that is what
+        # makes it one queue rather than one per host.
+        assert name == nodes._planner_lock(rt)
+        assert name.startswith("planner-")
         # The label is what a bay on another host is told it is waiting
         # behind, so it names the bay and the run, not the word "planner".
-        assert "target r1" in files[0].read_text()
+        assert "target r1" in label
 
 
 class TestAStageDrawnFromAFinding:

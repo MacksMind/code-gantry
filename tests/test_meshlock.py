@@ -119,50 +119,53 @@ class TestTheDaemonHoldsIt:
 
 
 class TestWithNoDaemonToAsk:
-    def test_it_falls_back_to_the_lock_this_machine_can_see(self, daemon_state, tmp_path):
-        # No socket at all: the daemon is not running. A run must still be
-        # excluded from its neighbour on this host rather than proceeding
-        # unheld, which is what the lock did before any of this.
-        locks = tmp_path / "locks"
+    def test_a_run_goes_ahead_holding_nothing_and_says_so(self, daemon_state):
+        # No socket at all: nothing is running on this machine. Nothing
+        # else about a run needs a daemon and this is not the exception.
         said: list[str] = []
+        started = time.monotonic()
+        with meshlock.hold("planner-abc", "bay1", said.append) as waited:
+            assert waited[0] == 0.0
+        assert time.monotonic() - started < 1, "a missing daemon must not be waited for"
+        assert any("no daemon" in line for line in said), said
+
+    def test_it_holds_nothing_rather_than_holding_this_machine_only(self, daemon_state):
+        # A lock of this machine would read as a hold while excluding
+        # nobody the semaphore is about — and the one bay it did exclude is
+        # the only other bay that could have seen the request.
         order: list[str] = []
-        first_held = threading.Event()
+        first_in = threading.Event()
         release = threading.Event()
 
-        def outer():
-            with meshlock.hold("planner-abc", "bay1", said.append, directory=locks):
+        def first():
+            with meshlock.hold("planner-abc", "bay1"):
                 order.append("first in")
-                first_held.set()
+                first_in.set()
                 release.wait(3)
-                order.append("first out")
 
-        thread = threading.Thread(target=outer)
-        thread.start()
-        assert first_held.wait(2)
-
-        def inner():
-            with meshlock.hold("planner-abc", "bay2", directory=locks):
+        def second():
+            with meshlock.hold("planner-abc", "bay2"):
                 order.append("second in")
 
-        waiter = threading.Thread(target=inner)
-        waiter.start()
-        time.sleep(0.3)
-        assert order == ["first in"], "the second bay was not excluded"
+        a = threading.Thread(target=first)
+        a.start()
+        assert first_in.wait(2)
+        b = threading.Thread(target=second)
+        b.start()
+        b.join(2)
+        assert order == ["first in", "second in"], "a run was held up by a lock nothing else can see"
         release.set()
-        thread.join(3)
-        waiter.join(3)
-        assert order == ["first in", "first out", "second in"]
-        assert any("daemon" in line for line in said), said
+        a.join(3)
 
-    def test_a_daemon_that_refuses_the_request_does_not_stop_the_run(self, daemon_state, tmp_path):
+    def test_a_daemon_that_refuses_the_request_does_not_stop_the_run(self, daemon_state):
         daemon = FakeDaemon(meshlock.socket_path(), refuse=True)
         said: list[str] = []
         try:
-            with meshlock.hold("planner-abc", "bay1", said.append, directory=tmp_path / "locks"):
-                pass
+            with meshlock.hold("planner-abc", "bay1", said.append) as waited:
+                assert waited[0] == 0.0
         finally:
             daemon.stop()
-        assert any("daemon" in line for line in said), said
+        assert any("could not grant" in line for line in said), said
 
 
 class TestTheContractTheLockAlreadyHad:
@@ -176,9 +179,9 @@ class TestTheContractTheLockAlreadyHad:
             daemon.stop()
         assert len(daemon.asked) == 1, "re-entering asked the daemon a second time"
 
-    def test_the_host_lock_is_untouched_by_any_of_this(self, tmp_path):
-        # The suite lock is genuinely one machine's: one suite per host is
-        # the rule, and it must not start asking the mesh.
+    def test_the_suite_lock_is_untouched_by_any_of_this(self, tmp_path):
+        # One suite per host is a fact about the host, so the suite keeps
+        # the lock this machine can see and never asks the mesh.
         locks = tmp_path / "locks"
         with hostlock.hold("full-suite", "a", directory=locks):
             assert hostlock.held("full-suite")

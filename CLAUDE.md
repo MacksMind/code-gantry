@@ -105,9 +105,12 @@ daemon's state directory and the connection *is* the hold: killed run,
 sleeping machine, severed link, all release it with nothing to expire.
 The release is the server's through a monitor, never the handler's,
 because a release written into the handler is skipped by exactly the
-deaths this exists to survive. With no daemon to ask, a run falls back to
-`hostlock` and says so: narrower than intended, never wider, and never a
-reason to stop. The holder is derived, not granted: the oldest request for
+deaths this exists to survive. With no daemon to ask, a run goes ahead
+holding nothing and says so: nothing else about a run needs a daemon and
+this is not the exception. Falling back to a lock of this machine would
+be worse than none — it reads as a hold while excluding nobody the
+semaphore is about, and the one bay it does exclude is the only other bay
+that could have seen the request. The holder is derived, not granted: the oldest request for
 a name anywhere, ties broken by a reference carrying the node, so every
 host computes the same answer from the same rows. A wrong clock makes the
 queue unfair, never unsafe; a partition grants on both sides, which is
@@ -860,17 +863,20 @@ site goes quietly missing.
   reaches the next call without a restart. `plan_sha` now pins only the
   conventions, operations and layout, which a resume still inherits — editing
   one of those means `run`, not `resume`.
-- **Hot reload carries code, never shape, and never a supervision tree.**
-  A running VM holds structs the old module built, so a new field in a
-  struct crashes whatever pattern-matches it; an OTP application the VM
-  did not start with (`:mnesia`) is simply unavailable to it; and a new
-  child in `Application.start` is *not* started by loading the module —
-  the tree is already running. Each of these took a daemon down or left a
-  feature dormant while every module reported loaded. A new child is added
-  to a live daemon with `Supervisor.start_child`, which is how the
-  semaphore went live without restarting a host; `code_change` for a
-  changed state shape is still unbuilt, and that case still needs a
-  restart at idle.
+- **Hot reload carries code, not consequences.** Loading a module starts
+  no process and changes no state: a running VM holds structs the old
+  module built, so a new field in a struct crashes whatever
+  pattern-matches it; an OTP application the VM did not start with
+  (`:mnesia`) is simply unavailable to it; and a child declared in a new
+  version is absent from a tree that is already running. Each took a
+  daemon down or left a feature dormant while every module reported
+  loaded. The third is closed: `Application.children/1` is the one list a
+  daemon starts from, and `Application.reconcile/1` brings a running tree
+  up to it — called by the pickup after every load, so a new child
+  arrives the way every other change does, and a child that is present
+  but not running is dropped and started again, which makes it a repair
+  too. The other two are open, and `code_change` for a changed state
+  shape still needs a restart at idle.
 - **A field removed from a model strands the run that persisted it.** `Stage` is
   `extra="forbid"`, so deleting a field raises on the next *resume*;
   `current_stage` filters to declared fields.
@@ -1316,7 +1322,8 @@ is what each is about: `hostlock.py` is one machine's, `fcntl` on a file,
 and holds the suite, because one suite per host is a fact about the host;
 `meshlock.py` is the mesh's, and holds the planner, because one derivation
 per ledger is a fact about the project. The runner takes the first and
-`plan` the second, and an AST test pins which caller takes which. `planmodel.py`
+`plan` the second, an AST test pins which caller takes which, and neither
+falls back to the other. `planmodel.py`
 reads Markdown into the tree and renders it back; `render.py` produces the two
 halves the planner is sent; `ledgercli.py` is the operator's `plan …` and
 `ledger …`. The pipeline's writes are in `nodes.py`: findings at derivation,

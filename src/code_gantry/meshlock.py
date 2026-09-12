@@ -12,10 +12,12 @@ The name is the thing serialised, not the machine. The planner semaphore is
 named for the ledger, so every bay of every host working one project queues
 behind the others, and a second project waits for none of them.
 
-**With no daemon to ask, a run falls back to `hostlock` and says so.** That
-is a hold of this machine only, which is what every run had before there was
-a mesh: narrower than intended, never wider. A run must not be stopped by
-the absence of a daemon, because nothing else about a run needs one.
+**With no daemon to ask, a run goes ahead unheld and says so.** Nothing
+else about a run needs a daemon and this must not be the exception: a run
+started by hand on a machine with nothing running behaves as it always
+did. A lock of this machine only would be worse than none — it would
+read as a hold while excluding nobody the semaphore is about, and the bay
+it did exclude is the one bay that could have seen the request.
 """
 
 from __future__ import annotations
@@ -27,11 +29,9 @@ import threading
 import time
 from pathlib import Path
 
-from code_gantry import hostlock
-
-# Names this thread already holds, with a depth, exactly as `hostlock` keeps
-# them: a hold inside a hold on the same name re-enters rather than asking
-# the daemon for a name it is already holding, which would wait on itself.
+# Names this thread already holds, with a depth: a hold inside a hold on the
+# same name re-enters rather than asking the daemon for a name it is already
+# holding, which would wait on itself.
 _local = threading.local()
 
 
@@ -60,13 +60,12 @@ def socket_path() -> Path:
 
 
 @contextlib.contextmanager
-def hold(name: str, label: str, log=None, *, directory: Path | None = None):
+def hold(name: str, label: str, log=None):
     """Hold `name` for the block, yielding a one-element list carrying the
     seconds spent waiting. `label` says who is asking, and is what a bay
     waiting behind this one is told it is behind.
 
-    The contract is `hostlock.hold`'s, so a caller cannot tell which of the
-    two it got, and the fallback needs no call site to know about it.
+    Yields immediately, holding nothing, when there is no daemon to ask.
     """
     label = " ".join(label.split())
     if held(name):
@@ -77,13 +76,12 @@ def hold(name: str, label: str, log=None, *, directory: Path | None = None):
             _held()[name] -= 1
         return
 
-    conn = _ask(name, label, log)
-    if conn is None:
-        with hostlock.hold(name, label, log, directory) as waited:
-            yield waited
+    answer = _ask(name, label, log)
+    if answer is None:
+        yield [0.0]
         return
 
-    waited, conn = conn
+    waited, conn = answer
     _held()[name] = 1
     try:
         yield waited
@@ -100,8 +98,8 @@ def hold(name: str, label: str, log=None, *, directory: Path | None = None):
 def _ask(name: str, label: str, log=None):
     """Ask the daemon for `name` and wait until it says the name is ours.
     Answers the wait and the open connection, or None when there is no
-    daemon to ask or it cannot answer — in which case the caller falls back
-    to a lock this machine can see."""
+    daemon to ask or it cannot answer — in which case the caller goes
+    ahead holding nothing."""
     path = socket_path()
     try:
         conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -109,7 +107,7 @@ def _ask(name: str, label: str, log=None):
     except OSError as e:
         if log:
             log(f"no daemon at {path} ({e.__class__.__name__}); "
-                f"holding {name!r} on this host only")
+                f"going ahead without {name!r}")
         return None
 
     started = time.monotonic()
@@ -133,7 +131,7 @@ def _ask(name: str, label: str, log=None):
     except OSError as e:
         conn.close()
         if log:
-            log(f"the daemon could not grant {name!r} ({e}); holding it on this host only")
+            log(f"the daemon could not grant {name!r} ({e}); going ahead without it")
         return None
 
 
