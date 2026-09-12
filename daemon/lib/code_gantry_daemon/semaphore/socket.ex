@@ -44,24 +44,38 @@ defmodule CodeGantryDaemon.Semaphore.Socket do
 
   @impl true
   def init(host) do
-    :ok = Semaphore.start(host.origin)
     Process.flag(:trap_exit, true)
-    # A Unix socket outlives the process that made it, so a daemon that was
-    # killed leaves a path that accepts nothing and refuses to be bound.
-    File.rm(path())
-
-    case :gen_tcp.listen(0, [{:ifaddr, {:local, path()}}, :binary, packet: :line, active: false, backlog: 64]) do
+    case start(host) do
       {:ok, listen} ->
         server = self()
         acceptor = spawn_link(fn -> accept(listen, host, server) end)
         {:ok, %{host: host, listen: listen, acceptor: acceptor, held: %{}}}
 
       {:error, reason} ->
-        # A daemon with no semaphore still runs its bays; the runs fall
-        # back to the lock that only reaches this machine.
-        Logger.error("semaphore: cannot listen on #{path()}: #{inspect(reason)}")
+        # A daemon with no semaphore still runs its bays, on a lock that
+        # reaches only their own machine. Refusing to start is the whole
+        # of the damage, and it must stay that way: crashing here instead
+        # would be restarted, and restarted again, until the supervisor
+        # gave up and took every run on this host down with it.
+        Logger.error("semaphore: not listening on #{path()}: #{inspect(reason)}")
         :ignore
     end
+  end
+
+  # The table this host writes its requests into, then the door. Either can
+  # refuse — an Mnesia that never started, a path that cannot be bound —
+  # and neither may raise.
+  defp start(host) do
+    with :ok <- Semaphore.start(host.origin) do
+      # A Unix socket outlives the process that made it, so a daemon that
+      # was killed leaves a path that binding refuses.
+      File.rm(path())
+      :gen_tcp.listen(0, [{:ifaddr, {:local, path()}}, :binary, packet: :line, active: false, backlog: 64])
+    end
+  rescue
+    e -> {:error, e}
+  catch
+    :exit, reason -> {:error, reason}
   end
 
   @impl true

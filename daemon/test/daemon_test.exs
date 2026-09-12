@@ -611,6 +611,16 @@ defmodule CodeGantryDaemonTest do
       assert "error " <> _ = line(socket)
     end
 
+    test "a door that cannot be opened refuses rather than crashing", %{host: host} do
+      # Whatever goes wrong here, the daemon keeps running its bays: a
+      # crash would be restarted until the supervisor gave up and took
+      # every run on the host down with it. The runs fall back to a lock
+      # that reaches only this machine, which is where they started.
+      stop_supervised!(Semaphore.Socket)
+      System.put_env("CODE_GANTRY_DAEMON_STATE", "/nonexistent/nowhere")
+      assert :ignore == Semaphore.Socket.start_link(host)
+    end
+
     test "the socket is remade over a stale file a dead daemon left", %{host: host, path: path, name: name} do
       # A unix socket outlives the process that made it, so a daemon that
       # was killed leaves a path that binding refuses. Starting again must
