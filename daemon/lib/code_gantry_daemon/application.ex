@@ -77,12 +77,19 @@ defmodule CodeGantryDaemon.Application do
     id = Supervisor.child_spec(spec, []).id
 
     case start_child(spec) do
-      {:ok, _} ->
+      # A pid, and only a pid. A child that refuses answers `{:ok,
+      # :undefined}`, and reporting that as started would say so on every
+      # pickup for as long as it kept refusing.
+      {:ok, pid} when is_pid(pid) ->
         id
 
       {:error, :already_present} ->
         Supervisor.delete_child(CodeGantryDaemon.Supervisor, id)
-        with {:ok, _} <- start_child(spec), do: id, else: (_ -> nil)
+
+        case start_child(spec) do
+          {:ok, pid} when is_pid(pid) -> id
+          _ -> nil
+        end
 
       _ ->
         nil

@@ -775,6 +775,17 @@ defmodule CodeGantryDaemonTest do
       assert Semaphore.Socket in running()
     end
 
+    test "a child that refuses is not reported as started", %{host: host} do
+      # `{:ok, :undefined}` is what a child answers when it declines to
+      # run. Counting that as started says so on every pickup for as long
+      # as it keeps refusing, and hides that anything is wrong.
+      System.put_env("CODE_GANTRY_DAEMON_STATE", "/nonexistent/nowhere")
+      refute Semaphore.Socket in Application.reconcile(host)
+      refute Process.whereis(Semaphore.Socket)
+      # And it keeps refusing quietly rather than announcing itself again.
+      refute Semaphore.Socket in Application.reconcile(host)
+    end
+
     test "a tree that is already right is left alone", %{host: host} do
       Application.reconcile(host)
       before = running()
