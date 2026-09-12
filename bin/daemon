@@ -40,7 +40,14 @@ case "${1:-}" in
     echo "daemon started, pid $!; status in $STATE/status, log in $LOG"
     ;;
   stop)
-    if alive; then kill "$(cat "$PIDFILE")"; rm -f "$PIDFILE"; echo "daemon stopped"; else echo "daemon not running"; fi
+    # Waits for the VM to be gone: its node name stays registered until it
+    # is, and a start in that window refuses the name.
+    if alive; then
+      pid="$(cat "$PIDFILE")"; kill "$pid"
+      for _ in $(seq 1 60); do kill -0 "$pid" 2>/dev/null || break; sleep 0.5; done
+      kill -0 "$pid" 2>/dev/null && { echo "daemon $pid did not exit in 30s" >&2; exit 1; }
+      rm -f "$PIDFILE"; echo "daemon stopped"
+    else echo "daemon not running"; fi
     ;;
   status)
     if alive; then cat "$STATE/status" 2>/dev/null || echo "running, no status written yet"; else echo "daemon not running"; fi
