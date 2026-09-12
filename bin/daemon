@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: bin/daemon start|stop|status|logs|retry <bay>|place <bay> <port-offset> [scope-key ...]|scope <bay> [key ...]
+# Usage: bin/daemon start|stop|status|logs|retry <bay>|place <bay> <port-offset>
 #
 # The per-host daemon, detached from the terminal that started it. Its
 # state lives under ~/.local/state/code_gantry/daemon: a pid file, the
@@ -52,20 +52,12 @@ case "${1:-}" in
     [ -n "${2:-}" ] || { echo "usage: bin/daemon retry <bay>" >&2; exit 2; }
     rpc "IO.puts CodeGantryDaemon.Control.retry(\"$2\")"
     ;;
-  scope)
-    [ -n "${2:-}" ] || { echo "usage: bin/daemon scope <bay> [key ...]   (no keys: the whole plan)" >&2; exit 2; }
-    KEYS=""
-    for key in "${@:3}"; do KEYS="$KEYS\"$key\","; done
-    rpc "IO.puts CodeGantryDaemon.Control.scope(\"$2\", [${KEYS%,}])"
-    ;;
   place)
-    [ -n "${2:-}" ] && [ -n "${3:-}" ] || { echo "usage: bin/daemon place <bay> <port-offset> [scope-key ...]" >&2; exit 2; }
+    [ -n "${2:-}" ] && [ -n "${3:-}" ] || { echo "usage: bin/daemon place <bay> <port-offset>" >&2; exit 2; }
     [[ "$3" =~ ^[0-9]+$ ]] || { echo "the port offset must be a whole number" >&2; exit 2; }
-    SCOPE=""
-    for key in "${@:4}"; do SCOPE="$SCOPE\"$key\","; done
-    rpc "IO.puts CodeGantryDaemon.Control.place(\"$2\", $3, [${SCOPE%,}])"
+    rpc "IO.puts CodeGantryDaemon.Control.place(\"$2\", $3)"
     ;;
   *)
-    echo "usage: bin/daemon start|stop|status|logs|retry <bay>|place <bay> <port-offset> [scope-key ...]|scope <bay> [key ...]" >&2; exit 2
+    echo "usage: bin/daemon start|stop|status|logs|retry <bay>|place <bay> <port-offset>" >&2; exit 2
     ;;
 esac

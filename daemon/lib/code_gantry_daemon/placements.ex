@@ -22,31 +22,10 @@ defmodule CodeGantryDaemon.Placements do
     end
   end
 
-  @doc """
-  Every bay of this host: the host file's, then the placed ones. A
-  placement that names a host-file bay overrides it — that is how a bay's
-  scope changes without the host file changing.
-  """
+  @doc "Every bay of this host: the host file's, then the placed ones."
   def all(host) do
-    placed = load()
-    by_name = Map.new(placed, &{&1.name, &1})
-    seeded = Enum.map(host.bays, &Map.get(by_name, &1.name, &1))
-    names = Enum.map(host.bays, & &1.name)
-    seeded ++ Enum.reject(placed, &(&1.name in names))
-  end
-
-  @doc "Remember a bay's scope, adding the placement if the host file seeded the bay."
-  def set_scope(host, name, scope) do
-    case Enum.find(all(host), &(&1.name == name)) do
-      nil ->
-        {:error, :no_such_bay}
-
-      bay ->
-        bay = %{bay | scope: scope}
-        rest = Enum.reject(load(), &(&1.name == name))
-        write(rest ++ [bay])
-        {:ok, bay}
-    end
+    seeded = Enum.map(host.bays, & &1.name)
+    host.bays ++ Enum.reject(load(), &(&1.name in seeded))
   end
 
   @doc "Remember a placement. `{:error, :exists}` when the name is taken."
@@ -62,11 +41,7 @@ defmodule CodeGantryDaemon.Placements do
   end
 
   defp bay(terms) do
-    %{
-      name: Keyword.fetch!(terms, :name),
-      offset: Keyword.fetch!(terms, :offset),
-      scope: Keyword.get(terms, :scope, [])
-    }
+    %{name: Keyword.fetch!(terms, :name), offset: Keyword.fetch!(terms, :offset)}
   end
 
   defp write(bays) do
@@ -75,7 +50,7 @@ defmodule CodeGantryDaemon.Placements do
     text =
       "[\n" <>
         Enum.map_join(bays, ",\n", fn b ->
-          "  [name: #{inspect(b.name)}, offset: #{b.offset}, scope: #{inspect(b.scope)}]"
+          "  [name: #{inspect(b.name)}, offset: #{b.offset}]"
         end) <> "\n]\n"
 
     tmp = path() <> ".tmp"

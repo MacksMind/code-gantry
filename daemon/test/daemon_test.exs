@@ -45,7 +45,7 @@ defmodule CodeGantryDaemonTest do
       config: "cfg.yaml",
       branch: "work",
       command: [fake],
-      bays: [%{name: "bay1", offset: 100, scope: ["p.001"]}]
+      bays: [%{name: "bay1", offset: 100}]
     }
 
     System.put_env("CODE_GANTRY_DAEMON_STATE", state)
@@ -73,14 +73,14 @@ defmodule CodeGantryDaemonTest do
     end
   end
 
-  test "a missing bay is made with mk-bay, then a run starts in it with its scope", %{root: root, host: host, state: state} do
+  test "a missing bay is made with mk-bay, then a run starts in it", %{root: root, host: host, state: state} do
     File.write!(Path.join(root, "exit"), "0")
     {:ok, _} = Bay.start_link({host, hd(host.bays)})
     wait_for(fn -> File.exists?(Path.join(root, "calls")) and String.contains?(calls(root), "argv:") end)
     wait_for(fn -> String.contains?(status(state), "bay1 finished") end)
     log = calls(root)
     assert log =~ "mk-bay bay1 100 work"
-    assert log =~ ~r/argv: run .*repo-bay1\/cfg.yaml --run-id \d{8}-\d{6}-bay1 --scope p.001/
+    assert log =~ ~r/argv: run .*repo-bay1\/cfg.yaml --run-id \d{8}-\d{6}-bay1$/m
     assert File.read!(Path.join(state, "bay1.log")) =~ "line one"
   end
 
@@ -159,11 +159,11 @@ defmodule CodeGantryDaemonTest do
 
     test "placing a bay makes its checkout, starts a run, and is remembered", %{root: root, host: host, state: state} do
       File.write!(Path.join(root, "exit"), "0")
-      line = Control.place("bay3", 300, ["p.002"])
+      line = Control.place("bay3", 300)
       assert line =~ ~r/^bay3: placed at offset 300/
       wait_for(fn -> String.contains?(status(state), "bay3 finished") end)
       assert calls(root) =~ "mk-bay bay3 300 work"
-      assert calls(root) =~ ~r/argv: run .*repo-bay3\/cfg.yaml --run-id \d{8}-\d{6}-bay3 --scope p.002/
+      assert calls(root) =~ ~r/argv: run .*repo-bay3\/cfg.yaml --run-id \d{8}-\d{6}-bay3$/m
       # The placement outlives this daemon: the next start reads it back.
       assert Enum.map(Placements.load(), & &1.name) == ["bay3"]
       assert Enum.map(Placements.all(host), & &1.name) == ["bay1", "bay3"]
@@ -181,7 +181,7 @@ defmodule CodeGantryDaemonTest do
 
     test "a placement from an earlier start is a bay again", %{root: root, host: host, state: state} do
       File.write!(Path.join(root, "exit"), "0")
-      :ok = Placements.add(%{name: "bay4", offset: 400, scope: []})
+      :ok = Placements.add(%{name: "bay4", offset: 400})
       CodeGantryDaemon.Application.start_bays(host)
       wait_for(fn -> String.contains?(status(state), "bay4 finished") end)
       assert calls(root) =~ "mk-bay bay4 400 work"
@@ -204,47 +204,6 @@ defmodule CodeGantryDaemonTest do
       wait_for(fn -> String.contains?(status(state), "bay5 finished") end)
       assert calls(root) =~ "mk-bay-from-bay1 bay5 500 work project=repo"
       assert File.dir?(Path.join(Path.dirname(host.primary), "repo-bay5"))
-    end
-  end
-
-  describe "scope" do
-    alias CodeGantryDaemon.{Control, Placements}
-
-    test "a finished bay given a new scope starts a run under it", %{root: root, host: host, state: state} do
-      File.write!(Path.join(root, "exit"), "0")
-      {:ok, _} = Bay.start_link({host, hd(host.bays)})
-      wait_for(fn -> String.contains?(status(state), "bay1 finished") end)
-      assert Control.scope("bay1", ["p.003", "p.004"]) =~ ~r/^bay1: scope p.003 p.004; run \d{8}-\d{6}-bay1 started$/
-      wait_for(fn -> length(Regex.scan(~r/argv: run/, calls(root))) == 2 end)
-      assert calls(root) =~ ~r/argv: run \S+ --run-id \S+ --scope p.003 --scope p.004/
-      # Remembered past this daemon, overriding what the host file said.
-      assert [%{name: "bay1", offset: 100, scope: ["p.003", "p.004"]}] = Placements.load()
-      assert Enum.map(Placements.all(host), &{&1.name, &1.scope}) == [{"bay1", ["p.003", "p.004"]}]
-    end
-
-    test "no keys means the whole plan", %{root: root, host: host, state: state} do
-      File.write!(Path.join(root, "exit"), "0")
-      {:ok, _} = Bay.start_link({host, hd(host.bays)})
-      wait_for(fn -> String.contains?(status(state), "bay1 finished") end)
-      assert Control.scope("bay1", []) =~ ~r/^bay1: the whole plan; run \S+ started$/
-      wait_for(fn -> length(Regex.scan(~r/argv: run/, calls(root))) == 2 end)
-      [_, second] = Regex.scan(~r/argv: run [^\n]*/, calls(root))
-      refute hd(second) =~ "--scope"
-    end
-
-    test "a running bay keeps its scope until its run ends", %{root: root, host: host, state: state} do
-      File.write!(Path.join(root, "hold"), "")
-      {:ok, _} = Bay.start_link({host, hd(host.bays)})
-      wait_for(fn -> String.contains?(status(state), "bay1 running") end)
-      assert Control.scope("bay1", ["p.009"]) =~ ~r/^bay1: scope p.009 from its next run; \S+ is still running$/
-      assert [%{scope: ["p.009"]}] = Placements.load()
-      File.rm!(Path.join(root, "hold"))
-      wait_for(fn -> String.contains?(status(state), "bay1 finished") end)
-      assert length(Regex.scan(~r/argv: run/, calls(root))) == 1
-    end
-
-    test "an unknown bay is refused" do
-      assert Control.scope("bay9", []) == "no bay named bay9 on this host"
     end
   end
 

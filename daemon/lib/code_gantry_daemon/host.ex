@@ -13,7 +13,7 @@ defmodule CodeGantryDaemon.Host do
         command: ["uv", "run", "code-gantry"],   # optional; what runs the CLI
         bays: [
           [name: "bay1", offset: 100],
-          [name: "bay2", offset: 200, scope: ["td.010"]]
+          [name: "bay2", offset: 200]
         ]
       ]
   """
@@ -34,11 +34,7 @@ defmodule CodeGantryDaemon.Host do
 
     bays =
       Enum.map(Keyword.fetch!(terms, :bays), fn bay ->
-        %{
-          name: Keyword.fetch!(bay, :name),
-          offset: Keyword.fetch!(bay, :offset),
-          scope: Keyword.get(bay, :scope, [])
-        }
+        %{name: Keyword.fetch!(bay, :name), offset: Keyword.fetch!(bay, :offset)}
       end)
 
     %__MODULE__{

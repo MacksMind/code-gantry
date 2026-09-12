@@ -1,5 +1,10 @@
 # Working on this codebase
 
+**This file is not a diary.** It holds the rules, the decisions and the
+current state a next session must know, and nothing about how they came to
+be. No narrative, no account of a session's work, no incidents. History is
+in git.
+
 [README.md](README.md) is how to use CodeGantry.
 [docs/architecture.md](docs/architecture.md) is the design authority.
 [docs/future-work.md](docs/future-work.md) holds open decisions.
@@ -21,303 +26,199 @@ which xdist worker ran it.
 
 ## Direction and standing decisions
 
-This section is the project's memory. It is here rather than in any
-session's notes because the notes live on one machine and this file lives in
-git. Update it when a decision changes; date the entries.
-
 **Working agreements with the operator.** Do the named action first and
 propose extras after. `code_gantry.yaml` in a target repository takes field
 changes only, with the rationale in the commit message. Commit and push this
 repository's own changes without asking. Comments and docstrings state the
-rule, not the incident; the incidents are in git history. Watch for code in
-the wrong layer and for duplication that comes from not having thought
-through pluggability. No role is ever tied to a wire. Tests pin generated
-facts and which prompt file is present, never a sentence of prose.
+rule, not the incident. Watch for code in the wrong layer and for
+duplication that comes from not having thought through pluggability. No role
+is ever tied to a wire. Tests pin generated facts and which prompt file is
+present, never a sentence of prose. Never touch a bay's tree by hand while
+its run is live. The primary repo copy on a host is the person's; the daemon
+reads nothing from it but `bin/mk-bay`, and only when no bay of the
+repository holds the script.
 
-**Vocabulary (decided 2026-09-11).** A *bay* is a checkout plus its
-containers on a host, named `<repo>-bayN` and made by the target's
-`bin/mk-bay`, on offset ports. The plain-named checkout on a host is the
-*primary repo copy*, the person's, never a bay, and the only one that may
-bring up the default ports. A *run* occupies a bay. A *key* names a plan
-node. The *ledger* is the record holding the plan tree, key states,
-findings and drawn stages, derived from one append-only sequence of
-events. A project's ledger is one name, `ledger.name` (`<repo>/<project>`),
-in a DynamoDB table every host writes (decided 2026-09-11); `ledger.path`
-is the older shape, a SQLite file on one host. An *origin* names the host
-that wrote an event, set by `CODE_GANTRY_ORIGIN`.
+**Vocabulary.** A *bay* is a checkout plus its containers on a host, named
+`<repo>-bayN`, made by the target's `bin/mk-bay` on offset ports. The
+plain-named checkout on a host is the *primary repo copy*, the person's,
+never a bay, and the only one that may bring up the default ports. A *run*
+occupies a bay. A *key* names a plan node. The *ledger* is the record
+holding the plan tree, key states, findings and drawn stages, derived from
+one append-only sequence of events; a project's ledger is one name,
+`ledger.name` (`<repo>/<project>`), in a DynamoDB table every host writes.
+`ledger.path` names a SQLite file instead, for a project on one host. An
+*origin* names the host that wrote an event, set by `CODE_GANTRY_ORIGIN`.
+There is no scope: every derivation fans out to every bay on every host,
+and claims in the table are what keep two bays off one key. The run's
+`--scope` and `key_scope` are to be removed.
 
-**Topology (revised 2026-09-11).** Hosts never address each other. Code
-moves through the git remote: every landing is a squash, `pull --rebase`,
-a re-run of the suite only if the pull brought commits, and a fast-forward
-push of the project branch alone. The record of the work is one DynamoDB
-table every host writes directly, through `ledgerstore.py`: a host that can
-reach the models can reach the table, and a host that cannot — a closed
-laptop, an RV off cellular — is idle, so there is nothing to reconcile and
-no merge rule to write. The table and the credentials come from the
-repository's credentials file (`CODE_GANTRY_LEDGER_TABLE` and the AWS
-variables), never from config; `infra/` provisions them with CDK as the
-stack `CodeGantry`; the ledger's IAM user can append and read and not
-delete, which makes the log append-only by policy. The earlier design —
-one JSON-lines file per origin on `refs/code_gantry/ledger/<origin>`,
-synced at four seams and on the daemon's clock, "a central database only
-ever as a replica" — rested on a disconnected host keeping working; it
-cannot, because the models are on the internet, and the operator struck
-it. Scopes are per host; within a host, bays share the drawn-stage queue
-under the planner lock, so no scope is needed between them.
+**Topology.** Hosts never address each other. Code moves through the git
+remote: every landing is a squash, `pull --rebase`, a re-run of the suite
+only if the pull brought commits, and a fast-forward push of the project
+branch alone. The record is the table, written directly by runs through
+`ledgerstore.py`: a host that can reach the models can reach the table, and
+a host that cannot is idle, so there is nothing to reconcile. The table and
+the credentials come from the repository's credentials file
+(`CODE_GANTRY_LEDGER_TABLE`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_DEFAULT_REGION`), never from config. `infra/` is the CDK app: stack
+`CodeGantry` in `us-east-1`, table `code-gantry-ledger`, IAM user
+`code-gantry` granted the table and never `DeleteItem`, its key in Secrets
+Manager as `code-gantry/ledger-user`. Within a host, bays share the
+drawn-stage queue under the planner lock, named for the ledger's identity.
 
-**Landing across hosts is optimistic, never leased (decided 2026-09-11).**
-Rebase, test, push; a push the remote refuses after a green suite is a
-retry — pull again, test again, push again — bounded by a retry count, with
-a conflict or a red combined tree stopping for a person. No lease ref on the
-remote: a lease can be held by a dead process and blocks a host whose suite
-would have passed. Within a host the suite lock serialises landings. The
-intended reordering, not yet built: squash the stage into one candidate
-commit on its own branch, rebase that onto the pulled tip, run the full
-suite once there, then fast-forward and push — one suite per landing, and
-the candidate stays a branch a rework can amend. The same landing serves a
-person's pull request, with the failure returned to whoever authored the
-candidate.
+**Landing across hosts is optimistic, never leased.** Rebase, test, push; a
+push the remote refuses after a green suite is a retry — pull again, test
+again, push again — bounded by a retry count, with a conflict or a red
+combined tree stopping for a person. No lease ref on the remote: a lease
+can be held by a dead process and blocks a host whose suite would have
+passed. Within a host the suite lock serialises landings. Intended, not
+built: squash the stage into one candidate commit on its own branch, rebase
+that onto the pulled tip, run the full suite once there, then fast-forward
+and push — one suite per landing, and the candidate stays a branch a
+rework can amend. The same landing serves a person's pull request.
 
-**Project state in the table, orchestration state in the daemons
-(decided by the operator 2026-09-11, replacing "the mesh is control, never
-state", which had been a constraint handed to him rather than a choice).**
-Project state — plan, claims as leases, drawn stages, findings, greens,
-landings — is the table's, written by runs directly and correct with no
-daemon anywhere. Orchestration state — placements, which run is live in
-which bay, host capacity and code version, pause and resume intent, the
-nudge that a landing just happened — is the daemons', in Mnesia once the
-mesh forms, each host the single writer of its own bay records, so a
-partition there delays and never loses. Daemons may dial either way, since
-the cookie is the only credential; a laptop joins as a hidden node. A landed change under `daemon/` is
-hot-loaded by each daemon at its own safe point, with `code_change`
-carrying GenServer state; Python workers restart from new code at a stage
-boundary. That is how the self-improvement loop reaches both languages.
+**Project state in the table, orchestration state in the daemons.** Project
+state — plan, claims as leases, drawn stages, findings, greens, landings —
+is the table's, written by runs directly and correct with no daemon
+anywhere. Orchestration state — placements, which run is live in which bay,
+host capacity and code version, pause and resume intent, the nudge that a
+landing happened — is the daemons', in Mnesia once the mesh forms, each
+host the single writer of its own bay records. Daemons may dial either way,
+since the cookie is the only credential; a laptop joins as a hidden node.
 
-**Test bed (2026-09).** The Spark (this host, a DGX with 121 GB unified
-memory, hostname `spark`) and the operator's MacBook. The two reach each
-other over Tailscale in both directions; what is one-way is credentials:
-the Spark holds no private keys, so SSH is Mac-to-Spark only, and anything
-the Spark initiates toward the Mac must need no key — a BEAM connection
-under the shared cookie qualifies, an SSH session does not. Multi-host is
-proven between those two before any cloud host. On the Spark: `/home/you/projects/app/acme_app` is
-the primary copy, still running as a bay for now, and `acme_app-bay2`
-is the second bay, ports offset by 100. The technical-debt project's ledger
-is `acme_app/technical-debt` in the table since 2026-09-12 00:09
-UTC: the Spark's SQLite file, 368 events, imported once; `ledger.name`
-replaced `ledger.path` in the config (target commit 239895796); both
-ledger refs deleted from GitHub. The old SQLite files are inert copies.
-The Spark now has the Mac's shape: the primary copy handed back on
-`technical-debt`, `bay1` at offset 200 and `bay2` at offset 100 under
-its daemon (`code_gantry_daemon@host-b`, origin `host-b`), on
-its packaged Elixir 1.14/OTP 24, which compiles and tests the daemon
-clean; the `.tool-versions` pin is honoured on neither host yet. Credentials are per repository, one file at the
-target's root, `<repo>/.code_gantry/env`, ignored there and named by every
-project's config as `../../.code_gantry/env` (landed as add9a0a in the
-target on 2026-09-11); a repository is one client. What a run writes stays
-per project under `docs/<project>/.code_gantry/`. Never host-level. The Rails 5
-project still keeps its ledger under its work dir. Remote landing is on for
-technical-debt, off for Rails 5.
+**Elixir is the control plane.** The daemon runs the process. A Claude Code
+session, or `claude -p`, is an escalation path the control plane calls; the
+operator role's model transport is a pluggable command. Anything a person
+or a session does by hand is a gap: log it below as a verb the daemon owes.
+Verbs it has: `retry`, `place`. Verbs it owes: `pause`, `resume` and `stop`
+per bay and per host; a status view across hosts; putting down the suite
+workers a killed run leaves in its container (`docker compose exec`
+survives its client); hot reload, so a new verb costs no restart; the code
+pickup; the operator invocation.
 
-**Sequence.** (1) the ledger holds the plan — landed; (2) bays behind one
-ledger, the suite and planner locks, drawn stages, leases — landed; (3) the
-per-host daemon: an Elixir Mix application under `daemon/`, started with
-`bin/daemon start`, reading `~/.config/code_gantry/host.exs`, supervising
-`code-gantry run` per bay, making a missing bay with `bin/mk-bay`, syncing
-the ledger refs on a clock, answering `bin/daemon status`; toolchain pinned
-with `.tool-versions` and `mise` as a floor (the Spark's packaged Elixir is
-1.14 on OTP 24, the Mac runs 1.20) — landed, tested against a fake CLI, not
-yet run for real on the Spark. Its first Mac start (2026-09-11) could not
-spawn `bin/mk-bay`; after the spawn fixes were pulled it made
-`acme_app-bay1`, and the first run there stopped in preflight because
-a host that has never run the project holds no plan until a sync brings the
-other origins' events — so `run` now syncs before preflight under
-`remote_landing`, and the three argv shapes the daemon composes are parsed
-through the real CLI in `tests/test_daemon_argv.py`, which found the sync
-and resume shapes wrong before the Mac did. The Mac's next run failed
-preflight on `base_ref 'upgrade/rails-5' exists`: `mk-bay` clones from
-the primary copy, so a bay holds only the branches that copy had locally.
-Fixed in preflight (c41a0b4), not `mk-bay`: a base ref that does not
-resolve here and a project branch missing here are fetched from origin
-into local branches — the project branch only under `remote_landing`,
-which is what makes origin its home — each with its own check line, since
-on a fresh host `ensure_project_branch` would otherwise cut the project
-branch afresh from the base. The Mac's first suite then failed 938 of
-6,168 by one mechanism, every Selenium session removed at one instant for
-inactivity: the grid's 300 s default, outlasted by a worker's non-browser
-stretch while a second run shared the machine. The bay's compose now sets
-`SE_NODE_SESSION_TIMEOUT: 1800` (target commit c72a331a1, ahead of origin
-until the Mac lands). `bin/daemon retry <bay>` (6879534) relaunches a
-stopped bay with no restart, and the clock sync reads a bay's config,
-never the primary's (c18d7dc); (4) the ledger in a DynamoDB table every host writes — `ledgerstore.py`
-under `ledger.py`, the refs and their sync deleted, `ledger import` for the
-old files — landed 2026-09-11 (d2c8284) in place of the ref sync, and
-preflight deduplication through `suite.green` — landed; (5) remote bays and scopes at placement; (6) an observer role
-that writes findings only; (7) CodeGantry improving itself from its own run
-artifacts. The daemon adds uptime, capacity, reload at the pause seam and a
-view, never a correctness property: a run started by hand with no daemon
-must behave the same.
+**Test bed.** The Spark (a DGX, hostname `spark`, origin `host-b`,
+packaged Elixir 1.14 on OTP 24) and the operator's MacBook (hostname
+`host-a`, origin `host-a-old`, Homebrew Elixir 1.20 on OTP 29), reaching
+each other over Tailscale; the Spark holds no private keys, so SSH is
+Mac-to-Spark only. `.tool-versions` pins Erlang 27.3.4 and Elixir 1.18.4;
+neither host honours it yet, and `bin/daemon` does not go through `mise`.
+Both hosts run the daemon from `~/projects/code-gantry` on `elixir-daemon`,
+node `code_gantry_daemon@<origin>`, host file `~/.config/code_gantry/host.exs`,
+state under `~/.local/state/code_gantry/daemon/`. On the Spark:
+`/home/you/projects/app/acme_app` is the primary copy, handed
+back to the person on `technical-debt`; `acme_app-bay1` (offset 200)
+and `acme_app-bay2` (offset 100) are its bays. On the Mac: the primary
+copy is the person's working tree on another branch and carries no
+`bin/mk-bay`; `acme_app-bay1` (offset 100) and `acme_app-bay2`
+(offset 200, placed) are its bays. Credentials are per repository, one file
+at the target's root, `<repo>/.code_gantry/env`, ignored there and named by
+every project's config as `../../.code_gantry/env`; on the Mac's primary
+the branch checked out predates that ignore line, so `.code_gantry/` is in
+its `.git/info/exclude`. The technical-debt project's ledger is
+`acme_app/technical-debt` in the table; its config names it with
+`ledger.name`, and `remote_landing` is on. The Rails 5 project still keeps a
+SQLite ledger under its work dir with `remote_landing` off. The Claude Code
+CLI is installed and authenticated on both hosts. No ledger refs exist on
+GitHub; the old SQLite files are inert copies. In the target: the Spark's
+primary copy holds stage branch `technical-debt-stage/021-…` (an attempt on
+`td.015`, the person's to keep or delete), its bay2 holds
+`technical-debt-stage/004-…` from a crashed run, and `PORT_REDIS_SESSIONS`
+is an unused variable in every bay's `.env`.
 
-**Build order and open decisions (kept current; last 2026-09-11).** The
-queue of what to build next, in order, and what waits on the operator. A
-session picks up from here; a decision the operator makes moves from the
-second list into the first or is struck.
+**Sequence.** Landed: the ledger holds the plan; bays behind one ledger
+with the suite and planner locks, drawn stages, leases; the per-host daemon
+(`bin/daemon start|stop|status|logs|retry|place`), tested against a fake
+CLI and running on both hosts; the ledger in the table with `ledger
+import` for the old files; preflight skipping a tip any origin proved green.
+Next: (5) placements as the daemon's record in place of the host file's
+bays; (6) the operator role; (7) CodeGantry improving itself from its own
+run artifacts. The daemon adds uptime, capacity, reload at the pause seam
+and a view, never a correctness property: a run started by hand with no
+daemon must behave the same.
 
-Build next, in order:
+**Build order.** In order:
 1. The landing reorder: one candidate commit on the stage branch, rebase
-   onto the pulled tip, one full suite there, fast-forward and push; retries
-   bounded by a config field; the verify layer's full suite moves into
-   publication. Then a rebase conflict as a rework rather than an escalation.
-2. The MacBook as a host: pull, `mise install`, host file, `bin/daemon
-   start`; the first cross-host sync and the first Mac landing.
-3. The daemon's control plane: distributed-Erlang mesh with the Mac as a
-   hidden node; one status view across hosts; start and stop from anywhere;
-   liveness for leases; hot reload of `daemon/` at a safe point. The first
-   verb is in (2026-09-11): the daemon starts as `--sname code_gantry_daemon`
-   with a cookie under its state dir, writes its node name beside the
-   status file, and `bin/daemon retry` is an `--rpc-eval` into `Control`;
-   status, stop and the mesh go through that same door. Bay names are
-   registered locally, never in `:global`, which would kill one of two
-   `bay1`s on the first connection between daemons. The daemon
-   also fetches and fast-forwards its own code-gantry checkout at that
-   point and starts the next worker from it, so one landing reaches every
-   host without anyone pulling. Decide here what Python moves into Elixir:
-   move a piece when its reason to change is the daemon's (locks, leases,
-   the take-before-derive queue, the sync clock, status); leave what is
-   bound to a provider, a repository or a gate (model clients and dialects,
-   gates, edit tools, git, the ledger's derivations). Prompts are files read
-   per call, so they need no restart, but they reach another host only by
-   that same fetch: a landed prompt change is live everywhere one interval
-   after it lands, and out of sync until then.
-4. The decision queue reachable from Telegram: every finding with
-   `needs: human`, every escalated or paused run, every candidate waiting on
-   a person, delivered as a message with the reply that answers it — answer,
-   release, drop, resume, pause — writing the same ledger events and CLI
-   calls a person at a terminal would. No human-in-the-loop Markdown
-   document; the ledger's findings are the queue and Telegram is a client of
-   it, served by the daemon.
+   onto the pulled tip, one full suite there, fast-forward and push;
+   retries bounded by a config field; the verify layer's full suite moves
+   into publication. Then a rebase conflict as a rework rather than an
+   escalation.
+2. The daemon's owed verbs, above, starting with `pause`, `resume` and
+   `stop`, and the workers a killed run leaves behind.
+3. The control plane: distributed-Erlang mesh with the Mac as a hidden
+   node (`:net_kernel.monitor_nodes`; bay names are registered locally,
+   never in `:global`); one status view across hosts; hot reload of
+   `daemon/` (`:code.load_file` per module, `code_change` for state); the
+   code pickup — on a tick or a nudge, fetch, classify by path, fast-forward
+   only a clean checkout of the daemon's own, verify with `mix compile` and
+   `mix test` on the pinned toolchain, hot-load Elixir, and pause and
+   resume every bay when Python changed, Elixir first. The nudge is sent
+   by the landing host after its push and only shortens the wait;
+   `bin/daemon reload` loads local code into one daemon for a test and
+   never nudges. A laptop catches up on wake, read from the VM's
+   time-offset monitor, retrying the remote on a short backoff. Prompts are
+   read per call and must be pinned per run. What Python moves into
+   Elixir: a piece whose reason to change is the daemon's (locks, leases,
+   the take-before-derive queue, status); not what is bound to a provider,
+   a repository or a gate. The derivation of views stays in one language;
+   Elixir asks through a `--json` face on the ledger commands until it is
+   ported as a decision.
+4. The decision queue: every finding with `needs: human`, every escalated
+   or paused run, every candidate waiting on a person, reachable from
+   Telegram with the reply that answers it, writing the same events the
+   CLI would. The operator: `claude -p` (or another model route) spawned by
+   the daemon on a bay exiting 1 or 2, a `needs: human` finding, a red
+   preflight suite; a prompt file; read and measure anything, findings on
+   the ledger, `retry`, a candidate branch, never the project branch; a
+   transcript per invocation; bounded per event and per hour. Its work on
+   CodeGantry is accounted separately from the target project's, under
+   CodeGantry's own project.
 5. Pull requests as candidates: intake, review comments as the rework
    channel, keys on a pull request closing plan items, branch protection
    routing merges through the orchestrator.
 6. The observer role that writes findings only, and CodeGantry improving
-   itself from its own run artifacts, both languages. Decided 2026-09-11:
-   the operator is a fourth role, `claude -p` spawned by the daemon on
-   the events a person used to watch for — a bay exiting 1 or 2, a
-   finding with `needs: human`, a red preflight suite — with a prompt
-   file, a bounded remit (read and measure anything; findings on the
-   ledger; `retry`; a candidate branch, never the project branch) and a
-   transcript per invocation. Its work on CodeGantry is accounted
-   separately from the target project's: its records, ledger and costs
-   live under CodeGantry's own project, and the target's run holds only
-   the finding that pointed at it. The Claude Code CLI is installed and
-   authenticated on the Spark and the Mac. A landing to code-gantry is
-   picked up by every host from the remote — fast-forward, verify on the
-   host's toolchain, hot-load Elixir, pause and resume every bay when
-   Python changed — and a nudge over the mesh, sent after the push, only
-   shortens the wait; `bin/daemon reload` loads local code into one
-   daemon for a test and never nudges. A laptop catches up on wake,
-   detected by the VM's time-offset monitor.
+   itself, both languages.
+7. Also owed: remove `--scope` and `key_scope` from the run; a host fact
+   for preflight that a red suite proves as well as a green one, and a pull
+   before preflight so the tip asked about is the tip the run uses; the
+   `Path.stat` crash on a brace glob handed to it as a literal path; an
+   unplaced bay; the toolchain pin honoured by `bin/daemon`.
 
-Waiting on the operator:
+**Waiting on the operator.**
 - Whether the executor comparison, Flash-Next against Luna, is worth a
   measured run once the Spark is idle, or whether Luna stands.
 - Whether to enable `remote_landing` for the Rails 5 project and move its
-  ledger beside technical-debt's.
-- When the Spark's runs stop. Decided 2026-09-11: the Spark takes the
-  Mac's shape — the primary copy handed back to its person, `bay1` made
-  at offset 200 (bay2 holds 100 and the primary the defaults), both under
-  the daemon. In order at the stop: `code-gantry pause` on both runs, a
-  last hand-sync so the hyphen ref's events reach the `code_gantry` one,
-  the ledger path and field moved, the lock symlink removed, the hyphen ref
-  deleted, this branch pulled and `mise install` on the Spark, the host
-  file written, `bin/daemon start`. Only the moment is still open; the
-  Spark's bays then run current code, which is what makes the ledger
-  exchange two-way for the first time.
-- How a green tree is tracked. `suite.green` carries a tree fact and a host
-  fact in one row and `proven_green` ANDs them, so a Spark green never lets
-  the Mac skip a suite; and preflight asks about HEAD before `precheck`
-  pulls, so it proves a tree the run then discards. Proposed: the tree
-  fact readable from any origin, a separate host fact that a red suite
-  proves as well as a green one, and a pull before preflight under
-  `remote_landing`. Measured 2026-09-11: zero `suite.green` events in 20
-  landings, because every Spark bay predates c3e5bf8 — the reader has
-  never had a record to read.
-- Done 2026-09-12: the stop, the import, the config switch, the refs
-  deleted, the lock symlink removed, both daemons on a55367f. Left behind
-  by it, each worth a look: the primary copy on the Spark holds stage
-  branch `technical-debt-stage/021-…` with an attempt on `td.015` that the
-  pause caught at a revision seam (its claim is released by the next Spark
-  run; the branch is a person's to keep or delete); `acme_app-bay2`
-  holds stage branch `…/004-…` with three commits from a run that crashed
-  on 2026-09-11 21:11 with `OSError: File name too long` — a brace glob
-  handed to `Path.stat` as a literal path, a code-gantry defect not yet
-  fixed; `PORT_REDIS_SESSIONS` is an unused variable in every bay's `.env`
-  since the base's one-instance Valkey layout was merged into
-  `technical-debt` (5fed041de).
-- The dispositions `discard`, `debt` and `raise` now mean something, and
-  the operator wants to discuss them before any finding is disposed of
-  with one; none has been used yet.
-
-**Elixir is the control plane (the operator, 2026-09-12).** A Claude Code
-session is an escalation path the control plane calls, not the thing that
-runs the process — and any number of decisions will need a model, reached
-through the Claude CLI or another route, so the operator role's transport
-is a pluggable command, never a hard-wired `claude -p`. Anything a person
-or a session has to do by hand is a functionality gap: a wish rather than
-an absolute, the daemon handling as much as is reasonable, but every such
-act is logged here as a verb the daemon owes. Verbs it has: `retry`, `scope`,
-`place` (3db4cd9: the placement remembered beside the status file, the bay
-under a dynamic supervisor, its checkout made from the primary or from
-another bay of the repository through `MK_BAY_PROJECT`, target 02e407e47).
-Verbs it owes, from what was done by hand on 2026-09-11/12: `pause`,
-`resume` and `stop` per bay and per host; a status view across hosts; the
-workers a killed suite leaves in the container (`docker compose exec`
-survives its client) put down by the run or the daemon that ended it; the
-ledger import and the config switch, which were one-offs; a push to the
-project branch from a bay whose run is live, which must never be done by
-hand again; hot reload, so a verb added does not cost a restart; the code
-pickup; and the operator invocation itself.
-- Decided 2026-09-12: a green suite counts from any origin (b598a0c);
-  preflight skips a tip any host proved and names the host. Still open:
-  a host fact a red suite proves as well, and pulling before preflight so
-  the tip asked about is the tip the run will use.
-- Scope. A bay's scope (`--scope`, the host file's `scope:`) partitioned
-  the plan between hosts under the refs design, when a host could not see
-  another's claims live. With the table every claim is visible as it is
-  written, so the reason is gone; scope survives as an optional "this bay
-  draws only from these keys" and the default is none. `bin/daemon scope
-  <bay> [key …]` changes it on a running daemon (b598a0c), no keys meaning
-  the whole plan; the Mac's bay1 finished at 00:29 because its inherited
-  scope, `td.010`, was one landed item.
-
+  ledger into the table.
+- The dispositions. `fold`, `discard`, `debt` and `raise` each mean
+  something in the views; none has been used, and the operator wants to
+  discuss them first — in particular what `debt` should carry, which today
+  is the finding's text as a new item under a section named by the answer.
 - A `checks` entry in the technical-debt config, backed by a script in the
   target's `bin/`, failing on a quoted path after an HTTP verb in an added
-  line under `spec/requests/`: three reviewer reworks on 2026-09-11 were
-  that convention, and `forbidden_patterns` exempts test files by design.
+  line under `spec/requests/`: `forbidden_patterns` exempts test files by
+  design, and the reviewer reworks that convention by hand.
 
 **Measured facts worth keeping.** Through OpenRouter, Fable 5.1 on the
-Messages wire drops the schema and refuses tools; on Responses it carries both
-and never caches; on chat completions it carries schema, strict tools, effort
-and a one-hour cache, and it serves the full planner prompt. The local
-Flash-Next executor took about four times Luna's median wall clock per
-attempt on one stage and serves one request at a time, which makes it the
-wrong executor for more than one bay; the technical-debt project runs Luna.
-Two bays ran together on 2026-09-11 for three hours: nine landings on
-`technical-debt` through origin, one derivation feeding both bays, the
-suite lock and the planner lock holding on first contention, a bay taking
-a drawn stage after waiting 530 s for the other's derivation, and one
-bounce on a stage both held that exposed and fixed three defects (head
-taken at derivation, a bounce dropping only its own record, a bounce never
-becoming a revision). The reviewer reworked three stages for the same
-route-helper convention; the fix is a mechanical check, listed above.
-The Mac's full suite is 8 minutes on a 14-cpu, 16 GB Docker VM with the
-machine to itself, 13 sharing it with one more suite, 25 sharing it with a
-fourteen-worker one; the flake adjudication in preflight fires and says so
-on the check line (one file excused on 2026-09-12 00:19).
-`preflight-suite.log` under the work dir is a failed preflight's raw
-capture and the only place its `Failures:` blocks survive: the run log
-clips the middle of a 5 MB report and the tail is container teardown. At
-21:14 on 2026-09-11 the Spark's live hyphen ref was 22 events past the
-hand-synced `code_gantry` one.
+Messages wire drops the schema and refuses tools; on Responses it carries
+both and never caches; on chat completions it carries schema, strict tools,
+effort and a one-hour cache, and it serves the full planner prompt. The
+local Flash-Next executor took about four times Luna's median wall clock
+per attempt on one stage and serves one request at a time, which makes it
+the wrong executor for more than one bay; the technical-debt project runs
+Luna. Two bays on one host share a derivation, hold the suite and planner
+locks on first contention, and a bay takes a drawn stage after waiting on
+the other's derivation. The reviewer reworks the route-helper convention
+by hand; the fix is a mechanical check, listed above. The Mac's full suite
+is 8 minutes on a 14-cpu, 16 GB Docker VM with the machine to itself, 13
+sharing it with one more suite, 25 sharing it with a fourteen-worker one;
+the Spark's is about 13. Selenium's grid drops a session after 300 s idle
+by default; a worker's non-browser stretch under contention outlasts that,
+so the target's compose sets `SE_NODE_SESSION_TIMEOUT: 3600`. Preflight's
+flake adjudication fires and says so on the check line, up to
+`flake_rerun_max_files` files. `preflight-suite.log` under the work dir is
+a failed preflight's raw capture and the only place its `Failures:` blocks
+survive; it is appended across preflights, so anchor to the run.
+DynamoDB's `ItemCount` in `describe-table` and the console lags by hours;
+a `Query` is the live count.
 
 **Operating this host.** The Claude Code harness stops its own background
 tasks on a "low memory" reading that page cache alone can trigger; it killed
@@ -332,8 +233,9 @@ directory.
 **Operating the Mac.** Idle sleep on AC is one minute: `caffeinate -i -s
 -w <daemon pid>` after every `bin/daemon start`, or a suite stops when the
 lid does. A bay that stopped for a person is answered with `bin/daemon
-retry <bay>`; `stop` and `start` end every bay's run on the host. The
-daemon reads only the bays; the primary copy is the person's.
+retry <bay>`; `stop` and `start` end every bay's run on the host, and a run
+killed mid-suite leaves its workers in the container. The daemon reads only
+the bays; the primary copy is the person's.
 
 ## Invariants
 
@@ -522,13 +424,11 @@ site goes quietly missing.
   daemon, a phone and `claude -p` write one event and get one result; a
   `debt` answer is two events, the entry's upsert and the answer naming it,
   under one lock. Findings are answered one at a time in any order; the
-  fold derives a set from the views, and nothing in the ledger is a
-  cursor. Three of the four dispositions were recorded and interpreted by
-  nothing for as long as only `fold` had a consumer.
+  fold derives a set from the views, and nothing in the ledger is a cursor.
 - **The event vocabulary is the contract between the languages.** Both
   write the table, so a kind or a field is added and never changes
   meaning; an unknown kind is ignored by an older reader, a changed one is
-  not. Any change here is a decision, dated in this file.
+  not.
 - **A fold is a rendering policy, not a document edit.** Landings and answered
   findings move from the projection into the node bodies when the projection
   outgrows `ledger.fold_ratio` of the plan text; the run does it at the
