@@ -669,6 +669,45 @@ defmodule CodeGantryDaemonTest do
       :gen_tcp.close(second)
     end
 
+    test "a caller with something better to do is told the name is busy", %{path: path, name: name} do
+      # The lander's shape: a bay that cannot have it works a stage
+      # instead. Waiting would cost it a whole compose — a full suite —
+      # for a job somebody else is already doing.
+      first = acquire(path, name, "bay1")
+      assert "held" <> _ = line(first)
+
+      second = connect(path)
+      :ok = :gen_tcp.send(second, "try #{name} bay2\n")
+      assert "busy bay1" == line(second)
+      :gen_tcp.close(second)
+
+      :gen_tcp.close(first)
+    end
+
+    test "a refused attempt leaves nothing queued behind it", %{path: path, name: name} do
+      # A request left standing would reach the front later and be granted
+      # to a connection nobody is holding.
+      first = acquire(path, name, "bay1")
+      assert "held" <> _ = line(first)
+      second = connect(path)
+      :ok = :gen_tcp.send(second, "try #{name} bay2\n")
+      assert "busy" <> _ = line(second)
+      :gen_tcp.close(second)
+
+      wait_for(fn -> length(Semaphore.queue(name)) == 1 end)
+      :gen_tcp.close(first)
+      wait_for(fn -> Semaphore.holder(name) == nil end)
+    end
+
+    test "an attempt at a free name holds it for as long as the connection", %{path: path, name: name} do
+      socket = connect(path)
+      :ok = :gen_tcp.send(socket, "try #{name} bay1\n")
+      assert "held" <> _ = line(socket)
+      assert Semaphore.holder(name).label == "bay1"
+      :gen_tcp.close(socket)
+      wait_for(fn -> Semaphore.holder(name) == nil end)
+    end
+
     test "a holder that dies releases what it held", %{path: path, name: name} do
       # The property the whole design turns on. The run is killed, or the
       # machine it ran on drops off; nothing gets a chance to say so.

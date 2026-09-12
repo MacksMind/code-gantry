@@ -154,6 +154,57 @@ def _gone(conn: socket.socket) -> bool:
 
 
 @contextlib.contextmanager
+def attempt(name: str, label: str, log=None):
+    """Hold `name` for the block if it is free *right now*, and say whether
+    it is. Yields True or False and never waits.
+
+    For a caller with something else it could be doing. Waiting to be the
+    one that composes a landing would cost a bay a whole suite for a job
+    another bay is already doing, and the stage it could have worked
+    instead is what that job is waiting for.
+
+    **With no daemon, nobody may have it.** Not "it is free": one host
+    cannot decide alone that it is the only one doing this, and everything
+    asked for this way is work that can wait for the next bay round.
+    """
+    if held(name):
+        _held()[name] += 1
+        try:
+            yield True
+        finally:
+            _held()[name] -= 1
+        return
+
+    conn = _say(f"try {name} {label_of(label)}", None, log)
+    if conn is None:
+        yield False
+        return
+
+    try:
+        answer = conn.makefile("r").readline().strip()
+    except OSError:
+        answer = ""
+    if not answer.startswith("held"):
+        conn.close()
+        if log:
+            log(f"{name!r} is busy: {answer[len('busy'):].strip() or 'another run has it'}")
+        yield False
+        return
+
+    _held()[name] = 1
+    try:
+        yield True
+    finally:
+        _held().pop(name, None)
+        conn.close()
+
+
+def label_of(label: str) -> str:
+    """One line, never empty: the label is the rest of a request."""
+    return " ".join(label.split()) or "a run"
+
+
+@contextlib.contextmanager
 def presence(run_id: str, bay: str, log=None):
     """Announce this run as alive for the length of the block.
 

@@ -21,7 +21,8 @@ class FakeDaemon:
     every connection and when each one ended, because the release is the
     close and nothing else."""
 
-    def __init__(self, path: Path, *, grant_after: float = 0.0, refuse: bool = False, runs=None):
+    def __init__(self, path: Path, *, grant_after: float = 0.0, refuse: bool = False, runs=None, busy: str = ""):
+        self.busy = busy
         self.path = path
         self.grant_after = grant_after
         self.refuse = refuse
@@ -51,6 +52,15 @@ class FakeDaemon:
             self.asked.append(line)
             if line.startswith("runs"):
                 conn.sendall(("".join(f"{r}\n" for r in self.runs) + "end\n").encode())
+                return
+            if line.startswith("try"):
+                if self.busy:
+                    conn.sendall(f"busy {self.busy}\n".encode())
+                    return
+                conn.sendall(b"held ref-2\n")
+                self.granted.set()
+                conn.recv(1)
+                self.closed.set()
                 return
             if line.startswith("presence"):
                 self.announced.append(line)
@@ -327,3 +337,50 @@ class TestTheTwoLocksAreNeverNested:
             f"nodes.py reaches for the mesh semaphore while holding the ledger's "
             f"writer at line(s) {inside}; the two must never nest that way"
         )
+
+
+class TestAnAttemptThatWillNotWait:
+    """A caller with something better to do: the lander asks whether it may
+    compose, and a bay that cannot works a stage instead. Waiting would cost
+    it a whole suite for a job somebody else is already doing."""
+
+    def test_a_free_name_is_held_for_the_block(self, daemon_state):
+        daemon = FakeDaemon(mesh.socket_path())
+        try:
+            with mesh.attempt("landing-abc", "bay1") as got:
+                assert got is True
+                assert daemon.granted.is_set()
+            assert daemon.closed.wait(2), "the hold outlived the block"
+        finally:
+            daemon.stop()
+        assert daemon.asked == ["try landing-abc bay1"]
+
+    def test_a_busy_name_answers_at_once_and_says_who(self, daemon_state):
+        daemon = FakeDaemon(mesh.socket_path(), busy="host-b bay1")
+        said: list[str] = []
+        started = time.monotonic()
+        try:
+            with mesh.attempt("landing-abc", "bay2", said.append) as got:
+                assert got is False
+        finally:
+            daemon.stop()
+        assert time.monotonic() - started < 1, "an attempt waited"
+        assert any("host-b bay1" in line for line in said), said
+
+    def test_with_no_daemon_nobody_may_have_it(self, daemon_state):
+        # Not "it is free". One host cannot decide alone that it is the
+        # only lander, and a compose is not work that must happen now.
+        said: list[str] = []
+        with mesh.attempt("landing-abc", "bay1", said.append) as got:
+            assert got is False
+        assert any("no daemon" in line for line in said), said
+
+    def test_a_name_this_thread_already_holds_is_still_held(self, daemon_state):
+        daemon = FakeDaemon(mesh.socket_path())
+        try:
+            with mesh.hold("landing-abc", "outer"):
+                with mesh.attempt("landing-abc", "inner") as got:
+                    assert got is True
+        finally:
+            daemon.stop()
+        assert len(daemon.asked) == 1

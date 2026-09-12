@@ -23,6 +23,9 @@ defmodule CodeGantryDaemon.Semaphore.Socket do
                                    held <ref>
       <the connection closes>  ->  released
 
+      try <name> <label>       ->  held <ref>, and the connection is the hold
+                                   busy <who holds it>, and the door closes
+
       presence <run-id> <bay>  ->  alive <ref>
       <the connection closes>  ->  the run is no longer alive
 
@@ -31,7 +34,9 @@ defmodule CodeGantryDaemon.Semaphore.Socket do
                                    end
 
   `label` is the rest of the line: who is asking, shown to whoever is
-  waiting behind them. A presence is held the same way a semaphore is, and
+  waiting behind them. `try` is for a caller with something else it could
+  be doing: waiting for a name would cost more than not having it. A
+  presence is held the same way a semaphore is, and
   for the same reason: the connection is the claim that the process is
   there, and nothing has to be expired when it is not.
   """
@@ -103,6 +108,16 @@ defmodule CodeGantryDaemon.Semaphore.Socket do
     {:reply, ref, watch(state, pid, {:semaphore, ref})}
   end
 
+  def handle_call({:withdraw, ref}, _from, state) do
+    Semaphore.release(state.host.origin, ref)
+
+    for {monitor, holding} <- state.held, holding == {:semaphore, ref} do
+      Process.demonitor(monitor, [:flush])
+    end
+
+    {:reply, :ok, %{state | held: Map.reject(state.held, fn {_m, h} -> h == {:semaphore, ref} end)}}
+  end
+
   def handle_call({:presence, run_id, bay}, {pid, _}, state) do
     ref = Runs.began(state.host.origin, run_id, bay)
     {:reply, ref, watch(state, pid, {:run, ref})}
@@ -162,6 +177,8 @@ defmodule CodeGantryDaemon.Semaphore.Socket do
 
   defp asked(socket, host, server, ["acquire", name, label]), do: hold(socket, host, server, name, label)
   defp asked(socket, host, server, ["acquire", name]), do: hold(socket, host, server, name, "a run")
+  defp asked(socket, _host, server, ["try", name, label]), do: attempt(socket, server, name, label)
+  defp asked(socket, _host, server, ["try", name]), do: attempt(socket, server, name, "a run")
   defp asked(socket, _host, server, ["presence", run_id, bay]), do: alive(socket, server, run_id, bay)
   defp asked(socket, _host, server, ["presence", run_id]), do: alive(socket, server, run_id, "")
 
@@ -187,6 +204,23 @@ defmodule CodeGantryDaemon.Semaphore.Socket do
     :inet.setopts(socket, active: true)
     :gen_tcp.send(socket, "alive #{ref}\n")
     closed(socket)
+  end
+
+  defp attempt(socket, server, name, label) do
+    ref = GenServer.call(server, {:request, name, label})
+
+    if Semaphore.granted?(name, ref) do
+      :inet.setopts(socket, active: true)
+      :gen_tcp.send(socket, "held #{ref}\n")
+      closed(socket)
+    else
+      # Withdrawn at once. A request left standing would come to the front
+      # of the queue later and be granted to a connection nobody is
+      # holding, which is a name held by a caller that walked away.
+      GenServer.call(server, {:withdraw, ref})
+      holder = Semaphore.holder(name)
+      :gen_tcp.send(socket, "busy #{(holder && holder.label) || "another run"}\n")
+    end
   end
 
   defp hold(socket, _host, server, name, label) do
