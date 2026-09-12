@@ -8,6 +8,15 @@ defmodule CodeGantryDaemon.Control do
 
   alias CodeGantryDaemon.{Application, Bay, Pickup, Placements, Status}
 
+  @doc "The commit this daemon's checkout is at, and the node answering: what a pickup is confirmed by."
+  def version(host \\ nil) do
+    host = host || Status.host()
+    {sha, 0} = CodeGantryDaemon.Command.run(["git", "rev-parse", "HEAD"], host.code_gantry, [])
+    {porcelain, 0} = CodeGantryDaemon.Command.run(["git", "status", "--porcelain"], host.code_gantry, [])
+    mark = if String.trim(porcelain) == "", do: "", else: "+dirty"
+    "code-gantry #{String.slice(String.trim(sha), 0, 12)}#{mark} on #{node()} (#{host.origin})"
+  end
+
   @doc "Pick up this daemon's code from origin now, rather than at the next tick."
   def pickup, do: Pickup.tick(Status.host())
 

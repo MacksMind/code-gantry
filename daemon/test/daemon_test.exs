@@ -224,6 +224,17 @@ defmodule CodeGantryDaemonTest do
     end
   end
 
+  describe "version" do
+    test "answers the commit the daemon's checkout is at and this node", %{root: root, host: host} do
+      {cg, _other} = code_repo(root)
+      host = with_code(host, cg)
+      line = CodeGantryDaemon.Control.version(host)
+      assert line =~ ~r/^code-gantry [0-9a-f]{12} on \S+ \(#{host.origin}\)$/
+      File.write!(Path.join([cg, "src", "x.py"]), "x = 3\n")
+      assert CodeGantryDaemon.Control.version(host) =~ ~r/\+dirty on/
+    end
+  end
+
   describe "pickup" do
     alias CodeGantryDaemon.{Control, Pickup}
 
