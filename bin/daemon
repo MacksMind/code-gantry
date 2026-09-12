@@ -11,9 +11,13 @@
 # connects across a narrow version window, and the machines' own packages
 # are far enough apart that they cannot see each other at all.
 #
-# The node name is long rather than short, because a short name cannot be
-# reached from another machine. The address comes from `address:` in the
-# host file, which is untracked, so no host is named in this repository.
+# The node name comes from `address:` in the host file, which is untracked,
+# so no host is named in this repository. A dotted address is a long name
+# and a bare one is short, which is Erlang's own distinction. Long is what
+# reaches another machine unaided; short works too when each host can
+# resolve the other's bare hostname, and is what lets one daemon join a
+# mesh without the other being restarted to match it. The two kinds cannot
+# connect to each other, so every daemon in one mesh uses the same kind.
 # The cookie is the only credential between daemons, so every host in one
 # mesh holds the same cookie file.
 set -euo pipefail
@@ -38,6 +42,15 @@ address() {
   printf '%s' "$a"
 }
 
+# --name or --sname, and the name to go with it.
+node_flags() {
+  local a; a="$(address)"
+  case "$a" in
+    *.*) printf -- '--name %s@%s' "$1" "$a" ;;
+    *)   printf -- '--sname %s' "$1" ;;
+  esac
+}
+
 alive() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
 
 # A verb spoken to the running daemon: one expression evaluated on its node.
@@ -54,7 +67,7 @@ rpc() {
   # and every verb keeps working across a restart rather than only after
   # one.
   case "${node#*@}" in
-    *.*) ( cd "$HERE/daemon" && "$MISE" exec -- elixir --name "ctl-$$@$(address)" \
+    *.*) ( cd "$HERE/daemon" && "$MISE" exec -- elixir --name "ctl-$$@${node#*@}" \
              --cookie "$(cat "$COOKIE")" --rpc-eval "$node" "$1" ) ;;
     *)   elixir --sname "ctl-$$" --cookie "$(cat "$COOKIE")" --rpc-eval "$node" "$1" ;;
   esac
@@ -67,7 +80,8 @@ case "${1:-}" in
     if [ ! -f "$COOKIE" ]; then (umask 077; openssl rand -hex 16 > "$COOKIE"); fi
     cd "$HERE/daemon"
     MIX_ENV=prod "$MISE" exec -- mix compile >/dev/null
-    nohup env MIX_ENV=prod "$MISE" exec -- elixir --name "code_gantry_daemon@$(address)" \
+    # shellcheck disable=SC2046
+    nohup env MIX_ENV=prod "$MISE" exec -- elixir $(node_flags code_gantry_daemon) \
       --cookie "$(cat "$COOKIE")" \
       -S mix run --no-halt >> "$LOG" 2>&1 < /dev/null &
     echo $! > "$PIDFILE"
