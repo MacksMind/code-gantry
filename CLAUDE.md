@@ -49,8 +49,7 @@ one append-only sequence of events; a project's ledger is one name,
 `ledger.path` names a SQLite file instead, for a project on one host. An
 *origin* names the host that wrote an event, set by `CODE_GANTRY_ORIGIN`.
 There is no scope: every derivation fans out to every bay on every host,
-and claims in the table are what keep two bays off one key. The run's
-`--scope` and `key_scope` are to be removed.
+and claims in the table are what keep two bays off one key.
 
 **Topology.** Hosts never address each other. Code moves through the git
 remote: every landing is a squash, `pull --rebase`, a re-run of the suite
@@ -90,11 +89,25 @@ since the cookie is the only credential; a laptop joins as a hidden node.
 session, or `claude -p`, is an escalation path the control plane calls; the
 operator role's model transport is a pluggable command. Anything a person
 or a session does by hand is a gap: log it below as a verb the daemon owes.
-Verbs it has: `retry`, `place`. Verbs it owes: `pause`, `resume` and `stop`
-per bay and per host; a status view across hosts; putting down the suite
-workers a killed run leaves in its container (`docker compose exec`
-survives its client); hot reload, so a new verb costs no restart; the code
-pickup; the operator invocation.
+Verbs it has: `retry`; `place <bay> <offset> [config]`, a placement
+naming the project it works so bays of one repository work different
+projects; `pickup`, one tick of the code pickup now; `reload`, the local
+checkout compiled and loaded for a test on one host. The pickup runs
+every `pickup_seconds` (host file; 0 never): fetch `code_branch`, and if
+origin is ahead of a clean checkout, fast-forward, compile `daemon/` and
+load its modules into the running VM, and when `src/`, `prompts/`,
+`pyproject.toml` or `uv.lock` changed, pause every running bay at its next
+seam and resume it from the new code. Local changes, a diverged branch or
+a failed compile are reported in the `code` status row and left alone.
+Verbs it owes: `pause`, `resume` and `stop` per bay and per host; a status
+view across every host, every repository on it and the project each bay
+works, read from the table so an unreachable host shows its last state
+with a timestamp; putting down the suite workers a killed run leaves in
+its container (`docker compose exec` survives its client); `ingest`, a
+finding or an item handed to a project from a Claude session in the
+person's primary copy, fronted by a skill in the target repository; a
+finding or item moved between projects of one repository as one event;
+the nudge after a push; the operator invocation.
 
 **Test bed.** The Spark (a DGX, hostname `spark`, origin `host-b`,
 packaged Elixir 1.14 on OTP 24) and the operator's MacBook (hostname
@@ -129,7 +142,8 @@ is an unused variable in every bay's `.env`.
 with the suite and planner locks, drawn stages, leases; the per-host daemon
 (`bin/daemon start|stop|status|logs|retry|place`), tested against a fake
 CLI and running on both hosts; the ledger in the table with `ledger
-import` for the old files; preflight skipping a tip any origin proved green.
+import` for the old files; preflight pulling the project branch first and
+skipping a tip any origin proved green; the code pickup.
 Next: (5) placements as the daemon's record in place of the host file's
 bays; (6) the operator role; (7) CodeGantry improving itself from its own
 run artifacts. The daemon adds uptime, capacity, reload at the pause seam
@@ -177,11 +191,11 @@ daemon must behave the same.
    routing merges through the orchestrator.
 6. The observer role that writes findings only, and CodeGantry improving
    itself, both languages.
-7. Also owed: remove `--scope` and `key_scope` from the run; a host fact
-   for preflight that a red suite proves as well as a green one, and a pull
-   before preflight so the tip asked about is the tip the run uses; the
-   `Path.stat` crash on a brace glob handed to it as a literal path; an
-   unplaced bay; the toolchain pin honoured by `bin/daemon`.
+7. Also owed: a host fact for preflight that a red suite proves as well
+   as a green one; the `Path.stat` crash on a brace glob handed to it as a
+   literal path; an unplaced bay; the toolchain pin honoured by
+   `bin/daemon`; hot reload of a GenServer whose state shape changed
+   (`code_change`), which today needs a restart at idle.
 
 **Waiting on the operator.**
 - Whether the executor comparison, Flash-Next against Luna, is worth a
