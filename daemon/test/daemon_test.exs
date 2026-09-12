@@ -484,6 +484,18 @@ defmodule CodeGantryDaemonTest do
       assert Host.node_name(host) == :"code_gantry_daemon@10.0.0.1"
     end
 
+    test "only a node named as a daemon is another daemon" do
+      assert Host.daemon_node?(:"code_gantry_daemon@10.0.0.2")
+      assert Host.daemon_node?(:"code_gantry_daemon@spark.example.ts.net")
+      # Every verb `bin/daemon` speaks starts one of these and drops it a
+      # moment later. Treating one as a host arriving merges Mnesia
+      # schemas with something about to vanish and sets off a pickup on
+      # every command a person types.
+      refute Host.daemon_node?(:"ctl-4821@10.0.0.1")
+      refute Host.daemon_node?(:"probe-7@10.0.0.1")
+      refute Host.daemon_node?(:nonode@nohost)
+    end
+
     test "peer nodes are named the same way and never include this node" do
       host = %Host{origin: "o", address: "10.0.0.1", peers: ["10.0.0.2", "10.0.0.1"]}
       assert Host.peer_nodes(host) == [:"code_gantry_daemon@10.0.0.2"]
@@ -494,6 +506,37 @@ defmodule CodeGantryDaemonTest do
   describe "the mesh" do
     test "a nudge with nobody connected tells nobody rather than raising" do
       assert Mesh.nudge() == 0
+    end
+
+    test "a control node connecting is not a host arriving", %{host: host} do
+      import ExUnit.CaptureLog
+
+      {:ok, pid} = Mesh.start_link(%{host | address: "203.0.113.1", peers: []})
+
+      log = capture_log(fn ->
+        send(pid, {:nodeup, :"ctl-9182@203.0.113.4"})
+        send(pid, {:nodedown, :"ctl-9182@203.0.113.4"})
+        _ = :sys.get_state(pid)
+      end)
+
+      refute log =~ "joined", "a throwaway node was taken for a peer"
+      refute log =~ "left"
+      assert Process.alive?(pid)
+      GenServer.stop(pid)
+    end
+
+    test "a daemon connecting is", %{host: host} do
+      import ExUnit.CaptureLog
+
+      {:ok, pid} = Mesh.start_link(%{host | address: "203.0.113.1", peers: []})
+
+      log = capture_log(fn ->
+        send(pid, {:nodeup, :"code_gantry_daemon@203.0.113.9"})
+        _ = :sys.get_state(pid)
+      end)
+
+      assert log =~ "joined"
+      GenServer.stop(pid)
     end
 
     test "it survives a peer it cannot reach", %{host: host} do

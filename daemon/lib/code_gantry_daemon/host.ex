@@ -34,6 +34,20 @@ defmodule CodeGantryDaemon.Host do
   """
   def node_name(%__MODULE__{address: address}), do: :"#{@node_base}@#{address}"
 
+  @doc """
+  Whether a node that has just connected is another daemon.
+
+  Every verb `bin/daemon` speaks starts a throwaway node of its own, and
+  those must not be taken for peers: treating one as a join merges Mnesia
+  schemas with something about to vanish and sets off a pickup on every
+  command a person types. Decided by the node's base name rather than by
+  the host file's `peers:`, because a host that names no peers still
+  accepts the dial of one that does, and must recognise it when it lands.
+  """
+  def daemon_node?(node) do
+    node |> Atom.to_string() |> String.split("@") |> hd() == @node_base
+  end
+
   @doc "The other hosts' node names, this one never among them."
   def peer_nodes(%__MODULE__{address: address, peers: peers}) do
     peers

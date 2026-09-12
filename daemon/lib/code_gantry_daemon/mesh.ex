@@ -19,6 +19,10 @@ defmodule CodeGantryDaemon.Mesh do
   enough to speak the distribution protocol, which is why `bin/daemon` goes
   through the pinned toolchain.
 
+  Not every node that connects is a peer. Every verb `bin/daemon` speaks
+  starts a node of its own and drops it a moment later, and only a node
+  named as a daemon is treated as a host arriving.
+
   What the mesh carries is a nudge: the host that has just taken new code
   tells the others to take it now rather than at their next tick. It moves
   no state. The code still travels through the git remote, and the nudge
@@ -66,18 +70,21 @@ defmodule CodeGantryDaemon.Mesh do
   end
 
   def handle_info({:nodeup, node}, host) do
-    Logger.info("mesh: #{node} joined")
-    Owned.join(node)
-    # A host that has been away missed every nudge sent while it was gone,
-    # and nobody will send another until the code moves again. So joining
-    # is itself a reason to look, which is what keeps the fallback tick
-    # rare rather than load-bearing.
-    Pickup.nudged()
+    if Host.daemon_node?(node) do
+      Logger.info("mesh: #{node} joined")
+      Owned.join(node)
+      # A host that has been away missed every nudge sent while it was
+      # gone, and nobody will send another until the code moves again. So
+      # joining is itself a reason to look, which is what keeps the
+      # fallback tick rare rather than load-bearing.
+      Pickup.nudged()
+    end
+
     {:noreply, host}
   end
 
   def handle_info({:nodedown, node}, host) do
-    Logger.info("mesh: #{node} left")
+    if Host.daemon_node?(node), do: Logger.info("mesh: #{node} left")
     {:noreply, host}
   end
 

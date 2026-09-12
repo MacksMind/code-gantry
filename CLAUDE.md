@@ -186,7 +186,13 @@ host file `~/.config/code_gantry/host.exs`, state under
 is the only credential and both hosts hold the same one. **The dial is
 one-way and need not be symmetric:** the Mac accepts nothing inbound, so
 it names the Spark in `peers:` and the Spark names nobody, and
-distribution runs both directions over that one connection. On the Spark:
+distribution runs both directions over that one connection. Not every
+node that connects is a peer: every `bin/daemon` verb starts a node of
+its own and drops it a moment later, and `Host.daemon_node?/1` on the
+base name is what keeps a control node from merging Mnesia schemas and
+setting off a pickup on every command a person types. The test is the
+name, not the host file's `peers:`, because a host that names no peers
+still accepts the dial of one that does. On the Spark:
 `/home/you/projects/app/acme_app` is the primary copy, handed
 back to the person on `technical-debt`; `acme_app-bay1` (offset 200)
 and `acme_app-bay2` (offset 100) are its bays. On the Mac: the primary
