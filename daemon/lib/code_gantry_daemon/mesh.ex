@@ -61,6 +61,11 @@ defmodule CodeGantryDaemon.Mesh do
   def handle_info({:nodeup, node}, host) do
     Logger.info("mesh: #{node} joined")
     Records.join(node)
+    # A host that has been away missed every nudge sent while it was gone,
+    # and nobody will send another until the code moves again. So joining
+    # is itself a reason to look, which is what keeps the fallback tick
+    # rare rather than load-bearing.
+    Pickup.nudged()
     {:noreply, host}
   end
 

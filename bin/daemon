@@ -26,6 +26,14 @@ COOKIE="$STATE/cookie"
 HOSTFILE="$HOME/.config/code_gantry/host.exs"
 mkdir -p "$STATE"
 
+# Distribution listens on a pinned range rather than an ephemeral port,
+# so what has to be reachable between hosts is a known, small set. The
+# daemon takes the first; the short-lived nodes the verbs start take the
+# rest. An ephemeral port was not reachable between these two machines.
+DIST_MIN=9100
+DIST_MAX=9110
+ERL_DIST="-kernel inet_dist_listen_min $DIST_MIN inet_dist_listen_max $DIST_MAX"
+
 MISE="$(command -v mise || true)"
 [ -n "$MISE" ] || MISE="$HOME/.local/bin/mise"
 [ -x "$MISE" ] || { echo "mise not found; the pinned toolchain in .tool-versions is required" >&2; exit 1; }
@@ -47,8 +55,17 @@ rpc() {
   case "$node" in
     ""|nonode@nohost) echo "the running daemon has no node name; it predates the verbs — stop and start it once" >&2; exit 1 ;;
   esac
-  cd "$HERE/daemon"
-  exec "$MISE" exec -- elixir --name "ctl-$$@$(address)" --cookie "$(cat "$COOKIE")" --rpc-eval "$node" "$1"
+  # Spoken in the same dialect as the daemon actually running. A daemon
+  # started before the mesh has a short node name and the Erlang its
+  # machine packages, and a long-named caller on the pinned Erlang can
+  # reach neither. So the caller is shaped from the node name on disk,
+  # and every verb keeps working across a restart rather than only after
+  # one.
+  case "${node#*@}" in
+    *.*) ( cd "$HERE/daemon" && "$MISE" exec -- elixir --name "ctl-$$@$(address)" \
+             --cookie "$(cat "$COOKIE")" --erl "$ERL_DIST" --rpc-eval "$node" "$1" ) ;;
+    *)   elixir --sname "ctl-$$" --cookie "$(cat "$COOKIE")" --rpc-eval "$node" "$1" ;;
+  esac
 }
 
 case "${1:-}" in
@@ -58,7 +75,8 @@ case "${1:-}" in
     if [ ! -f "$COOKIE" ]; then (umask 077; openssl rand -hex 16 > "$COOKIE"); fi
     cd "$HERE/daemon"
     MIX_ENV=prod "$MISE" exec -- mix compile >/dev/null
-    nohup env MIX_ENV=prod "$MISE" exec -- elixir --name "code_gantry_daemon@$(address)" --cookie "$(cat "$COOKIE")" \
+    nohup env MIX_ENV=prod "$MISE" exec -- elixir --name "code_gantry_daemon@$(address)" \
+      --cookie "$(cat "$COOKIE")" --erl "$ERL_DIST" \
       -S mix run --no-halt >> "$LOG" 2>&1 < /dev/null &
     echo $! > "$PIDFILE"
     echo "daemon started, pid $!; status in $STATE/status, log in $LOG"
@@ -77,7 +95,10 @@ case "${1:-}" in
     # Asked of the running daemon, which answers for every host that has
     # joined the mesh. The file is this host's own and is the fallback
     # when nothing is running to ask.
-    if alive; then rpc "IO.puts CodeGantryDaemon.Control.status()"
+    if alive; then
+      rpc "IO.puts CodeGantryDaemon.Control.status()" 2>/dev/null \
+        || cat "$STATE/status" 2>/dev/null \
+        || echo "running, no status written yet"
     else cat "$STATE/status" 2>/dev/null || echo "daemon not running"; fi
     ;;
   peers)
