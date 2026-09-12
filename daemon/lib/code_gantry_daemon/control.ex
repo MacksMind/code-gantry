@@ -6,7 +6,7 @@ defmodule CodeGantryDaemon.Control do
   answers from its own state, and the same verbs serve a mesh later.
   """
 
-  alias CodeGantryDaemon.{Application, Bay, Mesh, Pickup, Placements, Semaphore, Status}
+  alias CodeGantryDaemon.{Application, Bay, Mesh, Pickup, Placements, Runs, Semaphore, Status}
 
   @doc "The commit this daemon's checkout is at, and the node answering: what a pickup is confirmed by."
   def version(host \\ nil) do
@@ -58,6 +58,23 @@ defmodule CodeGantryDaemon.Control do
   defp stamp(at) do
     at |> DateTime.from_unix!(:microsecond) |> DateTime.truncate(:second) |> DateTime.to_iso8601()
   end
+
+  @doc """
+  Which runs are alive, on every host that answered. A host that could not
+  be asked is named as such rather than shown with no runs: unreachable and
+  finished must not read alike, or a claim gets given away while the run
+  holding it is working behind a link that is down only from here.
+  """
+  def runs do
+    case Runs.all() do
+      empty when empty == %{} -> "no runs"
+      hosts -> hosts |> Enum.sort() |> Enum.map_join("\n", &runs_line/1)
+    end
+  end
+
+  defp runs_line({origin, :unreachable}), do: "#{origin} unreachable"
+  defp runs_line({origin, []}), do: "#{origin} no runs"
+  defp runs_line({origin, ids}), do: Enum.map_join(ids, "\n", &"#{origin} #{&1}")
 
   @doc "Compile and load the local checkout as it is: for a test on one host; fetches nothing, nudges nobody."
   def reload(host \\ nil), do: Pickup.reload(host || Status.host())

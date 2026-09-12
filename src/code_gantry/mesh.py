@@ -1,5 +1,12 @@
-"""The semaphore a run takes: one holder at a time for a name, across every
-host in the mesh.
+"""What a run asks the daemon, over one socket in its state directory.
+
+Two questions, and both are answered from Mnesia across every host that has
+joined: **hold this name for me**, and **which runs are alive**. Neither can
+be answered by a run on its own, and neither may be answered wrongly when
+the daemon is absent.
+
+The semaphore: one holder at a time for a name, across every host in the
+mesh.
 
 The holder is decided by the daemon, and the run's connection to it *is*
 the hold: a Unix socket under the daemon's state directory, opened to ask
@@ -144,3 +151,87 @@ def _gone(conn: socket.socket) -> bool:
         return False
     except OSError:
         return True
+
+
+@contextlib.contextmanager
+def presence(run_id: str, bay: str, log=None):
+    """Announce this run as alive for the length of the block.
+
+    Held the way a semaphore is held, and for the same reason: the open
+    connection *is* the claim that the process is there, so a run that is
+    killed, or a machine that sleeps, stops being alive with nothing to
+    expire. It is announced by the run rather than by the daemon's record
+    of its bays, so a run started by hand in a terminal is as visible as
+    one the daemon started.
+
+    With no daemon, nothing is announced and the run goes on. Every reader
+    of this treats "could not ask" and "not alive" as different answers,
+    so an unannounced run is never taken for a dead one.
+    """
+    conn = _say(f"presence {run_id} {' '.join(bay.split()) or '-'}", "alive", log)
+    try:
+        yield
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def live_runs(log=None) -> tuple[set[str], set[tuple[str, str]]]:
+    """Which runs are alive, and which hosts answered.
+
+    Two sets, never one: the origins that answered, and the `(origin,
+    run_id)` pairs alive on them. A host that could not be asked appears
+    in neither, and that is the distinction the caller must keep — a host
+    off the link is not a host whose runs have stopped, and nothing this
+    answers may be read as "that run is dead" for a host that is absent
+    from the first set.
+    """
+    answered: set[str] = set()
+    live: set[tuple[str, str]] = set()
+    conn = _say("runs", None, log)
+    if conn is None:
+        return answered, live
+    try:
+        for line in conn.makefile("r"):
+            line = line.strip()
+            if line == "end":
+                break
+            origin, _, rest = line.partition(" ")
+            if origin == "unreachable":
+                continue
+            answered.add(origin)
+            if rest:
+                live.add((origin, rest))
+    except OSError as e:
+        if log:
+            log(f"the daemon stopped answering which runs are alive ({e})")
+        return set(), set()
+    finally:
+        conn.close()
+    return answered, live
+
+
+def _say(request: str, expect: str | None, log=None):
+    """Open the daemon's door and send one line. Answers the connection, or
+    None when there is no daemon to ask or it would not answer."""
+    path = socket_path()
+    try:
+        conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        conn.connect(str(path))
+        conn.sendall(f"{request}\n".encode())
+    except OSError as e:
+        if log:
+            log(f"no daemon at {path} ({e.__class__.__name__}); nothing was asked")
+        return None
+    if expect is None:
+        return conn
+    try:
+        answer = conn.makefile("r").readline().strip()
+        if not answer.startswith(expect):
+            raise OSError(answer or "the daemon closed the connection")
+    except OSError as e:
+        conn.close()
+        if log:
+            log(f"the daemon would not answer {request.split()[0]!r} ({e})")
+        return None
+    return conn

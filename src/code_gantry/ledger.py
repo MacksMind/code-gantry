@@ -284,14 +284,24 @@ class Views:
 
 
 def build_views(events: list[Event]) -> Views:
-    """The three views, from the events in `(at, origin, seq)` order.
+    """The three views, from the events in `seq` order.
 
-    Within one origin that is write order; across origins it is the one order
-    every host can compute. No two origins write the same node or finding, so
-    clock skew between them cannot change the result.
+    One sequence per ledger, assigned by the store at append, so this is the
+    order the writes happened in — across origins as well as within one, and
+    computed identically by every host from the same rows.
+
+    It used to be `(at, origin, seq)`, on the argument that no two origins
+    write the same node or finding so a skewed clock could not change the
+    result. Two origins do write the same *key*: one host releases a claim
+    another host's dead run left, and two hosts can claim one key in the
+    same second. Under the clock order the release sorted before the claim
+    it was releasing — `host-a` before `host-b` — and the key stayed
+    held by a run that was gone; a race between two claims was settled by
+    which machine was named first in the alphabet. `at` is what a person
+    reads; `seq` is what happened.
     """
     views = Views()
-    for event in sorted(events, key=lambda e: (e.at, e.origin, e.seq)):
+    for event in sorted(events, key=lambda e: e.seq):
         _apply(views, event)
     return views
 
@@ -864,12 +874,28 @@ def apply_fold(ledger: Ledger, *, actor: str | None = None) -> int:
 _COMING_BACK = frozenset({"paused", "escalated"})
 
 
-def release_dead_holders(ledger: Ledger, *, alive: Callable[[int], bool], keep_run: str | None = None) -> int:
-    """Give back every claim, finding and taken stage held by a run of this
-    ledger's origin that is gone for good. A claim is a lease from a live
-    run; the kernel cannot release it as it does a file lock, so the next
-    run on the host does. Holders on other hosts are left alone: their
-    liveness cannot be read from here. Returns how many were released."""
+def release_dead_holders(
+    ledger: Ledger,
+    *,
+    alive: Callable[[int], bool],
+    keep_run: str | None = None,
+    answered: set[str] | None = None,
+    live: set[tuple[str, str]] | None = None,
+) -> int:
+    """Give back every claim, finding and taken stage held by a run that is
+    gone for good. A claim is a lease from a live run; the kernel cannot
+    release it as it does a file lock, so somebody else must.
+
+    On this host that is process liveness. On another it is `answered` and
+    `live` from the mesh — which origins could be asked, and which runs are
+    alive on them. **A host that did not answer keeps everything it holds**:
+    it can reach the table it wrote the claim into and may be working
+    happily behind a link that is down only from here, so unreachable and
+    dead must never arrive at the same conclusion. With no mesh to ask,
+    every other host keeps everything, which is where this started.
+
+    Returns how many were released.
+    """
     released = 0
     with ledger.transaction():
         views = ledger.views()
@@ -885,7 +911,13 @@ def release_dead_holders(ledger: Ledger, *, alive: Callable[[int], bool], keep_r
             # the branch is orphaned.
             if views.runs.get(run_id or "") in _COMING_BACK:
                 return False
-            return origin == ledger.origin and pid is not None and not alive(int(pid))
+            if origin == ledger.origin:
+                return pid is not None and not alive(int(pid))
+            # Another host. Only its own daemon can say, and only while it
+            # is answering; silence is not an answer.
+            if not answered or origin not in answered:
+                return False
+            return (origin, run_id) not in (live or set())
 
         for key, state in views.key_states.items():
             if state.state == "claimed" and dead(state.origin, state.pid, state.run_id):

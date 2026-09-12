@@ -596,3 +596,87 @@ class TestAClaimOutlivesARunThatMeansToComeBack:
         assert self._sweep(led) == 0
         led.append(RUN_BEGAN, run_id="r1", pid=999998, bay="host-a/target")
         assert self._sweep(led) == 2, "a run that came back and then died is still dead"
+
+
+class TestAClaimHeldByAnotherHost:
+    """pid liveness cannot be read across machines, so a run that died on one
+    host held its stage against every other until a run started there again.
+    The mesh answers instead — but only about hosts that answered."""
+
+    def _held(self, tmp_path, origin="host-b"):
+        led = open_ledger(tmp_path / "l.sqlite", origin="host-a", actor="run:r9")
+        other = open_ledger(tmp_path / "l.sqlite", origin=origin, actor="run:r1")
+        other.append(RUN_BEGAN, run_id="r1", pid=4242, bay=f"{origin}/target")
+        other.append(STAGE_DERIVED, stage_id="s1", run_id="r1", fields={"id": "s1"}, keys=["p.001"], findings=[], rank=0)
+        record = next(iter(other.views().derived.values()))
+        other.append(STAGE_TAKEN, stage_id="s1", run_id="r1", derived_id=record.id, pid=4242, bay=f"{origin}/target")
+        other.append(CLAIMED, key="p.001", stage_id="s1", run_id="r1", pid=4242, bay=f"{origin}/target")
+        other.close()
+        return led
+
+    def _sweep(self, led, answered=None, live=None):
+        return release_dead_holders(
+            led, alive=lambda pid: False, keep_run="r9",
+            answered=answered, live=live,
+        )
+
+    def test_a_dead_run_on_a_host_that_answered_gives_its_stage_back(self, tmp_path):
+        led = self._held(tmp_path)
+        assert self._sweep(led, answered={"host-b"}, live=set()) == 2
+        assert led.views().state("p.001").state == "open"
+
+    def test_a_live_run_on_another_host_keeps_it(self, tmp_path):
+        led = self._held(tmp_path)
+        assert self._sweep(led, answered={"host-b"}, live={("host-b", "r1")}) == 0
+        assert led.views().state("p.001").state == "claimed"
+
+    def test_a_host_that_did_not_answer_keeps_everything(self, tmp_path):
+        # Unreachable is not dead. That host can reach the table it wrote
+        # this claim into, and may be working happily behind a link that
+        # is down only from here.
+        led = self._held(tmp_path)
+        assert self._sweep(led, answered=set(), live=set()) == 0
+        assert led.views().state("p.001").state == "claimed"
+
+    def test_with_no_mesh_at_all_another_host_is_left_alone(self, tmp_path):
+        # Today's behaviour, and what a run with no daemon still does.
+        led = self._held(tmp_path)
+        assert self._sweep(led) == 0
+
+    def test_a_paused_run_on_another_host_keeps_its_stage(self, tmp_path):
+        # It has no process to be alive, and every intention of returning.
+        led = self._held(tmp_path)
+        other = open_ledger(tmp_path / "l.sqlite", origin="host-b", actor="run:r1")
+        other.append(RUN_ENDED, run_id="r1", pid=4242, bay="host-b/target", disposition="paused")
+        other.close()
+        assert self._sweep(led, answered={"host-b"}, live=set()) == 0
+
+
+class TestTheOrderEventsAreApplied:
+    """One sequence per ledger, assigned at append by the store, is the order
+    the writes actually happened in. Ordering by wall clock ahead of it lets
+    two hosts writing the same key in one second be decided by which hostname
+    sorts first."""
+
+    def test_a_release_after_a_claim_is_applied_after_it(self, tmp_path):
+        # Both in the same second, by two hosts, and 'host-a' sorts
+        # before 'host-b'. Ordered by the clock the release lands
+        # first and the claim re-applies over it, so the key stays held by
+        # a run that is gone.
+        one = open_ledger(tmp_path / "l.sqlite", origin="host-b", actor="run:r1")
+        one.append(CLAIMED, key="p.001", stage_id="s1", run_id="r1", pid=42)
+        two = open_ledger(tmp_path / "l.sqlite", origin="host-a", actor="run:r2")
+        two.append(RELEASED, key="p.001", run_id="r1", stage_id="s1", reason="holder exited")
+        assert [e.at for e in two.events()].count(two.events()[0].at) == 2, (
+            "the two writes must share a timestamp, or this proves nothing"
+        )
+        assert two.views().state("p.001").state == "open"
+
+    def test_the_later_claim_of_two_racing_hosts_wins(self, tmp_path):
+        # Whoever wrote second holds it, whatever the two machines are
+        # called. Under the clock order the answer was alphabetical.
+        one = open_ledger(tmp_path / "l.sqlite", origin="host-b", actor="run:r1")
+        one.append(CLAIMED, key="p.001", stage_id="s1", run_id="r1", pid=42)
+        two = open_ledger(tmp_path / "l.sqlite", origin="host-a", actor="run:r2")
+        two.append(CLAIMED, key="p.001", stage_id="s2", run_id="r2", pid=43)
+        assert two.views().state("p.001").run_id == "r2"

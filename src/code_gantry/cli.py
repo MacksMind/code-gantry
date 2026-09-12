@@ -26,6 +26,7 @@ Exit codes: 0 complete, 1 failed or escalated.
 from __future__ import annotations
 
 import json
+import contextlib
 import os
 import re
 import sys
@@ -48,7 +49,7 @@ from code_gantry.driver import (
     load_state,
     open_checkpointer,
 )
-from code_gantry import nodes
+from code_gantry import mesh, nodes
 from code_gantry.ledger import RUN_BEGAN, RUN_ENDED, LedgerError, ledger_for, release_dead_holders
 from code_gantry.planner import make_planner
 from code_gantry.preflight import format_checks, run_preflight
@@ -735,6 +736,9 @@ def _drive(
         log(f"[preflight] {warning}")
     rt = None
     final = None
+    # The run's announcement of itself, which lasts exactly as long as the
+    # run: closed by the same `finally` that closes the log.
+    presence = contextlib.ExitStack()
     try:
         rt = build_runtime(
             cfg,
@@ -749,10 +753,20 @@ def _drive(
         # knowing it exists. A log nobody can find is not visibility.
         log(f"[run] tool reads are streaming to {paths.tool_log}")
         if rt.ledger is not None:
-            # Claims are leases from live runs; a run that died on this host
-            # left its keys, findings and taken stages held. A run that paused
-            # or escalated is not one of those, and says so below.
-            freed = release_dead_holders(rt.ledger, alive=_pid_alive, keep_run=paths.run_id)
+            # Announced before anything is claimed, so no other host can ask
+            # whether this run is alive during a window where it holds
+            # something and has not said so.
+            presence.enter_context(mesh.presence(paths.run_id, nodes.bay_id(rt), log))
+            # Claims are leases from live runs; a run that died left its keys,
+            # findings and taken stages held. On this host that is read from
+            # the pid, on another from the mesh — and a host that did not
+            # answer keeps everything, because unreachable is not dead. A run
+            # that paused or escalated is neither, and says so below.
+            answered, live = mesh.live_runs(log)
+            freed = release_dead_holders(
+                rt.ledger, alive=_pid_alive, keep_run=paths.run_id,
+                answered=answered, live=live,
+            )
             if freed:
                 log(f"[run] released {freed} claim(s) held by runs that have exited")
             # After the sweep, and before any work: this withdraws whatever a
@@ -816,6 +830,7 @@ def _drive(
                 RUN_ENDED, run_id=paths.run_id, pid=os.getpid(),
                 bay=nodes.bay_id(rt), disposition=_disposition(final),
             )
+        presence.close()
         log.close()
         tools.close()
         conn.close()

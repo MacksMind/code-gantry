@@ -54,11 +54,28 @@ defmodule CodeGantryDaemon.Owned do
   describe its own live processes, which are unreachable too.
   """
   def rows(table, pattern) do
-    :mnesia.dirty_match_object(pattern |> put_elem(0, table))
+    case read(table, pattern) do
+      {:ok, rows} -> rows
+      :unreachable -> []
+    end
+  end
+
+  @doc """
+  The same read, keeping the difference between "no rows" and "could not
+  ask". Every table but this host's own has its only copy on the host that
+  owns it, so a read of one is a live question put to that machine.
+
+  The difference matters wherever absence is taken for a fact. A host that
+  is merely off the link is not a host whose runs have stopped, and
+  answering an empty list for one would be answering a question about the
+  network as though it were about the work.
+  """
+  def read(table, pattern) do
+    {:ok, :mnesia.dirty_match_object(pattern |> put_elem(0, table))}
   rescue
-    _ -> []
+    _ -> :unreachable
   catch
-    :exit, _ -> []
+    :exit, _ -> :unreachable
   end
 
   @doc "Bring a peer's tables into view, and ours into its."

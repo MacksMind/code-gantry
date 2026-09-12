@@ -23,13 +23,22 @@ defmodule CodeGantryDaemon.Semaphore.Socket do
                                    held <ref>
       <the connection closes>  ->  released
 
+      presence <run-id> <bay>  ->  alive <ref>
+      <the connection closes>  ->  the run is no longer alive
+
+      runs                     ->  <origin> <run-id>        (one per line)
+                                   unreachable <origin>
+                                   end
+
   `label` is the rest of the line: who is asking, shown to whoever is
-  waiting behind them.
+  waiting behind them. A presence is held the same way a semaphore is, and
+  for the same reason: the connection is the claim that the process is
+  there, and nothing has to be expired when it is not.
   """
   use GenServer
   require Logger
 
-  alias CodeGantryDaemon.{Host, Semaphore}
+  alias CodeGantryDaemon.{Host, Runs, Semaphore}
 
   # How often a waiter looks again. Holds here are derivations, which run
   # in minutes, so this is far below anything it delays and far above
@@ -66,7 +75,8 @@ defmodule CodeGantryDaemon.Semaphore.Socket do
   # refuse — an Mnesia that never started, a path that cannot be bound —
   # and neither may raise.
   defp start(host) do
-    with :ok <- Semaphore.start(host.origin) do
+    with :ok <- Semaphore.start(host.origin),
+         :ok <- Runs.start(host.origin) do
       # A Unix socket outlives the process that made it, so a daemon that
       # was killed leaves a path that binding refuses.
       File.rm(path())
@@ -90,14 +100,23 @@ defmodule CodeGantryDaemon.Semaphore.Socket do
   @impl true
   def handle_call({:request, name, label}, {pid, _}, state) do
     ref = Semaphore.request(state.host.origin, name, label)
-    monitor = Process.monitor(pid)
-    {:reply, ref, %{state | held: Map.put(state.held, monitor, ref)}}
+    {:reply, ref, watch(state, pid, {:semaphore, ref})}
+  end
+
+  def handle_call({:presence, run_id, bay}, {pid, _}, state) do
+    ref = Runs.began(state.host.origin, run_id, bay)
+    {:reply, ref, watch(state, pid, {:run, ref})}
   end
 
   @impl true
   def handle_info({:DOWN, monitor, :process, _pid, _reason}, state) do
-    {ref, held} = Map.pop(state.held, monitor)
-    if ref, do: Semaphore.release(state.host.origin, ref)
+    {holding, held} = Map.pop(state.held, monitor)
+    case holding do
+      {:semaphore, ref} -> Semaphore.release(state.host.origin, ref)
+      {:run, ref} -> Runs.ended(state.host.origin, ref)
+      nil -> :ok
+    end
+
     {:noreply, %{state | held: held}}
   end
 
@@ -106,6 +125,12 @@ defmodule CodeGantryDaemon.Semaphore.Socket do
   end
 
   def handle_info(_other, state), do: {:noreply, state}
+
+  # Whatever a connection holds, the server is what gives it back: a
+  # handler that crashes, or is killed, has released nothing itself.
+  defp watch(state, pid, holding) do
+    %{state | held: Map.put(state.held, Process.monitor(pid), holding)}
+  end
 
   defp accept(listen, host, server) do
     case :gen_tcp.accept(listen) do
@@ -127,16 +152,41 @@ defmodule CodeGantryDaemon.Semaphore.Socket do
   defp serve(socket, host, server) do
     receive do: (:yours -> :ok)
 
-    with {:ok, line} <- :gen_tcp.recv(socket, 0),
-         ["acquire", name, label] <- String.split(String.trim(line), " ", parts: 3) do
-      hold(socket, host, server, name, label)
-    else
-      ["acquire", name] -> hold(socket, host, server, name, "a run")
+    case :gen_tcp.recv(socket, 0) do
+      {:ok, line} -> asked(socket, host, server, String.split(String.trim(line), " ", parts: 3))
       {:error, _} -> :ok
-      _ -> :gen_tcp.send(socket, "error expected: acquire <name> <label>\n")
     end
 
     :gen_tcp.close(socket)
+  end
+
+  defp asked(socket, host, server, ["acquire", name, label]), do: hold(socket, host, server, name, label)
+  defp asked(socket, host, server, ["acquire", name]), do: hold(socket, host, server, name, "a run")
+  defp asked(socket, _host, server, ["presence", run_id, bay]), do: alive(socket, server, run_id, bay)
+  defp asked(socket, _host, server, ["presence", run_id]), do: alive(socket, server, run_id, "")
+
+  defp asked(socket, _host, _server, ["runs" | _]) do
+    for {origin, runs} <- Runs.all() do
+      case runs do
+        :unreachable -> :gen_tcp.send(socket, "unreachable #{origin}\n")
+        ids -> for id <- ids, do: :gen_tcp.send(socket, "#{origin} #{id}\n")
+      end
+    end
+
+    # Said explicitly, because a reader cannot tell a host with no runs
+    # from an answer that stopped early any other way.
+    :gen_tcp.send(socket, "end\n")
+  end
+
+  defp asked(socket, _host, _server, _other) do
+    :gen_tcp.send(socket, "error expected: acquire <name> <label>, presence <run-id> <bay>, or runs\n")
+  end
+
+  defp alive(socket, server, run_id, bay) do
+    ref = GenServer.call(server, {:presence, run_id, bay})
+    :inet.setopts(socket, active: true)
+    :gen_tcp.send(socket, "alive #{ref}\n")
+    closed(socket)
   end
 
   defp hold(socket, _host, server, name, label) do

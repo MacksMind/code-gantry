@@ -7,7 +7,7 @@ defmodule CodeGantryDaemonTest do
   """
   use ExUnit.Case
 
-  alias CodeGantryDaemon.{Application, Control, Host, Bay, Mesh, Records, Semaphore, Status}
+  alias CodeGantryDaemon.{Application, Control, Host, Bay, Mesh, Records, Runs, Semaphore, Status}
 
   setup do
     root = Path.join(System.tmp_dir!(), "cgd-#{System.os_time(:microsecond)}-#{System.unique_integer([:positive])}")
@@ -674,6 +674,48 @@ defmodule CodeGantryDaemonTest do
       wait_for(fn -> Semaphore.holder(name) == nil end)
     end
 
+    test "a run announces itself and stops being alive when it dies", %{path: path, origin: origin} do
+      # The lease a claim in the ledger is had no reader off its own
+      # machine: pid liveness means nothing across hosts, so a run that
+      # died on one held its stage against every other. This is what any
+      # host can ask instead.
+      test = self()
+
+      run =
+        spawn(fn ->
+          socket = connect(path)
+          :ok = :gen_tcp.send(socket, "presence 20260912-1-bay1 host-a/target\n")
+          send(test, {:said, line(socket)})
+          receive do: (:never -> :ok)
+        end)
+
+      assert_receive {:said, "alive " <> _}, 2_000
+      assert Runs.all()[origin] == ["20260912-1-bay1"]
+      Process.exit(run, :kill)
+      wait_for(fn -> Runs.all()[origin] == [] end)
+    end
+
+    test "the runs of every host are answered, and a host that cannot be asked is said to be", %{path: path, origin: origin} do
+      # Absence is a fact only about a host that answered. A host merely
+      # off the link is not a host whose runs have stopped, and saying so
+      # would be answering a question about the network as though it were
+      # about the work.
+      gone = "s#{System.unique_integer([:positive])}"
+      :ok = Runs.start(gone)
+      on_exit(fn -> :mnesia.delete_table(Runs.table_for(gone)) end)
+      :ok = :mnesia.dirty_write({Runs.table_for(gone), "r", "a-run", "bay", 1})
+
+      socket = connect(path)
+      :ok = :gen_tcp.send(socket, "runs\n")
+      lines = Stream.repeatedly(fn -> line(socket) end) |> Enum.take_while(&(&1 != "end"))
+      :gen_tcp.close(socket)
+
+      assert "#{gone} a-run" in lines
+      refute Enum.any?(lines, &String.starts_with?(&1, "unreachable")),
+             "every table here is readable, so nothing may be reported unreachable"
+      assert Runs.all()[origin] == []
+    end
+
     test "a request nobody can read is refused rather than left hanging", %{path: path} do
       socket = connect(path)
       :ok = :gen_tcp.send(socket, "hello\n")
@@ -785,6 +827,16 @@ defmodule CodeGantryDaemonTest do
       rows = Records.all() |> Enum.filter(&(&1.origin in [origin, other]))
       assert length(rows) == 2, "one host's table must not hide another's"
       assert Enum.sort(Enum.map(rows, & &1.origin)) == Enum.sort([origin, other])
+    end
+
+    test "a read that cannot be answered says so rather than answering nothing", %{origin: origin} do
+      # The same path a read of a down host's table takes: its only copy is
+      # on that machine, so the read fails rather than returning empty. The
+      # two must not arrive at the caller looking alike.
+      alias CodeGantryDaemon.Owned
+      assert {:ok, []} = Owned.read(Records.table_for(origin), {:_, :_, :_, :_, :_, :_, :_})
+      assert :unreachable = Owned.read(:"bays@nobody-here", {:_, :_, :_, :_, :_, :_, :_})
+      assert Owned.rows(:"bays@nobody-here", {:_, :_, :_, :_, :_, :_, :_}) == []
     end
 
     test "a host owns one table, so two hosts never define the same one", %{origin: origin} do

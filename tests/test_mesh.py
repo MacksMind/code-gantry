@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from code_gantry import hostlock, meshlock
+from code_gantry import hostlock, mesh
 
 
 class FakeDaemon:
@@ -21,10 +21,13 @@ class FakeDaemon:
     every connection and when each one ended, because the release is the
     close and nothing else."""
 
-    def __init__(self, path: Path, *, grant_after: float = 0.0, refuse: bool = False):
+    def __init__(self, path: Path, *, grant_after: float = 0.0, refuse: bool = False, runs=None):
         self.path = path
         self.grant_after = grant_after
         self.refuse = refuse
+        self.runs = runs or []
+        self.announced: list[str] = []
+        self.gone = threading.Event()
         self.asked: list[str] = []
         self.closed = threading.Event()
         self.granted = threading.Event()
@@ -46,6 +49,15 @@ class FakeDaemon:
         with conn:
             line = conn.makefile("r").readline().strip()
             self.asked.append(line)
+            if line.startswith("runs"):
+                conn.sendall(("".join(f"{r}\n" for r in self.runs) + "end\n").encode())
+                return
+            if line.startswith("presence"):
+                self.announced.append(line)
+                conn.sendall(b"alive ref-9\n")
+                conn.recv(1)
+                self.gone.set()
+                return
             if self.refuse:
                 conn.sendall(b"error expected: acquire <name> <label>\n")
                 return
@@ -75,9 +87,9 @@ def daemon_state(monkeypatch):
 
 class TestTheDaemonHoldsIt:
     def test_a_run_asks_the_daemon_and_is_told_it_holds_it(self, daemon_state):
-        daemon = FakeDaemon(meshlock.socket_path())
+        daemon = FakeDaemon(mesh.socket_path())
         try:
-            with meshlock.hold("planner-abc", "bay1 run-7") as waited:
+            with mesh.hold("planner-abc", "bay1 run-7") as waited:
                 assert daemon.granted.wait(2), "the run went on without being granted anything"
                 assert waited[0] == pytest.approx(0.0, abs=0.5)
             assert daemon.closed.wait(2), "the hold outlived the block"
@@ -88,29 +100,29 @@ class TestTheDaemonHoldsIt:
     def test_the_name_and_who_is_asking_both_reach_the_daemon(self, daemon_state):
         # The label is what a waiting bay is told it is behind, so it must
         # survive the wire whole.
-        daemon = FakeDaemon(meshlock.socket_path())
+        daemon = FakeDaemon(mesh.socket_path())
         try:
-            with meshlock.hold("planner-abc", "host-a bay2 run-9"):
+            with mesh.hold("planner-abc", "host-a bay2 run-9"):
                 pass
         finally:
             daemon.stop()
         assert daemon.asked == ["acquire planner-abc host-a bay2 run-9"]
 
     def test_waiting_for_another_host_is_reported_as_time_waited(self, daemon_state):
-        daemon = FakeDaemon(meshlock.socket_path(), grant_after=0.4)
+        daemon = FakeDaemon(mesh.socket_path(), grant_after=0.4)
         said: list[str] = []
         try:
-            with meshlock.hold("planner-abc", "bay1", said.append) as waited:
+            with mesh.hold("planner-abc", "bay1", said.append) as waited:
                 assert waited[0] >= 0.3, "a wait nothing measures cannot be reported"
             assert any("another bay" in line for line in said), said
         finally:
             daemon.stop()
 
     def test_the_block_runs_only_once_it_holds_it(self, daemon_state):
-        daemon = FakeDaemon(meshlock.socket_path(), grant_after=0.5)
+        daemon = FakeDaemon(mesh.socket_path(), grant_after=0.5)
         entered = []
         try:
-            with meshlock.hold("planner-abc", "bay1"):
+            with mesh.hold("planner-abc", "bay1"):
                 entered.append(time.monotonic())
                 assert daemon.granted.is_set()
         finally:
@@ -124,7 +136,7 @@ class TestWithNoDaemonToAsk:
         # else about a run needs a daemon and this is not the exception.
         said: list[str] = []
         started = time.monotonic()
-        with meshlock.hold("planner-abc", "bay1", said.append) as waited:
+        with mesh.hold("planner-abc", "bay1", said.append) as waited:
             assert waited[0] == 0.0
         assert time.monotonic() - started < 1, "a missing daemon must not be waited for"
         assert any("no daemon" in line for line in said), said
@@ -138,13 +150,13 @@ class TestWithNoDaemonToAsk:
         release = threading.Event()
 
         def first():
-            with meshlock.hold("planner-abc", "bay1"):
+            with mesh.hold("planner-abc", "bay1"):
                 order.append("first in")
                 first_in.set()
                 release.wait(3)
 
         def second():
-            with meshlock.hold("planner-abc", "bay2"):
+            with mesh.hold("planner-abc", "bay2"):
                 order.append("second in")
 
         a = threading.Thread(target=first)
@@ -158,10 +170,10 @@ class TestWithNoDaemonToAsk:
         a.join(3)
 
     def test_a_daemon_that_refuses_the_request_does_not_stop_the_run(self, daemon_state):
-        daemon = FakeDaemon(meshlock.socket_path(), refuse=True)
+        daemon = FakeDaemon(mesh.socket_path(), refuse=True)
         said: list[str] = []
         try:
-            with meshlock.hold("planner-abc", "bay1", said.append) as waited:
+            with mesh.hold("planner-abc", "bay1", said.append) as waited:
                 assert waited[0] == 0.0
         finally:
             daemon.stop()
@@ -170,10 +182,10 @@ class TestWithNoDaemonToAsk:
 
 class TestTheContractTheLockAlreadyHad:
     def test_holding_a_name_inside_itself_does_not_wait_on_itself(self, daemon_state, tmp_path):
-        daemon = FakeDaemon(meshlock.socket_path())
+        daemon = FakeDaemon(mesh.socket_path())
         try:
-            with meshlock.hold("planner-abc", "outer"):
-                with meshlock.hold("planner-abc", "inner") as inner:
+            with mesh.hold("planner-abc", "outer"):
+                with mesh.hold("planner-abc", "inner") as inner:
                     assert inner[0] == 0.0
         finally:
             daemon.stop()
@@ -189,11 +201,11 @@ class TestTheContractTheLockAlreadyHad:
 
 class TestWhereTheSocketIs:
     def test_it_is_the_daemon_state_dir_the_daemon_itself_writes_to(self, daemon_state):
-        assert meshlock.socket_path() == daemon_state / "semaphore.sock"
+        assert mesh.socket_path() == daemon_state / "semaphore.sock"
 
     def test_without_the_override_it_is_the_daemon_s_default_state_dir(self, monkeypatch):
         monkeypatch.delenv("CODE_GANTRY_DAEMON_STATE", raising=False)
-        assert meshlock.socket_path() == Path.home() / ".local/state/code_gantry/daemon/semaphore.sock"
+        assert mesh.socket_path() == Path.home() / ".local/state/code_gantry/daemon/semaphore.sock"
 
 
 class TestWhichLockEachCallerTakes:
@@ -218,7 +230,7 @@ class TestWhichLockEachCallerTakes:
 
     def test_the_planner_semaphore_is_taken_through_the_mesh(self):
         calls = self._calls("nodes.py")
-        assert "_planner_lock(rt)" in calls.get("meshlock", []), (
+        assert "_planner_lock(rt)" in calls.get("mesh", []), (
             "the planner semaphore must reach every host; a host lock cannot see one"
         )
         assert "_planner_lock(rt)" not in calls.get("hostlock", [])
@@ -226,7 +238,7 @@ class TestWhichLockEachCallerTakes:
     def test_the_suite_lock_stays_on_this_machine(self):
         calls = self._calls("commands.py")
         assert calls.get("hostlock"), "one suite per host is a fact about the host"
-        assert "meshlock" not in calls, (
+        assert "mesh" not in calls, (
             "a suite is a machine's own resource: serialising it across the mesh "
             "would idle every other host for the duration"
         )
@@ -237,5 +249,44 @@ class TestTheSuiteNeverAsksTheRealDaemon:
         # Without this the suite queues behind a real derivation on another
         # machine and waits there for as long as that derivation takes —
         # which is minutes, and looks like a hung test.
-        assert meshlock.socket_path().parent == tmp_path / "no-daemon"
-        assert not meshlock.socket_path().exists()
+        assert mesh.socket_path().parent == tmp_path / "no-daemon"
+        assert not mesh.socket_path().exists()
+
+
+class TestWhoIsAlive:
+    def test_a_run_announces_itself_for_as_long_as_it_lives(self, daemon_state):
+        daemon = FakeDaemon(mesh.socket_path())
+        try:
+            with mesh.presence("20260912-1-bay1", "host-a/target"):
+                assert daemon.announced == ["presence 20260912-1-bay1 host-a/target"]
+                assert not daemon.gone.is_set()
+            assert daemon.gone.wait(2), "the announcement outlived the run"
+        finally:
+            daemon.stop()
+
+    def test_a_run_with_no_daemon_announces_nothing_and_goes_on(self, daemon_state):
+        said: list[str] = []
+        with mesh.presence("r1", "bay", said.append):
+            pass
+        assert any("no daemon" in line for line in said), said
+
+    def test_the_live_runs_of_every_host_come_back_with_who_answered(self, daemon_state):
+        daemon = FakeDaemon(
+            mesh.socket_path(),
+            runs=["host-a 20260912-1-bay1", "host-b 20260912-2-bay1", "unreachable dgx-2"],
+        )
+        try:
+            answered, live = mesh.live_runs()
+        finally:
+            daemon.stop()
+        assert live == {("host-a", "20260912-1-bay1"), ("host-b", "20260912-2-bay1")}
+        assert answered == {"host-a", "host-b"}
+        assert "dgx-2" not in answered, (
+            "a host that could not be asked must not be reported as having no runs"
+        )
+
+    def test_with_no_daemon_nobody_answered(self, daemon_state):
+        # Not "no runs are alive". The difference is the whole point: a
+        # caller that cannot ask must not conclude anything is dead.
+        answered, live = mesh.live_runs()
+        assert answered == set() and live == set()

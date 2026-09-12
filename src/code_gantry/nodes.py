@@ -27,7 +27,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from code_gantry import hostlock, meshlock
+from code_gantry import hostlock, mesh
 from code_gantry.commands import clip_for_model
 from code_gantry.cachekey import cache_key
 from code_gantry.config import ProjectConfig, Stage, validate_stage
@@ -327,7 +327,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
     # A revision draws nothing from the open list, so it holds no semaphore
     # and keeps no other bay waiting through its planner call.
     holding = (
-        meshlock.hold(_planner_lock(rt), f"{bay_id(rt)} {rt.paths.run_id}", rt.log)
+        mesh.hold(_planner_lock(rt), f"{bay_id(rt)} {rt.paths.run_id}", rt.log)
         if stage is None else contextlib.nullcontext([0.0])
     )
     with holding as waited:
@@ -3041,7 +3041,7 @@ def _planner_lock(rt: Runtime) -> str:
     bay's own work dir, which would give every bay a semaphore of its own.
 
     The same ledger is the same name on every machine, which is what makes
-    it one queue rather than one per host. Taken through `meshlock`, so the
+    it one queue rather than one per host. Taken through `mesh`, so the
     daemons decide it between them."""
     identity = rt.cfg.ledger.name or str(rt.project.ledger.resolve())
     digest = hashlib.sha1(identity.encode()).hexdigest()[:12]

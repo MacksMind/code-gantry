@@ -6,6 +6,7 @@ those lines, and a name error there stops every run at start — which is
 how one shipped: the suite was green and the first resume crashed.
 """
 
+import contextlib
 from types import SimpleNamespace
 
 from test_config import as_test_tools, minimal
@@ -36,10 +37,24 @@ def test_a_run_reaches_the_driver_with_every_start_step_done(tmp_path, monkeypat
     monkeypatch.setattr(cli, "make_reviewer", lambda *a, **k: object())
     monkeypatch.setattr(cli, "build_runtime", lambda *a, **k: fake_rt)
     monkeypatch.setattr(cli, "release_dead_holders", lambda *a, **k: steps.append("released") or 0)
+
+    @contextlib.contextmanager
+    def fake_presence(run_id, bay, log=None):
+        steps.append("announced")
+        try:
+            yield
+        finally:
+            steps.append("gone")
+
+    monkeypatch.setattr(cli.mesh, "presence", fake_presence)
+    monkeypatch.setattr(cli.mesh, "live_runs", lambda *a, **k: (set(), set()))
     monkeypatch.setattr(cli, "drive", lambda *a, **k: steps.append("driven") or {"status": "complete"})
 
     code = cli._drive(cfg, project, paths, {"run_id": "run-1"})
     assert code == cli.EXIT_OK
     # The order is the seam: the sweep runs before this run says it has
     # begun, and how it left is recorded while the ledger is still open.
-    assert steps == ["released", "run.began", "driven", "run.ended", "closed"], steps
+    # The order is the seam: this run announces itself before the sweep can
+    # be run anywhere, the sweep runs before it says it has begun, and how
+    # it left is recorded while the ledger is still open.
+    assert steps == ["announced", "released", "run.began", "driven", "run.ended", "gone", "closed"], steps

@@ -3872,7 +3872,7 @@ class TestDerivedStagesInTheLedger:
         """What the plan node asks the mesh to hold, as it asks for it."""
         import contextlib
 
-        from code_gantry import meshlock
+        from code_gantry import mesh
 
         asked = []
 
@@ -3881,7 +3881,7 @@ class TestDerivedStagesInTheLedger:
             asked.append((name, label))
             yield [0.0]
 
-        monkeypatch.setattr(meshlock, "hold", record)
+        monkeypatch.setattr(mesh, "hold", record)
         return asked
 
     def test_a_revision_holds_no_planner_semaphore(self, repo, tmp_path, monkeypatch):

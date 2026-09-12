@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: bin/daemon start|stop|status|peers|holds|logs|retry <bay>|place <bay> <port-offset> [config]|pickup|nudge|reload|version
+# Usage: bin/daemon start|stop|status|peers|holds|runs|logs|retry <bay>|place <bay> <port-offset> [config]|pickup|nudge|reload|version
 #
 # The per-host daemon, detached from the terminal that started it. Its
 # state lives under ~/.local/state/code_gantry/daemon: a pid file, the
@@ -116,6 +116,9 @@ case "${1:-}" in
   holds)
     rpc "IO.puts CodeGantryDaemon.Control.holds()"
     ;;
+  runs)
+    rpc "IO.puts CodeGantryDaemon.Control.runs()"
+    ;;
   logs)
     tail -n 50 -f "$LOG"
     ;;
@@ -138,6 +141,6 @@ case "${1:-}" in
     if [ -n "${4:-}" ]; then rpc "IO.puts CodeGantryDaemon.Control.place(\"$2\", $3, \"$4\")"; else rpc "IO.puts CodeGantryDaemon.Control.place(\"$2\", $3)"; fi
     ;;
   *)
-    echo "usage: bin/daemon start|stop|status|peers|holds|logs|retry <bay>|place <bay> <port-offset> [config]|pickup|nudge|reload|version" >&2; exit 2
+    echo "usage: bin/daemon start|stop|status|peers|holds|runs|logs|retry <bay>|place <bay> <port-offset> [config]|pickup|nudge|reload|version" >&2; exit 2
     ;;
 esac
