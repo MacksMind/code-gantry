@@ -233,12 +233,14 @@ class Views:
     def findings_on(self, key: str) -> list[Finding]:
         return [f for f in self.findings.values() if key in f.keys]
 
-    def proven_green(self, sha: str, command: str, origin: str) -> str | None:
-        """When `origin` last ran `command` green on `sha`, or None. Per
-        origin, because a suite is green on a host's environment, not on a
-        tree alone."""
-        times = [at for o, at in self.greens.get((sha, command), []) if o == origin]
-        return max(times) if times else None
+    def proven_green(self, sha: str, command: str) -> tuple[str, str] | None:
+        """Who last ran `command` green on `sha`, and when — any origin, since
+        a green suite is a fact about the tree (decided 2026-09-12); or None."""
+        runs = self.greens.get((sha, command), [])
+        if not runs:
+            return None
+        origin, at = max(runs, key=lambda pair: pair[1])
+        return origin, at
 
     def derived_waiting(self) -> list[DerivedStage]:
         """Stages drawn and not yet taken, a batch at a time in the order drawn."""

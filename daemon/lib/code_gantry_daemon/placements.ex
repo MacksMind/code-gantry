@@ -22,10 +22,31 @@ defmodule CodeGantryDaemon.Placements do
     end
   end
 
-  @doc "Every bay of this host: the host file's, then the placed ones."
+  @doc """
+  Every bay of this host: the host file's, then the placed ones. A
+  placement that names a host-file bay overrides it — that is how a bay's
+  scope changes without the host file changing.
+  """
   def all(host) do
-    seeded = Enum.map(host.bays, & &1.name)
-    host.bays ++ Enum.reject(load(), &(&1.name in seeded))
+    placed = load()
+    by_name = Map.new(placed, &{&1.name, &1})
+    seeded = Enum.map(host.bays, &Map.get(by_name, &1.name, &1))
+    names = Enum.map(host.bays, & &1.name)
+    seeded ++ Enum.reject(placed, &(&1.name in names))
+  end
+
+  @doc "Remember a bay's scope, adding the placement if the host file seeded the bay."
+  def set_scope(host, name, scope) do
+    case Enum.find(all(host), &(&1.name == name)) do
+      nil ->
+        {:error, :no_such_bay}
+
+      bay ->
+        bay = %{bay | scope: scope}
+        rest = Enum.reject(load(), &(&1.name == name))
+        write(rest ++ [bay])
+        {:ok, bay}
+    end
   end
 
   @doc "Remember a placement. `{:error, :exists}` when the name is taken."

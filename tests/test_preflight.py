@@ -954,9 +954,10 @@ class TestDeclaredChecksRunAtPreflight:
 
 
 class TestASuiteProvenGreenIsNotProvenAgain:
-    """A green suite is a fact about a tree on this host. Preflight records
-    the ones it runs and skips a tree this origin already proved; another
-    origin's proof does not count, since its environment is not this one."""
+    """A green suite is a fact about the tree, whoever ran it (decided
+    2026-09-12). Preflight records the ones it runs and skips a tip any
+    origin has proved — a host that lands a tip green has proved it for the
+    host that pulls it."""
 
     def _cfg(self, repo, marker):
         _commit_a_plan(repo)
@@ -989,9 +990,9 @@ class TestASuiteProvenGreenIsNotProvenAgain:
         checks = self._preflight(cfg, led)
         assert marker.read_text().count("x") == 1, "the suite ran again"
         skipped = next(c for c in checks if "full_test_command passes" in c.name)
-        assert skipped.ok and "proven green by this host" in skipped.detail
+        assert skipped.ok and "proven green by this-host" in skipped.detail
 
-    def test_another_origins_proof_does_not_count(self, repo, tmp_path):
+    def test_another_origins_proof_counts(self, repo, tmp_path):
         from code_gantry.gitops import Git
         from code_gantry.ledger import open_ledger
 
@@ -1000,8 +1001,10 @@ class TestASuiteProvenGreenIsNotProvenAgain:
         theirs = open_ledger(tmp_path / "ledger.db", origin="other-host", actor="o")
         theirs.record_green(Git(repo).head_sha(), cfg.full_test_command)
         mine = open_ledger(tmp_path / "ledger.db", origin="this-host", actor="t")
-        self._preflight(cfg, mine)
-        assert marker.read_text().count("x") == 1
+        checks = self._preflight(cfg, mine)
+        assert not marker.exists(), "the suite ran on a tip another host proved"
+        skipped = next(c for c in checks if "full_test_command passes" in c.name)
+        assert skipped.ok and "proven green by other-host" in skipped.detail
 
     def test_a_different_tree_is_proven_again(self, repo, tmp_path):
         from code_gantry.ledger import open_ledger

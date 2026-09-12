@@ -30,6 +30,25 @@ defmodule CodeGantryDaemon.Control do
     end
   end
 
+  @doc "Change what a bay draws from: the keys given, or the whole plan when none."
+  def scope(name, keys) do
+    host = Status.host()
+
+    case Placements.set_scope(host, name, keys) do
+      {:error, :no_such_bay} ->
+        "no bay named #{name} on this host"
+
+      {:ok, _bay} ->
+        what = if keys == [], do: "the whole plan", else: "scope #{Enum.join(keys, " ")}"
+
+        case Bay.rescope(name, keys) do
+          {:started, run_id} -> "#{name}: #{what}; run #{run_id} started"
+          {:running, run_id} -> "#{name}: #{what} from its next run; #{run_id} is still running"
+          {:error, :no_such_bay} -> "#{name}: #{what} remembered; the bay is not running on this daemon"
+        end
+    end
+  end
+
   def retry(name) do
     case Bay.retry(name) do
       {:ok, :run, nil} -> "#{name}: making the checkout again"

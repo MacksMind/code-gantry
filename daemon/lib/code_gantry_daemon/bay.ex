@@ -32,6 +32,18 @@ defmodule CodeGantryDaemon.Bay do
   def via(name), do: {:via, Registry, {CodeGantryDaemon.Registry, {__MODULE__, name}}}
 
   @doc """
+  Draw from `scope` — every key when empty. A bay with a run live keeps its
+  scope until that run ends and answers `{:running, run_id}`; an idle one
+  starts a new run now and answers `{:started, run_id}`.
+  """
+  def rescope(name, scope) do
+    case GenServer.whereis(via(name)) do
+      nil -> {:error, :no_such_bay}
+      pid -> GenServer.call(pid, {:scope, scope})
+    end
+  end
+
+  @doc """
   Launch again. `{:ok, mode, run_id}` names what was started; a bay with a
   run live refuses with its id, since the run is the thing to talk to.
   """
@@ -162,6 +174,16 @@ defmodule CodeGantryDaemon.Bay do
   # Never launched: the checkout is what to try again.
   def handle_call(:retry, _from, %{run_id: nil} = state) do
     {:reply, {:ok, :run, nil}, state, {:continue, :ensure_checkout}}
+  end
+
+  def handle_call({:scope, scope}, _from, %{port: port} = state) when is_port(port) do
+    {:reply, {:running, state.run_id}, %{state | bay: %{state.bay | scope: scope}}}
+  end
+
+  def handle_call({:scope, scope}, _from, state) do
+    run_id = new_run_id(state.bay, state.run_id)
+    state = %{state | bay: %{state.bay | scope: scope}, mode: :run, run_id: run_id, crashes: 0}
+    {:reply, {:started, run_id}, state, {:continue, :launch}}
   end
 
   def handle_call(:retry, _from, state) do

@@ -582,16 +582,17 @@ def _environment_checks(
     # second name: there is nothing left to deduplicate against.
     label = "full_test_command"
     command = cfg.full_test_command
-    if command and ledger is not None and ledger.origin:
-        # A suite is a fact about a tree on this host's environment. A tree
-        # this origin has already proven green is not proven again.
+    if command and ledger is not None:
+        # A green suite is a fact about the tree, whoever ran it: a tip
+        # another host landed green is not proven again here.
         tip = Git(cfg.target_repo).head_sha()
-        when = ledger.views().proven_green(tip, command, ledger.origin)
-        if when:
+        proven = ledger.views().proven_green(tip, command)
+        if proven:
+            by, when = proven
             checks.append(
                 Check(
                     f"{label} passes on a clean tree", True,
-                    f"not run: {tip[:12]} was proven green by this host at {when}",
+                    f"not run: {tip[:12]} was proven green by {by} at {when}",
                 )
             )
             return checks

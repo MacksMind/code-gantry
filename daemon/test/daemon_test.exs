@@ -207,6 +207,47 @@ defmodule CodeGantryDaemonTest do
     end
   end
 
+  describe "scope" do
+    alias CodeGantryDaemon.{Control, Placements}
+
+    test "a finished bay given a new scope starts a run under it", %{root: root, host: host, state: state} do
+      File.write!(Path.join(root, "exit"), "0")
+      {:ok, _} = Bay.start_link({host, hd(host.bays)})
+      wait_for(fn -> String.contains?(status(state), "bay1 finished") end)
+      assert Control.scope("bay1", ["p.003", "p.004"]) =~ ~r/^bay1: scope p.003 p.004; run \d{8}-\d{6}-bay1 started$/
+      wait_for(fn -> length(Regex.scan(~r/argv: run/, calls(root))) == 2 end)
+      assert calls(root) =~ ~r/argv: run \S+ --run-id \S+ --scope p.003 --scope p.004/
+      # Remembered past this daemon, overriding what the host file said.
+      assert [%{name: "bay1", offset: 100, scope: ["p.003", "p.004"]}] = Placements.load()
+      assert Enum.map(Placements.all(host), &{&1.name, &1.scope}) == [{"bay1", ["p.003", "p.004"]}]
+    end
+
+    test "no keys means the whole plan", %{root: root, host: host, state: state} do
+      File.write!(Path.join(root, "exit"), "0")
+      {:ok, _} = Bay.start_link({host, hd(host.bays)})
+      wait_for(fn -> String.contains?(status(state), "bay1 finished") end)
+      assert Control.scope("bay1", []) =~ ~r/^bay1: the whole plan; run \S+ started$/
+      wait_for(fn -> length(Regex.scan(~r/argv: run/, calls(root))) == 2 end)
+      [_, second] = Regex.scan(~r/argv: run [^\n]*/, calls(root))
+      refute hd(second) =~ "--scope"
+    end
+
+    test "a running bay keeps its scope until its run ends", %{root: root, host: host, state: state} do
+      File.write!(Path.join(root, "hold"), "")
+      {:ok, _} = Bay.start_link({host, hd(host.bays)})
+      wait_for(fn -> String.contains?(status(state), "bay1 running") end)
+      assert Control.scope("bay1", ["p.009"]) =~ ~r/^bay1: scope p.009 from its next run; \S+ is still running$/
+      assert [%{scope: ["p.009"]}] = Placements.load()
+      File.rm!(Path.join(root, "hold"))
+      wait_for(fn -> String.contains?(status(state), "bay1 finished") end)
+      assert length(Regex.scan(~r/argv: run/, calls(root))) == 1
+    end
+
+    test "an unknown bay is refused" do
+      assert Control.scope("bay9", []) == "no bay named bay9 on this host"
+    end
+  end
+
   describe "retry" do
     defp launches(root) do
       Regex.scan(~r/argv: (run|resume) \S+ (?:--run-id )?(\S+)/, calls(root))
