@@ -1983,9 +1983,11 @@ def advance(state: RunState, rt: Runtime) -> dict:
         merge_sha, publication = _publish_landing(rt, stage)
     if rt.ledger is not None:
         _record_landing(rt, stage, state, merge_sha or rt.git.head_sha())
-        # The suite this landing passed is a fact about the pushed tree; the
-        # next preflight on this host reads it rather than proving it again.
-        if publication is None and state.get("full_suite_digest") and rt.cfg.full_test_command:
+        # The pushed tree passed a full suite: the stage's own before it
+        # reached here, or the publication's re-run on the rebased tree; a
+        # publication that escalated is the one case it did not. Recorded so
+        # the next preflight on any host reads it rather than proving it again.
+        if publication is None and rt.cfg.full_test_command:
             rt.ledger.record_green(
                 merge_sha or rt.git.head_sha(), rt.cfg.full_test_command,
                 run_id=rt.paths.run_id, stage_id=stage.id,

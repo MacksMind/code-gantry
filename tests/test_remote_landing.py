@@ -252,11 +252,17 @@ class TestTheLandingHoldsTheSuiteLock:
 
 
 class TestALandingRecordsItsGreenSuite:
+    """A stage reaches `advance` only after the full suite passed on its
+    tree, and a publication that pulled a moved tip re-ran it on the rebased
+    tree before pushing — so a publication that did not escalate means the
+    pushed tree passed a full suite, whichever node ran it. The state here
+    is what production hands `advance`; no digest is injected."""
+
     def _land_after_a_green_suite(self, repo, tmp_path, **cfg_over):
         cfg, rt, state = make(repo, tmp_path, remote_landing=True, **cfg_over)
         state = with_stage(state, rt)
         (repo / "app.py").write_text("stage work\n")
-        state = {**state, "review_summary": "fine", "review_record": "did it", "full_suite_digest": "green"}
+        state = {**state, "review_summary": "fine", "review_record": "did it"}
         return cfg, rt, state, nodes.advance(state, rt)
 
     def test_a_pushed_landing_is_recorded_green_on_its_tip(self, repo, tmp_path, origin):
@@ -267,6 +273,24 @@ class TestALandingRecordsItsGreenSuite:
         tip = out["completed"][-1]["merge_sha"]
         greens = [e for e in rt.ledger.events() if e.kind == SUITE_GREEN]
         assert [(e.sha, e.body["command"]) for e in greens] == [(tip, cfg.full_test_command)]
+
+    def test_a_landing_onto_a_moved_tip_records_the_rebased_tip(self, repo, tmp_path, origin):
+        from code_gantry.ledger import SUITE_GREEN
+
+        bare, other = origin
+        other_lands(other)
+        cfg, rt, state, out = self._land_after_a_green_suite(repo, tmp_path, full_test_command="true")
+        assert out["next_hop"] != "escalate"
+        tip = origin_tip(bare)
+        greens = [e for e in rt.ledger.events() if e.kind == SUITE_GREEN]
+        assert [e.sha for e in greens] == [tip], "the tip the re-test passed on is the one recorded"
+
+    def test_a_landing_with_no_origin_records_its_tip(self, repo, tmp_path):
+        from code_gantry.ledger import SUITE_GREEN
+
+        cfg, rt, state, out = self._land_after_a_green_suite(repo, tmp_path)
+        greens = [e for e in rt.ledger.events() if e.kind == SUITE_GREEN]
+        assert [e.sha for e in greens] == [rt.git.rev_parse("proj")]
 
     def test_a_landing_whose_re_test_was_red_records_nothing(self, repo, tmp_path, origin):
         from code_gantry.ledger import SUITE_GREEN
