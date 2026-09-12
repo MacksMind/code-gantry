@@ -26,8 +26,18 @@ defmodule CodeGantryDaemon.Runs do
   @attributes [:ref, :run_id, :bay, :at]
   @prefix "runs@"
 
-  @doc "This host's table of live runs, created if it is not there yet."
-  def start(origin), do: Owned.start(@prefix, origin, @attributes)
+  @doc """
+  This host's table of live runs, created if it is not there yet and
+  emptied of whatever it holds. Same reason as the semaphore's: every row
+  is held open by a socket this server owns, and a server that has just
+  started owns none.
+  """
+  def start(origin) do
+    with :ok <- Owned.start(@prefix, origin, @attributes) do
+      :mnesia.clear_table(table_for(origin))
+      :ok
+    end
+  end
 
   @doc "The table a host owns."
   def table_for(origin), do: Owned.table_for(@prefix, origin)

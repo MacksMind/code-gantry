@@ -41,8 +41,24 @@ defmodule CodeGantryDaemon.Semaphore do
   @attributes [:ref, :name, :label, :at]
   @prefix "waits@"
 
-  @doc "This host's table of requests, created if it is not there yet."
-  def start(origin), do: Owned.start(@prefix, origin, @attributes)
+  @doc """
+  This host's table of requests, created if it is not there yet and
+  emptied of whatever it holds.
+
+  Emptying is the point. Every request in this table is held open by a
+  socket this server owns, and a server that has just started owns none —
+  so a row that outlived the process that was watching it is a name held
+  by nobody, and nothing will ever release it. The table survives a
+  restart of the server because Mnesia is the VM's, not the server's,
+  which is exactly how a semaphore came to be held for half an hour by a
+  run that had long since moved on.
+  """
+  def start(origin) do
+    with :ok <- Owned.start(@prefix, origin, @attributes) do
+      :mnesia.clear_table(table_for(origin))
+      :ok
+    end
+  end
 
   @doc "The table a host owns."
   def table_for(origin), do: Owned.table_for(@prefix, origin)

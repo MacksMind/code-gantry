@@ -560,6 +560,19 @@ defmodule CodeGantryDaemonTest do
       %{origin: origin}
     end
 
+    test "a server that starts again holds nothing it was watching before", %{origin: origin} do
+      # Every request is held open by a socket the server owns, so a row
+      # that outlived the server watching it is a name held by nobody and
+      # nothing will ever give it back. Mnesia belongs to the VM, not to
+      # the server, so a restart of one and not the other leaves exactly
+      # that — measured in the wild as a semaphore held for half an hour
+      # by a run that had long since moved on.
+      Semaphore.request(origin, "planner-abc", "a run that is gone", 1_000)
+      assert Semaphore.holder("planner-abc")
+      :ok = Semaphore.start(origin)
+      refute Semaphore.holder("planner-abc"), "a stale request survived the server that held it"
+    end
+
     test "a request nobody is ahead of is granted at once", %{origin: origin} do
       ref = Semaphore.request(origin, "planner-abc", "bay1")
       assert Semaphore.granted?("planner-abc", ref)
