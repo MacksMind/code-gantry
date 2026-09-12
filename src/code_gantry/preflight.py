@@ -604,23 +604,41 @@ def _environment_checks(
     # second name: there is nothing left to deduplicate against.
     label = "full_test_command"
     command = cfg.full_test_command
+    def _proven(tip: str, by: str, when: str, *, waited: bool) -> Check:
+        waiting = " while this host waited for the suite lock" if waited else ""
+        return Check(
+            f"{label} passes on a clean tree", True,
+            f"not run: {tip[:12]} was proven green by {by} at {when}{waiting}",
+        )
+
     if command and ledger is not None:
         # A green suite is a fact about the tree, whoever ran it: a tip
-        # another host landed green is not proven again here.
+        # another host landed green is not proven again here. Asked before
+        # the lock below is waited on, so a bay with nothing to prove skips
+        # at once rather than queueing behind a suite to be told so.
         tip = Git(cfg.target_repo).head_sha()
         proven = ledger.views().proven_green(tip, command)
         if proven:
-            by, when = proven
-            checks.append(
-                Check(
-                    f"{label} passes on a clean tree", True,
-                    f"not run: {tip[:12]} was proven green by {by} at {when}",
-                )
-            )
+            checks.append(_proven(tip, *proven, waited=False))
             return checks
     if command:
-        tip = Git(cfg.target_repo).head_sha()
-        result = runner.run(command)
+        # The suite holds the host lock, so the wait here can be a whole
+        # suite long, and the bay ahead may have proved this very tree while
+        # this one queued. Asked again now the lock is held — the idiom
+        # `plan` uses on the derivation queue — because the first ask was
+        # made before the wait and could not see the window it spans. Four
+        # duplicate pairs in the ledger's first night were this. The tip is
+        # read here too, so it is the tree the suite is about to run on.
+        with runner.holding(command) as waited:
+            tip = Git(cfg.target_repo).head_sha()
+            proven = (
+                ledger.views().proven_green(tip, command)
+                if waited[0] and ledger is not None else None
+            )
+            if proven:
+                checks.append(_proven(tip, *proven, waited=True))
+                return checks
+            result = runner.run(command)
         if result.ok and ledger is not None and ledger.origin:
             ledger.record_green(tip, command)
 

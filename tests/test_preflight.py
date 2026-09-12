@@ -1034,3 +1034,103 @@ class TestASuiteProvenGreenIsNotProvenAgain:
         led = open_ledger(tmp_path / "ledger.db", origin="this-host", actor="t")
         self._preflight(cfg, led)
         assert not [e for e in led.events() if e.kind == SUITE_GREEN]
+
+
+class TestTwoBaysDoNotProveTheSameTreeTwice:
+    """The proven-green question is asked before the suite lock is waited on,
+    so two bays on one host both asked, both found nothing, and the second
+    ran the identical suite on the identical commit behind the first — four
+    times in the ledger's first night, every green in it a duplicate pair.
+    It is asked again once the lock is held, the idiom `plan` already uses
+    for the derivation queue. The first ask stays: a bay that can skip must
+    not queue behind a suite to find that out."""
+
+    LOCK = "full-suite"
+
+    def _cfg(self, repo, marker):
+        _commit_a_plan(repo)
+        return parse_config(
+            as_test_tools({
+                "target_repo": str(repo), "base_ref": "main", "project_branch": "proj",
+                "plan_root": "PLAN.md", "full_test_command": f"echo x >> {marker}",
+                "executor": {"model": "m"}, "planner": {"model": "claude-opus-5"},
+                "reviewer": {"model": "gpt-5.6-sol"},
+            })
+        )
+
+    def _runner(self, cfg, lock_dir):
+        from code_gantry.commands import CommandRunner
+
+        return CommandRunner(
+            cwd=cfg.target_repo, timeout=60,
+            exclusive=cfg.exclusive_commands(), lock_dir=lock_dir,
+        )
+
+    def _preflight_in_a_thread(self, cfg, led, lock_dir, out):
+        def go():
+            out.append(
+                run_preflight(
+                    cfg, self._runner(cfg, lock_dir), check_models=False,
+                    check_approval=False, check_endpoint=False, ledger=led,
+                )
+            )
+
+        thread = threading.Thread(target=go, daemon=True)
+        thread.start()
+        return thread
+
+    def test_the_waiting_bay_asks_again_once_it_holds_the_lock(self, repo, tmp_path):
+        """The green is written while the second bay is blocked on the lock,
+        which is exactly the window its first ask could not see."""
+        import time
+
+        from code_gantry import hostlock
+        from code_gantry.gitops import Git
+        from code_gantry.ledger import open_ledger
+
+        marker = tmp_path / "runs.txt"
+        locks = tmp_path / "locks"
+        cfg = self._cfg(repo, marker)
+        mine = open_ledger(tmp_path / "ledger.db", origin="this-bay", actor="t")
+        out: list = []
+
+        # This thread stands in for the neighbouring bay's suite: it holds the
+        # host lock, and only then is the tree proved green.
+        with hostlock.hold(self.LOCK, "the neighbour's suite", None, locks):
+            thread = self._preflight_in_a_thread(cfg, mine, locks, out)
+            time.sleep(0.5)  # long enough for the first ask, which reads sqlite
+            assert thread.is_alive(), "the second bay did not wait for the lock"
+            neighbour = open_ledger(tmp_path / "ledger.db", origin="other-bay", actor="o")
+            neighbour.record_green(Git(repo).head_sha(), cfg.full_test_command)
+        thread.join(60)
+
+        assert not thread.is_alive(), "preflight never came back"
+        assert not marker.exists(), "the second bay proved a tree already proven"
+        skipped = next(c for c in out[0] if "full_test_command passes" in c.name)
+        assert skipped.ok
+        assert "proven green by other-bay" in skipped.detail
+        assert "while this host waited for the suite lock" in skipped.detail
+
+    def test_a_bay_that_can_skip_does_not_wait_for_the_lock(self, repo, tmp_path):
+        """The ask before the wait is what makes the skip free. Without it
+        every bay queues behind a suite to be told it need not run one."""
+        from code_gantry import hostlock
+        from code_gantry.gitops import Git
+        from code_gantry.ledger import open_ledger
+
+        marker = tmp_path / "runs.txt"
+        locks = tmp_path / "locks"
+        cfg = self._cfg(repo, marker)
+        theirs = open_ledger(tmp_path / "ledger.db", origin="other-bay", actor="o")
+        theirs.record_green(Git(repo).head_sha(), cfg.full_test_command)
+        mine = open_ledger(tmp_path / "ledger.db", origin="this-bay", actor="t")
+        out: list = []
+
+        with hostlock.hold(self.LOCK, "the neighbour's suite", None, locks):
+            thread = self._preflight_in_a_thread(cfg, mine, locks, out)
+            thread.join(30)
+            assert not thread.is_alive(), "the skip queued behind the suite lock"
+
+        assert not marker.exists()
+        skipped = next(c for c in out[0] if "full_test_command passes" in c.name)
+        assert skipped.ok and "while this host waited" not in skipped.detail

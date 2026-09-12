@@ -283,8 +283,14 @@ class CommandRunner:
         self.exclusive = dict(exclusive or {})
         self._lock_dir = lock_dir
 
-    def _holding(self, label: str, log):
-        """Hold the host lock `label` maps to, if any, for the block."""
+    def holding(self, label: str, log=None):
+        """Hold the host lock `label` maps to, if any, for the block.
+
+        Public because a caller can have a question to settle while it holds
+        it — preflight asks whether the tree is still worth proving once the
+        wait is over. The mapping stays here, so a command is tied to a lock
+        name in exactly one place.
+        """
         name = self.exclusive.get(label)
         if not name:
             return contextlib.nullcontext([0.0])
@@ -346,7 +352,7 @@ class CommandRunner:
         if extra_env:
             env.update(extra_env)
 
-        with self._holding(label, sink) as waited:
+        with self.holding(label, sink) as waited:
             started = time.monotonic()
             proc, stdout, stderr, timed_out = self._communicate(
                 target, shell, env, effective_timeout
