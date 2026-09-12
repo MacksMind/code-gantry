@@ -3970,3 +3970,31 @@ class TestAStageHeldElsewhere:
         out = nodes.plan(stale, other)
         assert out["current"]["id"] == "second", out.get("current")
         assert out["next_hop"] == "precheck"
+
+
+class TestThePlannerLockIsNamedForTheLedger:
+    """One planner at a time per ledger on a host. Two bays share a ledger by
+    naming it — a file outside every checkout, or a name in the table — and
+    the lock must follow that identity, never each bay's own work dir."""
+
+    def _rt(self, tmp_path, *, name, path, work):
+        from types import SimpleNamespace
+        from code_gantry.runtime import ProjectPaths
+
+        cfg = SimpleNamespace(ledger=SimpleNamespace(name=name, path=path))
+        return SimpleNamespace(cfg=cfg, project=ProjectPaths(tmp_path / work, ledger=path))
+
+    def test_two_bays_on_one_named_ledger_share_the_lock(self, tmp_path):
+        a = self._rt(tmp_path, name="repo/project", path=None, work="bay1/docs/.code_gantry")
+        b = self._rt(tmp_path, name="repo/project", path=None, work="bay2/docs/.code_gantry")
+        assert nodes._planner_lock(a) == nodes._planner_lock(b)
+        other = self._rt(tmp_path, name="repo/other", path=None, work="bay1/docs/.code_gantry")
+        assert nodes._planner_lock(a) != nodes._planner_lock(other)
+
+    def test_two_bays_on_one_ledger_file_share_the_lock(self, tmp_path):
+        shared = tmp_path / "shared.db"
+        a = self._rt(tmp_path, name=None, path=shared, work="bay1/docs/.code_gantry")
+        b = self._rt(tmp_path, name=None, path=shared, work="bay2/docs/.code_gantry")
+        assert nodes._planner_lock(a) == nodes._planner_lock(b)
+        own = self._rt(tmp_path, name=None, path=None, work="bay1/docs/.code_gantry")
+        assert nodes._planner_lock(a) != nodes._planner_lock(own)

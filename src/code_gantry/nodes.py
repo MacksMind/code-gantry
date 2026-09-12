@@ -3033,8 +3033,11 @@ def _drop_derived(rt: Runtime, stage: Stage, reason: str) -> None:
 
 
 def _planner_lock(rt: Runtime) -> str:
-    """One planner at a time per ledger file: the lock is named for the file."""
-    digest = hashlib.sha1(str(rt.project.ledger.resolve()).encode()).hexdigest()[:12]
+    """One planner at a time per ledger on this host: the lock is named for
+    the ledger's identity — its name in the table, or the file — never for
+    a bay's own work dir, which would give every bay a lock of its own."""
+    identity = rt.cfg.ledger.name or str(rt.project.ledger.resolve())
+    digest = hashlib.sha1(identity.encode()).hexdigest()[:12]
     return f"planner-{digest}"
 
 
