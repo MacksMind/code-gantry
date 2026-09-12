@@ -67,7 +67,13 @@ the credentials come from the repository's credentials file
 Manager as `code-gantry/ledger-user`. Within a host, bays share the
 drawn-stage queue under the planner lock, named for the ledger's identity.
 
-**Landing across hosts is optimistic, never leased.** Rebase, test, push; a
+**Landing across hosts is optimistic, never leased.** A landing lock
+per project in the table — one item, held from pull to push, renewed
+while the suite runs, expiring if its holder dies — was proposed after
+four bays landing every eight minutes kept moving origin under the Mac's
+re-test; the operator has not agreed to it, and noted that only one
+landing per project branch can push at a time, so a per-project lock
+would save the wasted re-tests rather than add throughput. Rebase, test, push; a
 push the remote refuses after a green suite is a retry — pull again, test
 again, push again — bounded by a retry count, with a conflict or a red
 combined tree stopping for a person. No lease ref on the remote: a lease
@@ -101,15 +107,40 @@ load its modules into the running VM, and when `src/`, `prompts/`,
 `pyproject.toml` or `uv.lock` changed, pause every running bay at its next
 seam and resume it from the new code. Local changes, a diverged branch or
 a failed compile are reported in the `code` status row and left alone.
-Verbs it owes: `pause`, `resume` and `stop` per bay and per host; a status
-view across every host, every repository on it and the project each bay
-works, read from the table so an unreachable host shows its last state
-with a timestamp; putting down the suite workers a killed run leaves in
-its container (`docker compose exec` survives its client); `ingest`, a
-finding or an item handed to a project from a Claude session in the
-person's primary copy, fronted by a skill in the target repository; a
-finding or item moved between projects of one repository as one event;
-the nudge after a push; the operator invocation.
+`version` answers the commit the running daemon's checkout is at. The
+pickup is proven across hosts: a push from the Mac was fetched, compiled
+and loaded by the Spark's running VM 95 s later with its pid unchanged,
+and a `src/` change had both Spark bays asked to pause 20 s after the
+push. It acts only when origin is ahead of the checkout, so a daemon
+running from the checkout a person commits in sees nothing to pick up —
+the Mac's case; it must also act when HEAD moved since it last looked.
+The table holds two more ledgers, written and read through
+`code-gantry hosts [put]` and `code-gantry events [put|--follow]`:
+`_hosts`, each daemon's state appended, the latest row per origin the
+truth, a host that stopped writing shown stale with its age; `_events`,
+one line per thing a daemon did, from every host, in one sequence — the
+one watch a session needs. Verbs it owes: writing its state and its
+events to those two ledgers on every change (the CLI is there; the
+daemon does not call it yet); `status` and `events --follow` across
+every host from `bin/daemon`; `pause`, `resume` and `stop` per bay and per
+host; putting down the suite workers a killed run leaves in its container
+(`docker compose exec` survives its client); `ingest`, a finding or an
+item handed to a project from a Claude session in the person's primary
+copy, fronted by a skill in the target repository; a finding or item
+moved between projects of one repository as one event; the nudge after a
+push; the operator invocation; `bin/daemon` going through `mise`.
+
+**The dashboard (decided 2026-09-12).** The daemon serves a Phoenix
+LiveView page on every host, over Tailscale, rendering the `_hosts` and
+project ledgers: one row per bay across all hosts (host, repository,
+project, bay, state, stage in flight, since), a code line per host, and
+the findings that need a person with their dispositions as buttons. The
+daemon therefore takes dependencies — Phoenix, LiveView, Bandit, Plug,
+Jason, Phoenix.PubSub — which the pickup's `mix compile` builds once;
+only our own modules are hot-loaded. The `.tool-versions` pin (Erlang
+27.3.4, Elixir 1.18.4) is required, since Phoenix wants Elixir ≥ 1.15
+and the Spark's packaged Elixir is 1.14: `mise install` runs on both
+hosts, and `bin/daemon` must start the VM through `mise exec`.
 
 **Test bed.** The Spark (a DGX, hostname `spark`, origin `host-b`,
 packaged Elixir 1.14 on OTP 24) and the operator's MacBook (hostname
@@ -145,7 +176,10 @@ with the suite and planner locks, drawn stages, leases; the per-host daemon
 (`bin/daemon start|stop|status|logs|retry|place`), tested against a fake
 CLI and running on both hosts; the ledger in the table with `ledger
 import` for the old files; preflight pulling the project branch first and
-skipping a tip any origin proved green; the code pickup.
+skipping a tip any origin proved green; the code pickup, proven across hosts; `advance` recording the pushed tip
+green at every landing (5666c5e), so preflight on any host skips a tip
+another host landed — every landing before it had left the row unwritten;
+`code-gantry hosts` and `events`.
 Next: (5) placements as the daemon's record in place of the host file's
 bays; (6) the operator role; (7) CodeGantry improving itself from its own
 run artifacts. The daemon adds uptime, capacity, reload at the pause seam
