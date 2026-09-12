@@ -929,6 +929,11 @@ from code_gantry.ledgercli import ledger as _ledger_group, plan as _plan_group  
 main.add_command(_plan_group, "plan")
 main.add_command(_ledger_group, "ledger")
 
+from code_gantry.hosts import events_group as _events_group, hosts_group as _hosts_group  # noqa: E402
+
+main.add_command(_hosts_group, "hosts")
+main.add_command(_events_group, "events")
+
 
 if __name__ == "__main__":  # pragma: no cover
     main()
