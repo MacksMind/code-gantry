@@ -537,6 +537,12 @@ defmodule CodeGantryDaemonTest do
 
 
   describe "the mesh" do
+    test "a control node is not listed as a peer" do
+      # Every verb `bin/daemon` speaks connects a node of its own, and
+      # listing those makes a mesh of one host look like a mesh of several.
+      refute Enum.any?(Mesh.peers(), &(not Host.daemon_node?(&1)))
+    end
+
     test "a nudge with nobody connected tells nobody rather than raising" do
       assert Mesh.nudge() == 0
     end

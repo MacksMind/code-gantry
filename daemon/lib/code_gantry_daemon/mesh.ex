@@ -37,8 +37,12 @@ defmodule CodeGantryDaemon.Mesh do
 
   def start_link(host), do: GenServer.start_link(__MODULE__, host, name: __MODULE__)
 
-  @doc "The peers reachable right now."
-  def peers, do: Node.list()
+  @doc """
+  The other daemons reachable right now. Not every connected node: each
+  verb `bin/daemon` speaks connects one of its own, and listing those as
+  peers makes a mesh of one host look like a mesh of several.
+  """
+  def peers, do: Enum.filter(Node.list(), &Host.daemon_node?/1)
 
   @doc """
   Tell every connected peer to pick code up now. Returns how many were
