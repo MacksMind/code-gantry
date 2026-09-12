@@ -6,7 +6,7 @@ defmodule CodeGantryDaemon.Control do
   answers from its own state, and the same verbs serve a mesh later.
   """
 
-  alias CodeGantryDaemon.{Application, Bay, Pickup, Placements, Status}
+  alias CodeGantryDaemon.{Application, Bay, Mesh, Pickup, Placements, Status}
 
   @doc "The commit this daemon's checkout is at, and the node answering: what a pickup is confirmed by."
   def version(host \\ nil) do
@@ -17,8 +17,26 @@ defmodule CodeGantryDaemon.Control do
     "code-gantry #{String.slice(String.trim(sha), 0, 12)}#{mark} on #{node()} (#{host.origin})"
   end
 
-  @doc "Pick up this daemon's code from origin now, rather than at the next tick."
-  def pickup, do: Pickup.tick(Status.host())
+  @doc """
+  Pick up this daemon's code from origin now, rather than waiting to be
+  told. Passes the nudge on if it moved, so saying this to one host moves
+  the mesh.
+  """
+  def pickup, do: Pickup.take(Status.host())
+
+  @doc "Tell every connected peer to pick code up now."
+  def nudge, do: "nudged #{Mesh.nudge()} peer(s)"
+
+  @doc "The peers this daemon can see."
+  def peers do
+    case Mesh.peers() do
+      [] -> "no peers connected"
+      nodes -> Enum.join(nodes, "\n")
+    end
+  end
+
+  @doc "Every bay on every host that has joined."
+  def status, do: Status.render_all()
 
   @doc "Compile and load the local checkout as it is: for a test on one host; fetches nothing, nudges nobody."
   def reload(host \\ nil), do: Pickup.reload(host || Status.host())

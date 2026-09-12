@@ -12,6 +12,8 @@ defmodule CodeGantryDaemon.Host do
         branch: "technical-debt",                # optional; what a new bay starts on
         code_branch: "elixir-daemon",            # optional; what the daemon picks its own code up from (default: the checkout's branch)
         pickup_seconds: 120,                     # optional; 0 never picks up
+        address: "192.0.2.10",                 # optional; how other hosts reach this one (default: the hostname)
+        peers: ["192.0.2.11"],                 # optional; the other hosts' addresses
         command: ["uv", "run", "code-gantry"],   # optional; what runs the CLI
         bays: [
           [name: "bay1", offset: 100],
@@ -20,7 +22,24 @@ defmodule CodeGantryDaemon.Host do
       ]
   """
 
-  defstruct [:origin, :code_gantry, :primary, :config, :branch, :code_branch, pickup_seconds: 120, bays: [], command: ["uv", "run", "code-gantry"]]
+  defstruct [:origin, :code_gantry, :primary, :config, :branch, :code_branch, :address,
+             pickup_seconds: 120, bays: [], peers: [], command: ["uv", "run", "code-gantry"]]
+
+  @node_base "code_gantry_daemon"
+
+  @doc """
+  This daemon's node name, long rather than short, because a short name
+  cannot be reached from another machine. The address comes from the host
+  file, so nothing tracked names a host.
+  """
+  def node_name(%__MODULE__{address: address}), do: :"#{@node_base}@#{address}"
+
+  @doc "The other hosts' node names, this one never among them."
+  def peer_nodes(%__MODULE__{address: address, peers: peers}) do
+    peers
+    |> Enum.reject(&(&1 == address))
+    |> Enum.map(&:"#{@node_base}@#{&1}")
+  end
 
   def path, do: Path.join([System.user_home!(), ".config", "code_gantry", "host.exs"])
 
@@ -48,8 +67,15 @@ defmodule CodeGantryDaemon.Host do
       branch: Keyword.get(terms, :branch),
       code_branch: Keyword.get(terms, :code_branch) || checkout_branch(Keyword.fetch!(terms, :code_gantry)),
       pickup_seconds: Keyword.get(terms, :pickup_seconds, 120),
+      address: Keyword.get(terms, :address) || hostname(),
+      peers: Keyword.get(terms, :peers, []),
       bays: bays
     }
+  end
+
+  defp hostname do
+    {:ok, name} = :inet.gethostname()
+    to_string(name)
   end
 
   defp checkout_branch(dir) do

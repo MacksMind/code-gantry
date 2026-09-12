@@ -16,7 +16,8 @@ defmodule CodeGantryDaemon.MixProject do
 
   def application do
     [
-      extra_applications: [:logger],
+      # :mnesia holds the bay records every host shares.
+      extra_applications: [:logger, :mnesia],
       mod: {CodeGantryDaemon.Application, []}
     ]
   end

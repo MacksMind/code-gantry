@@ -7,7 +7,7 @@ defmodule CodeGantryDaemonTest do
   """
   use ExUnit.Case
 
-  alias CodeGantryDaemon.{Host, Bay, Status}
+  alias CodeGantryDaemon.{Host, Bay, Mesh, Records, Status}
 
   setup do
     root = Path.join(System.tmp_dir!(), "cgd-#{System.os_time(:microsecond)}-#{System.unique_integer([:positive])}")
@@ -405,4 +405,96 @@ defmodule CodeGantryDaemonTest do
       assert Control.retry("bay9") == "no bay named bay9 in the host file"
     end
   end
+
+  describe "the host file names this node and its peers" do
+    defp write_host(root, extra) do
+      file = Path.join(root, "host.exs")
+      File.write!(file, """
+      [
+        origin: "test-host",
+        code_gantry: "#{root}",
+        primary: "#{root}",
+        config: "cfg.yaml",
+        pickup_seconds: 0,
+        #{extra}
+        bays: []
+      ]
+      """)
+      file
+    end
+
+    test "address and peers are read", %{root: root} do
+      host = Host.load!(write_host(root, ~s|address: "10.0.0.1", peers: ["10.0.0.2", "10.0.0.3"],|))
+      assert host.address == "10.0.0.1"
+      assert host.peers == ["10.0.0.2", "10.0.0.3"]
+    end
+
+    test "a host file naming neither still loads", %{root: root} do
+      host = Host.load!(write_host(root, ""))
+      assert host.address != nil, "an unnamed address falls back to something dialable"
+      assert host.peers == []
+    end
+
+    test "the node name is long, so it can be reached from another host" do
+      host = %Host{origin: "o", address: "10.0.0.1"}
+      assert Host.node_name(host) == :"code_gantry_daemon@10.0.0.1"
+    end
+
+    test "peer nodes are named the same way and never include this node" do
+      host = %Host{origin: "o", address: "10.0.0.1", peers: ["10.0.0.2", "10.0.0.1"]}
+      assert Host.peer_nodes(host) == [:"code_gantry_daemon@10.0.0.2"]
+    end
+  end
+
+
+  describe "the mesh" do
+    test "a nudge with nobody connected tells nobody rather than raising" do
+      assert Mesh.nudge() == 0
+    end
+
+    test "it survives a peer it cannot reach", %{host: host} do
+      # The laptop is asleep, or the link is down. A daemon that cannot
+      # reach its peer is a daemon that works alone, never one that stops.
+      host = %{host | address: "203.0.113.1", peers: ["203.0.113.9"]}
+      {:ok, pid} = Mesh.start_link(host)
+      Process.sleep(100)
+      assert Process.alive?(pid)
+      GenServer.stop(pid)
+    end
+  end
+
+
+  describe "bay records in Mnesia" do
+    setup do
+      origin = "o#{System.unique_integer([:positive])}"
+      :ok = Records.start(origin)
+      on_exit(fn -> :mnesia.delete_table(Records.table_for(origin)) end)
+      %{origin: origin}
+    end
+
+    test "a host writes its own bays and reads them back", %{origin: origin} do
+      Records.put(origin, "bay1", %{repo: "r", project: "p", state: "running", detail: "run-1"})
+      assert [row] = Records.all()  |> Enum.filter(&(&1.origin == origin))
+      assert row.name == "bay1" and row.project == "p" and row.state == "running"
+      assert row.since != nil, "a row carries when it was written, or staleness cannot be seen"
+    end
+
+    test "every host's rows are read together, each still naming its origin", %{origin: origin} do
+      other = "o#{System.unique_integer([:positive])}"
+      :ok = Records.start(other)
+      on_exit(fn -> :mnesia.delete_table(Records.table_for(other)) end)
+      Records.put(origin, "bay1", %{repo: "r", project: "p", state: "running", detail: "d"})
+      Records.put(other, "bay1", %{repo: "r", project: "q", state: "stopped", detail: "d"})
+
+      rows = Records.all() |> Enum.filter(&(&1.origin in [origin, other]))
+      assert length(rows) == 2, "one host's table must not hide another's"
+      assert Enum.sort(Enum.map(rows, & &1.origin)) == Enum.sort([origin, other])
+    end
+
+    test "a host owns one table, so two hosts never define the same one", %{origin: origin} do
+      other = "o#{System.unique_integer([:positive])}"
+      refute Records.table_for(origin) == Records.table_for(other)
+    end
+  end
+
 end

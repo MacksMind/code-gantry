@@ -9,7 +9,7 @@ defmodule CodeGantryDaemon.Application do
   """
   use Application
 
-  alias CodeGantryDaemon.{Bay, Host, Pickup, Placements, Status}
+  alias CodeGantryDaemon.{Bay, Host, Mesh, Pickup, Placements, Status}
 
   @impl true
   def start(_type, _args) do
@@ -23,8 +23,14 @@ defmodule CodeGantryDaemon.Application do
       [
         {Registry, keys: :unique, name: CodeGantryDaemon.Registry},
         {Status, host},
-        {DynamicSupervisor, name: CodeGantryDaemon.Bays, strategy: :one_for_one}
-      ] ++ if(host.pickup_seconds > 0, do: [{Pickup, host}], else: [])
+        {DynamicSupervisor, name: CodeGantryDaemon.Bays, strategy: :one_for_one},
+        # Before the pickup, so a pickup that moves the code has somewhere
+        # to send its nudge. The pickup runs whether or not a tick is
+        # configured: `pickup_seconds: 0` turns off the clock, not the
+        # ability to be told.
+        {Mesh, host},
+        {Pickup, host}
+      ]
 
     {:ok, sup} = Supervisor.start_link(children, strategy: :one_for_one, name: CodeGantryDaemon.Supervisor)
     start_bays(host)

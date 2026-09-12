@@ -1,11 +1,21 @@
 #!/usr/bin/env bash
-# Usage: bin/daemon start|stop|status|logs|retry <bay>|place <bay> <port-offset> [config]|pickup|reload|version
+# Usage: bin/daemon start|stop|status|peers|logs|retry <bay>|place <bay> <port-offset> [config]|pickup|nudge|reload|version
 #
 # The per-host daemon, detached from the terminal that started it. Its
 # state lives under ~/.local/state/code_gantry/daemon: a pid file, the
 # daemon's own log, one log per bay, the status file, and the node name
-# and cookie that `retry` uses to speak to it — a distributed-Erlang call
-# into the running daemon, which is how a mesh will reach it later.
+# and cookie that the verbs use to speak to it.
+#
+# Everything runs through `mise`, so both hosts are on the Erlang in
+# `.tool-versions`. That is not a preference: distributed Erlang only
+# connects across a narrow version window, and the machines' own packages
+# are far enough apart that they cannot see each other at all.
+#
+# The node name is long rather than short, because a short name cannot be
+# reached from another machine. The address comes from `address:` in the
+# host file, which is untracked, so no host is named in this repository.
+# The cookie is the only credential between daemons, so every host in one
+# mesh holds the same cookie file.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
@@ -13,7 +23,20 @@ STATE="$HOME/.local/state/code_gantry/daemon"
 PIDFILE="$STATE/daemon.pid"
 LOG="$STATE/daemon.log"
 COOKIE="$STATE/cookie"
+HOSTFILE="$HOME/.config/code_gantry/host.exs"
 mkdir -p "$STATE"
+
+MISE="$(command -v mise || true)"
+[ -n "$MISE" ] || MISE="$HOME/.local/bin/mise"
+[ -x "$MISE" ] || { echo "mise not found; the pinned toolchain in .tool-versions is required" >&2; exit 1; }
+
+# Must agree with Host.load!, which falls back to the short hostname.
+address() {
+  local a=""
+  [ -f "$HOSTFILE" ] && a="$(sed -n 's/^[[:space:]]*address:[[:space:]]*"\([^"]*\)".*/\1/p' "$HOSTFILE" | head -1)"
+  [ -n "$a" ] || a="$(hostname -s)"
+  printf '%s' "$a"
+}
 
 alive() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
 
@@ -24,7 +47,8 @@ rpc() {
   case "$node" in
     ""|nonode@nohost) echo "the running daemon has no node name; it predates the verbs — stop and start it once" >&2; exit 1 ;;
   esac
-  exec elixir --sname "ctl-$$" --cookie "$(cat "$COOKIE")" --rpc-eval "$node" "$1"
+  cd "$HERE/daemon"
+  exec "$MISE" exec -- elixir --name "ctl-$$@$(address)" --cookie "$(cat "$COOKIE")" --rpc-eval "$node" "$1"
 }
 
 case "${1:-}" in
@@ -33,8 +57,8 @@ case "${1:-}" in
     [ -f "$HOME/.config/code_gantry/host.exs" ] || { echo "no host file at ~/.config/code_gantry/host.exs" >&2; exit 1; }
     if [ ! -f "$COOKIE" ]; then (umask 077; openssl rand -hex 16 > "$COOKIE"); fi
     cd "$HERE/daemon"
-    MIX_ENV=prod mix compile >/dev/null
-    nohup env MIX_ENV=prod elixir --sname code_gantry_daemon --cookie "$(cat "$COOKIE")" \
+    MIX_ENV=prod "$MISE" exec -- mix compile >/dev/null
+    nohup env MIX_ENV=prod "$MISE" exec -- elixir --name "code_gantry_daemon@$(address)" --cookie "$(cat "$COOKIE")" \
       -S mix run --no-halt >> "$LOG" 2>&1 < /dev/null &
     echo $! > "$PIDFILE"
     echo "daemon started, pid $!; status in $STATE/status, log in $LOG"
@@ -50,7 +74,17 @@ case "${1:-}" in
     else echo "daemon not running"; fi
     ;;
   status)
-    if alive; then cat "$STATE/status" 2>/dev/null || echo "running, no status written yet"; else echo "daemon not running"; fi
+    # Asked of the running daemon, which answers for every host that has
+    # joined the mesh. The file is this host's own and is the fallback
+    # when nothing is running to ask.
+    if alive; then rpc "IO.puts CodeGantryDaemon.Control.status()"
+    else cat "$STATE/status" 2>/dev/null || echo "daemon not running"; fi
+    ;;
+  peers)
+    rpc "IO.puts CodeGantryDaemon.Control.peers()"
+    ;;
+  nudge)
+    rpc "IO.puts CodeGantryDaemon.Control.nudge()"
     ;;
   logs)
     tail -n 50 -f "$LOG"
@@ -74,6 +108,6 @@ case "${1:-}" in
     if [ -n "${4:-}" ]; then rpc "IO.puts CodeGantryDaemon.Control.place(\"$2\", $3, \"$4\")"; else rpc "IO.puts CodeGantryDaemon.Control.place(\"$2\", $3)"; fi
     ;;
   *)
-    echo "usage: bin/daemon start|stop|status|logs|retry <bay>|place <bay> <port-offset> [config]|pickup|reload|version" >&2; exit 2
+    echo "usage: bin/daemon start|stop|status|peers|logs|retry <bay>|place <bay> <port-offset> [config]|pickup|nudge|reload|version" >&2; exit 2
     ;;
 esac

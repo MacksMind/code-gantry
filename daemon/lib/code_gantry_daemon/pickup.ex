@@ -1,6 +1,7 @@
 defmodule CodeGantryDaemon.Pickup do
   @moduledoc """
-  How a landing to code-gantry reaches this daemon: on a clock, fetch the
+  How a landing to code-gantry reaches this daemon: on a nudge from the
+  host that already has it, or failing that on a clock, fetch the
   checkout's branch; if origin is ahead and the checkout is clean,
   fast-forward; compile `daemon/` and load the changed modules into this VM;
   and when the Python side changed, pause every running bay so its next
@@ -10,25 +11,54 @@ defmodule CodeGantryDaemon.Pickup do
   use GenServer
   require Logger
 
-  alias CodeGantryDaemon.{Bay, Command, Status}
+  alias CodeGantryDaemon.{Bay, Command, Mesh, Status}
 
   def start_link(host), do: GenServer.start_link(__MODULE__, host, name: __MODULE__)
 
   @impl true
   def init(host) do
-    Process.send_after(self(), :tick, host.pickup_seconds * 1000)
+    if host.pickup_seconds > 0, do: Process.send_after(self(), :tick, host.pickup_seconds * 1000)
     {:ok, host}
   end
 
+  @doc """
+  A peer has taken new code and is telling this host to take it now. A
+  cast, so the peer that has already done its own work never waits on
+  this one's fetch.
+  """
+  def nudged, do: GenServer.cast(__MODULE__, :nudged)
+
   @impl true
   def handle_info(:tick, host) do
-    Logger.info(tick(host))
+    Logger.info(take(host))
     Process.send_after(self(), :tick, host.pickup_seconds * 1000)
     {:noreply, host}
   end
 
   @impl true
-  def handle_call(:now, _from, host), do: {:reply, tick(host), host}
+  def handle_cast(:nudged, host) do
+    Logger.info("nudged: " <> take(host))
+    {:noreply, host}
+  end
+
+  @impl true
+  def handle_call(:now, _from, host), do: {:reply, take(host), host}
+
+  @doc """
+  A pickup, and a nudge to the peers if it moved this checkout.
+
+  Whether it moved is read from the checkout's head before and after,
+  rather than from the line the pickup renders: the sha is a fact, and a
+  sentence is a rendering that another case can render the same way. The
+  nudge cannot storm, because a host only passes it on when its own head
+  moved, and a host already holding the code moves nowhere.
+  """
+  def take(host) do
+    before = head(host.code_gantry)
+    line = tick(host)
+    if head(host.code_gantry) != before, do: Mesh.nudge()
+    line
+  end
 
   @doc "One pickup, now. Answers a line saying what happened."
   def tick(host) do
