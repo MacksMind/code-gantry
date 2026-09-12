@@ -1570,7 +1570,6 @@ def validate_stage(
     *,
     known_keys: set[str] | None,
     open_findings: set[str] | None,
-    key_scope: set[str] | None = None,
 ) -> list[str]:
     """Well-formedness of a single stage, planner-derived or otherwise.
 
@@ -1581,8 +1580,6 @@ def validate_stage(
     least one key the ledger holds, and may only claim to resolve findings that
     are open. Both are keyword-only and required so every caller says what it
     is checking against; `None` means the caller has no ledger to check.
-    `key_scope` is the run's, when it has one: a key outside it is refused
-    with its own reason, since the plan shows the mark.
     """
     problems: list[str] = []
     where = f"stage {stage.id!r}"
@@ -1599,12 +1596,6 @@ def validate_stage(
                 problems.append(
                     f"{where}: plan_keys names {key!r}, which is not a key in "
                     "the plan; copy the key from the item's `{#…}` marker"
-                )
-            elif key_scope is not None and key not in key_scope:
-                problems.append(
-                    f"{where}: plan_keys names {key!r}, which is outside this "
-                    "run's scope; draw only from items the plan shows without "
-                    "the scope mark"
                 )
     if open_findings is not None:
         for finding in stage.resolves:

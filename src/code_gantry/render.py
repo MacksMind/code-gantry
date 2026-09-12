@@ -30,17 +30,14 @@ def _flags(node: Node) -> str:
     return f" ({', '.join(flags)})" if flags else ""
 
 
-def render_plan(views: Views, *, scope: set[str] | None = None) -> str:
-    """The tree as text. `scope` names the keys this run may draw from; others
-    are shown by title only."""
+def render_plan(views: Views) -> str:
+    """The tree as text."""
     out: list[str] = []
 
     def item_line(node: Node) -> str:
         key = f"{{#{node.key}}}"
         if node.marks:
             return f"- [x] {key}{_flags(node)} ~~**{node.title}**~~ — " + "; ".join(node.marks)
-        if scope is not None and node.key not in scope and node.owner != "human":
-            return f"- [ ] {key} **{node.title}** (outside this run's scope)"
         line = f"- [ ] {key}{_flags(node)} **{node.title}**"
         return f"{line} {node.body}" if node.body else line
 
@@ -72,9 +69,7 @@ def render_plan(views: Views, *, scope: set[str] | None = None) -> str:
     return "\n".join(out).strip() + ("\n" if out else "")
 
 
-def render_projection(
-    views: Views, *, note_chars: int, scope: set[str] | None = None
-) -> str:
+def render_projection(views: Views, *, note_chars: int) -> str:
     """Everything the plan text does not yet show. Empty when there is nothing."""
     order = _order(views)
     position = lambda key: (order.get(key, len(order)), key)  # noqa: E731
@@ -83,8 +78,6 @@ def render_projection(
     for key, state in sorted(views.key_states.items(), key=lambda kv: position(kv[0])):
         node = views.nodes.get(key)
         if node is None or node.retired:
-            continue
-        if scope is not None and key not in scope:
             continue
         if state.state in ("landed", "struck") and node.marks:
             continue
@@ -119,8 +112,7 @@ def render_projection(
         + (f", settling {', '.join(f'`{f}`' for f in d.findings)}" if d.findings else "")
         + f" — drawn by {d.by_run or 'a run'}"
         for d in views.derived_waiting()
-        if scope is None or set(d.keys) <= scope
-    ]
+        ]
 
     sections: list[tuple[str, list[str]]] = [
         ("Landed since the plan text was last folded", landed),

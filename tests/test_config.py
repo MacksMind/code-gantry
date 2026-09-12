@@ -869,11 +869,3 @@ class TestTheLedgerPath:
             self._cfg(tmp_path, path="${CODE_GANTRY_NO_SUCH_VARIABLE}/ledger.db")
 
 
-class TestTheRunScopeInValidateStage:
-    def test_a_key_outside_the_scope_is_refused_by_that_name(self):
-        cfg = parse_config(as_test_tools(minimal()))
-        stage = cfg.stage_from_planner({"id": "s", "instruction": "do", "edit_files": ["a"], "plan_keys": ["p.003"]})
-        problems = validate_stage(stage, cfg, known_keys={"p.002", "p.003"}, open_findings=set(), key_scope={"p.002"})
-        assert any("outside this run's scope" in p for p in problems), problems
-        assert not validate_stage(stage, cfg, known_keys={"p.002", "p.003"}, open_findings=set(), key_scope={"p.003"})
-        assert not validate_stage(stage, cfg, known_keys={"p.002", "p.003"}, open_findings=set())

@@ -431,30 +431,6 @@ class TestOneFileSeveralBays:
                 pass
 
 
-class TestScope:
-    def test_a_name_means_itself_and_everything_under_it(self, led):
-        from code_gantry.ledger import resolve_scope
-
-        plant(led, "p.001", kind="document")
-        plant(led, "p.002", parent="p.001", kind="section")
-        plant(led, "p.003", parent="p.002")
-        plant(led, "p.004", parent="p.001")
-        plant(led, "p.005", kind="document")
-        assert resolve_scope(led.views(), ["p.002"]) == {"p.002", "p.003"}
-        assert resolve_scope(led.views(), ["p.001"]) == {"p.001", "p.002", "p.003", "p.004"}
-        assert resolve_scope(led.views(), ["p.003", "p.005"]) == {"p.003", "p.005"}
-
-    def test_an_unknown_or_retired_name_is_refused_by_name(self, led):
-        from code_gantry.ledger import resolve_scope
-
-        plant(led, "p.001")
-        led.append(NODE_RETIRED, key="p.001")
-        with pytest.raises(LedgerError, match="'p.001' is not a key"):
-            resolve_scope(led.views(), ["p.001"])
-        with pytest.raises(LedgerError, match="'p.999' is not a key"):
-            resolve_scope(led.views(), ["p.999"])
-
-
 class TestDrawnStages:
     def _drawn(self, led, stage_id="s1", keys=("p.001",), findings=(), batch=None, rank=0, run_id="r1"):
         return led.append(
@@ -523,14 +499,6 @@ class TestReferencesAvailable:
         views = led.views()
         assert views.references_available(["p.001"], []) == ["p.001 (landed)"]
         assert views.references_available([], [fid]) == []
-
-    def test_the_scope_bounds_both(self, led):
-        plant(led, "p.001", "p.002")
-        fid = led.open_finding(keys=["p.002"], by="reviewer", claim="x").finding_id
-        views = led.views()
-        assert views.references_available(["p.001"], [fid], scope={"p.001"}) == [f"{fid} (outside this run's scope)"]
-        assert views.references_available(["p.002"], [], scope={"p.001"}) == ["p.002 (outside this run's scope)"]
-
 
 class TestClaimsAreLeases:
     def _hold_everything(self, led, run_id, pid):

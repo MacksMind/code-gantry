@@ -286,35 +286,6 @@ class TestAFreshHost:
         assert not paths.ledger.exists()
 
 
-class TestRunScope:
-    def _stub_the_run(self, monkeypatch):
-        seen = {}
-        monkeypatch.setattr(cli, "run_preflight", lambda *a, **k: [])
-        monkeypatch.setattr(cli, "_drive", lambda cfg, project, paths, graph_input, warnings=None: seen.update(graph_input) or 0)
-        return seen
-
-    def test_a_scope_is_expanded_and_carried_into_the_run(self, project, monkeypatch):
-        seen = self._stub_the_run(monkeypatch)
-        imported(project)
-        result = run("run", "--scope", "p.001")
-        assert result.exit_code == 0, result.output
-        assert "p.001" in seen["key_scope"] and len(seen["key_scope"]) > 1, seen["key_scope"]
-
-    def test_no_scope_means_the_whole_plan(self, project, monkeypatch):
-        seen = self._stub_the_run(monkeypatch)
-        imported(project)
-        assert run("run").exit_code == 0
-        assert "key_scope" not in seen
-
-    def test_an_unknown_key_refuses_before_anything_starts(self, project, monkeypatch):
-        seen = self._stub_the_run(monkeypatch)
-        imported(project)
-        result = run("run", "--scope", "p.999")
-        assert result.exit_code != 0
-        assert "--scope: 'p.999' is not a key" in result.output
-        assert not seen
-
-
 class TestDrawnStagesOnTheCommandLine:
     def _drawn(self, paths):
         from code_gantry.ledger import STAGE_DERIVED

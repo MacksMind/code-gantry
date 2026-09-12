@@ -3725,35 +3725,6 @@ class TestTheModelIsChosenPerStage:
         assert seen["model"] == "vendor/locked-for-this-stage"
 
 
-class TestTheRunScope:
-    """A run with a scope draws only inside it: the plan shows the rest as
-    out of scope, and a stage citing an outside key is refused for that."""
-
-    def test_the_plan_marks_what_is_outside(self, repo, tmp_path):
-        cfg, rt, state = make(repo, tmp_path)
-        rt.key_scope = {THE_ITEM}
-        text = rt.plan_text()
-        assert "**do the other thing** (outside this run's scope)" in text
-        assert "**do the thing** (outside" not in text
-
-    def test_a_stage_inside_the_scope_is_drawn(self, repo, tmp_path):
-        planner = StubPlanner([PlannerOutcome("next_stage", "next", "e", stage_fields=planned_stage())])
-        cfg, rt, state = make(repo, tmp_path, planner=planner)
-        rt.key_scope = {THE_ITEM}
-        out = nodes.plan(state, rt)
-        assert out.get("current", {}).get("plan_keys") == [THE_ITEM]
-
-    def test_a_stage_outside_the_scope_is_refused_for_that_reason(self, repo, tmp_path):
-        planner = StubPlanner([
-            PlannerOutcome("next_stage", "next", "e", stage_fields=planned_stage(plan_keys=[THE_OTHER_ITEM])),
-        ])
-        cfg, rt, state = make(repo, tmp_path, planner=planner)
-        rt.key_scope = {THE_ITEM}
-        out = nodes.plan(state, rt)
-        assert "outside this run's scope" in json.dumps(out), out
-        assert (out.get("current") or {}).get("plan_keys") != [THE_OTHER_ITEM]
-
-
 class _NoPlanner:
     """A planner that must not be called."""
 

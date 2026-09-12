@@ -176,9 +176,6 @@ class Runtime:
     # The plan tree, key states and findings. None only in tests that build a
     # runtime without one; every node that plans, cuts or lands needs it.
     ledger: Ledger | None = None
-    # The keys this run may draw from, or None for the whole plan. Fixed at
-    # run start and carried in the checkpoint.
-    key_scope: set[str] | None = None
     _layout: str | None = None
 
     def views(self):
@@ -188,13 +185,11 @@ class Runtime:
 
     def plan_text(self) -> str:
         """The stable half of what the planner reads: the tree with its marks."""
-        return render_plan(self.views(), scope=self.key_scope)
+        return render_plan(self.views())
 
     def projection(self) -> str:
         """The churning half: every key state and finding the text does not show."""
-        return render_projection(
-            self.views(), note_chars=self.cfg.ledger.note_chars, scope=self.key_scope
-        )
+        return render_projection(self.views(), note_chars=self.cfg.ledger.note_chars)
 
     def operations_context(self, sha: str) -> str:
         """The operational documents, for the planner alone.
@@ -322,9 +317,7 @@ def ledger_references(ledger: Ledger | None) -> tuple[set[str] | None, set[str] 
     return keys, findings
 
 
-def _stage_problems(
-    cfg: ProjectConfig, fields: dict, ledger: Ledger | None, key_scope: set[str] | None = None
-) -> list[str]:
+def _stage_problems(cfg: ProjectConfig, fields: dict, ledger: Ledger | None) -> list[str]:
     """The same check `nodes.py` applies, phrased for the planner.
 
     Building the stage can fail on its own — an id that is not a string, a
@@ -336,7 +329,7 @@ def _stage_problems(
     try:
         return validate_stage(
             cfg.stage_from_planner(fields), cfg,
-            known_keys=known_keys, open_findings=open_findings, key_scope=key_scope,
+            known_keys=known_keys, open_findings=open_findings,
         )
     except Exception as e:  # noqa: BLE001 - any failure here is the model's
         return [f"the stage spec could not be read: {e}"]
@@ -399,7 +392,6 @@ def build_runtime(
     reviewer: ReviewerClient,
     log: Callable[[str], None] | None = None,
     tool_log: Callable[[str], None] | None = None,
-    key_scope=None,
 ) -> Runtime:
     # First, so a run holds every module it can reach before it starts. See
     # `pin_modules`: without this, editing the codebase during a live run can
@@ -424,7 +416,6 @@ def build_runtime(
     # told, a single bad character escalates to a human and discards the whole
     # tool loop that produced the stage. `nodes.py` still rejects the stage if
     # the second attempt is no better.
-    scope = set(key_scope) if key_scope else None
     ledger = (
         ledger_for(
             cfg, project, write=True,
@@ -435,9 +426,7 @@ def build_runtime(
         else None
     )
     if hasattr(planner, "validate_stage_fields"):
-        planner.validate_stage_fields = lambda fields: _stage_problems(
-            cfg, fields, ledger, scope
-        )
+        planner.validate_stage_fields = lambda fields: _stage_problems(cfg, fields, ledger)
     runner = CommandRunner(
         cwd=cfg.target_repo,
         timeout=cfg.limits.command_timeout_seconds,
@@ -483,7 +472,6 @@ def build_runtime(
         git=git,
         runner=runner,
         ledger=ledger,
-        key_scope=scope,
         # The executor takes git only to list tracked paths, which is what tells
         # the mention shield what counts as a path in the prompt it is handed.
         executor=Executor(

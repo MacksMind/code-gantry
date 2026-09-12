@@ -12,7 +12,7 @@ from click.testing import CliRunner
 from code_gantry import cli, ledgercli
 
 SHAPES = {
-    "run": (cli.run, ["run", "cfg.yaml", "--run-id", "20260911-204745-bay1", "--scope", "td.010"]),
+    "run": (cli.run, ["run", "cfg.yaml", "--run-id", "20260911-204745-bay1"]),
     "resume": (cli.resume, ["resume", "cfg.yaml", "20260911-204745-bay1"]),
 }
 
@@ -27,5 +27,3 @@ def test_the_daemons_argv_parses(name, monkeypatch):
     assert str(seen["config_path"]) == "cfg.yaml"
     if "20260911-204745-bay1" in argv:
         assert seen["run_id"] == "20260911-204745-bay1"
-    if "--scope" in argv:
-        assert seen["scope"] == ("td.010",)

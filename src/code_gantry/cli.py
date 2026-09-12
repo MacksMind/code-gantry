@@ -49,7 +49,7 @@ from code_gantry.driver import (
     open_checkpointer,
 )
 from code_gantry import nodes
-from code_gantry.ledger import LedgerError, ledger_for, release_dead_holders, resolve_scope
+from code_gantry.ledger import LedgerError, ledger_for, release_dead_holders
 from code_gantry.planner import make_planner
 from code_gantry.preflight import format_checks, run_preflight
 from code_gantry.report import build_report
@@ -405,14 +405,8 @@ def _reconcile_prompt(cfg: ProjectConfig, plan_text: str, projection: str) -> li
     help="Skip the suites during preflight. Faster, but an already-red repo "
     "will not be caught.",
 )
-@click.option(
-    "--scope", "scope", multiple=True, metavar="KEY",
-    help="A plan key this run may draw from, with everything under it. "
-    "Repeatable. Without it the run draws from the whole plan.",
-)
 def run(
     config_path: Path | None, run_id: str | None, skip_preflight_tests: bool,
-    scope: tuple[str, ...],
 ) -> None:
     """Start a run against a project."""
     config_path = _config_argument(config_path)
@@ -497,15 +491,6 @@ def run(
         git.restore_gc(previous_gc)
         sys.exit(EXIT_FAILED)
 
-    key_scope: list[str] | None = None
-    if scope:
-        try:
-            key_scope = sorted(resolve_scope(views, scope))
-        except LedgerError as e:
-            click.echo(f"--scope: {e}", err=True)
-            git.restore_gc(previous_gc)
-            sys.exit(EXIT_FAILED)
-
     state = new_state(
         run_id=run_id,
         project_slug=slug,
@@ -517,8 +502,6 @@ def run(
         project_branch=cfg.project_branch,
         started_at=time.time(),
     )
-    if key_scope:
-        state = {**state, "key_scope": key_scope}
     _write_metadata(paths, slug, run_id)
 
     click.echo(
@@ -760,7 +743,6 @@ def _drive(
             reviewer=make_reviewer(cfg.reviewer, cfg.target_repo, project_tools=cfg.project_tools),
             log=log,
             tool_log=tools,
-            key_scope=graph_input.get("key_scope"),
         )
         # Said once, in the timeline, so the file is discoverable without
         # knowing it exists. A log nobody can find is not visibility.
@@ -771,8 +753,6 @@ def _drive(
             freed = release_dead_holders(rt.ledger, alive=_pid_alive, keep_run=paths.run_id)
             if freed:
                 log(f"[run] released {freed} claim(s) held by runs that have exited")
-        if rt.key_scope:
-            log(f"[run] scope: {len(rt.key_scope)} key(s): {' '.join(sorted(rt.key_scope))}")
         final = drive(
             rt,
             graph_input,

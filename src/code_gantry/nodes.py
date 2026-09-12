@@ -554,7 +554,6 @@ def plan(state: RunState, rt: Runtime) -> dict:
         known_keys, open_ids = ledger_references(rt.ledger)
         problems = validate_stage(
             new_stage, rt.cfg, known_keys=known_keys, open_findings=open_ids,
-            key_scope=rt.key_scope,
         )
         if problems:
             # A malformed spec is the planner's error to fix, and this used to
@@ -664,7 +663,7 @@ def plan(state: RunState, rt: Runtime) -> dict:
         # that exist, and only this side of the boundary can list them.
         queue, dropped_from_batch = _queue_from_batch(
             rt.cfg, rt.git, new_stage, outcome.additional_stage_fields,
-            ledger=rt.ledger, key_scope=rt.key_scope,
+            ledger=rt.ledger,
         )
         # Everything this derivation produced, named, on one line and on every
         # derivation. Two lines said this before — the stage about to run, and a
@@ -2375,7 +2374,7 @@ def stale_excerpts(git, stage) -> list[str]:
 
 def _queue_from_batch(
     cfg, git, first, extra_fields: list[dict], *,
-    ledger: Ledger | None = None, key_scope: set[str] | None = None,
+    ledger: Ledger | None = None,
 ) -> tuple[list[dict], list[str]]:
     """The stages to hold behind the one being started, and what was trimmed.
 
@@ -2415,7 +2414,6 @@ def _queue_from_batch(
         stage = cfg.stage_from_planner(fields)
         problems = validate_stage(
             stage, cfg, known_keys=known_keys, open_findings=open_ids,
-            key_scope=key_scope,
         )
         if problems:
             notes.append(
@@ -2980,7 +2978,7 @@ def _references_taken(rt: Runtime, stage: Stage, state: RunState) -> list[str]:
     its own drawn record, if another run took it first."""
     views = rt.views()
     taken = views.references_available(
-        stage.plan_keys, stage.resolves, scope=rt.key_scope,
+        stage.plan_keys, stage.resolves,
         run_id=rt.paths.run_id, stage_id=stage.id,
     )
     if stage.derived_id:
@@ -3049,7 +3047,7 @@ def _take_derived(rt: Runtime, state: RunState) -> dict | None:
         return None
     views = rt.views()
     for record in views.derived_waiting():
-        if views.references_available(record.keys, record.findings, scope=rt.key_scope):
+        if views.references_available(record.keys, record.findings):
             continue
         try:
             stage = Stage.model_validate({**record.fields, "derived_id": record.id})

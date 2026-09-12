@@ -250,7 +250,7 @@ class Views:
         )
 
     def references_available(
-        self, keys, findings, *, scope: set[str] | None = None,
+        self, keys, findings, *,
         run_id: str | None = None, stage_id: str | None = None,
     ) -> list[str]:
         """What stops a stage drawn against `keys` and `findings` from
@@ -263,8 +263,6 @@ class Views:
             mine = state.state == "claimed" and state.run_id == run_id and state.stage_id == stage_id
             if state.state != "open" and not mine:
                 taken.append(f"{key} ({state.state})")
-            elif scope is not None and key not in scope:
-                taken.append(f"{key} (outside this run's scope)")
         for fid in findings:
             finding = self.findings.get(fid)
             if finding is None or finding.status not in ("open", "answered"):
@@ -274,8 +272,6 @@ class Views:
             mine = held and finding.claimed_run == run_id and finding.claimed_stage == stage_id
             if held and not mine:
                 taken.append(f"{fid} (held by {finding.claimed_run})")
-            elif scope is not None and finding.keys and not set(finding.keys) <= scope:
-                taken.append(f"{fid} (outside this run's scope)")
         return taken
 
 
@@ -877,13 +873,3 @@ def release_dead_holders(ledger: Ledger, *, alive: Callable[[int], bool], keep_r
     return released
 
 
-def resolve_scope(views: Views, names) -> set[str]:
-    """The keys a run may draw from: each name and everything under it."""
-    out: set[str] = set()
-    for name in names:
-        node = views.nodes.get(name)
-        if node is None or node.retired:
-            raise LedgerError(f"{name!r} is not a key in the plan")
-        out.add(name)
-        out.update(n.key for n in views.walk(name))
-    return out
