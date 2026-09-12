@@ -227,3 +227,12 @@ class TestWhichLockEachCallerTakes:
             "a suite is a machine's own resource: serialising it across the mesh "
             "would idle every other host for the duration"
         )
+
+
+class TestTheSuiteNeverAsksTheRealDaemon:
+    def test_the_daemon_state_dir_is_isolated_for_every_test(self, tmp_path):
+        # Without this the suite queues behind a real derivation on another
+        # machine and waits there for as long as that derivation takes —
+        # which is minutes, and looks like a hung test.
+        assert meshlock.socket_path().parent == tmp_path / "no-daemon"
+        assert not meshlock.socket_path().exists()

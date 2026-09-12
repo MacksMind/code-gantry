@@ -42,5 +42,12 @@ def repo(tmp_path):
 @pytest.fixture(autouse=True)
 def _host_locks_in_tmp(tmp_path, monkeypatch):
     """Every test takes its host locks under its own directory, never the
-    host's, so a suite leaves nothing behind and cannot wait on a live run."""
+    host's, so a suite leaves nothing behind and cannot wait on a live run.
+
+    The daemon's state directory is pointed at the same place and left
+    empty, so the semaphore finds no socket to ask and falls back. A suite
+    that found the real one would queue behind a real derivation on
+    another machine, and wait there for as long as that derivation takes.
+    """
     monkeypatch.setenv("CODE_GANTRY_LOCK_DIR", str(tmp_path / "host-locks"))
+    monkeypatch.setenv("CODE_GANTRY_DAEMON_STATE", str(tmp_path / "no-daemon"))

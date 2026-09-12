@@ -64,8 +64,9 @@ the credentials come from the repository's credentials file
 `AWS_DEFAULT_REGION`), never from config. `infra/` is the CDK app: stack
 `CodeGantry` in `us-east-1`, table `code-gantry-ledger`, IAM user
 `code-gantry` granted the table and never `DeleteItem`, its key in Secrets
-Manager as `code-gantry/ledger-user`. Within a host, bays share the
-drawn-stage queue under the planner lock, named for the ledger's identity.
+Manager as `code-gantry/ledger-user`. Bays share the drawn-stage queue under the
+planner semaphore, named for the ledger's identity and held across every
+host through the daemons.
 
 **Landing across hosts is optimistic, never leased.** A landing lock
 per project in the table — one item, held from pull to push, renewed
@@ -89,9 +90,28 @@ state — plan, claims as leases, drawn stages, findings, greens, landings —
 is the table's, written by runs directly and correct with no daemon
 anywhere. Orchestration state — placements, which run is live in which bay,
 host capacity and code version, pause and resume intent, the nudge that a
-landing happened — is the daemons', in Mnesia once the mesh forms, each
-host the single writer of its own bay records. Daemons may dial either way,
-since the cookie is the only credential; a laptop joins as a hidden node.
+landing happened, and which host holds the planner semaphore — is the
+daemons', in Mnesia, each host the single writer of its own tables.
+`CodeGantryDaemon.Owned` is that one mechanism: one table per origin,
+`<kind>@<origin>`, written only by its own host and read together by
+everyone, so two hosts never define the same table and their schemas
+merge when they meet. A table made after a merge propagates to the peer,
+and a read of a table whose host is gone fails in milliseconds and is
+taken as no rows — which is what makes a dead host's holds disappear.
+
+**A hold dissolves the instant its holder dies, which is why holds are
+here and not in the table.** A run connects to a unix socket in the
+daemon's state directory and the connection *is* the hold: killed run,
+sleeping machine, severed link, all release it with nothing to expire.
+The release is the server's through a monitor, never the handler's,
+because a release written into the handler is skipped by exactly the
+deaths this exists to survive. With no daemon to ask, a run falls back to
+`hostlock` and says so: narrower than intended, never wider, and never a
+reason to stop. The holder is derived, not granted: the oldest request for
+a name anywhere, ties broken by a reference carrying the node, so every
+host computes the same answer from the same rows. A wrong clock makes the
+queue unfair, never unsafe; a partition grants on both sides, which is
+what every host did before there was a semaphore.
 
 **Elixir is the control plane.** The daemon runs the process. A Claude Code
 session, or `claude -p`, is an escalation path the control plane calls; the
@@ -100,8 +120,12 @@ or a session does by hand is a gap: log it below as a verb the daemon owes.
 Verbs it has: `retry`; `place <bay> <offset> [config]`, a placement
 naming the project it works so bays of one repository work different
 projects; `pickup`, one tick of the code pickup now; `reload`, the local
-checkout compiled and loaded for a test on one host. The pickup runs
-every `pickup_seconds` (host file; 0 never): fetch `code_branch`, and if
+checkout compiled and loaded for a test on one host; `peers`, the hosts
+this daemon can see; `nudge`, telling them to pick code up now; `status`,
+every bay on every host; `holds`, what holds each semaphore and who is
+behind it. The pickup is nudged by the host that has just taken new code,
+with `pickup_seconds` (host file; 0 never) as the fallback tick and a
+catch-up when a host joins: fetch `code_branch`, and if
 origin is ahead of a clean checkout, fast-forward, compile `daemon/` and
 load its modules into the running VM, and when `src/`, `prompts/`,
 `pyproject.toml` or `uv.lock` changed, pause every running bay at its next
@@ -144,16 +168,22 @@ installed on both hosts under `mise` (precompiled, seconds), and
 `bin/daemon` must start the VM and run `mix` through `mise exec` — it
 does not yet.
 
-**Test bed.** The Spark (a DGX, hostname `spark`, origin `host-b`,
-packaged Elixir 1.14 on OTP 24) and the operator's MacBook (hostname
-`host-a`, origin `host-a`, Homebrew Elixir 1.20 on OTP 29), reaching
-each other over Tailscale; the Spark holds no private keys, so SSH is
-Mac-to-Spark only. `.tool-versions` pins Erlang 27.3.4 and Elixir 1.18.4,
-installed on both hosts under `mise`; `bin/daemon` does not go through
-`mise` yet, so both daemons still run on the system Elixir.
+**Test bed.** The Spark (a DGX, hostname `spark`, origin `host-b`)
+and the operator's MacBook (hostname `host-a`, origin `host-a`),
+reaching each other over Tailscale; the Spark holds no private keys, so
+SSH is Mac-to-Spark only. `.tool-versions` pins Erlang 27.3.4 and Elixir
+1.18.4, installed on both hosts under `mise`, and `bin/daemon` runs the
+VM and `mix` through it: distributed Erlang connects across a narrow
+version window and the machines' own packages are too far apart to see
+each other at all.
 Both hosts run the daemon from `~/projects/code-gantry` on `elixir-daemon`,
-node `code_gantry_daemon@<origin>`, host file `~/.config/code_gantry/host.exs`,
-state under `~/.local/state/code_gantry/daemon/`. On the Spark:
+host file `~/.config/code_gantry/host.exs`, state under
+`~/.local/state/code_gantry/daemon/`. The node name is long, built from
+`address:` in the host file, so nothing tracked names a host; the cookie
+is the only credential and both hosts hold the same one. **The dial is
+one-way and need not be symmetric:** the Mac accepts nothing inbound, so
+it names the Spark in `peers:` and the Spark names nobody, and
+distribution runs both directions over that one connection. On the Spark:
 `/home/you/projects/app/acme_app` is the primary copy, handed
 back to the person on `technical-debt`; `acme_app-bay1` (offset 200)
 and `acme_app-bay2` (offset 100) are its bays. On the Mac: the primary
@@ -830,6 +860,17 @@ site goes quietly missing.
   reaches the next call without a restart. `plan_sha` now pins only the
   conventions, operations and layout, which a resume still inherits — editing
   one of those means `run`, not `resume`.
+- **Hot reload carries code, never shape, and never a supervision tree.**
+  A running VM holds structs the old module built, so a new field in a
+  struct crashes whatever pattern-matches it; an OTP application the VM
+  did not start with (`:mnesia`) is simply unavailable to it; and a new
+  child in `Application.start` is *not* started by loading the module —
+  the tree is already running. Each of these took a daemon down or left a
+  feature dormant while every module reported loaded. A new child is added
+  to a live daemon with `Supervisor.start_child`, which is how the
+  semaphore went live without restarting a host; `code_change` for a
+  changed state shape is still unbuilt, and that case still needs a
+  restart at idle.
 - **A field removed from a model strands the run that persisted it.** `Stage` is
   `extra="forbid"`, so deleting a field raises on the next *resume*;
   `current_stage` filters to declared fields.
@@ -1270,8 +1311,12 @@ derivation is written as `stage.derived` records before anything runs, and
 named for the ledger file with the queue checked again once held, so a killed
 run or a second bay never pays for the same derivation twice. Claims on keys
 and findings carry the holder's pid; `release_dead_holders` gives back what a
-run that exited on this host still held. `hostlock.py` is the one lock; the
-runner and `plan` both take theirs through it. `planmodel.py`
+run that exited on this host still held. Two locks, and the difference
+is what each is about: `hostlock.py` is one machine's, `fcntl` on a file,
+and holds the suite, because one suite per host is a fact about the host;
+`meshlock.py` is the mesh's, and holds the planner, because one derivation
+per ledger is a fact about the project. The runner takes the first and
+`plan` the second, and an AST test pins which caller takes which. `planmodel.py`
 reads Markdown into the tree and renders it back; `render.py` produces the two
 halves the planner is sent; `ledgercli.py` is the operator's `plan …` and
 `ledger …`. The pipeline's writes are in `nodes.py`: findings at derivation,
