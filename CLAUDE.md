@@ -47,7 +47,9 @@ holding the plan tree, key states, findings and drawn stages, derived from
 one append-only sequence of events; a project's ledger is one name,
 `ledger.name` (`<repo>/<project>`), in a DynamoDB table every host writes.
 `ledger.path` names a SQLite file instead, for a project on one host. An
-*origin* names the host that wrote an event, set by `CODE_GANTRY_ORIGIN`.
+*origin* names the host that wrote an event, set by `CODE_GANTRY_ORIGIN`
+from the host file and equal to the hostname; rows written under the
+Mac's earlier label `host-a-old` keep it.
 There is no scope: every derivation fans out to every bay on every host,
 and claims in the table are what keep two bays off one key.
 
@@ -111,7 +113,7 @@ the nudge after a push; the operator invocation.
 
 **Test bed.** The Spark (a DGX, hostname `spark`, origin `host-b`,
 packaged Elixir 1.14 on OTP 24) and the operator's MacBook (hostname
-`host-a`, origin `host-a-old`, Homebrew Elixir 1.20 on OTP 29), reaching
+`host-a`, origin `host-a`, Homebrew Elixir 1.20 on OTP 29), reaching
 each other over Tailscale; the Spark holds no private keys, so SSH is
 Mac-to-Spark only. `.tool-versions` pins Erlang 27.3.4 and Elixir 1.18.4;
 neither host honours it yet, and `bin/daemon` does not go through `mise`.
