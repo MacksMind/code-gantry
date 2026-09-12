@@ -126,7 +126,9 @@ projects; `pickup`, one tick of the code pickup now; `reload`, the local
 checkout compiled and loaded for a test on one host; `peers`, the hosts
 this daemon can see; `nudge`, telling them to pick code up now; `status`,
 every bay on every host; `holds`, what holds each semaphore and who is
-behind it. The pickup is nudged by the host that has just taken new code,
+behind it; `runs`, which runs are alive on every host that answered — a
+host that could not be asked is named as such rather than shown with no
+runs. The pickup is nudged by the host that has just taken new code,
 with `pickup_seconds` (host file; 0 never) as the fallback tick and a
 catch-up when a host joins: fetch `code_branch`, and if
 origin is ahead of a clean checkout, fast-forward, compile `daemon/` and
@@ -505,6 +507,15 @@ site goes quietly missing.
   open findings at derivation, true whether or not the stage succeeds; reviewer
   observations stay on the landing gate, because an abandoned diff does not
   exist.
+- **Events are applied in `seq` order, which is the order they were
+written.** One sequence per ledger, assigned by the store at append, across
+every origin. It was `(at, origin, seq)` on the argument that no two
+origins write the same node — but two origins do write the same *key*: one
+host releasing a claim another host's dead run left, and two hosts claiming
+one key in the same second. A release sorted before the claim it released,
+because `host-a` precedes `host-b`, and a race between two claims
+was settled by which machine was named first in the alphabet. `at` is what
+a person reads; `seq` is what happened.
 - **State is derived from events, never stored.** The ledger's tree, key states
   and findings are rebuilt from one append-only table on read, so no status
   column can disagree with the history that produced it — the `gate_history`
@@ -1322,15 +1333,26 @@ refuses a stage citing outside it, and nothing else needs to know. A
 derivation is written as `stage.derived` records before anything runs, and
 `plan` takes a waiting record before it calls the planner, under a host lock
 named for the ledger file with the queue checked again once held, so a killed
-run or a second bay never pays for the same derivation twice. Claims on keys
-and findings carry the holder's pid; `release_dead_holders` gives back what a
-run that exited on this host still held. Two locks, and the difference
+run or a second bay never pays for the same derivation twice. **A claim is a lease, and the lease is given back only for a run that is
+gone for good.** Claims carry the holder's pid and origin;
+`release_dead_holders` reads pid liveness on this host, and on any other
+host it reads the mesh — which origins answered, and which runs are alive
+on them. A host that did not answer keeps everything it holds, because it
+can reach the table it wrote the claim into and may be working behind a
+link that is down only from here; with no mesh to ask, every other host
+keeps everything. A run says on its way out how it left (`run.began`,
+`run.ended` with a disposition), and a `paused` or `escalated` run keeps
+its claims: both exit meaning to come back, an escalation with work on a
+stage branch, and pid liveness cannot tell either from a crash. A run
+announces itself to the daemon for its lifetime, so one started by hand is
+as visible as one the daemon started. Two locks, and the difference
 is what each is about: `hostlock.py` is one machine's, `fcntl` on a file,
 and holds the suite, because one suite per host is a fact about the host;
-`meshlock.py` is the mesh's, and holds the planner, because one derivation
+`mesh.py` is the mesh's, and holds the planner, because one derivation
 per ledger is a fact about the project. The runner takes the first and
 `plan` the second, an AST test pins which caller takes which, and neither
-falls back to the other. `planmodel.py`
+falls back to the other. `mesh.py` is one door with two questions on it:
+hold this name, and which runs are alive. `planmodel.py`
 reads Markdown into the tree and renders it back; `render.py` produces the two
 halves the planner is sent; `ledgercli.py` is the operator's `plan …` and
 `ledger …`. The pipeline's writes are in `nodes.py`: findings at derivation,
