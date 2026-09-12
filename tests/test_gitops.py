@@ -76,10 +76,10 @@ class TestInspection:
         assert not g.is_ancestor("HEAD", base)
 
     def test_the_one_push_never_forces_and_has_one_caller(self):
-        # The pipeline pushes only the configured project branch, fast
-        # forward, and only `nodes` calls `push`. There is no other push:
-        # the ledger no longer travels by ref, so nothing else may move
-        # anything on the remote.
+        # The pipeline pushes the configured project branch and the stage
+        # branches carrying candidates, fast forward, and only `nodes`
+        # calls `push`. There is no other push: the ledger does not travel
+        # by ref, so nothing else may move anything on the remote.
         import ast
         import inspect
         import textwrap
@@ -101,6 +101,7 @@ class TestInspection:
         ], argv
 
         callers = []
+        pushed = []
         for module in Path(code_gantry.__file__).parent.glob("*.py"):
             tree = ast.parse(module.read_text())
             for node in ast.walk(tree):
@@ -110,7 +111,15 @@ class TestInspection:
                     and node.func.attr == "push"
                 ):
                     callers.append(module.name)
-        assert callers == ["nodes.py"], callers
+                    pushed.append(ast.unparse(node.args[0]) if node.args else "")
+        assert set(callers) == {"nodes.py"}, callers
+        # Two call sites and no more: the publication that moves the project
+        # branch, and the candidate that moves a stage branch of it. Both
+        # name a local `branch`, so which ref each pushes is not readable
+        # here and is pinned where it can be — `test_compose_landing`
+        # asserts the project branch does not move when a candidate goes up.
+        assert len(callers) == 2, callers
+        assert set(pushed) == {"branch"}, pushed
 
 
 class TestProjectBranch:

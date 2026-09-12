@@ -990,6 +990,14 @@ class ProjectConfig(_Strict):
     # re-run the full suite if the pull brought commits, and push fast-forward.
     # The only push the pipeline makes, and only of this branch. Off by default.
     remote_landing: bool = False
+    # Land through a composing bay rather than each bay for itself. A stage
+    # that is approved is squashed to one candidate commit and pushed as its
+    # own branch, and the project branch is moved only by whichever bay holds
+    # the landing semaphore: it replays every pending candidate onto the
+    # fetched tip, proves the composition with one suite, and fast-forwards.
+    # Requires `remote_landing`, and a daemon to hold the semaphore — with
+    # neither, a run lands for itself exactly as before. Off by default.
+    compose_landings: bool = False
 
     # Repo-relative path to the plan document. A document, not a directory:
     # pointing at `docs/` would sweep every runbook and ADR into every review
@@ -1682,6 +1690,11 @@ def _format_pydantic_errors(e: ValidationError) -> list[str]:
 def _structural_problems(cfg: ProjectConfig) -> list[str]:
     problems: list[str] = []
 
+    if cfg.compose_landings and not cfg.remote_landing:
+        problems.append(
+            "compose_landings needs remote_landing: a candidate that is never "
+            "pushed can be composed by nobody but the bay that wrote it"
+        )
     if cfg.project_branch == cfg.base_ref:
         problems.append(
             f"project_branch {cfg.project_branch!r} must differ from base_ref "

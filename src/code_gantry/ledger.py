@@ -56,6 +56,12 @@ STAGE_DROPPED = "stage.dropped"
 # A run's own life, recorded so a claim can tell a run that crashed from one
 # that means to come back. `disposition` on the end is how it left:
 # "finished", "paused", "escalated" or "failed".
+# A stage squashed to one commit and pushed as its own branch, waiting for
+# whichever bay holds the landing semaphore to compose it onto the project
+# branch. `candidate.dropped` is one taken back out of the pool, by the
+# compose that found it guilty or by the bay reworking it.
+CANDIDATE_PUSHED = "candidate.pushed"
+CANDIDATE_DROPPED = "candidate.dropped"
 RUN_BEGAN = "run.began"
 RUN_ENDED = "run.ended"
 STAGE_DONE = "stage.done"
@@ -171,6 +177,22 @@ class DerivedStage:
 
 
 @dataclass
+class Candidate:
+    """A stage squashed to one commit on the base it was cut from, pushed as
+    its own branch and waiting to be composed onto the project branch."""
+
+    branch: str
+    sha: str
+    base: str
+    stage_id: str
+    keys: list[str]
+    findings: list[str]
+    run_id: str | None
+    origin: str
+    at: str
+
+
+@dataclass
 class Views:
     nodes: dict[str, Node] = field(default_factory=dict)
     key_states: dict[str, KeyState] = field(default_factory=dict)
@@ -181,6 +203,9 @@ class Views:
     # run_id -> how it last left, or None while it is running. A run that
     # paused or escalated keeps what it holds; see `release_dead_holders`.
     runs: dict[str, str | None] = field(default_factory=dict)
+    # branch -> the candidate waiting on it. Dropped when it lands, or when
+    # a compose finds it is what turned the composition red.
+    candidates: dict[str, "Candidate"] = field(default_factory=dict)
 
     # -- tree -------------------------------------------------------------
 
@@ -250,6 +275,13 @@ class Views:
         origin, at = max(runs, key=lambda pair: pair[1])
         return origin, at
 
+    def pending_candidates(self) -> list["Candidate"]:
+        """Everything squashed and pushed and not yet composed, oldest
+        first. The order is the order they will be replayed in, so it is
+        the order they were finished in — a stage cannot be composed ahead
+        of one it was drawn behind."""
+        return sorted(self.candidates.values(), key=lambda c: (c.at, c.branch))
+
     def derived_waiting(self) -> list[DerivedStage]:
         """Stages drawn and not yet taken, a batch at a time in the order drawn."""
         return sorted(
@@ -309,6 +341,22 @@ def build_views(events: list[Event]) -> Views:
 def _apply(views: Views, event: Event) -> None:
     body = event.body
     kind = event.kind
+    if kind == CANDIDATE_PUSHED:
+        views.candidates[body.get("branch") or ""] = Candidate(
+            branch=body.get("branch") or "",
+            sha=event.sha or "",
+            base=body.get("base") or "",
+            stage_id=event.stage_id or "",
+            keys=list(body.get("keys") or []),
+            findings=list(body.get("findings") or []),
+            run_id=event.run_id,
+            origin=event.origin,
+            at=event.at,
+        )
+        return
+    if kind == CANDIDATE_DROPPED:
+        views.candidates.pop(body.get("branch") or "", None)
+        return
     if kind == RUN_BEGAN:
         # Beginning withdraws whatever intent a previous end recorded: a run
         # that came back and then died is dead, and one pause must not spare

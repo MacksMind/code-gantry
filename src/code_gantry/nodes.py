@@ -40,6 +40,7 @@ from code_gantry.flake import adjudicate, append_flakes, predates_stage
 from code_gantry.gateway import resolve_policy
 from code_gantry.gitops import GitError
 from code_gantry.ledger import (
+    CANDIDATE_PUSHED,
     CLAIMED,
     FINDING_RESOLVED,
     LANDED,
@@ -1993,17 +1994,23 @@ def advance(state: RunState, rt: Runtime) -> dict:
         )
 
     rt.git.commit_all(f"[{stage.id}] wip")
-    merge_sha = rt.git.squash_merge(
-        branch,
-        rt.cfg.project_branch,
-        _commit_message(
-            stage,
-            state.get("review_record") or state.get("review_summary") or "",
-            trailers=_landing_trailers(rt, stage, state, start_sha),
-        ),
+    message = _commit_message(
+        stage,
+        state.get("review_record") or state.get("review_summary") or "",
+        trailers=_landing_trailers(rt, stage, state, start_sha),
     )
-    rt.git.delete_branch(branch)
+
     publication = None
+    if rt.cfg.compose_landings:
+        # Nothing lands here. The stage becomes a candidate for whichever
+        # bay holds the landing semaphore, and the keys stay claimed until
+        # that bay has composed it onto the project branch and pushed:
+        # until then there is no tree anywhere that has this work in it.
+        merge_sha = _push_candidate(rt, stage, state, branch, start_sha, message)
+        return _advance_result(state, rt, stage, start_sha, merge_sha, publication)
+
+    merge_sha = rt.git.squash_merge(branch, rt.cfg.project_branch, message)
+    rt.git.delete_branch(branch)
     if rt.cfg.remote_landing and merge_sha:
         merge_sha, publication = _publish_landing(rt, stage)
     if rt.ledger is not None:
@@ -2018,6 +2025,12 @@ def advance(state: RunState, rt: Runtime) -> dict:
                 run_id=rt.paths.run_id, stage_id=stage.id,
             )
 
+    return _advance_result(state, rt, stage, start_sha, merge_sha, publication)
+
+
+def _advance_result(state: RunState, rt: Runtime, stage: Stage, start_sha: str, merge_sha, publication):
+    """What `advance` answers, whichever way the stage left the bay: the
+    completed record, the costs, and where the run goes next."""
     usage = state.get("stage_usage") or {}
     result = {
         "id": stage.id,
@@ -3250,6 +3263,44 @@ def _sync_project_branch(rt: Runtime) -> bool:
     """Bring the project branch up to origin's before a stage is cut. Returns
     whether the tip moved; False when there is no origin or no remote branch."""
     return rt.git.sync_branch(rt.cfg.project_branch)
+
+
+def _push_candidate(rt: Runtime, stage: Stage, state: RunState, branch: str, start_sha: str, message: str) -> str | None:
+    """Squash the stage to one commit on the base it was cut from, push that
+    branch, and record it as waiting to be composed. Answers the candidate's
+    sha, or None when the stage changed nothing.
+
+    The project branch is not touched. Every bay pushing its own candidate
+    is what makes a composing bay possible at all: the work travels between
+    hosts on a branch of its own, so nothing has to move the one branch
+    every bay is reading.
+
+    The bay ends on the project branch as it found it, so the next stage is
+    cut from the same base as this one rather than stacked on it.
+    """
+    candidate = rt.git.squash_to_candidate(branch, start_sha, message)
+    rt.git.checkout(rt.cfg.project_branch)
+    if candidate is None:
+        rt.log(f"[advance] {stage.id}: nothing to land")
+        rt.git.delete_branch(branch)
+        return None
+
+    # Moved once it is not the branch we are standing on, so the local
+    # branch and the pushed one are the same commit and neither is a
+    # rendering of the other.
+    rt.git.set_branch(branch, candidate)
+    rt.git.push(branch)
+    rt.log(f"[advance] {stage.id}: pushed candidate {candidate[:12]} as {branch}")
+
+    if rt.ledger is not None:
+        rt.ledger.append(
+            CANDIDATE_PUSHED, stage_id=stage.id, run_id=rt.paths.run_id,
+            sha=candidate, branch=branch, base=start_sha,
+            keys=list(stage.plan_keys), findings=list(state.get("pending_resolved") or stage.resolves),
+        )
+    # Kept at origin, which is where the composing bay reads it from.
+    rt.git.delete_branch(branch)
+    return candidate
 
 
 def _publish_landing(rt: Runtime, stage: Stage) -> tuple[str, dict | None]:

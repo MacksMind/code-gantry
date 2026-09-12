@@ -683,6 +683,14 @@ class Git:
                 if target.exists():
                     target.unlink()
 
+    def set_branch(self, name: str, sha: str) -> None:
+        """Point a branch at a commit. Never the checked-out one: that moves
+        the branch out from under the index and the working tree, which then
+        describe a commit nothing is on."""
+        if self.current_branch() == name:
+            raise GitError(f"refusing to move {name!r} while it is checked out")
+        self._run("update-ref", f"refs/heads/{name}", sha)
+
     def squash_to_candidate(self, child_branch: str, base_sha: str, message: str) -> str | None:
         """The whole of a stage as one commit on the base it was cut from,
         built as an object rather than merged into a checked-out branch.
