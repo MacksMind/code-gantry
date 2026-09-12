@@ -256,6 +256,26 @@ Waiting on the operator:
 - The dispositions `discard`, `debt` and `raise` now mean something, and
   the operator wants to discuss them before any finding is disposed of
   with one; none has been used yet.
+
+**Elixir is the control plane (the operator, 2026-09-12).** A Claude Code
+session is an escalation path the control plane calls, not the thing that
+runs the process — and any number of decisions will need a model, reached
+through the Claude CLI or another route, so the operator role's transport
+is a pluggable command, never a hard-wired `claude -p`. Anything a person
+or a session has to do by hand is a functionality gap: a wish rather than
+an absolute, the daemon handling as much as is reasonable, but every such
+act is logged here as a verb the daemon owes. Verbs it has: `retry`,
+`place` (3db4cd9: the placement remembered beside the status file, the bay
+under a dynamic supervisor, its checkout made from the primary or from
+another bay of the repository through `MK_BAY_PROJECT`, target 02e407e47).
+Verbs it owes, from what was done by hand on 2026-09-11/12: `pause`,
+`resume` and `stop` per bay and per host; a status view across hosts; the
+workers a killed suite leaves in the container (`docker compose exec`
+survives its client) put down by the run or the daemon that ended it; the
+ledger import and the config switch, which were one-offs; a push to the
+project branch from a bay whose run is live, which must never be done by
+hand again; hot reload, so a verb added does not cost a restart; the code
+pickup; and the operator invocation itself.
 - The green-tracking split (tree fact from any origin; a host fact a red
   suite proves as well; pull before preflight) is now a change against the
   table rather than the refs; still the operator's call.
