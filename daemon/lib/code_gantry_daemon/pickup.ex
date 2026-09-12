@@ -7,6 +7,16 @@ defmodule CodeGantryDaemon.Pickup do
   and when the Python side changed, pause every running bay so its next
   run starts from the new code. Nothing here moves a checkout that has
   local changes or has diverged — those are reported and left alone.
+
+  **What it acts on is the checkout moving, not the fetch bringing
+  something.** Those are the same event on a host that only ever receives
+  code, and different on the host where the code is written: there the
+  commits are already in the checkout and origin is never ahead, so a
+  pickup that asked only "is origin ahead" found nothing to do and left
+  that host's bays running code from before the change — for hours,
+  measured, while every other host had moved on. The commit this daemon
+  last looked at is kept in its state directory, and anything between that
+  and the checkout's head is what it acts on, however it got there.
   """
   use GenServer
   require Logger
@@ -17,6 +27,11 @@ defmodule CodeGantryDaemon.Pickup do
 
   @impl true
   def init(host) do
+    # The bays this daemon is about to start will run the code that is in
+    # the checkout now, so that is what it has last looked at. Seeding it
+    # here rather than leaving yesterday's mark is what stops a restart
+    # pausing every bay over a change they already have.
+    mark(host, head(host.code_gantry))
     if host.pickup_seconds > 0, do: Process.send_after(self(), :tick, host.pickup_seconds * 1000)
     {:ok, host}
   end
@@ -88,28 +103,70 @@ defmodule CodeGantryDaemon.Pickup do
     new = rev(dir, "origin/#{host.code_branch}")
 
     cond do
-      new == old ->
-        Status.put(:code, :ok, short(old))
-        "code: at #{short(old)}"
-
-      not ancestor?(dir, old, new) ->
+      new != old and not ancestor?(dir, old, new) ->
         Status.put(:code, :held, "#{short(old)}: diverged from origin at #{short(new)}")
         "code: held at #{short(old)}: diverged from origin at #{short(new)}"
 
-      true ->
-        {files, 0} = Command.run(["git", "diff", "--name-only", old, new], dir, [])
-        changed = String.split(files, "\n", trim: true)
+      new != old ->
         {_, 0} = Command.run(["git", "merge", "-q", "--ff-only", new], dir, [])
-        parts = [] ++ elixir_part(host, changed) ++ python_part(host, changed)
-        line = "code: #{short(old)} -> #{short(new)}" <> Enum.map_join(parts, "", &("; " <> &1))
+        act(host, dir, "#{short(old)} -> #{short(new)}", old)
 
-        if Enum.any?(parts, &String.contains?(&1, "failed")),
-          do: Status.put(:code, :failed, "#{short(new)} on disk; running #{short(old)}"),
-          else: Status.put(:code, :ok, short(new))
-
-        line
+      true ->
+        act(host, dir, "at #{short(old)}", nil)
     end
   end
+
+  # Everything between the commit this daemon last acted on and the one the
+  # checkout holds now — whether the fetch above brought it or a person
+  # committed it here. The two are the same on a host that only receives
+  # code and different on the host where it is written, and only this reads
+  # both.
+  defp act(host, dir, how, merged_from) do
+    now = head(dir)
+    # What this daemon last acted on, or — when it has no mark, which is a
+    # daemon that has never looked — whatever the fetch just brought in.
+    # Not knowing what was last seen is no reason to ignore what has
+    # plainly just arrived.
+    seen = seen(host) || merged_from
+
+    parts =
+      if seen in [nil, now] do
+        []
+      else
+        {files, 0} = Command.run(["git", "diff", "--name-only", seen, now], dir, [])
+        changed = String.split(files, "\n", trim: true)
+        elixir_part(host, changed) ++ python_part(host, changed)
+      end
+
+    failed = Enum.any?(parts, &String.contains?(&1, "failed"))
+    # Marked only when the work it stands for is done, so a compile that
+    # failed is looked at again rather than skipped as already seen.
+    if not failed, do: mark(host, now)
+
+    if failed,
+      do: Status.put(:code, :failed, "#{short(now)} on disk; running #{short(seen)}"),
+      else: Status.put(:code, :ok, short(now))
+
+    "code: #{how}" <> Enum.map_join(parts, "", &("; " <> &1))
+  end
+
+  # The commit this daemon last acted on, in its state directory rather
+  # than in this process: a restart of the daemon is not a reason to pause
+  # every bay, and neither is a restart of this GenServer.
+  defp seen(host) do
+    case File.read(mark_path(host)) do
+      {:ok, sha} -> String.trim(sha)
+      _ -> nil
+    end
+  end
+
+  defp mark(host, sha) do
+    _ = host
+    File.mkdir_p!(CodeGantryDaemon.Host.state_dir())
+    File.write!(mark_path(host), sha <> "\n")
+  end
+
+  defp mark_path(_host), do: Path.join(CodeGantryDaemon.Host.state_dir(), "picked_up")
 
   @doc "Compile and load the checkout as it is, fetching nothing. For a local test; never nudges."
   def reload(host) do

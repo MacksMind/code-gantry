@@ -349,6 +349,39 @@ defmodule CodeGantryDaemonTest do
       refute Pickup.tick(host) =~ "started", "a tree that is already right is left alone"
     end
 
+    test "a commit made in this checkout is picked up, with origin never ahead", %{root: root, host: host, state: state} do
+      # The host where the code is written. Its commits are already in the
+      # checkout and origin is never ahead of it, so a pickup that asked
+      # only "is origin ahead" found nothing to do and left this host's
+      # bays running code from before the change — measured, for hours,
+      # while every other host had moved on.
+      {cg, _other} = code_repo(root)
+      host = with_code(host, cg)
+      assert Pickup.tick(host) =~ ~r/^code: at [0-9a-f]{12}/
+
+      File.write!(Path.join([cg, "src", "thing.py"]), "changed here\n")
+      sh!(cg, ["git", "add", "-A"])
+      sh!(cg, ["git", "commit", "-qm", "written on this host"])
+      sh!(cg, ["git", "push", "-q", "origin", "work"])
+
+      File.write!(Path.join(root, "hold"), "")
+      {:ok, _} = CodeGantryDaemon.Application.start_bay(host, %{name: "bay1", offset: 100})
+      wait_for(fn -> status(state) =~ "bay1 running" end)
+
+      line = Pickup.tick(host)
+      assert line =~ "python: 1 bay(s) pausing", line
+      assert status(state) =~ ~r/code ok [0-9a-f]{12}/
+    end
+
+    test "a checkout that has not moved since the last look does nothing", %{root: root, host: host} do
+      {cg, _other} = code_repo(root)
+      host = with_code(host, cg)
+      Pickup.tick(host)
+      line = Pickup.tick(host)
+      refute line =~ "loaded"
+      refute line =~ "pause"
+    end
+
     test "a change under src/ pauses each running bay and resumes it on the new code", %{root: root, host: host, state: state} do
       {cg, other} = code_repo(root)
       host = with_code(host, cg)

@@ -140,9 +140,15 @@ a failed compile are reported in the `code` status row and left alone.
 pickup is proven across hosts: a push from the Mac was fetched, compiled
 and loaded by the Spark's running VM 95 s later with its pid unchanged,
 and a `src/` change had both Spark bays asked to pause 20 s after the
-push. It acts only when origin is ahead of the checkout, so a daemon
-running from the checkout a person commits in sees nothing to pick up —
-the Mac's case; it must also act when HEAD moved since it last looked.
+push. **What it acts on is the checkout moving, not the fetch bringing
+something.** Those are one event on a host that only receives code and
+two on the host where it is written, where the commits are already in the
+checkout and origin is never ahead — the Mac's case, which left its bays
+running code from before a change for hours while every other host had
+moved on. The commit last acted on is `picked_up` in the state directory,
+seeded when the daemon starts, so a restart is not a reason to pause every
+bay; a failed compile leaves it unmarked, so the change is looked at again
+rather than skipped as seen.
 The table holds two more ledgers, written and read through
 `code-gantry hosts [put]` and `code-gantry events [put|--follow]`:
 `_hosts`, each daemon's state appended, the latest row per origin the
