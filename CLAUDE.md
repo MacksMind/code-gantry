@@ -102,10 +102,15 @@ under the shared cookie qualifies, an SSH session does not. Multi-host is
 proven between those two before any cloud host. On the Spark: `/home/you/projects/app/acme_app` is
 the primary copy, still running as a bay for now, and `acme_app-bay2`
 is the second bay, ports offset by 100. The technical-debt project's ledger
-is still the SQLite file `~/.local/share/code-gantry/acme_app/technical-debt.db`
-on each host until the stop, when the Spark's copy is imported into the
-table with `code-gantry ledger import` and `ledger.name` replaces
-`ledger.path` in the config. Credentials are per repository, one file at the
+is `acme_app/technical-debt` in the table since 2026-09-12 00:09
+UTC: the Spark's SQLite file, 368 events, imported once; `ledger.name`
+replaced `ledger.path` in the config (target commit 239895796); both
+ledger refs deleted from GitHub. The old SQLite files are inert copies.
+The Spark now has the Mac's shape: the primary copy handed back on
+`technical-debt`, `bay1` at offset 200 and `bay2` at offset 100 under
+its daemon (`code_gantry_daemon@host-b`, origin `host-b`), on
+its packaged Elixir 1.14/OTP 24, which compiles and tests the daemon
+clean; the `.tool-versions` pin is honoured on neither host yet. Credentials are per repository, one file at the
 target's root, `<repo>/.code_gantry/env`, ignored there and named by every
 project's config as `../../.code_gantry/env` (landed as add9a0a in the
 target on 2026-09-11); a repository is one client. What a run writes stays
@@ -236,17 +241,21 @@ Waiting on the operator:
   `remote_landing`. Measured 2026-09-11: zero `suite.green` events in 20
   landings, because every Spark bay predates c3e5bf8 — the reader has
   never had a record to read.
-- At the stop: import the Spark's SQLite ledger, which holds every
-  origin's events, into the table once (`code-gantry ledger import <file>`
-  with a config naming `ledger.name`), set
-  `ledger.name: acme_app/technical-debt` in place of `ledger.path`
-  (a field change in the target's config, rationale in the commit), delete
-  both ledger refs on GitHub (`refs/code-gantry/ledger/host-b` and
-  `refs/code_gantry/ledger/host-b`), and remove the `/tmp/code_gantry-<uid>`
-  lock symlink. Until then the Spark's live runs, on code from before all
-  of this, keep writing their file and their hyphenated ref; a Mac run on
-  current code reads whatever `ledger.name` or `ledger.path` its config
-  says, and the Mac's file is a stale copy of the Spark's.
+- Done 2026-09-12: the stop, the import, the config switch, the refs
+  deleted, the lock symlink removed, both daemons on a55367f. Left behind
+  by it, each worth a look: the primary copy on the Spark holds stage
+  branch `technical-debt-stage/021-…` with an attempt on `td.015` that the
+  pause caught at a revision seam (its claim is released by the next Spark
+  run; the branch is a person's to keep or delete); `acme_app-bay2`
+  holds stage branch `…/004-…` with three commits from a run that crashed
+  on 2026-09-11 21:11 with `OSError: File name too long` — a brace glob
+  handed to `Path.stat` as a literal path, a code-gantry defect not yet
+  fixed; `PORT_REDIS_SESSIONS` is an unused variable in every bay's `.env`
+  since the base's one-instance Valkey layout was merged into
+  `technical-debt` (5fed041de).
+- The dispositions `discard`, `debt` and `raise` now mean something, and
+  the operator wants to discuss them before any finding is disposed of
+  with one; none has been used yet.
 - The green-tracking split (tree fact from any origin; a host fact a red
   suite proves as well; pull before preflight) is now a change against the
   table rather than the refs; still the operator's call.
