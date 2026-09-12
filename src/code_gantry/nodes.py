@@ -3170,21 +3170,27 @@ def _take_rework(rt: Runtime, state: RunState) -> dict | None:
         return None
 
     rejection, stage = taken
+    branch, sha = rejection.candidate.branch, rejection.candidate.sha
     try:
         rt.git.fetch()
-        base = rt.git.rebase_onto(rejection.candidate.branch, f"origin/{rt.cfg.project_branch}")
+        base = rt.git.reset_branch_to(branch, f"origin/{rt.cfg.project_branch}")
+        conflicts = rt.git.apply_commit(sha)
     except GitError as e:
-        # Given straight back rather than held by a bay that cannot do it.
-        # A conflict is two stages disagreeing about the same lines, and
-        # nothing here is entitled to settle that.
-        rt.log(f"[rework] {stage.id} cannot be rebased, leaving it for a person: {e}")
+        # Given straight back rather than held by a bay that could not even
+        # begin. A conflict is not this: a conflict is left in the tree to
+        # be worked on, and only something that stopped the work starting
+        # comes through here.
+        rt.log(f"[rework] {stage.id} could not be set up, leaving it for a person: {e}")
         rt.ledger.append(
             REWORK_RELEASED, stage_id=stage.id, run_id=rt.paths.run_id,
-            branch=rejection.candidate.branch, reason=f"rebase conflicts: {e}",
+            branch=branch, reason=f"could not be set up for rework: {e}",
         )
         return None
 
-    rt.log(f"[rework] took {stage.id} on {rejection.candidate.branch}, rebased onto {base[:12]}")
+    rt.log(
+        f"[rework] took {stage.id} on {branch}, re-applied onto {base[:12]}"
+        + (f" with {len(conflicts)} conflicted file(s)" if conflicts else " cleanly")
+    )
     return {
         **fresh_stage_fields(),
         "current": stage.model_dump(),
@@ -3195,15 +3201,39 @@ def _take_rework(rt: Runtime, state: RunState) -> dict | None:
         "stage_started_at": time.time(),
         "stage_queue": [],
         "batch_notes": [],
-        # What the composition found, as the thing to answer. Not a planner
-        # failure and not this stage's own gate: the stage was green on its
-        # own tree and is red beside what has landed since.
-        "last_failure": {
-            "layer": "tests",
-            "summary": f"composed with what has landed since, this stage is red:\n{rejection.reason}",
-        },
+        # What the composition found, as the thing to answer. The stage's
+        # own instruction travels with it unchanged — this is the same
+        # stage, still to be done — so what the executor is handed reads
+        # like a stage with feedback, which is what it is.
+        "last_failure": {"layer": "composition", "summary": _rework_feedback(rejection, conflicts)},
         "next_hop": "precheck",
     }
+
+
+def _rework_feedback(rejection, conflicts: list[str]) -> str:
+    """What the executor is told about a candidate that could not be landed.
+
+    Both halves, because a candidate can have either or both: its changes
+    would not apply beside what landed, and what it does is wrong beside
+    what landed. Neither is a defect in the stage as it was drawn, and the
+    stage is still the thing to do — so this says what changed underneath
+    it, not that it did the wrong thing.
+    """
+    parts = [
+        "This stage was finished and approved, and could not be landed. "
+        "Work has landed on the project branch since, and your branch has "
+        "been put back on top of it with your changes re-applied."
+    ]
+    if conflicts:
+        parts.append(
+            "These files could not be re-applied cleanly and are in the tree "
+            "with conflict markers. Resolving them is part of the work:\n"
+            + "\n".join(f"  {path}" for path in conflicts)
+        )
+    if rejection.reason:
+        parts.append(f"What the composition found:\n{rejection.reason}")
+    parts.append("The stage's own instruction is unchanged and is still what has to be done.")
+    return "\n\n".join(parts)
 
 
 def _claim_rework(rt: Runtime, state: RunState):

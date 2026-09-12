@@ -97,6 +97,25 @@ bare tip is proved before anything is rejected: blaming a good stage for a
 broken branch sends a person to read the wrong diff, and then does it again
 to the next stage. `max_compose_suites` bounds one composition.
 
+A rejection is taken for rework before anything the planner would draw: it
+is closer to done than a stage not yet written, and it holds plan keys
+while it waits, so the lander gives those back as it rejects. **The rework
+is a rebase done in two steps that can be stopped between them** — the
+branch is reset to the fetched tip and the old candidate re-applied
+uncommitted — because a `git rebase` that conflicts leaves an operation in
+progress for somebody to continue, and this leaves an ordinary working
+tree with conflict markers in it, which the executor already knows how to
+be handed. A candidate can fail both ways at once, so the feedback carries
+both: what would not re-apply, and what the composition found. The stage's
+own instruction travels unchanged, because the stage is still the thing to
+do. From there it is an ordinary stage — replan, review, the lot — and
+`advance` makes it a candidate again and offers to land it. **A branch at
+origin is not a candidate**: the ledger says what is, and a rejection takes
+it off that list, so a branch part-way through a rework is inert and is
+also the copy of the work that survives the bay. `replace_branch` is the
+only forced push there is, because a rework rewrites the branch; it is
+safe for a branch the pipeline alone makes, deletes and reads.
+
 **Project state in the table, orchestration state in the daemons.** Project
 state — plan, claims as leases, drawn stages, findings, greens, landings —
 is the table's, written by runs directly and correct with no daemon

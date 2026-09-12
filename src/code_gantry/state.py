@@ -58,6 +58,14 @@ FailureLayer = Literal[
     "tree_dirty",
     "planner",
     "remote_landing",
+    # A candidate a composition could not take: red beside what landed while
+    # it waited, or in conflict with it, or both. Deliberately in neither set
+    # below. It reaches the fallback, which asks whether the branch carries
+    # commits — and a rework's branch carries none, because it is reset to
+    # the new tip and the work re-applied uncommitted. So a resume goes to
+    # `precheck`, which resumes the branch and hands the tree to the
+    # executor: exactly where it was going anyway.
+    "composition",
 ]
 
 # Which failures mean "the repo changed and needs re-checking" versus "the plan

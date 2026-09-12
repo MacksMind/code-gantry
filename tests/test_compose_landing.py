@@ -393,23 +393,39 @@ class TestReworkingARejectedCandidate:
         assert out["next_hop"] == "precheck"
         assert drawn == [], "a drawn stage was taken while rework was waiting"
 
-    def test_it_starts_from_the_rebase(self, repo, tmp_path, origin, a_daemon):
+    def test_it_starts_on_the_new_tip_with_the_work_re_applied(self, repo, tmp_path, origin, a_daemon):
         # The base it was built against is not what the branch holds any
         # more, and the failure it has to answer is against the tree as it
-        # is now.
+        # is now. The branch is put on the new tip and the work comes back
+        # uncommitted, so what the executor gets is a working tree.
         bare, _ = origin
         cfg, rt, state = self._rejected(repo, tmp_path, origin)
         out = nodes._take_rework(rt, state)
-        assert out["stage_start_sha"] == origin_tip(bare)
-        assert rt.git.rev_parse(f"{out['stage_branch']}~1") == origin_tip(bare)
-        # The work is still on it, on top of what landed.
-        assert (repo / "poison.txt").exists() and (repo / "app.py").read_text() == "fine\n"
 
-    def test_the_executor_is_told_what_the_composition_found(self, repo, tmp_path, origin, a_daemon):
+        assert out["stage_start_sha"] == origin_tip(bare)
+        assert rt.git.head_sha() == origin_tip(bare), "the branch carries a commit already"
+        assert (repo / "app.py").read_text() == "fine\n", "what landed is not there"
+        assert (repo / "poison.txt").exists(), "the stage's own work was not re-applied"
+        assert (repo / "other.py").read_text() == "the work\n"
+
+    def test_nothing_is_left_half_done_for_a_later_command(self, repo, tmp_path, origin, a_daemon):
+        # A `git rebase` that conflicts leaves an operation in progress for
+        # somebody to continue. This must leave an ordinary working tree.
+        cfg, rt, state = self._rejected(repo, tmp_path, origin)
+        nodes._take_rework(rt, state)
+        assert not (repo / ".git" / "CHERRY_PICK_HEAD").exists()
+        assert not (repo / ".git" / "rebase-merge").exists()
+        rt.git.commit_all("the executor's first cycle")
+
+    def test_the_executor_is_told_both_what_changed_and_what_is_still_to_do(self, repo, tmp_path, origin, a_daemon):
         cfg, rt, state = self._rejected(repo, tmp_path, origin)
         out = nodes._take_rework(rt, state)
-        assert "red" in out["last_failure"]["summary"]
-        assert out["last_failure"]["layer"] == "tests"
+        summary = out["last_failure"]["summary"]
+        assert out["last_failure"]["layer"] == "composition"
+        assert "could not be landed" in summary
+        assert "red" in summary, "what the composition found is missing"
+        assert "instruction is unchanged" in summary, "the original scope was not carried over"
+        assert out["current"]["instruction"] == state["current"]["instruction"] if state.get("current") else True
 
     def test_two_bays_never_rework_one_branch(self, repo, tmp_path, origin, a_daemon):
         cfg, rt, state = self._rejected(repo, tmp_path, origin)
@@ -417,16 +433,16 @@ class TestReworkingARejectedCandidate:
         other, other_state = make(repo, tmp_path, **compose_cfg())[1], state
         assert rt.views().rework_waiting() == [], "the rejection was still on offer"
 
-    def test_a_rework_that_cannot_be_rebased_is_left_for_a_person(self, repo, tmp_path, origin, a_daemon, monkeypatch):
+    def test_a_rework_that_cannot_even_be_set_up_is_left_for_a_person(self, repo, tmp_path, origin, a_daemon, monkeypatch):
         cfg, rt, state = self._rejected(repo, tmp_path, origin)
         monkeypatch.setattr(
-            rt.git, "rebase_onto",
-            lambda *a, **k: (_ for _ in ()).throw(GitError("conflicts in app.py")),
+            rt.git, "reset_branch_to",
+            lambda *a, **k: (_ for _ in ()).throw(GitError("the branch is gone")),
         )
         assert nodes._take_rework(rt, state) is None
         [rejection] = rt.views().rejected.values()
         assert rejection.taken_run, "it went back on offer to the next bay to ask"
-        assert "conflict" in rejection.reason
+        assert "could not be set up" in rejection.reason
 
     def test_coming_back_makes_it_a_candidate_again(self, repo, tmp_path, origin, a_daemon):
         # The rework rejoins the ordinary path: `advance` squashes it to a
@@ -484,3 +500,47 @@ class TestWhatMakesSomethingACandidate:
         [rejection] = rt.views().rejected.values()
         nodes._take_rework(rt, state)
         assert sh(bare, "rev-parse", rejection.candidate.branch) == rejection.candidate.sha
+
+
+class TestAReworkThatConflicts:
+    """A candidate can fail to land two ways at once: its changes will not
+    apply beside what landed, and what it does is wrong beside what landed.
+    Neither is a defect in the stage as it was drawn, and the stage is still
+    the thing to do."""
+
+    def _conflicting(self, repo, tmp_path, origin):
+        # Two stages editing the same lines. The first lands; the second
+        # cannot be replayed onto it.
+        a_candidate(repo, tmp_path, name="first", content="theirs\n")
+        cfg, rt, state = a_candidate(repo, tmp_path, name="second", content="mine\n",
+                                     keys=[THE_OTHER_ITEM])
+        lander.compose(rt)
+        return cfg, rt, state
+
+    def test_the_conflict_is_left_in_the_tree_to_be_worked_on(self, repo, tmp_path, origin, a_daemon):
+        cfg, rt, state = self._conflicting(repo, tmp_path, origin)
+        out = nodes._take_rework(rt, state)
+        assert out is not None, "a conflicting candidate was refused instead of taken"
+        assert "<<<<<<<" in (repo / "app.py").read_text(), "there is nothing to resolve"
+        assert "conflict markers" in out["last_failure"]["summary"]
+        assert "app.py" in out["last_failure"]["summary"]
+
+    def test_it_is_an_ordinary_tree_with_no_operation_in_progress(self, repo, tmp_path, origin, a_daemon):
+        cfg, rt, state = self._conflicting(repo, tmp_path, origin)
+        nodes._take_rework(rt, state)
+        assert not (repo / ".git" / "CHERRY_PICK_HEAD").exists()
+        # And the ordinary path works from here: resolve, commit, carry on.
+        (repo / "app.py").write_text("theirs\nmine\n")
+        rt.git.commit_all("resolved")
+        assert rt.git.is_clean()
+
+    def test_resolving_it_lands_the_stage(self, repo, tmp_path, origin, a_daemon):
+        bare, _ = origin
+        cfg, rt, state = self._conflicting(repo, tmp_path, origin)
+        out = nodes._take_rework(rt, state)
+        (repo / "app.py").write_text("theirs\nmine\n")
+        state = {**state, **out, "review_summary": "resolved", "review_record": "took both"}
+        nodes.advance(state, rt)
+        assert sh(bare, "show", "proj:app.py") == "theirs\nmine"
+        assert rt.views().rejected == {}
+        assert rt.views().pending_candidates() == []

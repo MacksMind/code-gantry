@@ -711,25 +711,40 @@ class Git:
             f"cherry-pick of {sha[:12]} failed: {proc.stderr.strip() or proc.stdout.strip()}"
         )
 
-    def rebase_onto(self, branch: str, base: str) -> str:
-        """Move a branch's work onto a new base, and answer the new base sha.
+    def reset_branch_to(self, branch: str, base: str) -> str:
+        """Put a branch at a commit and stand on it, keeping nothing of what
+        it held. Answers the base's sha.
 
-        The first step of reworking a candidate: what it was built against
-        is no longer what the project branch holds, and the failure it has
-        to answer is a failure against the tree as it is now. A conflict
-        leaves nothing behind — the rebase is aborted and the branch is as
-        it was — because two stages disagreeing about the same lines is not
-        something to resolve on the way past.
+        The first half of reworking a candidate. The second is applying the
+        old candidate's changes back on top with `apply_commit`, which is a
+        rebase done in two steps that can be stopped between them — and the
+        difference is the whole point: a `git rebase` that conflicts leaves
+        an operation in progress for somebody to continue, and this leaves
+        an ordinary working tree with conflict markers in it, which is a
+        thing the executor already knows how to be handed.
         """
-        self.checkout(branch)
-        proc = self._run("rebase", base, check=False)
-        if proc.returncode != 0:
-            self._run("rebase", "--abort", check=False)
-            raise GitError(
-                f"rebasing {branch!r} onto {base[:12]} conflicts: "
-                f"{proc.stdout.strip() or proc.stderr.strip()}"
-            )
+        self._run("checkout", "-q", "-B", branch, base)
         return self.rev_parse(base)
+
+    def apply_commit(self, sha: str) -> list[str]:
+        """Apply a commit's changes to the working tree without committing,
+        and answer the paths that conflicted. Empty means it applied cleanly.
+
+        A conflict is left in the tree rather than backed out: the markers
+        are the description of what has to be decided, and deciding it is
+        the work. The sequencer state is dropped either way, so nothing is
+        left half-done for a later command to trip over — what remains is a
+        tree with changes in it, and no operation in progress.
+        """
+        proc = self._run("cherry-pick", "-n", sha, check=False)
+        conflicted = self._out("diff", "--name-only", "--diff-filter=U").splitlines()
+        self._run("cherry-pick", "--quit", check=False)
+        if proc.returncode != 0 and not conflicted:
+            raise GitError(
+                f"applying {sha[:12]} failed: "
+                f"{proc.stderr.strip() or proc.stdout.strip()}"
+            )
+        return conflicted
 
     def cherry_pick_abort(self) -> None:
         """Back to where the pick started. Best effort: this runs on the
