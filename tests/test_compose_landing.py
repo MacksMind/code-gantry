@@ -620,3 +620,40 @@ class TestWhatTheExecutorIsActuallyHanded:
         # matters here is that the rework is added to it rather than put in
         # place of it.
         assert "do the stage" in text, "the rework displaced the stage's own prompt"
+
+
+class TestTheCostRecordOfACandidate:
+    def test_a_finished_stage_is_measured_off_the_commit_it_made(self, repo, tmp_path, origin):
+        # `merge_sha` is null under composition, and the cost record reads
+        # it to measure the diff. Every bay crashed in `advance` the moment
+        # it finished a stage, because a null reached `git diff --shortstat`
+        # — and only when there was something to record, which is why the
+        # usage is set here rather than left to the fixture.
+        from unittest import mock
+
+        cfg, rt, state = make(repo, tmp_path, **compose_cfg())
+        state = with_stage(state, rt)
+        (repo / "app.py").write_text("stage work\n")
+        state = {**state, "review_summary": "fine", "review_record": "did it",
+                 "stage_usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                 "executor_context_tokens": 1234}
+        with mock.patch.object(nodes, "_compose_if_free"):
+            out = nodes.advance(state, rt)
+
+        [entry] = out["completed"]
+        assert entry["candidate_sha"]
+        costs = rt.project.project_dir / "stage-costs.md"
+        assert costs.is_file(), "no cost record was written"
+        assert entry["candidate_sha"][:12] in costs.read_text()
+
+    def test_a_stage_that_made_nothing_is_not_measured_against_nothing(self, repo, tmp_path, origin):
+        from unittest import mock
+
+        cfg, rt, state = make(repo, tmp_path, **compose_cfg())
+        state = with_stage(state, rt)
+        state = {**state, "review_summary": "fine", "review_record": "did it",
+                 "stage_usage": {"prompt_tokens": 10}, "executor_context_tokens": 10}
+        with mock.patch.object(nodes, "_compose_if_free"):
+            out = nodes.advance(state, rt)
+        [entry] = out["completed"]
+        assert entry["merge_sha"] is None and entry["candidate_sha"] is None

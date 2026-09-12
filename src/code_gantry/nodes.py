@@ -2090,18 +2090,23 @@ def _advance_result(state: RunState, rt: Runtime, stage: Stage, start_sha: str, 
     # a later run can calibrate against.
     spend = _stage_spend(rt.cfg, usage, result.get("executor_cost_usd") or None)
     if result.get("executor_context_tokens") or spend:
+        # The commit this stage produced, whichever kind it is: a landing
+        # when the bay lands for itself, a candidate when it does not. The
+        # cost record is about the work, and the work is the same commit
+        # either way — it is only the project branch that has not moved.
+        made = result["merge_sha"] or result["candidate_sha"]
         append_stage_cost(
             rt.project.project_dir,
             stage_id=stage.id,
-            merge_sha=result["merge_sha"],
+            merge_sha=made,
             files=len(stage.edit_files),
             context_tokens=result.get("executor_context_tokens", 0),
             spend=spend,
             roles=_roles_for_record(rt.cfg),
-            # Measured off the landing commit rather than taken from the
-            # stage's declared scope. `edit_files` is a permission and stages
+            # Measured off the commit rather than taken from the stage's
+            # declared scope. `edit_files` is a permission and stages
             # routinely touch less than it allows.
-            changed=rt.git.shortstat(result["merge_sha"]),
+            changed=rt.git.shortstat(made) if made else "",
             # What the planner said this would take, beside what it took.
             difficulty=stage.difficulty,
         )
