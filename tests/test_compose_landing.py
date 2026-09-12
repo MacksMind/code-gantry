@@ -575,3 +575,48 @@ class TestACandidateFromBeforeItCarriedItsStage:
         taken = nodes._claim_rework(rt, state)
         assert taken is not None
         assert taken[1].id == "old"
+
+
+class TestWhatTheExecutorIsActuallyHanded:
+    """`review_feedback` is the executor's channel and `last_failure` is the
+    planner's. Writing the rework into the second alone left a bay resolving
+    conflict markers it had never been told were there — it managed, from
+    the tree, which is how a channel that has gone missing stays missing."""
+
+    def test_the_rework_reaches_the_executor_not_only_the_planner(self, repo, tmp_path, origin, a_daemon):
+        a_candidate(repo, tmp_path, name="first", content="theirs\n")
+        cfg, rt, state = a_candidate(repo, tmp_path, name="second", content="mine\n",
+                                     keys=[THE_OTHER_ITEM])
+        lander.compose(rt)
+        out = nodes._take_rework(rt, state)
+
+        [feedback] = out["review_feedback"]
+        assert "conflict markers" in feedback
+        assert "app.py" in feedback
+        assert "instruction is unchanged" in feedback
+
+    def test_it_reaches_the_prompt_the_executor_is_sent(self, repo, tmp_path, origin, a_daemon):
+        from code_gantry.prompts import build_executor_messages
+
+        a_candidate(repo, tmp_path, name="first", content="theirs\n")
+        cfg, rt, state = a_candidate(repo, tmp_path, name="second", content="mine\n",
+                                     keys=[THE_OTHER_ITEM])
+        lander.compose(rt)
+        out = nodes._take_rework(rt, state)
+
+        stage = nodes.Stage(**out["current"])
+        messages = build_executor_messages(
+            stage=stage, cfg=cfg, prompt="do the stage",
+            feedback=out["review_feedback"], failure_layer=out["failure_layer"],
+        )
+        text = "\n".join(
+            block.get("text", "")
+            for message in messages
+            for block in (message.get("content") or [])
+            if isinstance(block, dict)
+        )
+        assert "conflict markers" in text, "the executor is sent no word of the conflicts"
+        # The stage's prompt is rendered by the node and passed in; what
+        # matters here is that the rework is added to it rather than put in
+        # place of it.
+        assert "do the stage" in text, "the rework displaced the stage's own prompt"

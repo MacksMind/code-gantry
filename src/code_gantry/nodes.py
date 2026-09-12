@@ -3228,10 +3228,13 @@ def _take_rework(rt: Runtime, state: RunState) -> dict | None:
         "stage_started_at": time.time(),
         "stage_queue": [],
         "batch_notes": [],
-        # What the composition found, as the thing to answer. The stage's
-        # own instruction travels with it unchanged — this is the same
-        # stage, still to be done — so what the executor is handed reads
-        # like a stage with feedback, which is what it is.
+        # `review_feedback` is what the executor is handed; `last_failure`
+        # is what the planner would be, and the two are different channels.
+        # Written to the first, because the executor is who has to answer
+        # this — it was in the second alone, and a bay resolved conflict
+        # markers it had never been told were there.
+        "review_feedback": [_rework_feedback(rejection, conflicts)],
+        "failure_layer": "composition",
         "last_failure": {"layer": "composition", "summary": _rework_feedback(rejection, conflicts)},
         "next_hop": "precheck",
     }
