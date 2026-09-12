@@ -8,6 +8,13 @@ defmodule CodeGantryDaemon.Mesh do
   runs its bays exactly as it would alone, which is why a failed connection
   is logged and never raised.
 
+  Who dials whom is not symmetric, and need not be. Distribution runs over
+  one connection, so a host that can dial out joins a host that accepts
+  nothing inbound, and both then speak over it. A laptop is that case: it
+  accepts no connections at all, so it names its peers and they name none.
+  Leaving a peer named on the side that cannot reach it only produces a
+  failed dial every retry, which is noise that hides a real one.
+
   The cookie is the only credential, and both ends must run an Erlang close
   enough to speak the distribution protocol, which is why `bin/daemon` goes
   through the pinned toolchain.
