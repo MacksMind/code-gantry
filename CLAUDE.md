@@ -264,7 +264,7 @@ through the Claude CLI or another route, so the operator role's transport
 is a pluggable command, never a hard-wired `claude -p`. Anything a person
 or a session has to do by hand is a functionality gap: a wish rather than
 an absolute, the daemon handling as much as is reasonable, but every such
-act is logged here as a verb the daemon owes. Verbs it has: `retry`,
+act is logged here as a verb the daemon owes. Verbs it has: `retry`, `scope`,
 `place` (3db4cd9: the placement remembered beside the status file, the bay
 under a dynamic supervisor, its checkout made from the primary or from
 another bay of the repository through `MK_BAY_PROJECT`, target 02e407e47).
@@ -276,9 +276,18 @@ ledger import and the config switch, which were one-offs; a push to the
 project branch from a bay whose run is live, which must never be done by
 hand again; hot reload, so a verb added does not cost a restart; the code
 pickup; and the operator invocation itself.
-- The green-tracking split (tree fact from any origin; a host fact a red
-  suite proves as well; pull before preflight) is now a change against the
-  table rather than the refs; still the operator's call.
+- Decided 2026-09-12: a green suite counts from any origin (b598a0c);
+  preflight skips a tip any host proved and names the host. Still open:
+  a host fact a red suite proves as well, and pulling before preflight so
+  the tip asked about is the tip the run will use.
+- Scope. A bay's scope (`--scope`, the host file's `scope:`) partitioned
+  the plan between hosts under the refs design, when a host could not see
+  another's claims live. With the table every claim is visible as it is
+  written, so the reason is gone; scope survives as an optional "this bay
+  draws only from these keys" and the default is none. `bin/daemon scope
+  <bay> [key …]` changes it on a running daemon (b598a0c), no keys meaning
+  the whole plan; the Mac's bay1 finished at 00:29 because its inherited
+  scope, `td.010`, was one landed item.
 
 - A `checks` entry in the technical-debt config, backed by a script in the
   target's `bin/`, failing on a quoted path after an HTTP verb in an added
@@ -300,7 +309,10 @@ bounce on a stage both held that exposed and fixed three defects (head
 taken at derivation, a bounce dropping only its own record, a bounce never
 becoming a revision). The reviewer reworked three stages for the same
 route-helper convention; the fix is a mechanical check, listed above.
-The Mac's full suite is 13 minutes on a 14-cpu, 16 GB Docker VM.
+The Mac's full suite is 8 minutes on a 14-cpu, 16 GB Docker VM with the
+machine to itself, 13 sharing it with one more suite, 25 sharing it with a
+fourteen-worker one; the flake adjudication in preflight fires and says so
+on the check line (one file excused on 2026-09-12 00:19).
 `preflight-suite.log` under the work dir is a failed preflight's raw
 capture and the only place its `Failures:` blocks survive: the run log
 clips the middle of a 5 MB report and the tail is container teardown. At
