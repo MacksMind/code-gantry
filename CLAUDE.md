@@ -139,15 +139,18 @@ daemon therefore takes dependencies — Phoenix, LiveView, Bandit, Plug,
 Jason, Phoenix.PubSub — which the pickup's `mix compile` builds once;
 only our own modules are hot-loaded. The `.tool-versions` pin (Erlang
 27.3.4, Elixir 1.18.4) is required, since Phoenix wants Elixir ≥ 1.15
-and the Spark's packaged Elixir is 1.14: `mise install` runs on both
-hosts, and `bin/daemon` must start the VM through `mise exec`.
+and the Spark's packaged Elixir is 1.14: the pinned toolchain is
+installed on both hosts under `mise` (precompiled, seconds), and
+`bin/daemon` must start the VM and run `mix` through `mise exec` — it
+does not yet.
 
 **Test bed.** The Spark (a DGX, hostname `spark`, origin `host-b`,
 packaged Elixir 1.14 on OTP 24) and the operator's MacBook (hostname
 `host-a`, origin `host-a`, Homebrew Elixir 1.20 on OTP 29), reaching
 each other over Tailscale; the Spark holds no private keys, so SSH is
-Mac-to-Spark only. `.tool-versions` pins Erlang 27.3.4 and Elixir 1.18.4;
-neither host honours it yet, and `bin/daemon` does not go through `mise`.
+Mac-to-Spark only. `.tool-versions` pins Erlang 27.3.4 and Elixir 1.18.4,
+installed on both hosts under `mise`; `bin/daemon` does not go through
+`mise` yet, so both daemons still run on the system Elixir.
 Both hosts run the daemon from `~/projects/code-gantry` on `elixir-daemon`,
 node `code_gantry_daemon@<origin>`, host file `~/.config/code_gantry/host.exs`,
 state under `~/.local/state/code_gantry/daemon/`. On the Spark:
