@@ -49,7 +49,7 @@ from code_gantry.driver import (
     open_checkpointer,
 )
 from code_gantry import nodes
-from code_gantry.ledger import LedgerError, ledger_for, release_dead_holders
+from code_gantry.ledger import RUN_BEGAN, RUN_ENDED, LedgerError, ledger_for, release_dead_holders
 from code_gantry.planner import make_planner
 from code_gantry.preflight import format_checks, run_preflight
 from code_gantry.report import build_report
@@ -734,6 +734,7 @@ def _drive(
     for warning in warnings or []:
         log(f"[preflight] {warning}")
     rt = None
+    final = None
     try:
         rt = build_runtime(
             cfg,
@@ -749,10 +750,17 @@ def _drive(
         log(f"[run] tool reads are streaming to {paths.tool_log}")
         if rt.ledger is not None:
             # Claims are leases from live runs; a run that died on this host
-            # left its keys, findings and taken stages held.
+            # left its keys, findings and taken stages held. A run that paused
+            # or escalated is not one of those, and says so below.
             freed = release_dead_holders(rt.ledger, alive=_pid_alive, keep_run=paths.run_id)
             if freed:
                 log(f"[run] released {freed} claim(s) held by runs that have exited")
+            # After the sweep, and before any work: this withdraws whatever a
+            # previous end recorded, so a resume of a paused run is a running
+            # run again and its next death is an ordinary one.
+            rt.ledger.append(
+                RUN_BEGAN, run_id=paths.run_id, pid=os.getpid(), bay=nodes.bay_id(rt),
+            )
         final = drive(
             rt,
             graph_input,
@@ -800,6 +808,14 @@ def _drive(
         paths.report.write_text(report)
         log(f"[run] report written to {paths.report}")
     finally:
+        # How this run left, before the ledger closes. A crash reaches here
+        # with `final` unset and records nothing, which is right: nothing was
+        # decided, and a run that vanished is exactly what the sweep is for.
+        if rt is not None and rt.ledger is not None and final is not None:
+            rt.ledger.append(
+                RUN_ENDED, run_id=paths.run_id, pid=os.getpid(),
+                bay=nodes.bay_id(rt), disposition=_disposition(final),
+            )
         log.close()
         tools.close()
         conn.close()
@@ -812,6 +828,16 @@ def _drive(
     click.echo("")
     click.echo(f"report written to {paths.report}")
     return _exit_code(final)
+
+
+def _disposition(state: dict) -> str:
+    """How a run left, for the claims it holds. "paused" and "escalated" both
+    mean it intends to come back and keeps them; the others give them up."""
+    return {
+        EXIT_OK: "finished",
+        EXIT_PAUSED: "paused",
+        EXIT_ESCALATED: "escalated",
+    }.get(_exit_code(state), "failed")
 
 
 def _exit_code(state: dict) -> int:

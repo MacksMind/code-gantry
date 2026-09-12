@@ -21,6 +21,8 @@ from code_gantry.ledger import (
     NODE_MARKED,
     NODE_RETIRED,
     RELEASED,
+    RUN_BEGAN,
+    RUN_ENDED,
     STAGE_DERIVED,
     STAGE_DONE,
     STAGE_DROPPED,
@@ -35,6 +37,7 @@ from code_gantry.ledger import (
     fold_marks,
     open_ledger,
     read_ledger,
+    release_dead_holders,
     should_fold,
 )
 
@@ -536,3 +539,60 @@ class TestClaimsAreLeases:
         views = mine.views()
         assert views.state("k-remote").state == "claimed"
         assert views.state("k-me").state == "claimed"
+
+
+class TestAClaimOutlivesARunThatMeansToComeBack:
+    """A claim is a lease from a live run, and the sweep that gives one back
+    reads process liveness. A run that pauses or escalates has no process and
+    every intention of returning — with work on a stage branch, in the
+    escalated case — so liveness alone hands its stage to another bay."""
+
+    def _held(self, tmp_path, disposition=None):
+        led = open_ledger(tmp_path / "l.sqlite", origin="host-a", actor="run:r1")
+        led.append(RUN_BEGAN, run_id="r1", pid=999999, bay="host-a/target")
+        led.append(STAGE_DERIVED, stage_id="s1", run_id="r1", fields={"id": "s1"}, keys=["p.001"], findings=[], rank=0)
+        record = next(iter(led.views().derived.values()))
+        led.append(STAGE_TAKEN, stage_id="s1", run_id="r1", derived_id=record.id, pid=999999, bay="host-a/target")
+        led.append(CLAIMED, key="p.001", stage_id="s1", run_id="r1", pid=999999, bay="host-a/target")
+        if disposition:
+            led.append(RUN_ENDED, run_id="r1", pid=999999, bay="host-a/target", disposition=disposition)
+        return led
+
+    def _sweep(self, led):
+        # Another bay's run starting on the same host, while r1's process is
+        # gone. Never r1 itself: a run does not release its own.
+        return release_dead_holders(led, alive=lambda pid: False, keep_run="r2")
+
+    def test_a_paused_run_keeps_its_stage(self, tmp_path):
+        led = self._held(tmp_path, "paused")
+        assert self._sweep(led) == 0, "another bay starting took a paused run's stage"
+        assert led.views().state("p.001").state == "claimed"
+        assert next(iter(led.views().derived.values())).status == "taken"
+
+    def test_an_escalated_run_keeps_its_stage(self, tmp_path):
+        # The sharper case: an escalation happens mid-stage, so a branch
+        # holds work. Handing the stage on means the next bay cuts a fresh
+        # branch over it.
+        led = self._held(tmp_path, "escalated")
+        assert self._sweep(led) == 0
+        assert led.views().state("p.001").state == "claimed"
+
+    def test_a_run_that_simply_died_still_gives_its_stage_back(self, tmp_path):
+        # No end recorded at all: killed, crashed, or the machine went. This
+        # is what the sweep is for and it must keep working.
+        led = self._held(tmp_path)
+        assert self._sweep(led) == 2
+        assert led.views().state("p.001").state == "open"
+        assert next(iter(led.views().derived.values())).status == "derived"
+
+    def test_a_finished_run_gives_its_stage_back(self, tmp_path):
+        led = self._held(tmp_path, "finished")
+        assert self._sweep(led) == 2
+
+    def test_a_resumed_run_is_swept_again_once_it_dies_for_real(self, tmp_path):
+        # The intent is withdrawn by coming back. Without this, one pause
+        # spares a run's claims for the life of the ledger.
+        led = self._held(tmp_path, "paused")
+        assert self._sweep(led) == 0
+        led.append(RUN_BEGAN, run_id="r1", pid=999998, bay="host-a/target")
+        assert self._sweep(led) == 2, "a run that came back and then died is still dead"

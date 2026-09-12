@@ -24,8 +24,13 @@ def test_a_run_reaches_the_driver_with_every_start_step_done(tmp_path, monkeypat
 
     steps = []
     fake_rt = SimpleNamespace(
-        ledger=SimpleNamespace(close=lambda: steps.append("closed")),
+        ledger=SimpleNamespace(
+            close=lambda: steps.append("closed"),
+            append=lambda kind, **body: steps.append(kind),
+            origin="test-host",
+        ),
         runner=None,
+        cfg=SimpleNamespace(target_repo=str(project.project_dir)),
     )
     monkeypatch.setattr(cli, "make_planner", lambda *a, **k: object())
     monkeypatch.setattr(cli, "make_reviewer", lambda *a, **k: object())
@@ -35,4 +40,6 @@ def test_a_run_reaches_the_driver_with_every_start_step_done(tmp_path, monkeypat
 
     code = cli._drive(cfg, project, paths, {"run_id": "run-1"})
     assert code == cli.EXIT_OK
-    assert steps[:3] == ["released", "driven", "closed"], steps
+    # The order is the seam: the sweep runs before this run says it has
+    # begun, and how it left is recorded while the ledger is still open.
+    assert steps == ["released", "run.began", "driven", "run.ended", "closed"], steps

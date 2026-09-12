@@ -53,6 +53,11 @@ STAGE_DERIVED = "stage.derived"
 STAGE_TAKEN = "stage.taken"
 STAGE_RELEASED = "stage.released"
 STAGE_DROPPED = "stage.dropped"
+# A run's own life, recorded so a claim can tell a run that crashed from one
+# that means to come back. `disposition` on the end is how it left:
+# "finished", "paused", "escalated" or "failed".
+RUN_BEGAN = "run.began"
+RUN_ENDED = "run.ended"
 STAGE_DONE = "stage.done"
 # A suite command was green on a tree, on the origin that ran it.
 SUITE_GREEN = "suite.green"
@@ -173,6 +178,9 @@ class Views:
     derived: dict[str, DerivedStage] = field(default_factory=dict)
     # (sha, command) -> [(origin, at)]: which trees which host has proven green.
     greens: dict[tuple[str, str], list[tuple[str, str]]] = field(default_factory=dict)
+    # run_id -> how it last left, or None while it is running. A run that
+    # paused or escalated keeps what it holds; see `release_dead_holders`.
+    runs: dict[str, str | None] = field(default_factory=dict)
 
     # -- tree -------------------------------------------------------------
 
@@ -291,6 +299,15 @@ def build_views(events: list[Event]) -> Views:
 def _apply(views: Views, event: Event) -> None:
     body = event.body
     kind = event.kind
+    if kind == RUN_BEGAN:
+        # Beginning withdraws whatever intent a previous end recorded: a run
+        # that came back and then died is dead, and one pause must not spare
+        # its claims for the life of the ledger.
+        views.runs[event.run_id or ""] = None
+        return
+    if kind == RUN_ENDED:
+        views.runs[event.run_id or ""] = body.get("disposition") or "finished"
+        return
     if kind == NODE_UPSERTED:
         key = event.key or ""
         current = views.nodes.get(key)
@@ -844,20 +861,32 @@ def apply_fold(ledger: Ledger, *, actor: str | None = None) -> int:
     return len(proposed)
 
 
+_COMING_BACK = frozenset({"paused", "escalated"})
+
+
 def release_dead_holders(ledger: Ledger, *, alive: Callable[[int], bool], keep_run: str | None = None) -> int:
     """Give back every claim, finding and taken stage held by a run of this
-    ledger's origin whose process is gone. A claim is a lease from a live
+    ledger's origin that is gone for good. A claim is a lease from a live
     run; the kernel cannot release it as it does a file lock, so the next
     run on the host does. Holders on other hosts are left alone: their
     liveness cannot be read from here. Returns how many were released."""
-    def dead(origin, pid, run_id) -> bool:
-        if run_id and run_id == keep_run:
-            return False
-        return origin == ledger.origin and pid is not None and not alive(int(pid))
-
     released = 0
     with ledger.transaction():
         views = ledger.views()
+
+        def dead(origin, pid, run_id) -> bool:
+            if run_id and run_id == keep_run:
+                return False
+            # A pause or an escalation ends the process and keeps the claim.
+            # Both exit meaning to come back — an escalation with work on a
+            # stage branch — and liveness cannot tell either from a crash, so
+            # the run says on its way out which it was. Without this, the next
+            # bay to start on the host hands the stage to somebody else and
+            # the branch is orphaned.
+            if views.runs.get(run_id or "") in _COMING_BACK:
+                return False
+            return origin == ledger.origin and pid is not None and not alive(int(pid))
+
         for key, state in views.key_states.items():
             if state.state == "claimed" and dead(state.origin, state.pid, state.run_id):
                 ledger.append(RELEASED, key=key, run_id=state.run_id, stage_id=state.stage_id, reason="holder exited")
