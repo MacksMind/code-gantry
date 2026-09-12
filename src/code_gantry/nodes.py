@@ -3063,6 +3063,14 @@ def _take_derived(rt: Runtime, state: RunState) -> dict | None:
         except Exception as e:  # noqa: BLE001 - a record nothing can read is dropped, not fatal
             rt.ledger.append(STAGE_DROPPED, stage_id=record.stage_id, run_id=rt.paths.run_id, derived_id=record.id, reason=f"unreadable: {e}")
             continue
+        # Taking *is* claiming, and both happen here because here is where
+        # the planner semaphore is held. Two bays reaching this queue
+        # together were stopped by nothing but the timing: each read the
+        # record as waiting and each went on to `precheck`, which is where
+        # the claim used to be written. `precheck` still re-asks and hands
+        # a loser back to the planner, but that is a way of surviving the
+        # race rather than of not having one.
+        _claim_references(rt, stage, state)
         rt.log(f"[plan] took {stage.id} ({record.id}), drawn by {record.by_run or 'another run'}")
         return {
             **fresh_stage_fields(),

@@ -3753,19 +3753,53 @@ class TestDerivedStagesInTheLedger:
         )
         return rt.cfg, rt, state
 
-    def _second_run(self, rt, state):
+    def _second_run(self, rt, state, run_id="r2"):
         from dataclasses import replace
 
         from code_gantry.ledger import open_ledger
         from code_gantry.runtime import RunPaths
 
-        paths = RunPaths(rt.project, "r2")
+        paths = RunPaths(rt.project, run_id)
         paths.ensure()
         other = replace(
             rt, paths=paths, planner=_NoPlanner(),
-            ledger=open_ledger(rt.project.ledger, origin="test-host", actor="run:r2"),
+            ledger=open_ledger(rt.project.ledger, origin="test-host", actor=f"run:{run_id}"),
         )
-        return other, {**state, "run_id": "r2"}
+        return other, {**state, "run_id": run_id}
+
+    def test_taking_a_drawn_stage_is_what_claims_it(self, repo, tmp_path):
+        # Two bays reaching the queue together used to be stopped by
+        # nothing but the timing: both read the record as waiting, both
+        # went on to `precheck`, and only there did either claim it. The
+        # take is the claim, and it happens where the planner semaphore is
+        # held, which is what makes it one bay's.
+        cfg, rt, state = self._make(repo, tmp_path)
+        nodes.plan(state, rt)
+
+        a, a_state = self._second_run(rt, state, "r2")
+        b, b_state = self._second_run(rt, state, "r3")
+
+        took = nodes._take_derived(a, a_state)
+        assert took is not None and took["current"]["id"] == "second"
+        assert nodes._take_derived(b, b_state) is None, "two bays took one drawn stage"
+
+        record = rt.views().derived[took["current"]["derived_id"]]
+        assert record.status == "taken" and record.taken_run == "r2"
+
+    def test_taking_a_stage_holds_the_keys_it_was_drawn_against(self, repo, tmp_path):
+        # Not only the record: a second stage drawn against the same key
+        # must not be startable either, and that is decided by the key's
+        # state rather than by which record was taken.
+        cfg, rt, state = self._make(repo, tmp_path)
+        nodes.plan(state, rt)
+        a, a_state = self._second_run(rt, state, "r2")
+        took = nodes._take_derived(a, a_state)
+
+        stage = took["current"]
+        for key in stage["plan_keys"]:
+            held = rt.views().state(key)
+            assert held.state == "claimed", f"{key} was taken and left open"
+            assert held.run_id == "r2"
 
     def test_a_batch_is_recorded_with_the_head_held_and_the_rest_waiting(self, repo, tmp_path):
         cfg, rt, state = self._make(repo, tmp_path)
