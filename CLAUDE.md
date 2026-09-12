@@ -79,11 +79,23 @@ push the remote refuses after a green suite is a retry — pull again, test
 again, push again — bounded by a retry count, with a conflict or a red
 combined tree stopping for a person. No lease ref on the remote: a lease
 can be held by a dead process and blocks a host whose suite would have
-passed. Within a host the suite lock serialises landings. Intended, not
-built: squash the stage into one candidate commit on its own branch, rebase
-that onto the pulled tip, run the full suite once there, then fast-forward
-and push — one suite per landing, and the candidate stays a branch a
-rework can amend. The same landing serves a person's pull request.
+passed. Within a host the suite lock serialises landings. Built, behind `compose_landings`:
+`lander.py`. Every bay pushes a candidate and moves nothing; the project
+branch is moved by whichever bay holds the landing semaphore, named for the
+branch rather than the ledger because the branch is what only one push can
+move. It replays every pending candidate onto the fetched tip, proves the
+whole composition with one suite, fast-forwards, records each candidate's
+landing from what its event carried, and deletes the branches it landed.
+**The semaphore is attempted, never waited for**: a bay that queued would
+spend a suite's time on a job another bay is doing, and the stage it could
+have worked is what that job is waiting for. Two stages green on their own
+trees were never green together, and this is where that is established —
+a red composition is bisected, the guilty candidate rejected with its
+branch left standing, and the green part lands. **A red tip looks exactly
+like a bad first candidate**, so when the bisect blames the first one the
+bare tip is proved before anything is rejected: blaming a good stage for a
+broken branch sends a person to read the wrong diff, and then does it again
+to the next stage. `max_compose_suites` bounds one composition.
 
 **Project state in the table, orchestration state in the daemons.** Project
 state — plan, claims as leases, drawn stages, findings, greens, landings —

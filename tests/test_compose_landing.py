@@ -10,11 +10,24 @@ import pytest
 
 from test_config import as_test_tools, minimal
 from test_nodes import THE_ITEM, make, with_stage
+from test_mesh import FakeDaemon, daemon_state  # noqa: F401
 from test_remote_landing import origin, origin_tip, other_lands, sh  # noqa: F401
 
-from code_gantry import nodes
+from code_gantry import lander, nodes
 from code_gantry.config import ConfigError, parse_config
 from code_gantry.gitops import Git
+
+
+@pytest.fixture
+def a_daemon(daemon_state):
+    """A daemon that grants the landing semaphore. The whole path is
+    exercised rather than patched out, because "may this bay land" is the
+    question the composition turns on."""
+    from code_gantry import mesh
+
+    daemon = FakeDaemon(mesh.socket_path())
+    yield daemon
+    daemon.stop()
 
 
 def compose_cfg(**over):
@@ -64,7 +77,7 @@ class TestWhatAFinishedStageDoes:
         assert candidate.branch == state["stage_branch"]
         assert candidate.base == state["stage_start_sha"]
         assert candidate.stage_id == "extract"
-        assert THE_ITEM in candidate.keys
+        assert THE_ITEM in candidate.landing["keys"]
 
     def test_nothing_is_recorded_as_landed(self, repo, tmp_path, origin):
         # Nothing is on the project branch, so nothing has landed. A key
@@ -108,3 +121,146 @@ class TestWhatAFinishedStageDoes:
         state = {**state, "review_summary": "fine", "review_record": "did it"}
         nodes.advance(state, rt)
         assert rt.views().pending_candidates() == []
+
+
+def a_candidate(repo, tmp_path, *, name, content, path="app.py", **over):
+    """One finished stage, pushed as a candidate and landing nothing."""
+    cfg, rt, state = make(repo, tmp_path, **compose_cfg(**over))
+    state = with_stage(state, rt, id=name)
+    (repo / path).write_text(content)
+    state = {**state, "review_summary": "fine", "review_record": "did it"}
+    nodes.advance(state, rt)
+    return cfg, rt, state
+
+
+class TestComposingWhatIsPending:
+    def test_two_candidates_land_together_on_one_suite(self, repo, tmp_path, origin, a_daemon):
+        bare, _ = origin
+        counter = tmp_path / "suites"
+        a_candidate(repo, tmp_path, name="first", content="one\n",
+                    full_test_command=f"echo x >> {counter}")
+        cfg, rt, _ = a_candidate(repo, tmp_path, name="second", content="two\n", path="other.py",
+                                 full_test_command=f"echo x >> {counter}")
+        counter.write_text("")
+
+        outcome = lander.compose(rt)
+        assert outcome is not None and outcome.sha
+        assert {c.stage_id for c in outcome.landed} == {"first", "second"}
+        assert counter.read_text().count("x") == 1, "one composition, one suite"
+        assert sh(bare, "show", f"proj:app.py") == "one"
+        assert sh(bare, "show", f"proj:other.py") == "two"
+
+    def test_nothing_is_pending_afterwards(self, repo, tmp_path, origin, a_daemon):
+        cfg, rt, _ = a_candidate(repo, tmp_path, name="first", content="one\n")
+        lander.compose(rt)
+        assert rt.views().pending_candidates() == []
+
+    def test_the_landed_keys_are_recorded_against_the_composed_commit(self, repo, tmp_path, origin, a_daemon):
+        cfg, rt, _ = a_candidate(repo, tmp_path, name="first", content="one\n")
+        outcome = lander.compose(rt)
+        landed = rt.views().state(THE_ITEM)
+        assert landed.state == "landed"
+        assert landed.sha == outcome.sha, "a key landed against a tree nobody holds"
+
+    def test_the_branches_it_landed_are_taken_off_the_remote(self, repo, tmp_path, origin, a_daemon):
+        bare, _ = origin
+        cfg, rt, state = a_candidate(repo, tmp_path, name="first", content="one\n")
+        assert sh(bare, "branch", "--list", state["stage_branch"])
+        lander.compose(rt)
+        assert sh(bare, "branch", "--list", state["stage_branch"]) == ""
+
+    def test_the_composed_tip_is_recorded_green(self, repo, tmp_path, origin, a_daemon):
+        cfg, rt, _ = a_candidate(repo, tmp_path, name="first", content="one\n",
+                                 full_test_command="true")
+        outcome = lander.compose(rt)
+        assert rt.views().proven_green(outcome.sha, "true")
+
+    def test_a_bay_that_cannot_have_the_semaphore_composes_nothing(self, repo, tmp_path, origin):
+        # With no daemon nobody may land: one host cannot decide alone that
+        # it is the only one moving the project branch.
+        bare, _ = origin
+        before = origin_tip(bare)
+        cfg, rt, _ = a_candidate(repo, tmp_path, name="first", content="one\n")
+        assert lander.compose(rt) is None
+        assert origin_tip(bare) == before
+
+    def test_with_nothing_pending_it_does_nothing(self, repo, tmp_path, origin):
+        cfg, rt, state = make(repo, tmp_path, **compose_cfg())
+        assert lander.compose(rt) is None
+
+
+class TestWhenTheCompositionIsRed:
+    def _poisoned(self, repo, tmp_path):
+        """Two candidates: one harmless, one that only fails in company."""
+        suite = "test ! -e poison.txt"
+        a_candidate(repo, tmp_path, name="good", content="fine\n",
+                    full_test_command=suite)
+        cfg, rt, state = a_candidate(repo, tmp_path, name="bad", content="x\n",
+                                     path="poison.txt", full_test_command=suite)
+        return cfg, rt, state
+
+    def test_the_guilty_candidate_is_removed_and_the_rest_land(self, repo, tmp_path, origin, a_daemon):
+        bare, _ = origin
+        cfg, rt, state = self._poisoned(repo, tmp_path)
+        outcome = lander.compose(rt)
+
+        assert [c.stage_id for c in outcome.landed] == ["good"]
+        assert [c.stage_id for c, _ in outcome.rejected] == ["bad"]
+        assert sh(bare, "show", "proj:app.py") == "fine"
+
+    def test_the_rejected_candidate_keeps_its_branch_and_its_reason(self, repo, tmp_path, origin, a_daemon):
+        bare, _ = origin
+        cfg, rt, state = self._poisoned(repo, tmp_path)
+        lander.compose(rt)
+
+        [rejection] = rt.views().rejected.values()
+        assert rejection.candidate.stage_id == "bad"
+        assert "red" in rejection.reason
+        assert sh(bare, "branch", "--list", rejection.candidate.branch), (
+            "the work was thrown away with the rejection"
+        )
+
+    def test_the_guilty_keys_are_not_landed(self, repo, tmp_path, origin, a_daemon):
+        cfg, rt, state = self._poisoned(repo, tmp_path)
+        lander.compose(rt)
+        landed = [e for e in rt.ledger.events() if e.kind == "landed" and e.stage_id == "bad"]
+        assert landed == []
+
+    def test_a_candidate_that_will_not_replay_is_rejected_rather_than_resolved(self, repo, tmp_path, origin, a_daemon):
+        # Two stages editing the same lines. A conflict is a disagreement
+        # about the work, and no merge strategy is entitled to settle it.
+        bare, other = origin
+        a_candidate(repo, tmp_path, name="first", content="theirs\n")
+        cfg, rt, state = a_candidate(repo, tmp_path, name="second", content="mine\n")
+        outcome = lander.compose(rt)
+
+        assert len(outcome.landed) == 1
+        assert len(outcome.rejected) == 1
+        assert "replay" in outcome.rejected[0][1]
+
+
+class TestWhenTheBranchItselfIsRed:
+    def test_nothing_is_rejected_for_a_tip_that_was_already_broken(self, repo, tmp_path, origin, a_daemon):
+        # A red tip looks exactly like a bad first candidate. Rejecting the
+        # stage would send a person to read the wrong diff, and then do it
+        # again to the next stage, and the next.
+        bare, other = origin
+        cfg, rt, state = a_candidate(repo, tmp_path, name="first", content="one\n",
+                                     full_test_command="test ! -e poison.txt")
+        other_lands(other, name="poison.txt", text="the branch was broken\n")
+
+        outcome = lander.compose(rt)
+        assert outcome.escalation is not None
+        assert "red before anything was composed" in outcome.escalation["escalation_reason"]
+        assert outcome.rejected == [], "a good stage was blamed for a broken branch"
+        assert rt.views().pending_candidates(), "the candidate was thrown away"
+
+    def test_a_composition_that_will_not_go_green_asks_for_a_person(self, repo, tmp_path, origin, a_daemon):
+        suite = "test ! -e poison.txt"
+        a_candidate(repo, tmp_path, name="bad-one", content="x\n", path="poison.txt",
+                    full_test_command=suite)
+        cfg, rt, state = a_candidate(repo, tmp_path, name="bad-two", content="y\n", path="poison2.txt",
+                                     full_test_command=suite, limits={"max_compose_suites": 1})
+        outcome = lander.compose(rt)
+        assert outcome.escalation is not None
+        assert "still red" in outcome.escalation["escalation_reason"]

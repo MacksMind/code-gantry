@@ -319,6 +319,12 @@ def plan(state: RunState, rt: Runtime) -> dict:
         rt.log(f"[plan] folded {written} mark(s) into the plan text")
         plan_text, projection = rt.plan_text(), rt.projection()
 
+    # Before anything else this bay could do: landing is what every other
+    # bay's finished work is waiting on, and it is attempted rather than
+    # waited for, so a bay that cannot have it loses nothing by asking.
+    if stage is None:
+        _compose_if_free(rt)
+
     if stage is not None and rt.ledger is not None:
         elsewhere = _held_elsewhere(rt, stage)
         if elsewhere:
@@ -3083,6 +3089,26 @@ def _planner_lock(rt: Runtime) -> str:
     return f"planner-{digest}"
 
 
+def _compose_if_free(rt: Runtime) -> None:
+    """Compose what is pending, if this bay can have the landing semaphore.
+
+    Answers nothing: a composition is not this run's work and its outcome
+    belongs to the ledger, not to this run's state. A failure here must not
+    stop a bay that was on its way to do something else, so it is logged and
+    the run goes on — the candidates stay pending and the next bay to hold
+    the semaphore composes them.
+    """
+    from code_gantry import lander
+
+    try:
+        outcome = lander.compose(rt)
+    except Exception as e:  # noqa: BLE001 - never the reason a bay stops
+        rt.log(f"[land] composing failed, leaving the candidates pending: {e!r}")
+        return
+    if outcome is not None and outcome.escalation:
+        rt.log("[land] the composition needs a person; the candidates stay pending")
+
+
 def _take_derived(rt: Runtime, state: RunState) -> dict | None:
     """A stage already drawn and waiting whose references are available
     inside this run's scope, as the update that starts it; None when there is
@@ -3215,47 +3241,74 @@ def bay_id(rt: Runtime) -> str:
     return f"{host}/{Path(rt.cfg.target_repo).name}"
 
 
+def landing_facts(stage: Stage, state: RunState) -> dict:
+    """What a landing records, gathered from the run that did the work.
+
+    Separated because the run that does the work and the run that lands it
+    are no longer the same one: under `compose_landings` these travel in the
+    candidate's event and are replayed by whichever bay composes it. One
+    assembly rather than two, because a copy of an assembly is not a check
+    on it.
+    """
+    return {
+        "stage_id": stage.id,
+        "derived_id": stage.derived_id,
+        "keys": list(stage.plan_keys),
+        "resolved": list(state.get("pending_resolved") or []),
+        "held": list(stage.resolves),
+        "summary": state.get("review_summary") or "",
+        "observations": list(state.get("pending_observations") or []),
+    }
+
+
 def _record_landing(rt: Runtime, stage: Stage, state: RunState, merge_sha: str) -> None:
-    """Landed keys, confirmed resolutions, and the reviewer's observations as findings."""
+    record_landing(rt, landing_facts(stage, state), merge_sha, run_id=rt.paths.run_id)
+
+
+def record_landing(rt: Runtime, facts: dict, merge_sha: str, *, run_id: str) -> None:
+    """Landed keys, confirmed resolutions, and the reviewer's observations as
+    findings. `run_id` is the run that did the work, which is not always the
+    run writing this."""
     views = rt.views()
-    summary = state.get("review_summary") or ""
-    for key in stage.plan_keys:
+    summary = facts.get("summary") or ""
+    stage_id = facts.get("stage_id") or ""
+    for key in facts.get("keys") or []:
         current = views.state(key)
         if current.state == "landed" and current.sha == merge_sha:
             continue
         rt.ledger.append(
-            LANDED, key=key, sha=merge_sha, stage_id=stage.id, run_id=rt.paths.run_id,
+            LANDED, key=key, sha=merge_sha, stage_id=stage_id, run_id=run_id,
             evidence=summary,
         )
-    resolved = list(state.get("pending_resolved") or [])
+    resolved = list(facts.get("resolved") or [])
     for finding_id in resolved:
         rt.ledger.append(
-            FINDING_RESOLVED, sha=merge_sha, stage_id=stage.id, run_id=rt.paths.run_id,
+            FINDING_RESOLVED, sha=merge_sha, stage_id=stage_id, run_id=run_id,
             finding_id=finding_id,
         )
     # A finding the stage held and the reviewer did not confirm goes back to
     # open rather than staying held by a stage that has finished.
-    for finding_id in stage.resolves:
+    for finding_id in facts.get("held") or []:
         finding = views.findings.get(finding_id)
-        if finding_id not in resolved and finding is not None and finding.claimed_run == rt.paths.run_id:
-            rt.ledger.append(FINDING_RELEASED, stage_id=stage.id, run_id=rt.paths.run_id, finding_id=finding_id, reason="not confirmed by the reviewer")
-    if stage.derived_id:
-        record = views.derived.get(stage.derived_id)
+        if finding_id not in resolved and finding is not None and finding.claimed_run == run_id:
+            rt.ledger.append(FINDING_RELEASED, stage_id=stage_id, run_id=run_id, finding_id=finding_id, reason="not confirmed by the reviewer")
+    if facts.get("derived_id"):
+        record = views.derived.get(facts["derived_id"])
         if record is not None and record.status == "taken":
-            rt.ledger.append(STAGE_DONE, stage_id=stage.id, run_id=rt.paths.run_id, sha=merge_sha, derived_id=stage.derived_id)
-    for observation in state.get("pending_observations") or []:
+            rt.ledger.append(STAGE_DONE, stage_id=stage_id, run_id=run_id, sha=merge_sha, derived_id=facts["derived_id"])
+    for observation in facts.get("observations") or []:
         where = (observation.get("file") or "").strip()
         finding = (observation.get("finding") or "").strip()
         detail = (observation.get("detail") or "").strip()
         rt.ledger.open_finding(
             keys=[], by="reviewer",
             claim="\n\n".join(p for p in (f"{where}: {finding}" if where else finding, detail) if p),
-            needs="human", at_sha=merge_sha, stage_id=stage.id, run_id=rt.paths.run_id,
+            needs="human", at_sha=merge_sha, stage_id=stage_id, run_id=run_id,
         )
     rt.log(
-        f"[advance] ledger: {len(stage.plan_keys)} key(s) landed, "
-        f"{len(state.get('pending_resolved') or [])} finding(s) resolved, "
-        f"{len(state.get('pending_observations') or [])} observation(s) opened"
+        f"[landing] ledger: {len(facts.get('keys') or [])} key(s) landed, "
+        f"{len(resolved)} finding(s) resolved, "
+        f"{len(facts.get('observations') or [])} observation(s) opened"
     )
 
 
@@ -3293,10 +3346,14 @@ def _push_candidate(rt: Runtime, stage: Stage, state: RunState, branch: str, sta
     rt.log(f"[advance] {stage.id}: pushed candidate {candidate[:12]} as {branch}")
 
     if rt.ledger is not None:
+        # Everything the landing will need, carried here because the run
+        # that does the work and the run that lands it are no longer the
+        # same one. Recorded as it happens — the candidate exists — and
+        # replayed by whichever bay composes it, when that happens.
         rt.ledger.append(
             CANDIDATE_PUSHED, stage_id=stage.id, run_id=rt.paths.run_id,
             sha=candidate, branch=branch, base=start_sha,
-            keys=list(stage.plan_keys), findings=list(state.get("pending_resolved") or stage.resolves),
+            landing=landing_facts(stage, state),
         )
     # Kept at origin, which is where the composing bay reads it from.
     rt.git.delete_branch(branch)

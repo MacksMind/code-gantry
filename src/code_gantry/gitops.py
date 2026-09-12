@@ -683,6 +683,51 @@ class Git:
                 if target.exists():
                     target.unlink()
 
+    def fetch(self, remote: str = "origin") -> None:
+        """Every branch the remote has, not one: a composing bay needs the
+        project branch and every candidate branch waiting on it, and which
+        candidates those are is the ledger's answer rather than a guess made
+        here."""
+        self._run("fetch", "-q", remote)
+
+    def cherry_pick(self, sha: str) -> bool:
+        """Replay one commit onto the current branch. True when it produced a
+        commit, False when it was already there and left nothing to do.
+
+        An empty pick is not a failure. Two stages can arrive at the same
+        change, and a candidate whose work is already on the branch has
+        nothing to land rather than something to escalate — but git reports
+        it exactly as it reports a conflict, so the two are told apart here
+        and only one of them raises.
+        """
+        proc = self._run("cherry-pick", sha, check=False)
+        if proc.returncode == 0:
+            return True
+        output = f"{proc.stdout}\n{proc.stderr}"
+        if "empty" in output and self._out("status", "--porcelain") == "":
+            self._run("cherry-pick", "--skip", check=False)
+            return False
+        raise GitError(
+            f"cherry-pick of {sha[:12]} failed: {proc.stderr.strip() or proc.stdout.strip()}"
+        )
+
+    def cherry_pick_abort(self) -> None:
+        """Back to where the pick started. Best effort: this runs on the
+        failure path, and a second failure there would replace the diagnosis
+        with its own."""
+        self._run("cherry-pick", "--abort", check=False)
+
+    def delete_remote_branch(self, name: str, remote: str = "origin") -> None:
+        """Take a branch off the remote. Deleting is a push of nothing, and
+        the one push that is not fast-forward by nature — which is why it
+        says so in its own method rather than growing a flag on `push`."""
+        proc = self._run("push", "-q", remote, "--delete", name, check=False)
+        if proc.returncode != 0:
+            raise GitError(
+                f"deleting {name!r} from {remote!r} failed: "
+                f"{proc.stderr.strip() or proc.stdout.strip()}"
+            )
+
     def set_branch(self, name: str, sha: str) -> None:
         """Point a branch at a commit. Never the checked-out one: that moves
         the branch out from under the index and the working tree, which then

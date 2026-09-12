@@ -546,6 +546,12 @@ class Limits(_Strict):
     # project consume unbounded paid inference one stage at a time. Kept as an
     # absolute backstop; the rule below is what normally binds.
     max_planner_interventions: int = 12
+    # Full suites one composition may spend before it gives up and asks for
+    # a person. A composition of n candidates costs one suite when it is
+    # green, and a removal costs a bisect — so this binds only when several
+    # stages are bad at once, which is a question about the plan rather than
+    # about any one stage.
+    max_compose_suites: int = 8
     # Consecutive planner passes with nothing landing in between.
     #
     # A flat global cap needs a stage count nobody has — CodeGantry's

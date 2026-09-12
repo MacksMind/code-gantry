@@ -77,9 +77,11 @@ class TestInspection:
 
     def test_the_one_push_never_forces_and_has_one_caller(self):
         # The pipeline pushes the configured project branch and the stage
-        # branches carrying candidates, fast forward, and only `nodes`
-        # calls `push`. There is no other push: the ledger does not travel
-        # by ref, so nothing else may move anything on the remote.
+        # branches carrying candidates, fast forward. There is no other
+        # push: the ledger does not travel by ref, so nothing else may move
+        # anything on the remote. Deleting a landed candidate's branch is a
+        # push of nothing and says so in a method of its own, rather than
+        # growing a flag on this one.
         import ast
         import inspect
         import textwrap
@@ -112,13 +114,14 @@ class TestInspection:
                 ):
                     callers.append(module.name)
                     pushed.append(ast.unparse(node.args[0]) if node.args else "")
-        assert set(callers) == {"nodes.py"}, callers
-        # Two call sites and no more: the publication that moves the project
-        # branch, and the candidate that moves a stage branch of it. Both
-        # name a local `branch`, so which ref each pushes is not readable
-        # here and is pinned where it can be — `test_compose_landing`
-        # asserts the project branch does not move when a candidate goes up.
-        assert len(callers) == 2, callers
+        # Three call sites and no more: a bay publishing its own landing, a
+        # bay pushing a candidate branch, and the composing bay moving the
+        # project branch. All three name a local `branch`, so which ref each
+        # pushes is not readable here and is pinned where it can be —
+        # `test_compose_landing` asserts the project branch does not move
+        # when a candidate goes up, and moves only when a composition lands.
+        assert set(callers) == {"nodes.py", "lander.py"}, callers
+        assert len(callers) == 3, callers
         assert set(pushed) == {"branch"}, pushed
 
 

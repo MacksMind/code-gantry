@@ -61,7 +61,10 @@ STAGE_DROPPED = "stage.dropped"
 # branch. `candidate.dropped` is one taken back out of the pool, by the
 # compose that found it guilty or by the bay reworking it.
 CANDIDATE_PUSHED = "candidate.pushed"
-CANDIDATE_DROPPED = "candidate.dropped"
+# Composed onto the project branch and pushed, or taken back out of the pool
+# by the compose that found it is what turned the composition red.
+CANDIDATE_LANDED = "candidate.landed"
+CANDIDATE_REJECTED = "candidate.rejected"
 RUN_BEGAN = "run.began"
 RUN_ENDED = "run.ended"
 STAGE_DONE = "stage.done"
@@ -185,10 +188,24 @@ class Candidate:
     sha: str
     base: str
     stage_id: str
-    keys: list[str]
-    findings: list[str]
+    # What the landing will record: keys, confirmed findings, the stage's
+    # drawn record and the reviewer's observations. Carried because the bay
+    # that composes it is not the bay that did the work.
+    landing: dict
     run_id: str | None
     origin: str
+    at: str
+
+
+@dataclass
+class Rejection:
+    """A candidate a composition could not take: it turned the composed tree
+    red, or it would not replay onto the tip at all. Its branch still holds
+    the work, on a base that has since moved."""
+
+    candidate: "Candidate"
+    against: str
+    reason: str
     at: str
 
 
@@ -203,9 +220,11 @@ class Views:
     # run_id -> how it last left, or None while it is running. A run that
     # paused or escalated keeps what it holds; see `release_dead_holders`.
     runs: dict[str, str | None] = field(default_factory=dict)
-    # branch -> the candidate waiting on it. Dropped when it lands, or when
-    # a compose finds it is what turned the composition red.
+    # branch -> the candidate waiting on it, until it lands or is rejected.
     candidates: dict[str, "Candidate"] = field(default_factory=dict)
+    # branch -> a candidate a composition found guilty, waiting for a bay to
+    # rebase it onto what has landed since and put it right.
+    rejected: dict[str, "Rejection"] = field(default_factory=dict)
 
     # -- tree -------------------------------------------------------------
 
@@ -347,15 +366,19 @@ def _apply(views: Views, event: Event) -> None:
             sha=event.sha or "",
             base=body.get("base") or "",
             stage_id=event.stage_id or "",
-            keys=list(body.get("keys") or []),
-            findings=list(body.get("findings") or []),
+            landing=dict(body.get("landing") or {}),
             run_id=event.run_id,
             origin=event.origin,
             at=event.at,
         )
         return
-    if kind == CANDIDATE_DROPPED:
-        views.candidates.pop(body.get("branch") or "", None)
+    if kind in (CANDIDATE_LANDED, CANDIDATE_REJECTED):
+        candidate = views.candidates.pop(body.get("branch") or "", None)
+        if kind == CANDIDATE_REJECTED and candidate is not None:
+            views.rejected[candidate.branch] = Rejection(
+                candidate=candidate, against=event.sha or "",
+                reason=body.get("reason") or "", at=event.at,
+            )
         return
     if kind == RUN_BEGAN:
         # Beginning withdraws whatever intent a previous end recorded: a run
