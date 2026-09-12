@@ -711,11 +711,55 @@ class Git:
             f"cherry-pick of {sha[:12]} failed: {proc.stderr.strip() or proc.stdout.strip()}"
         )
 
+    def rebase_onto(self, branch: str, base: str) -> str:
+        """Move a branch's work onto a new base, and answer the new base sha.
+
+        The first step of reworking a candidate: what it was built against
+        is no longer what the project branch holds, and the failure it has
+        to answer is a failure against the tree as it is now. A conflict
+        leaves nothing behind — the rebase is aborted and the branch is as
+        it was — because two stages disagreeing about the same lines is not
+        something to resolve on the way past.
+        """
+        self.checkout(branch)
+        proc = self._run("rebase", base, check=False)
+        if proc.returncode != 0:
+            self._run("rebase", "--abort", check=False)
+            raise GitError(
+                f"rebasing {branch!r} onto {base[:12]} conflicts: "
+                f"{proc.stdout.strip() or proc.stderr.strip()}"
+            )
+        return self.rev_parse(base)
+
     def cherry_pick_abort(self) -> None:
         """Back to where the pick started. Best effort: this runs on the
         failure path, and a second failure there would replace the diagnosis
         with its own."""
         self._run("cherry-pick", "--abort", check=False)
+
+    def replace_branch(self, name: str, remote: str = "origin") -> None:
+        """Put a rewritten branch on the remote in place of what is there.
+
+        **Only ever a candidate's own branch.** A rework rebases the branch
+        onto what has landed since, which rewrites it, so pushing it back is
+        not a fast-forward and never can be. That is safe here and nowhere
+        else: a stage branch is the pipeline's alone — it makes them, it
+        deletes them, and nobody pulls from them — while the project branch
+        is what every bay reads and `push` stays fast-forward-only for it.
+
+        `--force-with-lease`, so it refuses if the branch is not where this
+        checkout last saw it. Being the only bay holding the rework claim is
+        the reason to expect that; being refused is how we would find out we
+        were wrong.
+        """
+        proc = self._run(
+            "push", "-q", "--force-with-lease", remote, f"{name}:{name}", check=False
+        )
+        if proc.returncode != 0:
+            raise GitError(
+                f"replacing {name!r} on {remote!r} was refused: "
+                f"{proc.stderr.strip() or proc.stdout.strip()}"
+            )
 
     def delete_remote_branch(self, name: str, remote: str = "origin") -> None:
         """Take a branch off the remote. Deleting is a push of nothing, and

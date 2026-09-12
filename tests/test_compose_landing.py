@@ -9,13 +9,13 @@ A bare repository stands in for origin.
 import pytest
 
 from test_config import as_test_tools, minimal
-from test_nodes import THE_ITEM, make, with_stage
+from test_nodes import THE_ITEM, THE_OTHER_ITEM, make, with_stage
 from test_mesh import FakeDaemon, daemon_state  # noqa: F401
 from test_remote_landing import origin, origin_tip, other_lands, sh  # noqa: F401
 
 from code_gantry import lander, nodes
 from code_gantry.config import ConfigError, parse_config
-from code_gantry.gitops import Git
+from code_gantry.gitops import Git, GitError
 
 
 @pytest.fixture
@@ -128,7 +128,7 @@ class TestWhatAFinishedStageDoes:
         assert rt.views().pending_candidates() == []
 
 
-def a_candidate(repo, tmp_path, *, name, content, path="app.py", land=False, **over):
+def a_candidate(repo, tmp_path, *, name, content=None, path="app.py", land=False, keys=None, files=None, **over):
     """One finished stage, pushed as a candidate.
 
     `land` is whether the bay is allowed to go on and compose, which it
@@ -138,8 +138,9 @@ def a_candidate(repo, tmp_path, *, name, content, path="app.py", land=False, **o
     from unittest import mock
 
     cfg, rt, state = make(repo, tmp_path, **compose_cfg(**over))
-    state = with_stage(state, rt, id=name)
-    (repo / path).write_text(content)
+    state = with_stage(state, rt, id=name, **({"plan_keys": keys} if keys else {}))
+    for where, what in (files or {path: content}).items():
+        (repo / where).write_text(what)
     state = {**state, "review_summary": "fine", "review_record": "did it"}
     if land:
         nodes.advance(state, rt)
@@ -353,3 +354,133 @@ class TestWhatTheRecordClaims:
         final = nodes.finalize({**state, "completed": out["completed"]}, rt)
         assert final.get("failure_layer") != "branch_moved", final
         assert final["status"] == "complete"
+
+
+class TestReworkingARejectedCandidate:
+    """A rejection is work that was finished and is now red beside what
+    landed while it waited. A bay looking for something to do takes that
+    before anything the planner would draw: it is closer to done, and it is
+    holding plan keys while it waits."""
+
+    def _rejected(self, repo, tmp_path, origin):
+        """One landed stage and one rejected by it."""
+        suite = "test ! -e poison.txt"
+        a_candidate(repo, tmp_path, name="good", content="fine\n", full_test_command=suite)
+        # Real work *and* the thing that only fails in company, so the
+        # rework has something left to be about once the poison is gone.
+        cfg, rt, state = a_candidate(repo, tmp_path, name="bad",
+                                     files={"other.py": "the work\n", "poison.txt": "x\n"},
+                                     full_test_command=suite, keys=[THE_OTHER_ITEM])
+        lander.compose(rt)
+        return cfg, rt, state
+
+    def test_the_keys_it_was_holding_are_given_back(self, repo, tmp_path, origin, a_daemon):
+        # Otherwise no bay can ever take it: a claim never takes what
+        # another run holds, and the run that made the candidate is holding
+        # these while working something else entirely.
+        cfg, rt, state = self._rejected(repo, tmp_path, origin)
+        [rejection] = rt.views().rejected.values()
+        for key in rejection.candidate.landing["keys"]:
+            assert rt.views().state(key).state == "open"
+
+    def test_a_bay_takes_the_rework_before_anything_drawn(self, repo, tmp_path, origin, a_daemon, monkeypatch):
+        cfg, rt, state = self._rejected(repo, tmp_path, origin)
+        drawn = []
+        monkeypatch.setattr(nodes, "_take_derived", lambda *a, **k: drawn.append(True))
+        out = nodes._take_rework(rt, state)
+        assert out is not None
+        assert out["current"]["id"] == "bad"
+        assert out["next_hop"] == "precheck"
+        assert drawn == [], "a drawn stage was taken while rework was waiting"
+
+    def test_it_starts_from_the_rebase(self, repo, tmp_path, origin, a_daemon):
+        # The base it was built against is not what the branch holds any
+        # more, and the failure it has to answer is against the tree as it
+        # is now.
+        bare, _ = origin
+        cfg, rt, state = self._rejected(repo, tmp_path, origin)
+        out = nodes._take_rework(rt, state)
+        assert out["stage_start_sha"] == origin_tip(bare)
+        assert rt.git.rev_parse(f"{out['stage_branch']}~1") == origin_tip(bare)
+        # The work is still on it, on top of what landed.
+        assert (repo / "poison.txt").exists() and (repo / "app.py").read_text() == "fine\n"
+
+    def test_the_executor_is_told_what_the_composition_found(self, repo, tmp_path, origin, a_daemon):
+        cfg, rt, state = self._rejected(repo, tmp_path, origin)
+        out = nodes._take_rework(rt, state)
+        assert "red" in out["last_failure"]["summary"]
+        assert out["last_failure"]["layer"] == "tests"
+
+    def test_two_bays_never_rework_one_branch(self, repo, tmp_path, origin, a_daemon):
+        cfg, rt, state = self._rejected(repo, tmp_path, origin)
+        assert nodes._take_rework(rt, state) is not None
+        other, other_state = make(repo, tmp_path, **compose_cfg())[1], state
+        assert rt.views().rework_waiting() == [], "the rejection was still on offer"
+
+    def test_a_rework_that_cannot_be_rebased_is_left_for_a_person(self, repo, tmp_path, origin, a_daemon, monkeypatch):
+        cfg, rt, state = self._rejected(repo, tmp_path, origin)
+        monkeypatch.setattr(
+            rt.git, "rebase_onto",
+            lambda *a, **k: (_ for _ in ()).throw(GitError("conflicts in app.py")),
+        )
+        assert nodes._take_rework(rt, state) is None
+        [rejection] = rt.views().rejected.values()
+        assert rejection.taken_run, "it went back on offer to the next bay to ask"
+        assert "conflict" in rejection.reason
+
+    def test_coming_back_makes_it_a_candidate_again(self, repo, tmp_path, origin, a_daemon):
+        # The rework rejoins the ordinary path: `advance` squashes it to a
+        # candidate and offers to land, whether this bay can or not.
+        cfg, rt, state = self._rejected(repo, tmp_path, origin)
+        out = nodes._take_rework(rt, state)
+        state = {**state, **out, "review_summary": "fixed", "review_record": "removed the poison"}
+        (repo / "poison.txt").unlink()
+        nodes.advance(state, rt)
+
+        assert rt.views().rejected == {}, "it is still recorded as needing rework"
+        assert [c.stage_id for c in rt.views().pending_candidates()] == [], "it never got composed"
+        assert sh(origin[0], "show", "proj:app.py") == "fine", "the earlier landing was lost"
+        assert sh(origin[0], "show", "proj:other.py") == "the work", "the reworked stage did not land"
+
+
+class TestWhatMakesSomethingACandidate:
+    """A branch at origin is not a candidate. The ledger says what is, and a
+    rejection takes it off that list — so a branch a bay is part-way through
+    reworking is inert however long the work takes, and a composition that
+    runs in the middle of one does not see it."""
+
+    def test_a_branch_being_reworked_is_not_composed(self, repo, tmp_path, origin, a_daemon):
+        bare, _ = origin
+        suite = "test ! -e poison.txt"
+        a_candidate(repo, tmp_path, name="good", content="fine\n", full_test_command=suite)
+        cfg, rt, state = a_candidate(repo, tmp_path, name="bad",
+                                     files={"other.py": "the work\n", "poison.txt": "x\n"},
+                                     full_test_command=suite, keys=[THE_OTHER_ITEM])
+        lander.compose(rt)
+
+        # Mid-rework: taken, rebased, not yet finished. The branch is still
+        # on the remote, holding the pre-rework work.
+        out = nodes._take_rework(rt, state)
+        assert out is not None
+        assert sh(bare, "branch", "--list", out["stage_branch"]), "the branch left the remote"
+
+        tip = origin_tip(bare)
+        again = lander.compose(rt)
+        assert again is None, "a composition picked up a branch somebody is working on"
+        assert origin_tip(bare) == tip
+
+    def test_the_remote_branch_is_the_backup_while_the_rework_runs(self, repo, tmp_path, origin, a_daemon):
+        # Deleting it would make the remote match the ledger, and would put
+        # the only copy of the work in one bay's checkout until the rework
+        # finishes. The ledger already answers what is a candidate, so the
+        # branch is worth more as the copy that survives the bay.
+        bare, _ = origin
+        suite = "test ! -e poison.txt"
+        a_candidate(repo, tmp_path, name="good", content="fine\n", full_test_command=suite)
+        cfg, rt, state = a_candidate(repo, tmp_path, name="bad",
+                                     files={"other.py": "the work\n", "poison.txt": "x\n"},
+                                     full_test_command=suite, keys=[THE_OTHER_ITEM])
+        lander.compose(rt)
+        [rejection] = rt.views().rejected.values()
+        nodes._take_rework(rt, state)
+        assert sh(bare, "rev-parse", rejection.candidate.branch) == rejection.candidate.sha

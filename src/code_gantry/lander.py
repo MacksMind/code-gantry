@@ -30,6 +30,8 @@ from code_gantry.gitops import GitError
 from code_gantry.ledger import (
     CANDIDATE_LANDED,
     CANDIDATE_REJECTED,
+    FINDING_RELEASED,
+    RELEASED,
     Candidate,
 )
 
@@ -255,11 +257,40 @@ def _record_landings(rt, landed: list[Candidate], sha: str) -> None:
 
 
 def _record_rejections(rt, rejected: list[tuple[Candidate, str]]) -> None:
+    """Record each rejection, and give back what its stage was holding.
+
+    The keys and findings are still claimed by the run that made the
+    candidate — they are held from the moment a stage is drawn until its
+    work lands, and this work has not. That run has long since moved on to
+    another stage, so the claim describes nobody: leaving it would mean the
+    rework could be taken by no bay but the one that is not doing it, and a
+    claim never takes what another run holds.
+    """
     for candidate, reason in rejected:
         rt.ledger.append(
             CANDIDATE_REJECTED, stage_id=candidate.stage_id, run_id=rt.paths.run_id,
             sha=rt.git.head_sha(), branch=candidate.branch, reason=reason,
         )
+        _release_references(rt, candidate)
+
+
+def _release_references(rt, candidate: Candidate) -> None:
+    views = rt.views()
+    facts = candidate.landing or {}
+    for key in facts.get("keys") or []:
+        state = views.state(key)
+        if state.state == "claimed":
+            rt.ledger.append(
+                RELEASED, key=key, run_id=state.run_id, stage_id=state.stage_id,
+                reason="its candidate was rejected",
+            )
+    for finding_id in facts.get("held") or []:
+        finding = views.findings.get(finding_id)
+        if finding is not None and finding.claimed_run:
+            rt.ledger.append(
+                FINDING_RELEASED, finding_id=finding_id, run_id=finding.claimed_run,
+                stage_id=candidate.stage_id, reason="its candidate was rejected",
+            )
 
 
 def _delete_branches(rt, branches: list[str]) -> None:

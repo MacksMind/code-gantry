@@ -114,15 +114,59 @@ class TestInspection:
                 ):
                     callers.append(module.name)
                     pushed.append(ast.unparse(node.args[0]) if node.args else "")
-        # Three call sites and no more: a bay publishing its own landing, a
-        # bay pushing a candidate branch, and the composing bay moving the
-        # project branch. All three name a local `branch`, so which ref each
-        # pushes is not readable here and is pinned where it can be —
-        # `test_compose_landing` asserts the project branch does not move
-        # when a candidate goes up, and moves only when a composition lands.
+        # Two call sites and no more: a bay publishing its own landing, and
+        # the composing bay moving the project branch. Both name a local
+        # `branch`, so which ref each pushes is not readable here and is
+        # pinned where it can be — `test_compose_landing` asserts the
+        # project branch does not move when a candidate goes up, and moves
+        # only when a composition lands.
         assert set(callers) == {"nodes.py", "lander.py"}, callers
-        assert len(callers) == 3, callers
+        assert len(callers) == 2, callers
         assert set(pushed) == {"branch"}, pushed
+
+    def test_force_lives_in_one_method_that_only_candidates_use(self):
+        # A rework rebases a candidate's branch, so putting it back is not a
+        # fast-forward and never can be. That is safe for a branch the
+        # pipeline makes, deletes and is the only reader of; it would not be
+        # for the project branch, which is why it is a method of its own
+        # with a name that says what it is for, rather than a flag on
+        # `push`.
+        import ast
+        import inspect
+        import textwrap
+        from pathlib import Path
+
+        import code_gantry
+
+        forcing = []
+        for name, method in vars(Git).items():
+            if not callable(method) or not getattr(method, "__doc__", None) and name.startswith("_"):
+                continue
+            try:
+                source = textwrap.dedent(inspect.getsource(method))
+            except (TypeError, OSError):
+                continue
+            words = {
+                node.value
+                for node in ast.walk(ast.parse(source))
+                if isinstance(node, ast.Constant) and isinstance(node.value, str)
+            }
+            # Only a forced *push* is the question here. `-f` on a local
+            # command rewrites nothing anyone else can see.
+            if "push" in words and any(w.startswith("--force") or w == "-f" for w in words):
+                forcing.append(name)
+        assert forcing == ["replace_branch"], forcing
+
+        callers = []
+        for module in Path(code_gantry.__file__).parent.glob("*.py"):
+            for node in ast.walk(ast.parse(module.read_text())):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "replace_branch"
+                ):
+                    callers.append(module.name)
+        assert callers == ["nodes.py"], callers
 
 
 class TestProjectBranch:

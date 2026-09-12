@@ -65,6 +65,12 @@ CANDIDATE_PUSHED = "candidate.pushed"
 # by the compose that found it is what turned the composition red.
 CANDIDATE_LANDED = "candidate.landed"
 CANDIDATE_REJECTED = "candidate.rejected"
+# A bay has taken a rejected candidate to put right. Held the way a drawn
+# stage is held, so two bays never rework one branch.
+REWORK_TAKEN = "rework.taken"
+# Given back by a bay that could not do it — a rebase that conflicts — so
+# it waits for a person rather than for whoever asks next.
+REWORK_RELEASED = "rework.released"
 RUN_BEGAN = "run.began"
 RUN_ENDED = "run.ended"
 STAGE_DONE = "stage.done"
@@ -192,6 +198,9 @@ class Candidate:
     # drawn record and the reviewer's observations. Carried because the bay
     # that composes it is not the bay that did the work.
     landing: dict
+    # The stage itself, so a bay reworking this candidate needs nothing but
+    # this record and the branch.
+    fields: dict
     run_id: str | None
     origin: str
     at: str
@@ -207,6 +216,9 @@ class Rejection:
     against: str
     reason: str
     at: str
+    taken_run: str | None = None
+    taken_origin: str | None = None
+    taken_pid: int | None = None
 
 
 @dataclass
@@ -294,6 +306,15 @@ class Views:
         origin, at = max(runs, key=lambda pair: pair[1])
         return origin, at
 
+    def rework_waiting(self) -> list["Rejection"]:
+        """Rejected candidates no bay has taken, oldest first. Work that is
+        closer to done than anything the planner would draw, and holding
+        plan keys while it waits."""
+        return sorted(
+            (r for r in self.rejected.values() if not r.taken_run),
+            key=lambda r: (r.at, r.candidate.branch),
+        )
+
     def pending_candidates(self) -> list["Candidate"]:
         """Everything squashed and pushed and not yet composed, oldest
         first. The order is the order they will be replayed in, so it is
@@ -361,16 +382,33 @@ def _apply(views: Views, event: Event) -> None:
     body = event.body
     kind = event.kind
     if kind == CANDIDATE_PUSHED:
+        # A branch pushed again is a rework that has come back: it is a
+        # candidate once more and no longer something waiting to be put right.
+        views.rejected.pop(body.get("branch") or "", None)
         views.candidates[body.get("branch") or ""] = Candidate(
             branch=body.get("branch") or "",
             sha=event.sha or "",
             base=body.get("base") or "",
             stage_id=event.stage_id or "",
             landing=dict(body.get("landing") or {}),
+            fields=dict(body.get("fields") or {}),
             run_id=event.run_id,
             origin=event.origin,
             at=event.at,
         )
+        return
+    if kind == REWORK_RELEASED:
+        rejection = views.rejected.get(body.get("branch") or "")
+        if rejection is not None:
+            rejection.taken_run = rejection.taken_run or "needs a person"
+            rejection.reason = f"{rejection.reason}\n{body.get('reason') or ''}".strip()
+        return
+    if kind == REWORK_TAKEN:
+        rejection = views.rejected.get(body.get("branch") or "")
+        if rejection is not None:
+            rejection.taken_run = event.run_id
+            rejection.taken_origin = event.origin
+            rejection.taken_pid = body.get("pid")
         return
     if kind in (CANDIDATE_LANDED, CANDIDATE_REJECTED):
         candidate = views.candidates.pop(body.get("branch") or "", None)

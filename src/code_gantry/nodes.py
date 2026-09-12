@@ -41,6 +41,8 @@ from code_gantry.gateway import resolve_policy
 from code_gantry.gitops import GitError
 from code_gantry.ledger import (
     CANDIDATE_PUSHED,
+    REWORK_RELEASED,
+    REWORK_TAKEN,
     CLAIMED,
     FINDING_RESOLVED,
     LANDED,
@@ -342,7 +344,9 @@ def plan(state: RunState, rt: Runtime) -> dict:
     # freed. `_take_derived` holds the ledger's own writer instead, which is
     # what makes the check and the claim one act.
     if stage is None:
-        taken = _take_derived(rt, state)
+        # Rework first: it is closer to done than anything the planner would
+        # draw, and it is holding plan keys while it waits.
+        taken = _take_rework(rt, state) or _take_derived(rt, state)
         if taken is not None:
             return taken
 
@@ -3141,6 +3145,91 @@ def _compose_if_free(rt: Runtime) -> None:
         rt.log("[land] the composition needs a person; the candidates stay pending")
 
 
+def _take_rework(rt: Runtime, state: RunState) -> dict | None:
+    """A rejected candidate to put right, as the update that starts it; None
+    when there is none this run can take.
+
+    Asked before anything is drawn and before anything drawn is taken.
+    Rejected work is closer to done than a stage the planner has yet to
+    write, and it holds plan keys while it waits — a plan whose rejects are
+    never picked up is a plan that slowly runs out of things to draw.
+
+    It begins with a rebase, because the base the candidate was built
+    against is not what the project branch holds any more and the failure
+    it has to answer is a failure against the tree as it is now. From there
+    it is an ordinary stage with its branch already carrying work: the
+    executor is handed what the composition said, the gates run, and
+    `advance` squashes it to a candidate again and offers to land it.
+    """
+    if rt.ledger is None or not rt.cfg.compose_landings:
+        return None
+
+    with rt.ledger.transaction():
+        taken = _claim_rework(rt, state)
+    if taken is None:
+        return None
+
+    rejection, stage = taken
+    try:
+        rt.git.fetch()
+        base = rt.git.rebase_onto(rejection.candidate.branch, f"origin/{rt.cfg.project_branch}")
+    except GitError as e:
+        # Given straight back rather than held by a bay that cannot do it.
+        # A conflict is two stages disagreeing about the same lines, and
+        # nothing here is entitled to settle that.
+        rt.log(f"[rework] {stage.id} cannot be rebased, leaving it for a person: {e}")
+        rt.ledger.append(
+            REWORK_RELEASED, stage_id=stage.id, run_id=rt.paths.run_id,
+            branch=rejection.candidate.branch, reason=f"rebase conflicts: {e}",
+        )
+        return None
+
+    rt.log(f"[rework] took {stage.id} on {rejection.candidate.branch}, rebased onto {base[:12]}")
+    return {
+        **fresh_stage_fields(),
+        "current": stage.model_dump(),
+        "revision": 0,
+        "stage_index": state.get("stage_index", 0),
+        "stage_branch": rejection.candidate.branch,
+        "stage_start_sha": base,
+        "stage_started_at": time.time(),
+        "stage_queue": [],
+        "batch_notes": [],
+        # What the composition found, as the thing to answer. Not a planner
+        # failure and not this stage's own gate: the stage was green on its
+        # own tree and is red beside what has landed since.
+        "last_failure": {
+            "layer": "tests",
+            "summary": f"composed with what has landed since, this stage is red:\n{rejection.reason}",
+        },
+        "next_hop": "precheck",
+    }
+
+
+def _claim_rework(rt: Runtime, state: RunState):
+    """Pick a rejection nobody holds whose references are free, and hold it.
+    Under the ledger's writer, like every other claim."""
+    views = rt.views()
+    for rejection in views.rework_waiting():
+        candidate = rejection.candidate
+        if not candidate.fields:
+            continue
+        facts = candidate.landing or {}
+        if views.references_available(facts.get("keys") or [], facts.get("held") or []):
+            continue
+        try:
+            stage = Stage.model_validate(candidate.fields)
+        except Exception:  # noqa: BLE001 - a record nothing can read is not a rework
+            continue
+        rt.ledger.append(
+            REWORK_TAKEN, stage_id=stage.id, run_id=rt.paths.run_id,
+            branch=rejection.candidate.branch, pid=os.getpid(), bay=bay_id(rt),
+        )
+        _claim_references(rt, stage, state)
+        return rejection, stage
+    return None
+
+
 def _take_derived(rt: Runtime, state: RunState) -> dict | None:
     """A stage already drawn and waiting whose references are available
     inside this run's scope, as the update that starts it; None when there is
@@ -3385,7 +3474,11 @@ def _push_candidate(rt: Runtime, stage: Stage, state: RunState, branch: str, sta
     # branch and the pushed one are the same commit and neither is a
     # rendering of the other.
     rt.git.set_branch(branch, candidate)
-    rt.git.push(branch)
+    # Replaced rather than pushed: a rework rebases the branch onto what has
+    # landed since, so what goes up is not a descendant of what is there. A
+    # candidate's branch is the pipeline's alone, which is what makes that
+    # safe here and nowhere else.
+    rt.git.replace_branch(branch)
     rt.log(f"[advance] {stage.id}: pushed candidate {candidate[:12]} as {branch}")
 
     if rt.ledger is not None:
@@ -3397,6 +3490,12 @@ def _push_candidate(rt: Runtime, stage: Stage, state: RunState, branch: str, sta
             CANDIDATE_PUSHED, stage_id=stage.id, run_id=rt.paths.run_id,
             sha=candidate, branch=branch, base=start_sha,
             landing=landing_facts(stage, state),
+            # The stage itself, so the candidate is self-contained. A bay
+            # reworking one is not the bay that drew it and may be on
+            # another machine: recovering the stage by joining against its
+            # drawn record would make the rework depend on a second record
+            # that a fold, a drop or a redraw can move.
+            fields=stage.model_dump(),
         )
     # Kept at origin, which is where the composing bay reads it from.
     rt.git.delete_branch(branch)
