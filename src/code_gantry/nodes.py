@@ -3197,12 +3197,7 @@ def _record_landing(rt: Runtime, stage: Stage, state: RunState, merge_sha: str) 
 def _sync_project_branch(rt: Runtime) -> bool:
     """Bring the project branch up to origin's before a stage is cut. Returns
     whether the tip moved; False when there is no origin or no remote branch."""
-    git, branch = rt.git, rt.cfg.project_branch
-    if not git.remote_exists() or not git.remote_has_branch(branch):
-        return False
-    if git.current_branch() != branch:
-        git.checkout(branch)
-    return git.pull_rebase(branch)
+    return rt.git.sync_branch(rt.cfg.project_branch)
 
 
 def _publish_landing(rt: Runtime, stage: Stage) -> tuple[str, dict | None]:

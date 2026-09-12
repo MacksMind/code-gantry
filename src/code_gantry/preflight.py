@@ -71,6 +71,7 @@ def run_preflight(
     check_endpoint: bool = True,
     for_resume: bool = False,
     ledger=None,
+    pull: bool = False,
 ) -> list[Check]:
     runner = runner or CommandRunner(
         cwd=cfg.target_repo,
@@ -96,6 +97,15 @@ def run_preflight(
         # Everything below needs a working repo; running it would only produce
         # confusing secondary failures.
         return checks
+
+    if pull and cfg.remote_landing:
+        # Before anything is asked about the tree, the tree is the one the
+        # run will use: origin's tip, which whoever landed it proved green.
+        # Only a run asks for this; `validate` may be reading a person's
+        # checkout and moves nothing.
+        checks.append(_pull_check(cfg, git))
+        if any(c.blocking for c in checks):
+            return checks
 
     checks.append(_ledger_check(cfg, project_dir))
     if cfg.plan_addendum_path:
@@ -340,6 +350,18 @@ def _repo_checks(cfg: ProjectConfig, git: Git, *, for_resume: bool) -> list[Chec
         )
 
     return checks
+
+
+def _pull_check(cfg: ProjectConfig, git: Git) -> Check:
+    name = f"project branch {cfg.project_branch!r} is at origin's tip"
+    if not git.remote_exists() or not git.remote_has_branch(cfg.project_branch):
+        return Check(name, True, "no origin, or origin has no such branch; nothing to pull", fatal=False)
+    try:
+        moved = git.sync_branch(cfg.project_branch)
+    except GitError as e:
+        return Check(name, False, f"pull --rebase failed: {e}")
+    tip = git.rev_parse(cfg.project_branch)
+    return Check(name, True, f"pulled to {tip[:12]}" if moved else f"already at {tip[:12]}")
 
 
 def _read_budget_check(cfg: ProjectConfig, git: Git) -> Check:

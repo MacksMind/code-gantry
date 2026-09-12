@@ -454,7 +454,7 @@ def run(
     )
     try:
         checks = run_preflight(cfg, project_dir=project, run_tests=not skip_preflight_tests,
-                               config_path=config_path, ledger=early)
+                               config_path=config_path, ledger=early, pull=True)
     finally:
         if early is not None:
             early.close()

@@ -357,3 +357,90 @@ class TestAFreshHostTakesBranchesFromOrigin:
     def test_branches_already_here_are_not_fetched(self, repo, tmp_path, bare_with_a_base):
         checks = self.checks(repo, base_ref="main", remote_landing=True)
         assert not self.named(checks, "fetched from origin")
+
+
+class TestPreflightPullsFirst:
+    """Under `remote_landing` a run's preflight brings the project branch to
+    origin's tip before it asks anything about the tree, so the tip it asks
+    about is the tip the run will use — and a tip another host landed green
+    is not proven again here."""
+
+    def cfg(self, repo, marker, **over):
+        from test_config import minimal
+
+        fields = {
+            "target_repo": str(repo), "base_ref": "main", "project_branch": "proj",
+            "full_test_command": f"echo x >> {marker}", "remote_landing": True, **over,
+        }
+        return parse_config(minimal(**fields))
+
+    def preflight(self, cfg, ledger, *, pull=True):
+        return run_preflight(
+            cfg, check_models=False, check_approval=False, check_endpoint=False,
+            ledger=ledger, pull=pull,
+        )
+
+    def test_a_tip_another_host_landed_green_is_pulled_and_not_proven_again(self, repo, tmp_path, origin):
+        from code_gantry.ledger import open_ledger
+
+        bare, other = origin
+        theirs = other_lands(other)
+        marker = tmp_path / "runs.txt"
+        cfg = self.cfg(repo, marker)
+        shared = tmp_path / "shared.db"
+        open_ledger(shared, origin="other-host", actor="o").record_green(theirs, cfg.full_test_command)
+        checks = self.preflight(cfg, open_ledger(shared, origin="this-host", actor="t"))
+        pulled = next(c for c in checks if "is at origin's tip" in c.name)
+        assert pulled.ok and f"pulled to {theirs[:12]}" in pulled.detail, pulled.detail
+        assert Git(repo).rev_parse("proj") == theirs
+        assert not marker.exists(), "the suite ran on a tip another host proved"
+        suite = next(c for c in checks if "full_test_command passes" in c.name)
+        assert "proven green by other-host" in suite.detail
+
+    def test_already_at_the_tip_says_so_and_pulls_nothing(self, repo, tmp_path, origin):
+        from code_gantry.ledger import open_ledger
+
+        marker = tmp_path / "runs.txt"
+        cfg = self.cfg(repo, marker)
+        before = Git(repo).rev_parse("proj")
+        checks = self.preflight(cfg, open_ledger(tmp_path / "l.db", origin="this-host"))
+        pulled = next(c for c in checks if "is at origin's tip" in c.name)
+        assert pulled.ok and f"already at {before[:12]}" in pulled.detail
+        assert Git(repo).rev_parse("proj") == before
+
+    def test_validate_never_pulls(self, repo, tmp_path, origin):
+        from code_gantry.ledger import open_ledger
+
+        bare, other = origin
+        theirs = other_lands(other)
+        cfg = self.cfg(repo, tmp_path / "runs.txt")
+        checks = self.preflight(cfg, open_ledger(tmp_path / "l.db", origin="this-host"), pull=False)
+        assert not [c for c in checks if "is at origin's tip" in c.name]
+        assert Git(repo).rev_parse("proj") != theirs
+
+    def test_without_remote_landing_nothing_is_pulled(self, repo, tmp_path, origin):
+        from code_gantry.ledger import open_ledger
+
+        bare, other = origin
+        theirs = other_lands(other)
+        cfg = self.cfg(repo, tmp_path / "runs.txt", remote_landing=False)
+        checks = self.preflight(cfg, open_ledger(tmp_path / "l.db", origin="this-host"))
+        assert not [c for c in checks if "is at origin's tip" in c.name]
+        assert Git(repo).rev_parse("proj") != theirs
+
+    def test_a_pull_that_conflicts_blocks_before_anything_runs(self, repo, tmp_path, origin):
+        from code_gantry.ledger import open_ledger
+
+        bare, other = origin
+        other_lands(other, name="app.py", text="theirs\n")
+        g = Git(repo)
+        g.checkout("proj")
+        (repo / "app.py").write_text("ours\n")
+        g.commit_all("local divergence")
+        marker = tmp_path / "runs.txt"
+        cfg = self.cfg(repo, marker)
+        checks = self.preflight(cfg, open_ledger(tmp_path / "l.db", origin="this-host"))
+        pulled = next(c for c in checks if "is at origin's tip" in c.name)
+        assert pulled.blocking and "pull --rebase" in pulled.detail
+        assert not marker.exists()
+        assert g.is_clean(), "the aborted rebase leaves a clean tree"

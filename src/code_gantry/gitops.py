@@ -740,6 +740,18 @@ class Git:
             )
         return self.rev_parse(name)
 
+    def sync_branch(self, branch: str, remote: str = "origin") -> bool:
+        """Bring `branch` to the remote's tip: fetched if this checkout lacks
+        it, checked out, rebased. Returns whether the tip moved; False when
+        there is no remote or the remote has no such branch."""
+        if not self.remote_exists(remote) or not self.remote_has_branch(branch, remote):
+            return False
+        if not self.branch_exists(branch):
+            self.fetch_branch(branch, remote)
+        if self.current_branch() != branch:
+            self.checkout(branch)
+        return self.pull_rebase(branch, remote)
+
     def pull_rebase(self, branch: str, remote: str = "origin") -> bool:
         """Rebase the checked-out `branch` onto the remote's copy.
 
