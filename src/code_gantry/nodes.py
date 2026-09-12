@@ -46,6 +46,7 @@ from code_gantry.ledger import (
     CLAIMED,
     FINDING_RESOLVED,
     LANDED,
+    RELEASED,
     Ledger,
     apply_fold,
     should_fold,
@@ -3100,9 +3101,21 @@ def _claim_references(rt: Runtime, stage: Stage, state: RunState) -> None:
 
 
 def _drop_derived(rt: Runtime, stage: Stage, reason: str) -> None:
-    """Withdraw the stage's drawn record: it goes back to the planner, so the
-    record must not wait for another run to take it."""
-    if not stage.derived_id or rt.ledger is None:
+    """Withdraw the stage's drawn record *and* everything taking it held.
+
+    Taking a stage is what claims its keys, so dropping it is what gives
+    them back — the two are one act read backwards, and they were not.
+    Without this a run that took a stage and found it unstartable kept its
+    keys for the rest of its life while working something else entirely,
+    and the keys are what the planner reads to decide there is nothing to
+    draw. Four bays did that to each other and every one of them blocked.
+    """
+    if rt.ledger is None:
+        return
+    # Before the record, and not conditional on there being one: what the
+    # stage holds is held whether or not the planner drew it from a batch.
+    _unclaim_references(rt, stage)
+    if not stage.derived_id:
         return
     record = rt.views().derived.get(stage.derived_id)
     mine = record is not None and (
@@ -3110,6 +3123,20 @@ def _drop_derived(rt: Runtime, stage: Stage, reason: str) -> None:
     )
     if mine:
         rt.ledger.append(STAGE_DROPPED, stage_id=stage.id, run_id=rt.paths.run_id, derived_id=stage.derived_id, reason=reason)
+
+
+def _unclaim_references(rt: Runtime, stage: Stage) -> None:
+    """Give back what this run holds for this stage, and nothing else: a key
+    another stage of this run is working is not this stage's to release."""
+    views, run_id = rt.views(), rt.paths.run_id
+    for key in stage.plan_keys:
+        current = views.state(key)
+        if current.state == "claimed" and current.run_id == run_id and current.stage_id == stage.id:
+            rt.ledger.append(RELEASED, key=key, run_id=run_id, stage_id=stage.id, reason="the stage was not started")
+    for fid in stage.resolves:
+        finding = views.findings.get(fid)
+        if finding is not None and finding.claimed_run == run_id and finding.claimed_stage == stage.id:
+            rt.ledger.append(FINDING_RELEASED, finding_id=fid, run_id=run_id, stage_id=stage.id, reason="the stage was not started")
 
 
 def _planner_lock(rt: Runtime) -> str:

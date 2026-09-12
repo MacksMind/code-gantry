@@ -4091,3 +4091,35 @@ class TestThePlannerLockIsNamedForTheLedger:
         assert nodes._planner_lock(a) == nodes._planner_lock(b)
         own = self._rt(tmp_path, name=None, path=None, work="bay1/docs/.code_gantry")
         assert nodes._planner_lock(a) != nodes._planner_lock(own)
+
+
+class TestDroppingAStageGivesBackWhatTakingItHeld:
+    """Taking a stage is what claims its keys, so dropping it is what gives
+    them back — the two are one act read backwards. Without this a run that
+    took a stage and found it unstartable kept its keys for the rest of its
+    life, and the keys are what the planner reads to decide there is nothing
+    left to draw."""
+
+    def test_a_dropped_stage_releases_its_keys(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        stage = Stage(**planned_stage(plan_keys=[THE_ITEM]))
+        nodes._claim_references(rt, stage, state)
+        assert rt.views().state(THE_ITEM).state == "claimed"
+
+        nodes._drop_derived(rt, stage, "stale excerpts: app/models/item.rb")
+        assert rt.views().state(THE_ITEM).state == "open", (
+            "the run kept a key for a stage it never started"
+        )
+
+    def test_it_releases_only_what_that_stage_held(self, repo, tmp_path):
+        cfg, rt, state = make(repo, tmp_path)
+        working = Stage(**planned_stage(id="working", plan_keys=[THE_OTHER_ITEM]))
+        dropped = Stage(**planned_stage(id="dropped", plan_keys=[THE_ITEM]))
+        nodes._claim_references(rt, working, state)
+        nodes._claim_references(rt, dropped, state)
+
+        nodes._drop_derived(rt, dropped, "references taken")
+        assert rt.views().state(THE_ITEM).state == "open"
+        assert rt.views().state(THE_OTHER_ITEM).state == "claimed", (
+            "a stage this run is still working had its key taken away"
+        )
