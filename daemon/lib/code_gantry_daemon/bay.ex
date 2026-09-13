@@ -17,7 +17,16 @@ defmodule CodeGantryDaemon.Bay do
   finished has nothing to continue, so a new run starts; one that escalated,
   paused or died is resumed under its id, since its stage is still there.
   """
-  use GenServer
+  # Long enough for `terminate` to ask the run to stop, wait, and kill what
+  # is left. The default is five seconds, which is the same as the grace
+  # period — so the supervisor would kill this process while it was still
+  # waiting, and the run would be orphaned exactly as before.
+  use GenServer, shutdown: 20_000
+
+  # What a run gets between being asked to stop and being made to. It closes
+  # its semaphore and its presence on the way out, and a killed one leaves
+  # both to the kernel.
+  @grace_ms 5_000
   require Logger
 
   alias CodeGantryDaemon.{Host, Command, Status}
@@ -65,6 +74,10 @@ defmodule CodeGantryDaemon.Bay do
 
   @impl true
   def init({host, bay}) do
+    # Without this the supervisor's shutdown never reaches `terminate`, so
+    # the run this bay started outlives the daemon that started it. Three
+    # of four did, and had to be killed by hand.
+    Process.flag(:trap_exit, true)
     state = %{host: host, bay: bay, port: nil, log: nil, run_id: nil, crashes: 0, mode: :run, last: nil, resume_after_pause: false}
     Status.put(bay.name, :starting, nil, Host.project_of(host, bay))
     {:ok, state, {:continue, :ensure_checkout}}
@@ -231,8 +244,9 @@ defmodule CodeGantryDaemon.Bay do
 
 
   @impl true
-  def terminate(_reason, %{port: port}) when is_port(port) do
-    # The run is its own process group; closing the port ends it.
+  def terminate(_reason, %{port: port, bay: bay}) when is_port(port) do
+    Logger.info("#{bay.name}: stopping its run")
+    Command.stop_tree(port, @grace_ms)
     Port.close(port)
   catch
     _, _ -> :ok
