@@ -359,6 +359,15 @@ defmodule CodeGantryDaemonTest do
       refute Complete.complete?("p")
     end
 
+    test "wake also starts a bay whose last run simply finished", %{root: root, host: host, state: state} do
+      # Finished before the wind-down existed, or finished on a project nobody
+      # marked: idle with nothing to come back to, the same as wound down.
+      investigator_fake(root)
+      {:ok, _} = Application.start_bay(host, %{name: "bay2", offset: 200, config: "docs/p/code_gantry.yaml"})
+      wait_for(fn -> status(state) =~ "bay2 finished" end)
+      assert Control.wake("p") =~ ~r/^p: woken; started bay2 \d{8}-\d{6}-bay2/
+    end
+
     test "a peer's verdict winds this host's bays down, and wake starts them again everywhere", %{root: root, host: host, state: state} do
       wind_down_fake(root)
       {:ok, _} = Application.start_bay(host, %{name: "bay2", offset: 200, config: "docs/p/code_gantry.yaml"})

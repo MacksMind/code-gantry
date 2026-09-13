@@ -105,7 +105,12 @@ defmodule CodeGantryDaemon.Bay do
     end
   end
 
-  @doc "Whether this bay is idle because its project was found complete."
+  @doc """
+  Whether this bay is idle with nothing to come back to: no run live, no
+  investigation, and its last run finished or found the project complete.
+  A bay that paused or escalated is idle too, but a resume is its own
+  matter and a wake leaves it alone.
+  """
   def idle_complete?(name) do
     case GenServer.whereis(via(name)) do
       nil -> false
@@ -332,7 +337,7 @@ defmodule CodeGantryDaemon.Bay do
   # `Map.get` on the investigation fields: a bay process started before
   # they existed holds a state map without them until its next restart.
   def handle_call(:idle_complete?, _from, state),
-    do: {:reply, state.port == nil and state.last == :complete and Map.get(state, :investigating) == nil, state}
+    do: {:reply, state.port == nil and state.last in [:complete, :finished] and Map.get(state, :investigating) == nil, state}
 
   def handle_call({:investigate, about}, _from, %{host: host, bay: bay} = state) do
     recent = Enum.filter(Map.get(state, :investigations, []), &(System.monotonic_time(:second) - &1 < 3600))
