@@ -864,3 +864,19 @@ class TestOrigin:
         monkeypatch.delenv("CODE_GANTRY_ORIGIN", raising=False)
         monkeypatch.setenv("CODE_GANTRY_HOST_FILE", str(tmp_path / "absent.exs"))
         assert default_origin() == socket.gethostname().split(".")[0]
+
+
+class TestDismissingACandidate:
+    def test_a_dismissed_rejection_waits_for_nobody(self, led):
+        from code_gantry.ledger import CANDIDATE_DISMISSED, CANDIDATE_PUSHED, CANDIDATE_REJECTED
+        led.append(CANDIDATE_PUSHED, sha="a" * 40, stage_id="s", branch="stage/001-x", base="b" * 40, landing={}, fields={})
+        led.append(CANDIDATE_REJECTED, sha="c" * 40, branch="stage/001-x", reason="would not replay")
+        assert [r.candidate.branch for r in led.views().rework_waiting()] == ["stage/001-x"]
+        led.append(CANDIDATE_DISMISSED, branch="stage/001-x", reason="the work is already on the branch")
+        assert led.views().rework_waiting() == [] and led.views().pending_candidates() == []
+
+    def test_a_dismissed_pending_candidate_is_not_composed(self, led):
+        from code_gantry.ledger import CANDIDATE_DISMISSED, CANDIDATE_PUSHED
+        led.append(CANDIDATE_PUSHED, sha="a" * 40, stage_id="s", branch="stage/002-y", base="b" * 40, landing={}, fields={})
+        led.append(CANDIDATE_DISMISSED, branch="stage/002-y", reason="duplicate")
+        assert led.views().pending_candidates() == []

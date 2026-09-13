@@ -626,6 +626,57 @@ def ledger_import(old_file, config_path) -> None:
     click.echo(f"{n} event(s) imported into {led.where}")
 
 
+@ledger.command("candidates")
+@json_option
+@config_option
+def ledger_candidates(as_json, config_path) -> None:
+    """Candidates pushed and not yet composed, and rejected ones waiting for rework."""
+    _, _, led = _cfg_and_ledger(config_path, write=False)
+    views = led.views()
+    pending = views.pending_candidates()
+    rejected = views.rework_waiting()
+    if as_json:
+        return _emit_json({
+            "pending": [dataclasses.asdict(c) for c in pending],
+            "rejected": [{**dataclasses.asdict(r.candidate), "against": r.against, "reason": r.reason, "rejected_at": r.at} for r in rejected],
+        })
+    for c in pending:
+        click.echo(f"pending  {c.branch} {c.sha[:12]} ({c.stage_id}) on {', '.join(c.landing.get('keys') or [])}")
+    for r in rejected:
+        click.echo(f"rejected {r.candidate.branch} {r.candidate.sha[:12]} ({r.candidate.stage_id}): {r.reason[:100]}")
+    if not pending and not rejected:
+        click.echo("no candidates")
+
+
+@ledger.command("dismiss")
+@click.argument("branch")
+@click.option("--reason", required=True, help="Why it is not landed and not reworked.")
+@click.option("--delete-branch", is_flag=True, help="Also take the branch off origin.")
+@json_option
+@config_option
+def ledger_dismiss(branch, reason, delete_branch, as_json, config_path) -> None:
+    """Put a pending or rejected candidate aside: nobody composes or
+    reworks it. For a second candidate on work that is already on the
+    branch, which a rework would only redo."""
+    from code_gantry.ledger import CANDIDATE_DISMISSED
+
+    cfg, _, led = _cfg_and_ledger(config_path, write=True)
+    views = led.views()
+    if branch not in views.candidates and branch not in views.rejected:
+        raise click.ClickException(f"{branch} is neither pending nor rejected")
+    led.append(CANDIDATE_DISMISSED, branch=branch, reason=reason)
+    deleted = False
+    if delete_branch:
+        try:
+            Git(cfg.target_repo).delete_remote_branch(branch)
+            deleted = True
+        except GitError as e:
+            click.echo(f"dismissed, but the branch stays at origin: {e}", err=True)
+    if as_json:
+        return _emit_json({"branch": branch, "dismissed": True, "branch_deleted": deleted})
+    click.echo(f"{branch}: dismissed" + (", branch deleted at origin" if deleted else ""))
+
+
 @ledger.command("fold")
 @config_option
 def ledger_fold(config_path) -> None:

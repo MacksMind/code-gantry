@@ -78,6 +78,10 @@ CANDIDATE_PUSHED = "candidate.pushed"
 # by the compose that found it is what turned the composition red.
 CANDIDATE_LANDED = "candidate.landed"
 CANDIDATE_REJECTED = "candidate.rejected"
+# A rejected or pending candidate a person put aside: not landed, not
+# reworked, its branch left to whoever dismissed it. The case that wants
+# it is a second candidate for work that is already on the branch.
+CANDIDATE_DISMISSED = "candidate.dismissed"
 # A bay has taken a rejected candidate to put right. Held the way a drawn
 # stage is held, so two bays never rework one branch.
 REWORK_TAKEN = "rework.taken"
@@ -528,6 +532,11 @@ def _apply(views: Views, event: Event) -> None:
                 candidate=candidate, against=event.sha or "",
                 reason=body.get("reason") or "", at=event.at,
             )
+        return
+    if kind == CANDIDATE_DISMISSED:
+        branch = body.get("branch") or ""
+        views.candidates.pop(branch, None)
+        views.rejected.pop(branch, None)
         return
     if kind == RUN_BEGAN:
         # Beginning withdraws whatever intent a previous end recorded: a run

@@ -457,6 +457,25 @@ class TestAccept:
         assert result.exit_code != 0 and "amend" in result.output
 
 
+class TestCandidates:
+    def test_dismiss_takes_a_rejected_candidate_off_the_rework_list(self, project):
+        import json
+        from code_gantry.ledger import CANDIDATE_PUSHED, CANDIDATE_REJECTED
+
+        repo, config, paths, sha = project
+        imported(project)
+        writer = open_ledger(paths.ledger, origin="run-host", actor="run:1")
+        writer.append(CANDIDATE_PUSHED, sha="a" * 40, stage_id="s", branch="work-stage/001-x", base="b" * 40, landing={"keys": ["p.004"]}, fields={})
+        writer.append(CANDIDATE_REJECTED, sha="c" * 40, branch="work-stage/001-x", reason="would not replay")
+        writer.close()
+        assert "rejected work-stage/001-x" in run("ledger", "candidates").output
+        assert run("ledger", "dismiss", "nope", "--reason", "x").exit_code != 0
+        result = run("ledger", "dismiss", "work-stage/001-x", "--reason", "already on the branch", "--json")
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["dismissed"] is True
+        assert run("ledger", "candidates").output.strip() == "no candidates"
+
+
 class TestValidateSeesTheLedger:
     def test_validate_reports_the_imported_plan(self, project):
         imported(project)
