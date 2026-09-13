@@ -44,7 +44,13 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
   # started. Nothing inside a card reads the clock, for the same reason.
   defp cards(socket, projects) do
     seen = Map.get(socket.assigns, :seen, %{})
-    entries = for project <- projects, w <- project.waiting, do: %{id: w["id"], w: w, project: Map.drop(project, [:waiting])}
+    # A card is its record and the project it belongs to; the reading's
+    # time and error are the page's, not the card's, or every card would
+    # compare as changed at every reading.
+    entries =
+      for project <- projects, w <- project.waiting do
+        %{id: w["id"], w: w, project: Map.take(project, [:project, :config, :projects])}
+      end
     now = Map.new(entries, &{&1.id, &1})
     gone = for id <- Map.keys(seen), not Map.has_key?(now, id), do: id
     changed = for entry <- entries, Map.get(seen, entry.id) != entry, do: entry
