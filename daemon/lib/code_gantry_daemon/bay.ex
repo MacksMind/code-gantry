@@ -329,16 +329,19 @@ defmodule CodeGantryDaemon.Bay do
     {:reply, {:ok, mode, run_id}, %{state | mode: mode, run_id: run_id, crashes: 0, last: :retrying}, {:continue, :launch}}
   end
 
-  def handle_call(:idle_complete?, _from, state), do: {:reply, state.port == nil and state.last == :complete and state.investigating == nil, state}
+  # `Map.get` on the investigation fields: a bay process started before
+  # they existed holds a state map without them until its next restart.
+  def handle_call(:idle_complete?, _from, state),
+    do: {:reply, state.port == nil and state.last == :complete and Map.get(state, :investigating) == nil, state}
 
   def handle_call({:investigate, about}, _from, %{host: host, bay: bay} = state) do
-    recent = Enum.filter(state.investigations, &(System.monotonic_time(:second) - &1 < 3600))
+    recent = Enum.filter(Map.get(state, :investigations, []), &(System.monotonic_time(:second) - &1 < 3600))
 
     cond do
       is_port(state.port) ->
         {:reply, {:error, {:running, state.run_id}}, state}
 
-      state.investigating != nil ->
+      Map.get(state, :investigating) != nil ->
         {:reply, {:error, {:investigating, state.investigating.about}}, state}
 
       length(recent) >= @max_investigations_per_hour ->
@@ -357,7 +360,7 @@ defmodule CodeGantryDaemon.Bay do
           end)
 
         investigating = %{about: about, task: task, before: before}
-        {:reply, {:ok, about}, %{state | investigating: investigating, investigations: [System.monotonic_time(:second) | recent]}}
+        {:reply, {:ok, about}, Map.merge(state, %{investigating: investigating, investigations: [System.monotonic_time(:second) | recent]})}
     end
   end
 
