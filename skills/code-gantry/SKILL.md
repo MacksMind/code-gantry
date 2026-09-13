@@ -114,7 +114,10 @@ cg ledger unblock <key> "the decision, as a fact the planner can act on"
                                      # a key held on a question (`cg ledger block <key> "…"` is how one is held)
 cg ledger answer <id> amend --text "the constraint the decision sets" --target <key>
                                      # the decision changes what an item says
-cg plan edit <key> --owner pipeline  # and now the fleet can do it
+cg plan edit <key> --owner pipeline  # and now the fleet can do it — but in the
+                                     # technical_debt project, `move` it to the
+                                     # Rails 5 project instead: the fleet works
+                                     # that branch only, and human items stay
 cg ledger strike <key> "decided: not doing it"
 cg plan add --under <section key> --title "…" --body-file notes.md
                                      # the decision is new work

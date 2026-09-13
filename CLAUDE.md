@@ -287,7 +287,14 @@ every project's config as `../../.code_gantry/env`; on the Mac's primary
 the branch checked out predates that ignore line, so `.code_gantry/` is in
 its `.git/info/exclude`. The technical-debt project's ledger is
 `acme_app/technical-debt` in the table; its config names it with
-`ledger.name`, and `remote_landing` is on. The Rails 5 project still keeps a
+`ledger.name`, and `remote_landing` is on. **The technical-debt project is
+closed to the fleet (2026-09-13):** its automatable work was the proof of
+concept and is done, every open pipeline-owned item was moved into the
+Rails 5 project under `r5.021` in subsections named for where they came
+from, and anything there that becomes the fleet's is moved the same way
+rather than worked on that branch. Its human-owned items and findings stay
+there for now. The Rails 5 project's ledger is `acme_app/rails-5`,
+landing through a composing bay; every bay is placed on it. The Rails 5 project still keeps a
 SQLite ledger under its work dir with `remote_landing` off. The Claude Code
 CLI is installed and authenticated on both hosts. No ledger refs exist on
 GitHub; the old SQLite files are inert copies. In the target: the Spark's
