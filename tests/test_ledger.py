@@ -728,6 +728,16 @@ class TestWaitingOnAPerson:
         assert item.title == "Check production data" and item.recommendation is None and item.thread == []
         assert finding.text == "needs a person" and finding.keys == ["k.001"]
 
+    def test_the_pipelines_own_finding_that_the_work_is_already_done_waits_too(self, led):
+        # The planner says an item is done in the tree; nothing in the
+        # pipeline can close it, since no stage will be drawn for it, so it
+        # waits on a person like the rest. An ordinary pipeline finding does not.
+        plant(led, "k.001", "k.002")
+        done = led.open_finding(keys=["k.001"], by="planner", claim="nothing left", needs="pipeline", total="none remain")
+        led.open_finding(keys=["k.002"], by="planner", claim="7 of 24 remain", needs="pipeline", total="7 sites")
+        assert [w.id for w in led.views().waiting()] == [done.finding_id]
+        assert led.views().waiting()[0].total == "none remain"
+
     def test_a_card_and_a_question_travel_with_the_thing(self, led):
         plant(led, "k.001")
         f = led.open_finding(keys=["k.001"], by="planner", claim="two readings", needs="human")

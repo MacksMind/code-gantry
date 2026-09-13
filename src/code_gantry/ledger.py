@@ -321,7 +321,9 @@ class Views:
 
     def waiting(self) -> list[Waiting]:
         """Everything waiting on a person: open human-owned items in tree
-        order, then findings that need a human, oldest first."""
+        order, then findings that need a human, oldest first, and among
+        them the planner's own findings that say an item's work is already
+        done, which nothing in the pipeline can close."""
         out: list[Waiting] = []
         for node in self.walk():
             if node.kind == "item" and node.owner == "human" and self.is_open(node.key):
@@ -331,7 +333,12 @@ class Views:
                     thread=list(self.threads.get(node.key, [])),
                 ))
         for f in sorted(self.findings.values(), key=lambda f: f.opened_at):
-            if f.status == "open" and f.needs == "human":
+            # A finding the planner filed saying the work is already done
+            # ("none remain") is the pipeline's and yet waits on a person:
+            # no stage will be drawn for it, so nothing in the pipeline
+            # can close it. Verified and landed, or struck, it goes.
+            already_done = f.needs == "pipeline" and (f.total or "").strip().lower().startswith("none")
+            if f.status == "open" and (f.needs == "human" or already_done):
                 out.append(Waiting(
                     id=f.id, kind="finding", title=f.subject or f.claim.splitlines()[0][:80], text=f.claim,
                     keys=list(f.keys), since=f.opened_at, subject=f.subject, total=f.total,
