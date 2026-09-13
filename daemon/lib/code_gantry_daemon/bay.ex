@@ -80,6 +80,22 @@ defmodule CodeGantryDaemon.Bay do
     end
   end
 
+  @doc "Ask this bay's run to stop at its next seam because the project is complete; nothing when no run is live."
+  def wind_down(name) do
+    case GenServer.whereis(via(name)) do
+      nil -> :absent
+      pid -> GenServer.cast(pid, :wind_down)
+    end
+  end
+
+  @doc "Whether this bay is idle because its project was found complete."
+  def idle_complete?(name) do
+    case GenServer.whereis(via(name)) do
+      nil -> false
+      pid -> GenServer.call(pid, :idle_complete?)
+    end
+  end
+
   @impl true
   def init({host, bay}) do
     # Without this the supervisor's shutdown never reaches `terminate`, so
@@ -249,25 +265,6 @@ defmodule CodeGantryDaemon.Bay do
 
   def handle_call(:pause_for_pickup, _from, state), do: {:reply, :idle, state}
 
-  @doc "Ask this bay's run to stop at its next seam because the project is complete; nothing when no run is live."
-  def wind_down(name) do
-    case GenServer.whereis(via(name)) do
-      nil -> :absent
-      pid -> GenServer.cast(pid, :wind_down)
-    end
-  end
-
-  @impl true
-  def handle_cast(:wind_down, %{port: port, host: host, bay: bay} = state) when is_port(port) do
-    config = Host.bay_config(host, bay)
-    {out, status} = Command.run(Command.code_gantry(host, ["pause", config, state.run_id, "--note", "project complete"]), host.code_gantry, Host.env(host))
-    if status != 0, do: Logger.warning("#{bay.name}: wind-down pause exited #{status}: #{String.trim(out)}")
-    Status.put(bay.name, :winding_down, state.run_id, Host.project_of(host, bay))
-    {:noreply, %{state | winding_down: status == 0}}
-  end
-
-  def handle_cast(:wind_down, state), do: {:noreply, state}
-
   def handle_call(:retry, _from, %{port: port} = state) when is_port(port) do
     {:reply, {:error, {:running, state.run_id}}, state}
   end
@@ -294,15 +291,18 @@ defmodule CodeGantryDaemon.Bay do
     {:reply, {:ok, mode, run_id}, %{state | mode: mode, run_id: run_id, crashes: 0, last: :retrying}, {:continue, :launch}}
   end
 
-  @doc "Whether this bay is idle because its project was found complete."
-  def idle_complete?(name) do
-    case GenServer.whereis(via(name)) do
-      nil -> false
-      pid -> GenServer.call(pid, :idle_complete?)
-    end
+  def handle_call(:idle_complete?, _from, state), do: {:reply, state.port == nil and state.last == :complete, state}
+
+  @impl true
+  def handle_cast(:wind_down, %{port: port, host: host, bay: bay} = state) when is_port(port) do
+    config = Host.bay_config(host, bay)
+    {out, status} = Command.run(Command.code_gantry(host, ["pause", config, state.run_id, "--note", "project complete"]), host.code_gantry, Host.env(host))
+    if status != 0, do: Logger.warning("#{bay.name}: wind-down pause exited #{status}: #{String.trim(out)}")
+    Status.put(bay.name, :winding_down, state.run_id, Host.project_of(host, bay))
+    {:noreply, %{state | winding_down: status == 0}}
   end
 
-  def handle_call(:idle_complete?, _from, state), do: {:reply, state.port == nil and state.last == :complete, state}
+  def handle_cast(:wind_down, state), do: {:noreply, state}
 
   # The exit code says which kind of end; the run's own output says why.
   # Its last lines travel into the daemon log beside the verdict, so a
