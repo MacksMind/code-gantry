@@ -88,7 +88,9 @@ defmodule CodeGantryDaemon.Mesh do
   end
 
   def handle_info({:nodedown, node}, host) do
-    if Host.daemon_node?(node), do: Logger.info("mesh: #{node} left")
+    if Host.daemon_node?(node) do
+      Logger.info("mesh: #{node} left" <> Owned.forget(node))
+    end
     {:noreply, host}
   end
 

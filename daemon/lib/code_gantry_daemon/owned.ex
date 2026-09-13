@@ -79,6 +79,20 @@ defmodule CodeGantryDaemon.Owned do
   end
 
   @doc "Bring a peer's tables into view, and ours into its."
+  @doc """
+  Forget a node that has gone: its tables leave this schema. A daemon
+  that restarts makes its tables again with new identities, and a schema
+  still holding the old ones refuses to merge with it (`Bad cookie in
+  table definition`), which left a restarted peer's bays invisible for as
+  long as the other host stayed up. Answers a suffix for the log line.
+  """
+  def forget(node) do
+    case :mnesia.del_table_copy(:schema, node) do
+      {:atomic, :ok} -> "; its tables forgotten"
+      {:aborted, reason} -> "; could not forget its tables: #{inspect(reason)}"
+    end
+  end
+
   def join(node) do
     case :mnesia.change_config(:extra_db_nodes, [node]) do
       {:ok, _} ->

@@ -148,14 +148,15 @@ defmodule CodeGantryDaemon.Waiting do
   end
 
   # The repository's other projects, as the checkout holds them: every
-  # `code_gantry.yaml` in the bay's tree but this one's, named by its
-  # directory, the way a placement names a project.
+  # `code_gantry.yaml` up to three directories down but this one's, named
+  # by its directory, the way a placement names a project. Never `**`: a
+  # Rails checkout's `tmp/`, `node_modules/` and `log/` are hundreds of
+  # thousands of entries, and one walk held this server for minutes.
   defp other_projects(host, bay, config) do
     dir = Host.bay_dir(host, bay)
 
-    dir
-    |> Path.join("**/code_gantry.yaml")
-    |> Path.wildcard()
+    ~w(*/code_gantry.yaml */*/code_gantry.yaml */*/*/code_gantry.yaml)
+    |> Enum.flat_map(&Path.wildcard(Path.join(dir, &1)))
     |> Enum.reject(fn path -> path == config or Enum.any?(@skip, &String.contains?(path, &1)) end)
     |> Enum.map(&%{project: &1 |> Path.dirname() |> Path.basename(), config: &1})
     |> Enum.sort_by(& &1.project)
