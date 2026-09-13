@@ -52,6 +52,7 @@ defmodule CodeGantryDaemon.DashboardTest do
       "ledger ask") echo '{"id": "'"$3"'"}' ;;
       "plan sections") echo '[{"key": "g.001", "kind": "document", "title": "General debt", "parent": null, "depth": 0}, {"key": "g.002", "kind": "section", "title": "Inherited", "parent": "g.001", "depth": 1}]' ;;
       "plan add") echo "g.009" ;;
+      "ledger show") case "$*" in *docs/p/*) echo '[{"key": "p.004", "title": "Add the new route", "owner": "pipeline", "state": {"state": "open"}}, {"key": "p.008", "title": "A stray N+1", "owner": "pipeline", "state": {"state": "open"}}]' ;; *) echo "[]" ;; esac ;;
     esac
     exit 0
     """)
@@ -212,6 +213,39 @@ defmodule CodeGantryDaemon.DashboardTest do
     assert last != first
     assert Process.read_timer(first) == false
     assert is_integer(Process.read_timer(last))
+  end
+
+  test "every project in the checkout is read, placed or not", %{root: root} do
+    # The general project has no bay; what waits on a person there waits all the same.
+    assert calls(root) =~ ~r/argv: ledger waiting --json --config \S+repo-bay1\/docs\/general\/code_gantry.yaml/
+    assert Enum.map(Waiting.all(), & &1.project) == ["p", "general"]
+  end
+
+  test "the filter narrows by project, kind and text, and lives in the URL", %{} do
+    {:ok, _view, html} = live(build_conn(), "/")
+    assert html =~ "waiting-p.006" and html =~ "waiting-f1" and html =~ "2 shown"
+    {:ok, _view, html} = live(build_conn(), "/?kind=item")
+    assert html =~ "waiting-p.006" and not (html =~ "waiting-f1")
+    {:ok, _view, html} = live(build_conn(), "/?q=callers")
+    assert html =~ "waiting-f1" and not (html =~ "waiting-p.006")
+    {:ok, _view, html} = live(build_conn(), "/?project=general")
+    assert html =~ "0 shown" and not (html =~ "waiting-p.006")
+    # Changing the form patches the URL, which is what a reload keeps.
+    {:ok, view, _} = live(build_conn(), "/")
+    view |> form("form#filter", %{"kind" => "finding"}) |> render_change()
+    assert_patch(view, "/?kind=finding")
+    refute render(view) =~ "waiting-p.006"
+  end
+
+  test "each project shows how much the fleet can draw, and lists it on request", %{root: root} do
+    {:ok, view, html} = live(build_conn(), "/")
+    assert calls(root) =~ ~r/argv: ledger show --drawable --json --config \S+docs\/p\/code_gantry.yaml/
+    assert html =~ "2 drawable" and html =~ "0 drawable"
+    refute html =~ "Add the new route"
+    html = view |> element("button[phx-value-project=p]") |> render_click()
+    assert html =~ "<code>p.004</code> Add the new route" and html =~ "A stray N+1"
+    html = view |> element("button[phx-value-project=p]") |> render_click()
+    refute html =~ "Add the new route"
   end
 
   test "before the first reading there is nothing, not an error" do

@@ -23,16 +23,22 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
 
     socket =
       socket
-      |> assign(notice: nil)
+      |> assign(notice: nil, filter: %{"project" => "", "kind" => "", "q" => ""}, latest: Waiting.all(), listing: nil)
       |> stream_configure(:cards, dom_id: &"waiting-#{&1.id}")
-      |> cards(Waiting.all())
       |> read_hosts()
 
     {:ok, socket}
   end
 
+  # The filter lives in the URL, so a reload and a shared link keep it.
   @impl true
-  def handle_info({:waiting, projects}, socket), do: {:noreply, cards(socket, projects)}
+  def handle_params(params, _uri, socket) do
+    filter = %{"project" => params["project"] || "", "kind" => params["kind"] || "", "q" => params["q"] || ""}
+    {:noreply, socket |> assign(filter: filter) |> cards(socket.assigns.latest)}
+  end
+
+  @impl true
+  def handle_info({:waiting, projects}, socket), do: {:noreply, socket |> assign(latest: projects) |> cards(projects)}
   def handle_info(:tick, socket), do: {:noreply, read_hosts(socket)}
 
   # The cards are a stream, and a reading is applied as a diff: a card
@@ -47,10 +53,15 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
     # A card is its record and the project it belongs to; the reading's
     # time and error are the page's, not the card's, or every card would
     # compare as changed at every reading.
+    filter = socket.assigns.filter
+
     entries =
-      for project <- projects, w <- project.waiting do
-        %{id: w["id"], w: w, project: Map.take(project, [:project, :config, :projects])}
-      end
+      for project <- projects,
+          filter["project"] in ["", project.project],
+          w <- project.waiting,
+          filter["kind"] in ["", w["kind"]],
+          matches?(w, filter["q"]),
+          do: %{id: w["id"], w: w, project: Map.take(project, [:project, :config, :projects])}
     now = Map.new(entries, &{&1.id, &1})
     gone = for id <- Map.keys(seen), not Map.has_key?(now, id), do: id
     changed = for entry <- entries, Map.get(seen, entry.id) != entry, do: entry
@@ -63,6 +74,13 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
     Enum.reduce(gone, socket, fn id, s -> stream_delete_by_dom_id(s, :cards, "waiting-#{id}") end)
   end
 
+  defp matches?(_w, q) when q in [nil, ""], do: true
+
+  defp matches?(w, q) do
+    needle = String.downcase(q)
+    Enum.any?([w["id"], w["title"], w["text"], w["subject"]], &(is_binary(&1) and String.contains?(String.downcase(&1), needle)))
+  end
+
   @impl true
   def handle_event("act", %{"action" => action, "config" => config} = params, socket) do
     case Waiting.act(config, action, params) do
@@ -70,6 +88,16 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
       {:ok, _} -> {:noreply, assign(socket, notice: "#{params["about"]}: #{action}")}
       {:error, why} -> {:noreply, assign(socket, notice: why)}
     end
+  end
+
+  def handle_event("filter", params, socket) do
+    query = for k <- ~w(project kind q), v = params[k], v not in [nil, ""], do: {k, v}
+    {:noreply, push_patch(socket, to: "/?" <> URI.encode_query(query))}
+  end
+
+  # The drawable list of one project, opened and closed by its count.
+  def handle_event("drawable", %{"project" => project}, socket) do
+    {:noreply, assign(socket, listing: if(socket.assigns.listing == project, do: nil, else: project))}
   end
 
   def handle_event("refresh", _params, socket) do
@@ -115,10 +143,30 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
     </table>
 
     <h2>Waiting on a person <button phx-click="refresh">read again</button></h2>
+    <form id="filter" phx-change="filter" class="filter">
+      <select name="project">
+        <option value="" selected={@filter["project"] == ""}>every project</option>
+        <option :for={p <- @projects} value={p.project} selected={@filter["project"] == p.project}>{p.project}</option>
+      </select>
+      <select name="kind">
+        <option value="" selected={@filter["kind"] == ""}>items and findings</option>
+        <option value="item" selected={@filter["kind"] == "item"}>items</option>
+        <option value="finding" selected={@filter["kind"] == "finding"}>findings</option>
+      </select>
+      <input type="text" name="q" value={@filter["q"]} placeholder="text in the id, title or body" phx-debounce="300" />
+      <span class="empty">{@cards} shown</span>
+    </form>
     <p :if={@notice} class="notice">{@notice}</p>
-    <p :for={project <- @projects} class="empty">
-      {project.project}: read at {DateTime.truncate(project.read_at, :second) |> DateTime.to_time() |> Time.to_string()} UTC<span :if={project.error} class="error"> — {project.error}</span>
-    </p>
+    <div :for={project <- @projects}>
+      <p class="empty">
+        {project.project}: read at {DateTime.truncate(project.read_at, :second) |> DateTime.to_time() |> Time.to_string()} UTC
+        · <button phx-click="drawable" phx-value-project={project.project} class="linkish">{length(Map.get(project, :drawable, []))} drawable</button><span :if={project.error} class="error"> — {project.error}</span>
+      </p>
+      <ul :if={@listing == project.project} class="drawable">
+        <li :for={item <- Map.get(project, :drawable, [])}><code>{item["key"]}</code> {item["title"]}</li>
+        <li :if={Map.get(project, :drawable, []) == []} class="empty">nothing the fleet can draw</li>
+      </ul>
+    </div>
     <p :if={@cards == 0} class="empty">nothing waiting</p>
     <div id="cards" phx-update="stream">
       <.card :for={{dom_id, entry} <- @streams.cards} id={dom_id} w={entry.w} project={entry.project} />

@@ -276,15 +276,20 @@ def ledger() -> None:
 @click.option("--claimed", "only", flag_value="claimed")
 @click.option("--blocked", "only", flag_value="blocked")
 @click.option("--landed", "only", flag_value="landed")
+@click.option("--drawable", is_flag=True, help="Only what the fleet can draw: open, pipeline-owned items.")
 @json_option
 @config_option
-def ledger_show(key, only, as_json, config_path) -> None:
-    """Every item's state, or one key's."""
+def ledger_show(key, only, drawable, as_json, config_path) -> None:
+    """Every item's state, or one key's. `--drawable` is the fleet's list:
+    open items a person does not own, before the planner's own judgement
+    of them."""
     _, _, led = _cfg_and_ledger(config_path, write=False)
     views = led.views()
     nodes = [_key(led, key)] if key else [n for n in views.walk() if n.kind == "item"]
     rows = [(node, views.state(node.key)) for node in nodes]
     rows = [(node, state) for node, state in rows if not only or state.state == only]
+    if drawable:
+        rows = [(node, state) for node, state in rows if state.state == "open" and node.owner == "pipeline"]
     if as_json:
         return _emit_json([{**dataclasses.asdict(node), "state": dataclasses.asdict(state)} for node, state in rows])
     for node, state in rows:

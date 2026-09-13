@@ -185,6 +185,7 @@ defmodule CodeGantryDaemon.Waiting do
           project: Host.project_of(host, bay),
           config: config,
           waiting: waiting,
+          drawable: drawable_of(host, config),
           projects: other_projects(host, bay, config),
           read_at: DateTime.utc_now(),
           error: error
@@ -246,6 +247,20 @@ defmodule CodeGantryDaemon.Waiting do
   # documents and sections, in plan order, with depth for indenting.
   defp sections_of(host, config) do
     case Command.stdout(Command.code_gantry(host, ["plan", "sections", "--json", "--config", config]), host.code_gantry, Host.env(host)) do
+      {out, 0} ->
+        case Jason.decode(out) do
+          {:ok, rows} when is_list(rows) -> rows
+          _ -> []
+        end
+
+      _ ->
+        []
+    end
+  end
+
+  # What the fleet can draw in a project, by the CLI's own definition.
+  defp drawable_of(host, config) do
+    case Command.stdout(Command.code_gantry(host, ["ledger", "show", "--drawable", "--json", "--config", config]), host.code_gantry, Host.env(host)) do
       {out, 0} ->
         case Jason.decode(out) do
           {:ok, rows} when is_list(rows) -> rows

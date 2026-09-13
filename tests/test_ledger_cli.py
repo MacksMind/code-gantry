@@ -366,6 +366,18 @@ class TestWhatIsWaitingOnAPerson:
         assert "p.006 struck" in run("ledger", "show", "p.006").output
 
 
+class TestDrawable:
+    def test_drawable_is_open_pipeline_owned_items(self, project):
+        import json
+        imported(project)
+        run("plan", "edit", "p.006", "--owner", "human")
+        run("ledger", "claim", "p.008")
+        rows = json.loads(run("ledger", "show", "--drawable", "--json").output)
+        # p.003 landed, p.006 a person's, p.008 claimed: one left.
+        assert [r["key"] for r in rows] == ["p.004"]
+        assert run("ledger", "show", "--drawable").output.startswith("p.004 open")
+
+
 class TestSections:
     def test_sections_are_the_documents_and_sections_in_plan_order_with_depth(self, project):
         import json

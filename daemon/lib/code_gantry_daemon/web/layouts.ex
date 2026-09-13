@@ -35,6 +35,10 @@ defmodule CodeGantryDaemon.Web.Layouts do
           .item-actions { display: flex; flex-wrap: wrap; gap: 6px 18px; }
           .card form { margin-top: 8px; }
           .empty { color: #666; }
+          form.filter { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0 10px; }
+          form.filter input[type=text] { flex: 1 1 260px; padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px; }
+          button.linkish { background: none; border: none; padding: 0; color: #1f4f8f; cursor: pointer; text-decoration: underline; font: inherit; }
+          ul.drawable { margin: 0 0 8px 12px; padding-left: 12px; font-size: 13px; }
         </style>
         <script src="/assets/phoenix/phoenix.min.js"></script>
         <script src="/assets/live_view/phoenix_live_view.min.js"></script>
