@@ -570,6 +570,21 @@ class Limits(_Strict):
     wall_clock_hours: float = 14.0
 
 
+class InvestigatorConfig(_Strict):
+    """The investigator: a model with a shell, started by the daemon or by a
+    person on one thing waiting for a person, to attach a card. The
+    transport is a command that reads the prompt on stdin and does its own
+    tool loop; the daemon knows nothing of it but that it exits. It runs in
+    the bay's checkout, which is the daemon's, where a declared script
+    already has this reach.
+    """
+
+    command: list[str] = ["claude", "-p", "--allowedTools", "Bash,Read,Grep,Glob"]
+    # Long enough to read a gem in a container and query the dev database;
+    # short enough that a wedged tool loop gives the bay back.
+    timeout_minutes: int = 20
+
+
 class LedgerConfig(_Strict):
     """The ledger that holds the plan — see `ledger.py`."""
 
@@ -1155,6 +1170,7 @@ class ProjectConfig(_Strict):
     executor: ExecutorConfig
     planner: PlannerConfig
     reviewer: ReviewerConfig
+    investigator: InvestigatorConfig = InvestigatorConfig()
     limits: Limits = Limits()
 
     stage_defaults: StageDefaults = StageDefaults()
@@ -1393,6 +1409,7 @@ class ProjectConfig(_Strict):
             out.append((f"stage_defaults.context_commands[{i}]", command))
         for i, command in enumerate(self.stage_defaults.checks):
             out.append((f"stage_defaults.checks[{i}]", command))
+        out.append(("investigator.command", " ".join(self.investigator.command)))
         for tool in self.project_tools:
             # Joined for scanning only. The denylist reads shell-shaped strings
             # — `git push`, `rm -rf` — and an argv list would hide `["git",

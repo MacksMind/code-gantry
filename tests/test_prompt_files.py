@@ -86,6 +86,12 @@ def every_assembled_prompt() -> list[str]:
     out.append(prompts._history_block(landed))
     out.append(prompts._batch_block(SimpleNamespace(planner=SimpleNamespace(max_batch_stages=1))))
     out.append(prompts._conventions_block("conv", role="executor", project_tools=()))
+    from code_gantry.investigator import render_prompt
+    from code_gantry.ledger import Waiting
+
+    thing = Waiting(id="f-x-1", kind="finding", title="t", text="claim", keys=["k.001"], since="2026-01-01T00:00:00+00:00")
+    out.append(render_prompt(thing, [Waiting(id="k.002", kind="item", title="other", text="", keys=["k.002"], since=None)],
+                             project_label="repo/p", config_path=Path("/cfg.yaml")))
     return out
 
 

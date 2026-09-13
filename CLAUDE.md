@@ -342,6 +342,14 @@ daemon must behave the same.
    (`code_change`), which today needs a restart at idle.
 
 **Waiting on the operator.**
+- The driver into Elixir: what LangGraph supplied — the graph of nodes
+  and edges, the loop that calls the next node, the checkpoint between —
+  moves into the daemon, with each Python node a `step` the daemon calls
+  and the Python driver kept for a run started by hand. Agreed, held
+  until the investigator is in. Re-examine before starting how the whole
+  moves into AWS: a persistent daemon (Fargate), Python steps on Lambda,
+  bays on something persistent (EFS?), and the suite on a Graviton spot
+  host — starting with an AWS test runner before anything else moves.
 - Whether the executor comparison, Flash-Next against Luna, is worth a
   measured run once the Spark is idle, or whether Luna stands.
 - Whether to enable `remote_landing` for the Rails 5 project and move its

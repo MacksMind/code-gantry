@@ -411,6 +411,34 @@ def ledger_move(about, to_config, under, as_json, config_path) -> None:
     click.echo(f"{about}: moved to {label(to_cfg, to_project)} as {opened}")
 
 
+@ledger.command("investigate")
+@click.argument("about")
+@json_option
+@config_option
+def ledger_investigate(about, as_json, config_path) -> None:
+    """Have the investigator attach a card to one thing waiting on a
+    person: a model with a shell, run in the checkout, that writes
+    `ledger recommend` and nothing else. Exits 0 when a card was written,
+    1 when not; the transcript is under the work directory either way."""
+    from code_gantry.investigator import investigate
+
+    cfg, project, led = _cfg_and_ledger(config_path, write=False)
+    label = cfg.ledger.name or str(project.ledger)
+    try:
+        result = investigate(cfg, led, about, work_dir=project.work_dir, project_label=label, config_path=Path(config_path or os.environ.get("CODE_GANTRY_CONFIG")).resolve())
+    except LookupError as e:
+        raise click.ClickException(str(e))
+    if as_json:
+        _emit_json({**dataclasses.asdict(result), "transcript": str(result.transcript)})
+    else:
+        click.echo(
+            f"{about}: {'card written' if result.recommended else 'no card written'} "
+            f"({result.seconds:.0f}s, exit {result.exit_code}); transcript {result.transcript}"
+        )
+    if not result.recommended:
+        raise SystemExit(1)
+
+
 @ledger.command("answer")
 @click.argument("finding_id")
 @click.argument("disposition", type=click.Choice(["fold", "discard", "debt", "raise"]))
