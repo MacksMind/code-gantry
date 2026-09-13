@@ -27,6 +27,11 @@ defmodule CodeGantryDaemon.Web do
   is built, so it runs before the PubSub child that needs it.
   """
   def child_spec(%Host{} = host) do
+    # Mix prunes the code path at boot to the applications the project
+    # declared then, so a daemon that took its first dependencies on a
+    # hot load has no `public_key` or `ssl` on its path, and Phoenix will
+    # not start without them. Appended, so nothing shadows the project.
+    for dir <- Path.wildcard(Path.join(:code.root_dir(), "lib/*/ebin")), do: Code.append_path(dir)
     for app <- @dependencies, do: {:ok, _} = Application.ensure_all_started(app)
     Application.put_env(:code_gantry_daemon, CodeGantryDaemon.Web.Endpoint, config(host))
     CodeGantryDaemon.Web.Endpoint.child_spec([])

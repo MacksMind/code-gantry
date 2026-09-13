@@ -92,6 +92,18 @@ defmodule CodeGantryDaemon.DashboardTest do
     refute render(view) =~ "Two callers remain"
   end
 
+  test "the endpoint's spec puts back the OTP applications a pruned code path lost", %{host: host} do
+    # Mix prunes the code path at boot to what the project declared then;
+    # a daemon that took its first dependencies on a hot load has no
+    # `public_key` on its path, and Phoenix will not start without it.
+    ebin = :code.lib_dir(:public_key) |> Path.join("ebin")
+    assert true == :code.del_path(String.to_charlist(ebin))
+    assert :code.lib_dir(:public_key) == {:error, :bad_name}
+    _ = Web.child_spec(host)
+    assert :code.lib_dir(:public_key) |> to_string() |> String.ends_with?("/ebin") == false
+    assert :code.lib_dir(:public_key) != {:error, :bad_name}
+  end
+
   test "every bay on every host is a row", %{host: host} do
     Status.put("bay1", :running, "20260913-000000-bay1", Host.project_of(host, hd(host.bays)))
     {:ok, _view, html} = live(build_conn(), "/")
