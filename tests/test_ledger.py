@@ -802,6 +802,13 @@ class TestMove:
         assert state.state == "struck" and state.reason == "moved to repo/debt as q.003"
         assert "k.002" not in [w.id for w in led.views().waiting()]
 
+    def test_a_moved_item_keeps_its_owner(self, led, other):
+        # A pipeline item moved to the project whose branch the fix lands on
+        # is still the fleet's; a person's item is still the person's.
+        led.upsert_node("k.005", parent=None, position=4, kind="item", title="Fix the trigger", owner="pipeline")
+        opened = led.move("k.005", to=other, to_label="repo/debt", from_label="repo/rails-5", under="q.002")
+        assert other.views().nodes[opened].owner == "pipeline"
+
     def test_an_item_needs_a_section_to_go_under(self, led, other):
         led.upsert_node("k.002", parent=None, position=1, kind="item", title="Delete the columns", owner="human")
         with pytest.raises(LedgerError):

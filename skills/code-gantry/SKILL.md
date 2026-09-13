@@ -140,10 +140,12 @@ ticket), what done looks like, and any constraint the work must respect. Facts,
 never instructions to the planner. `--owner human` keeps it off the fleet's
 list and on the dashboard's, for work that needs a decision or a person's
 hands first; `plan edit <key> --owner pipeline` hands it over later. The
-section decides which project's debt or plan it belongs to: this project's
-own `technical_debt.md` for defects this project's work created, the
-`technical_debt` project for defects the codebase already had, the plan
-document for the work the project is for.
+project is the branch the fix should land on, and the section is where in
+that project's documents it belongs. In this repository that is the Rails 5
+project for everything now: its `technical_debt.md` has a section for defects
+this project's work created and one for inherited defects the branch has to
+carry (`r5.021`); the plan document is for the work the project is for. The
+`technical_debt` project is closed to new work; nothing goes there.
 
 ## When you are done
 

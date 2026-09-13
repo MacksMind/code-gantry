@@ -1044,7 +1044,7 @@ class Ledger:
                 body = (node.body + "\n\n" if node.body else "") + f"Moved from {from_label}, where it was {about}."
                 to.upsert_node(
                     opened, parent=under, position=len(views.children(under)), kind="item",
-                    title=node.title, body=body, owner="human", actor=actor,
+                    title=node.title, body=body, owner=node.owner, actor=actor,
                 )
         self.append(MOVED, actor=actor, about=about, to=to_label, opened_as=opened)
         return opened
