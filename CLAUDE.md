@@ -200,7 +200,8 @@ every host from `bin/daemon`; `pause`, `resume` and `stop` per bay and per
 host; putting down the suite workers a killed run leaves in its container
 (`docker compose exec` survives its client); `ingest`, a finding or an
 item handed to a project from a Claude session in the person's primary
-copy, fronted by a skill in the target repository; a finding or item
+copy — done as the CLI's own verbs, fronted by `skills/code-gantry/SKILL.md`
+here, which a target repository links from `.claude/skills/code-gantry`; a finding or item
 moved between projects of one repository as one event; the nudge after a
 push; the operator invocation; `bin/daemon` going through `mise`.
 
