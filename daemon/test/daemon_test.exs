@@ -227,6 +227,73 @@ defmodule CodeGantryDaemonTest do
     end
   end
 
+  describe "wind-down" do
+    alias CodeGantryDaemon.{Complete, Control, Placements}
+
+    # bay1's run finds the project complete at once; bay2's holds until it
+    # is asked to pause, and then leaves as a paused run does.
+    defp wind_down_fake(root) do
+      fake = Path.join(root, "fake-cli")
+      File.write!(fake, """
+      #!/usr/bin/env bash
+      echo "argv: $*" >> "#{root}/calls"
+      case "$1" in
+        run|resume) case "$*" in *-bay1*) exit 0 ;; *) while [ -f "#{root}/hold" ]; do sleep 0.1; done; exit 3 ;; esac ;;
+        pause) rm -f "#{root}/hold"; exit 0 ;;
+      esac
+      exit 0
+      """)
+      File.chmod!(fake, 0o755)
+      File.write!(Path.join(root, "hold"), "")
+      File.mkdir_p!(Path.join([root, "repo-bay1", "docs", "p"]))
+      File.mkdir_p!(Path.join([root, "repo-bay2", "docs", "p"]))
+      :ok = Placements.put(%{name: "bay1", offset: 100, config: "docs/p/code_gantry.yaml"})
+      :ok = Placements.put(%{name: "bay2", offset: 200, config: "docs/p/code_gantry.yaml"})
+    end
+
+    test "a run that finds nothing to draw winds the project's other bays down and marks it", %{root: root, host: host, state: state} do
+      wind_down_fake(root)
+      {:ok, _} = Application.start_bay(host, %{name: "bay2", offset: 200, config: "docs/p/code_gantry.yaml"})
+      wait_for(fn -> status(state) =~ "bay2 running" end)
+      log = ExUnit.CaptureLog.capture_log(fn ->
+        {:ok, _} = Application.start_bay(host, %{name: "bay1", offset: 100, config: "docs/p/code_gantry.yaml"})
+        wait_for(fn -> status(state) =~ "bay2 complete" end)
+      end)
+      assert log =~ "bay1: run " and log =~ "finished: p is complete; winding the other bays down"
+      assert calls(root) =~ ~r/argv: pause \S+repo-bay2\/docs\/p\/code_gantry.yaml \d{8}-\d{6}-bay2 --note project complete/
+      assert status(state) =~ ~r/^bay1 finished/m
+      assert status(state) =~ ~r/^bay2 complete wound down at \d{8}-\d{6}-bay2/m
+      assert Complete.complete?("p") and Complete.since("p") =~ ~r/^\d{8}-\d{6}-bay1 /
+      # A wound-down bay may hold a drawn stage: a later ask resumes it.
+      assert {:ok, :resume, _} = Bay.retry("bay2")
+      refute Complete.complete?("p")
+    end
+
+    test "a project found complete is left idle at start, and a person's ask starts it again", %{root: root, host: host, state: state} do
+      wind_down_fake(root)
+      Complete.mark("p", "20260913-000000-bay1")
+      {:ok, _} = Application.start_bay(host, %{name: "bay2", offset: 200, config: "docs/p/code_gantry.yaml"})
+      wait_for(fn -> status(state) =~ "bay2 complete nothing to draw since 20260913-000000-bay1" end)
+      refute File.exists?(Path.join(root, "calls")), "a run was started on a complete project"
+      assert Control.retry("bay2") =~ ~r/^bay2: run \d{8}-\d{6}-bay2 started/
+      wait_for(fn -> status(state) =~ "bay2 running" end)
+      refute Complete.complete?("p")
+    end
+
+    test "a peer's verdict winds this host's bays down, and wake starts them again everywhere", %{root: root, host: host, state: state} do
+      wind_down_fake(root)
+      {:ok, _} = Application.start_bay(host, %{name: "bay2", offset: 200, config: "docs/p/code_gantry.yaml"})
+      wait_for(fn -> status(state) =~ "bay2 running" end)
+      Control.wound_down("p", "20260913-000000-bay9", "other-host")
+      wait_for(fn -> status(state) =~ "bay2 complete" end)
+      assert Complete.complete?("p")
+      File.write!(Path.join(root, "hold"), "")
+      assert Control.wake("p") =~ ~r/^p: woken; started bay2 \d{8}-\d{6}-bay2; 0 peer\(s\) told$/
+      wait_for(fn -> status(state) =~ "bay2 running" end)
+      refute Complete.complete?("p")
+    end
+  end
+
   describe "a placement's project" do
     alias CodeGantryDaemon.{Control, Placements}
 

@@ -6,7 +6,7 @@ defmodule CodeGantryDaemon.Control do
   answers from its own state, and the same verbs serve a mesh later.
   """
 
-  alias CodeGantryDaemon.{Application, Bay, Mesh, Pickup, Placements, Runs, Semaphore, Status}
+  alias CodeGantryDaemon.{Application, Bay, Complete, Host, Mesh, Pickup, Placements, Runs, Semaphore, Status}
 
   @doc "The commit this daemon's checkout is at, and the node answering: what a pickup is confirmed by."
   def version(host \\ nil) do
@@ -105,6 +105,48 @@ defmodule CodeGantryDaemon.Control do
           {:error, reason} -> "#{name}: placed, but could not start: #{inspect(reason)}"
         end
     end
+  end
+
+  @doc """
+  A run found `project` complete: mark it so, and ask every other bay on
+  it here to stop at its seam. Called by the bay whose run said so, and
+  by a peer's daemon through `wound_down/3`.
+  """
+  def wind_down(project, run_id, origin) do
+    Complete.mark(project, run_id)
+    host = Status.host()
+
+    for bay <- Placements.all(host), Host.project_of(host, bay) == project, do: Bay.wind_down(bay.name)
+
+    _ = origin
+    :ok
+  end
+
+  @doc "A peer's run found `project` complete; wind this host's bays on it down too."
+  def wound_down(project, run_id, origin) do
+    require Logger
+    Logger.info("#{origin}: #{project} is complete (run #{run_id}); winding this host's bays on it down")
+    wind_down(project, run_id, origin)
+  end
+
+  @doc """
+  A complete project may have work again: forget the mark and start every
+  bay idle on it, here and on every peer. What a person says after adding
+  to the plan, and what the dashboard says after handing an item to the
+  fleet or moving one in.
+  """
+  def wake(project, told_peers \\ false) do
+    Complete.clear(project)
+    host = Status.host()
+
+    started =
+      for bay <- Placements.all(host), Host.project_of(host, bay) == project, Bay.idle_complete?(bay.name) do
+        {:ok, _mode, run_id} = Bay.retry(bay.name)
+        "#{bay.name} #{run_id}"
+      end
+
+    peers = if told_peers, do: 0, else: Mesh.tell_peers(__MODULE__, :wake, [project, true])
+    "#{project}: woken; started #{if started == [], do: "nothing", else: Enum.join(started, ", ")}; #{peers} peer(s) told"
   end
 
   def retry(name) do

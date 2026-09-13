@@ -29,7 +29,7 @@ defmodule CodeGantryDaemon.Bay do
   @grace_ms 5_000
   require Logger
 
-  alias CodeGantryDaemon.{Host, Command, Status}
+  alias CodeGantryDaemon.{Command, Complete, Host, Mesh, Status}
 
   @backoff_seconds [10, 30, 60, 120, 300]
 
@@ -86,7 +86,7 @@ defmodule CodeGantryDaemon.Bay do
     # the run this bay started outlives the daemon that started it. Three
     # of four did, and had to be killed by hand.
     Process.flag(:trap_exit, true)
-    state = %{host: host, bay: bay, port: nil, log: nil, run_id: nil, crashes: 0, mode: :run, last: nil, resume_after_pause: false}
+    state = %{host: host, bay: bay, port: nil, log: nil, run_id: nil, crashes: 0, mode: :run, last: nil, resume_after_pause: false, winding_down: false}
     Status.put(bay.name, :starting, nil, Host.project_of(host, bay))
     {:ok, state, {:continue, :ensure_checkout}}
   end
@@ -128,7 +128,24 @@ defmodule CodeGantryDaemon.Bay do
     end
   end
 
-  def handle_continue(:launch, %{host: host, bay: bay} = state) do
+  # A fresh run on a project a run has already found complete is a
+  # planner call to be told again: the bay stays idle until a person asks
+  # or work comes back in reach. A resume is not a fresh run.
+  def handle_continue(:launch, %{host: host, bay: bay, mode: :run} = state) when state.last != :retrying do
+    project = Host.project_of(host, bay)
+
+    if Complete.complete?(project) do
+      Logger.info("#{bay.name}: #{project} is complete (#{Complete.since(project)}); not starting a run")
+      Status.put(bay.name, :complete, "nothing to draw since #{Complete.since(project)}", project)
+      {:noreply, %{state | last: :complete}}
+    else
+      launch(state)
+    end
+  end
+
+  def handle_continue(:launch, state), do: launch(state)
+
+  defp launch(%{host: host, bay: bay} = state) do
     run_id = state.run_id || new_run_id(bay)
     config = Host.bay_config(host, bay)
 
@@ -162,8 +179,14 @@ defmodule CodeGantryDaemon.Bay do
 
     case status do
       0 ->
-        Logger.info("#{bay.name}: run #{state.run_id} finished")
-        Status.put(bay.name, :finished, state.run_id, Host.project_of(host, bay))
+        # Exit 0 is the planner finding nothing left to draw: the project
+        # is complete, and every other bay on it is about to spend a
+        # planner call learning the same, here and on every host.
+        project = Host.project_of(host, bay)
+        Logger.info("#{bay.name}: run #{state.run_id} finished: #{project} is complete; winding the other bays down")
+        Status.put(bay.name, :finished, state.run_id, project)
+        CodeGantryDaemon.Control.wind_down(project, state.run_id, host.origin)
+        Mesh.tell_peers(CodeGantryDaemon.Control, :wound_down, [project, state.run_id, host.origin])
         {:noreply, %{state | last: :finished}}
 
       1 ->
@@ -183,6 +206,13 @@ defmodule CodeGantryDaemon.Bay do
         Status.put(bay.name, :resuming, state.run_id, Host.project_of(host, bay))
         Process.send_after(self(), :relaunch, 1_000)
         {:noreply, %{state | last: :paused, mode: :resume, resume_after_pause: false}}
+
+      3 when state.winding_down ->
+        # Stopped at its seam because another run found the project
+        # complete. It may hold a drawn stage, so a later ask resumes it.
+        Logger.info("#{bay.name}: run #{state.run_id} wound down; the project is complete")
+        Status.put(bay.name, :complete, "wound down at #{state.run_id}", Host.project_of(host, bay))
+        {:noreply, %{state | last: :complete, mode: :resume, winding_down: false}}
 
       3 ->
         Logger.info("#{bay.name}: run #{state.run_id} paused")
@@ -219,23 +249,60 @@ defmodule CodeGantryDaemon.Bay do
 
   def handle_call(:pause_for_pickup, _from, state), do: {:reply, :idle, state}
 
+  @doc "Ask this bay's run to stop at its next seam because the project is complete; nothing when no run is live."
+  def wind_down(name) do
+    case GenServer.whereis(via(name)) do
+      nil -> :absent
+      pid -> GenServer.cast(pid, :wind_down)
+    end
+  end
+
+  @impl true
+  def handle_cast(:wind_down, %{port: port, host: host, bay: bay} = state) when is_port(port) do
+    config = Host.bay_config(host, bay)
+    {out, status} = Command.run(Command.code_gantry(host, ["pause", config, state.run_id, "--note", "project complete"]), host.code_gantry, Host.env(host))
+    if status != 0, do: Logger.warning("#{bay.name}: wind-down pause exited #{status}: #{String.trim(out)}")
+    Status.put(bay.name, :winding_down, state.run_id, Host.project_of(host, bay))
+    {:noreply, %{state | winding_down: status == 0}}
+  end
+
+  def handle_cast(:wind_down, state), do: {:noreply, state}
+
   def handle_call(:retry, _from, %{port: port} = state) when is_port(port) do
     {:reply, {:error, {:running, state.run_id}}, state}
   end
 
-  # Never launched: the checkout is what to try again.
-  def handle_call(:retry, _from, %{run_id: nil} = state) do
-    {:reply, {:ok, :run, nil}, state, {:continue, :ensure_checkout}}
+  # Never launched — the checkout could not be made, or the project was
+  # complete at start — so the checkout is looked at again and a fresh
+  # run started; the ask clears the mark either way.
+  def handle_call(:retry, _from, %{run_id: nil, host: host, bay: bay} = state) do
+    Complete.clear(Host.project_of(host, bay))
+    run_id = new_run_id(bay)
+    {:reply, {:ok, :run, run_id}, %{state | mode: :run, run_id: run_id, last: :retrying}, {:continue, :ensure_checkout}}
   end
 
-  def handle_call(:retry, _from, state) do
+  def handle_call(:retry, _from, %{host: host, bay: bay} = state) do
+    # A person asking is the one signal the daemon has that a complete
+    # project may have work again.
+    Complete.clear(Host.project_of(host, bay))
+
     {mode, run_id} =
-      if state.last in [:escalated, :paused, :crashed],
+      if state.last in [:escalated, :paused, :crashed] or (state.last == :complete and state.mode == :resume and state.run_id),
         do: {:resume, state.run_id},
         else: {:run, new_run_id(state.bay, state.run_id)}
 
-    {:reply, {:ok, mode, run_id}, %{state | mode: mode, run_id: run_id, crashes: 0}, {:continue, :launch}}
+    {:reply, {:ok, mode, run_id}, %{state | mode: mode, run_id: run_id, crashes: 0, last: :retrying}, {:continue, :launch}}
   end
+
+  @doc "Whether this bay is idle because its project was found complete."
+  def idle_complete?(name) do
+    case GenServer.whereis(via(name)) do
+      nil -> false
+      pid -> GenServer.call(pid, :idle_complete?)
+    end
+  end
+
+  def handle_call(:idle_complete?, _from, state), do: {:reply, state.port == nil and state.last == :complete, state}
 
   # The exit code says which kind of end; the run's own output says why.
   # Its last lines travel into the daemon log beside the verdict, so a

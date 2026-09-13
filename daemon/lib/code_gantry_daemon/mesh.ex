@@ -56,6 +56,13 @@ defmodule CodeGantryDaemon.Mesh do
     length(nodes)
   end
 
+  @doc "Run `module.function(args)` on every connected peer, as a cast; how many were told."
+  def tell_peers(module, function, args) do
+    nodes = peers()
+    Enum.each(nodes, fn node -> :rpc.cast(node, module, function, args) end)
+    length(nodes)
+  end
+
   @impl true
   def init(host) do
     :net_kernel.monitor_nodes(true)

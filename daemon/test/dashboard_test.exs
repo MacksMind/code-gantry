@@ -71,6 +71,7 @@ defmodule CodeGantryDaemon.DashboardTest do
     System.put_env("CODE_GANTRY_DAEMON_STATE", state)
     on_exit(fn -> System.delete_env("CODE_GANTRY_DAEMON_STATE") end)
     {:ok, _} = Status.start_link(host)
+    start_supervised!({Registry, keys: :unique, name: CodeGantryDaemon.Registry})
     # Built first, as `Application.children/1` builds it: the endpoint's
     # spec is what starts the dependencies' applications, PubSub's among
     # them, and the tests run with none started.

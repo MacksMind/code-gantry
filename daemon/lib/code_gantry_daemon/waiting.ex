@@ -79,6 +79,14 @@ defmodule CodeGantryDaemon.Waiting do
         {:error, why} -> {:error, why}
       end
 
+    # Work came back in reach of the fleet: a project a run found
+    # complete may not be any more.
+    case {reply, action} do
+      {{:ok, _}, "fleet"} -> CodeGantryDaemon.Control.wake(project_of(config))
+      {{:ok, _}, "move"} -> CodeGantryDaemon.Control.wake(project_of(params["to"]))
+      _ -> :ok
+    end
+
     {:reply, reply, read(state)}
   end
 
@@ -100,6 +108,8 @@ defmodule CodeGantryDaemon.Waiting do
   defp argv("fleet", %{"about" => id}), do: {:ok, ["plan", "edit", id, "--owner", "pipeline"]}
 
   defp argv(action, params), do: {:error, "#{action} needs more than #{inspect(Map.keys(params))}"}
+
+  defp project_of(config), do: config |> Path.dirname() |> Path.basename()
 
   defp flag(_name, value) when value in [nil, ""], do: []
   defp flag(name, value), do: [name, value]

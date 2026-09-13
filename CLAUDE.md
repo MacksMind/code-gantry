@@ -165,7 +165,8 @@ this daemon can see; `nudge`, telling them to pick code up now; `status`,
 every bay on every host; `holds`, what holds each semaphore and who is
 behind it; `runs`, which runs are alive on every host that answered — a
 host that could not be asked is named as such rather than shown with no
-runs. The pickup is nudged by the host that has just taken new code,
+runs. `wake <project>`, a complete project told it may have work
+again, here and on every peer. The pickup is nudged by the host that has just taken new code,
 with `pickup_seconds` (host file; 0 never) as the fallback tick and a
 catch-up when a host joins: fetch `code_branch`, and if
 origin is ahead of a clean checkout, fast-forward, compile `daemon/` and
@@ -1516,9 +1517,25 @@ the status file, `Control` holds the verbs a person says to a running
 daemon — `retry` today — reached by `bin/daemon` over the daemon's named
 node and cookie. It carries no ledger state. It drives the CLI
 through `host.command` and never through anything else, so its tests run
-against a fake CLI. The CLI's exit codes are its contract: 0 finished, 1
-failed before or outside a stage, 2 escalated, 3 paused; anything else is a
-crash and is resumed.
+against a fake CLI. The CLI's exit codes are its contract: 0 complete — the planner
+found nothing left to draw, 1 failed before or outside a stage, 2
+escalated, 3 paused; anything else is a crash and is resumed.
+
+**The wind-down.** A run exiting 0 is the verdict that its project has
+nothing left to draw, and every other bay on that project, here and on
+every peer, was about to spend a planner call learning the same. So the
+bay marks the project complete (`Complete`: one file per project in the
+state directory), asks every other bay on it to pause at its seam with
+the note `project complete` (they exit 3 and show `complete`, holding
+whatever stage they had drawn), and tells every peer (`Control.wound_down/3`
+over `Mesh.tell_peers/3`), which does the same on its host. A daemon
+starting leaves a marked project's bays idle, `complete` with the run and
+time that found it so, rather than paying a planner call per bay to be
+told again. The daemon cannot see the ledger change, so the mark is
+cleared by a person's ask — `retry <bay>`, `place`, or `wake <project>`,
+which also starts every idle bay on it everywhere — and by the dashboard
+after an item is handed to the fleet or a thing is moved into a project.
+A session that adds to the plan says `bin/daemon wake <project>`.
 
 `scripts/smoke.py` stands up one HTTP server for all three roles and no binary
 on `PATH`. A test asserts the old stub executable is gone, because that is the

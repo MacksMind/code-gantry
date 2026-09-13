@@ -109,8 +109,17 @@ defmodule CodeGantryDaemon.Host do
   @doc "The config a bay works: its own when placed with one, else the host's."
   def bay_config(host, bay), do: Path.join(bay_dir(host, bay), Map.get(bay, :config) || host.config)
 
-  @doc "The project a bay works, as its config's directory is named: `docs/technical_debt/code_gantry.yaml` is `technical_debt`."
-  def project_of(host, bay), do: (Map.get(bay, :config) || host.config) |> Path.dirname() |> Path.basename()
+  @doc """
+  The project a bay works, as its config's directory is named:
+  `docs/technical_debt/code_gantry.yaml` is `technical_debt`. A config at
+  the checkout's root is the repository itself, named for it.
+  """
+  def project_of(host, bay) do
+    case (Map.get(bay, :config) || host.config) |> Path.dirname() do
+      "." -> Path.basename(host.primary)
+      dir -> Path.basename(dir)
+    end
+  end
 
   @doc "The environment every command the daemon runs is given."
   def env(%__MODULE__{origin: origin}) do
