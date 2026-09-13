@@ -178,7 +178,7 @@ defmodule CodeGantryDaemon.Waiting do
     timer = Process.send_after(self(), :refresh, @refresh_ms)
 
     projects =
-      for {config, bay} <- placed(host) do
+      for {config, bay} <- projects_in_checkout(host) do
         {waiting, error} = waiting_of(host, config)
 
         %{
@@ -199,13 +199,32 @@ defmodule CodeGantryDaemon.Waiting do
     Map.merge(state, %{projects: projects, timer: timer})
   end
 
-  # One read per project, however many bays work it: the same config in
-  # two bays is two paths and one project.
-  defp placed(host) do
-    host
-    |> Placements.all()
-    |> Enum.uniq_by(&Host.project_of(host, &1))
-    |> Enum.map(&{Host.bay_config(host, &1), &1})
+  # Every project of the repository, placed or not, each read once: what
+  # is waiting on a person in a project no bay works is still waiting on
+  # a person. The placed projects are read through their own bay; the
+  # rest through the first bay's checkout, which holds every config.
+  defp projects_in_checkout(host) do
+    placed =
+      host
+      |> Placements.all()
+      |> Enum.uniq_by(&Host.project_of(host, &1))
+      |> Enum.map(&{Host.bay_config(host, &1), &1})
+
+    case Placements.all(host) do
+      [] ->
+        placed
+
+      [first | _] ->
+        known = MapSet.new(placed, fn {_, bay} -> Host.project_of(host, bay) end)
+
+        others =
+          for %{config: config} <- other_projects(host, first, Host.bay_config(host, first)),
+              project = config |> Path.dirname() |> Path.basename(),
+              not MapSet.member?(known, project),
+              do: {config, Map.put(first, :config, Path.relative_to(config, Host.bay_dir(host, first)))}
+
+        placed ++ others
+    end
   end
 
   # The repository's other projects, as the checkout holds them: every

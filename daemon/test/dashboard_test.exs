@@ -46,7 +46,7 @@ defmodule CodeGantryDaemon.DashboardTest do
     #!/usr/bin/env bash
     echo "argv: $*" >> "#{root}/calls"
     case "$1 $2" in
-      "ledger waiting") cat "#{root}/waiting.json" ;;
+      "ledger waiting") case "$*" in *docs/p/*) cat "#{root}/waiting.json" ;; *) echo "[]" ;; esac ;;
       "ledger answer"|"ledger accept") echo '{"about": "'"$3"'", "disposition": "discard", "applied": ["discard f1"]}'; echo "[]" > "#{root}/waiting.json" ;;
       "ledger move"|"ledger land"|"ledger strike"|"plan edit") echo '{"done": true}' ;;
       "ledger ask") echo '{"id": "'"$3"'"}' ;;
@@ -180,8 +180,8 @@ defmodule CodeGantryDaemon.DashboardTest do
     # on the server mid-read answered 500 after the call's timeout.
     File.write!(Path.join(root, "hold-waiting"), "")
     fake = Path.join(root, "fake-cli")
-    slow = ~s|"ledger waiting") while [ -f "#{root}/hold-waiting" ]; do sleep 0.1; done; cat|
-    File.write!(fake, String.replace(File.read!(fake), ~s|"ledger waiting") cat|, slow))
+    slow = ~s|"ledger waiting") while [ -f "#{root}/hold-waiting" ]; do sleep 0.1; done; case|
+    File.write!(fake, String.replace(File.read!(fake), ~s|"ledger waiting") case|, slow))
     task = Task.async(fn -> Waiting.refresh() end)
     {time, {:ok, _view, html}} = :timer.tc(fn -> live(build_conn(), "/") end)
     assert html =~ "Delete the columns"
@@ -196,8 +196,8 @@ defmodule CodeGantryDaemon.DashboardTest do
     File.rm!(Path.join(root, "calls"))
     :ok = Waiting.refresh()
     _ = host
-    assert length(Waiting.all()) == 1
-    assert length(Regex.scan(~r/argv: ledger waiting/, calls(root))) == 1
+    assert Enum.count(Waiting.all(), &(&1.project == "p")) == 1
+    assert length(Regex.scan(~r/argv: ledger waiting --json --config \S+docs\/p\/code_gantry.yaml/, calls(root))) == 1
   end
 
   test "the queue keeps one refresh clock however many reads it does" do
