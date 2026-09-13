@@ -342,6 +342,36 @@ defmodule CodeGantryDaemonTest do
       assert sh!(cg, ["git", "rev-parse", "HEAD"]) == sh!(other, ["git", "rev-parse", "HEAD"])
     end
 
+    test "a pushed change to the daemon's lock file fetches its dependencies before compiling", %{root: root, host: host} do
+      {cg, other} = code_repo(root)
+      host = with_code(host, cg)
+      assert Pickup.tick(host) =~ ~r/^code: at [0-9a-f]{12}$/
+      other_pushes(other, fn -> File.write!(Path.join([other, "daemon", "mix.lock"]), "%{}\n") end)
+      assert Pickup.tick(host) =~ ~r/; daemon: deps fetched; daemon: 1 module\(s\) loaded$/
+      # And not when the lock did not move: fetching is a network call.
+      other_pushes(other, fn -> write_probe(other, 3) end)
+      assert Pickup.tick(host) =~ ~r/; daemon: 1 module\(s\) loaded$/
+    end
+
+    test "a load carries the daemon's own modules and only puts its dependencies on the path", %{root: root, host: host} do
+      # A dependency's processes run inside its modules; purging and
+      # reloading them on every pickup would kill what they supervise.
+      # Its modules are found on the path when first called.
+      {cg, other} = code_repo(root)
+      host = with_code(host, cg)
+      ebin = Path.join([cg, "daemon", "_build", "prod", "lib", "extra_dep", "ebin"])
+      File.mkdir_p!(ebin)
+      [{ExtraDep, beam}] = Code.compile_string("defmodule ExtraDep do\n  def here, do: :yes\nend\n")
+      File.write!(Path.join(ebin, "Elixir.ExtraDep.beam"), beam)
+      File.write!(Path.join(ebin, "extra_dep.app"), "{application, extra_dep, [{modules, ['Elixir.ExtraDep']}]}.\n")
+      :code.purge(ExtraDep)
+      :code.delete(ExtraDep)
+      other_pushes(other, fn -> write_probe(other, 2) end)
+      assert Pickup.tick(host) =~ ~r/daemon: 1 module\(s\) loaded$/
+      refute :erlang.module_loaded(ExtraDep)
+      assert ExtraDep.here() == :yes
+    end
+
     test "the pickup starts a child the running tree lacks, whether or not code moved", %{root: root, host: host} do
       # The deficiency this closes: a version that declares a new child
       # carried its code on a reload and left the feature dormant until

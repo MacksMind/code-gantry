@@ -195,21 +195,44 @@ defmodule CodeGantryDaemon.Pickup do
   # -- the Elixir side ------------------------------------------------------
 
   defp elixir_part(host, changed) do
-    if Enum.any?(changed, &String.starts_with?(&1, "daemon/")), do: load_daemon(host), else: []
+    if Enum.any?(changed, &String.starts_with?(&1, "daemon/")),
+      do: load_daemon(host, "daemon/mix.lock" in changed),
+      else: []
   end
 
-  defp load_daemon(host) do
+  # The lock moving is the one sign a dependency changed, and fetching is
+  # a network call, so it is done only then; a compile on a lock that
+  # moved without a fetch fails, and is reported as that.
+  defp load_daemon(host, fetch_deps \\ false) do
     daemon = Path.join(host.code_gantry, "daemon")
+    env = [{"MIX_ENV", "prod"}]
 
-    case Command.run(["mix", "compile"], daemon, [{"MIX_ENV", "prod"}]) do
+    fetched =
+      if fetch_deps do
+        case Command.run(["mix", "deps.get"], daemon, env) do
+          {_, 0} -> ["daemon: deps fetched"]
+          {out, status} -> ["daemon: deps.get failed (#{status}): #{out |> String.trim() |> String.slice(0, 300)}"]
+        end
+      else
+        []
+      end
+
+    case Command.run(["mix", "compile"], daemon, env) do
       {out, 0} ->
+        own = own_app(daemon)
+
+        # Every application on the path, so a dependency's modules are
+        # found when first called; only the daemon's own purged and
+        # loaded, because a dependency's processes run inside its modules
+        # and a purge kills what is still in them.
         loaded =
           for ebin <- Path.wildcard(Path.join(daemon, "_build/prod/lib/*/ebin")),
               app <- Path.wildcard(Path.join(ebin, "*.app")),
+              Code.prepend_path(ebin),
+              Path.basename(app, ".app") == own,
               mod <- modules_of(app),
               reduce: 0 do
             n ->
-              Code.prepend_path(ebin)
               :code.soft_purge(mod)
               case :code.load_file(mod) do
                 {:module, ^mod} -> n + 1
@@ -218,10 +241,19 @@ defmodule CodeGantryDaemon.Pickup do
           end
 
         _ = out
-        ["daemon: #{loaded} module(s) loaded"]
+        fetched ++ ["daemon: #{loaded} module(s) loaded"]
 
       {out, status} ->
-        ["daemon: compile failed (#{status}): #{out |> String.trim() |> String.slice(0, 300)}"]
+        fetched ++ ["daemon: compile failed (#{status}): #{out |> String.trim() |> String.slice(0, 300)}"]
+    end
+  end
+
+  # The application `mix.exs` names, read from the file: the daemon has
+  # no Mix at runtime to ask.
+  defp own_app(daemon) do
+    case Regex.run(~r/app:\s*:(\w+)/, File.read!(Path.join(daemon, "mix.exs"))) do
+      [_, app] -> app
+      _ -> "code_gantry_daemon"
     end
   end
 
