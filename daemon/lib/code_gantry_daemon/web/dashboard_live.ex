@@ -117,9 +117,9 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
         <input type="hidden" name="action" value="answer" />
         <input type="hidden" name="about" value={@w["id"]} />
         <input type="hidden" name="config" value={@project.config} />
-        <input type="text" name="text" placeholder="text: the sentence a fold carries, the debt entry, or why a person must decide" />
-        <input type="text" name="target" placeholder="target key (fold, debt)" size="14" />
-        <button type="submit" name="disposition" value="fold">fold</button>
+        <input type="text" name="text" placeholder="text: the sentence an amend writes, the debt entry, or why a person must decide" />
+        <input type="text" name="target" placeholder="target key (amend, debt)" size="14" />
+        <button type="submit" name="disposition" value="amend">amend</button>
         <button type="submit" name="disposition" value="discard">discard</button>
         <button type="submit" name="disposition" value="debt">debt</button>
         <button type="submit" name="disposition" value="raise">raise</button>

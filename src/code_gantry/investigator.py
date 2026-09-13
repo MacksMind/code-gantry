@@ -31,7 +31,7 @@ from code_gantry.promptfiles import render
 # vocabulary rather than in the prompt file so a word added to one is missed
 # by a test rather than by a model.
 MEANINGS = {
-    "fold": "change something already in the plan — a status, a scope, a count, a constraint it got wrong; `target` names the key and `text` is the sentence it carries",
+    "amend": "change something already in the plan — a status, a scope, a count, a constraint it got wrong; `target` names the key and `text` is the sentence it carries, written on the item at the next fold",
     "discard": "the ledger keeps it; the plan never sees it — a complete outcome, and the right one for most observations",
     "debt": "a defect this project's own work created: an item under `target`, a section of this project, with `text` as the entry",
     "raise": "you cannot settle it and it needs the person's call; `text` says what would settle it",

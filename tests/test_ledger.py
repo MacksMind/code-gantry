@@ -262,7 +262,7 @@ class TestFindings:
     def test_an_answer_then_a_fold_closes_the_row(self, led):
         plant(led, "k.001")
         f = led.open_finding(keys=["k.001"], by="planner", claim="x", needs="human")
-        led.answer_finding(f.finding_id, disposition="fold", text="write this", target_key="k.001")
+        led.answer_finding(f.finding_id, disposition="amend", text="write this", target_key="k.001")
         assert led.views().findings[f.finding_id].status == "answered"
         led.append(FINDING_FOLDED, key="k.001", finding_id=f.finding_id)
         assert led.views().findings[f.finding_id].status == "folded"
@@ -275,6 +275,34 @@ class TestFindings:
             led.answer_finding(f.finding_id, disposition="ignore")
         with pytest.raises(LedgerError):
             led.answer_finding("f-nobody-9", disposition="discard")
+
+
+class TestSupersession:
+    def test_a_keyed_reading_supersedes_an_older_keyless_one_of_the_same_subject(self, led):
+        plant(led, "k.001")
+        keyless = led.open_finding(keys=[], by="planner", claim="needs a browser", needs="human", subject="browser reproduction")
+        keyed = led.open_finding(keys=["k.001"], by="planner", claim="needs a browser", needs="human", subject="browser reproduction")
+        views = led.views()
+        assert views.findings[keyless.finding_id].status == "superseded"
+        assert views.findings[keyless.finding_id].superseded_by == keyed.finding_id
+        assert views.findings[keyed.finding_id].status == "open"
+
+    def test_a_keyless_reading_supersedes_nothing(self, led):
+        plant(led, "k.001")
+        keyed = led.open_finding(keys=["k.001"], by="planner", claim="x", needs="human", subject="browser reproduction")
+        first_keyless = led.open_finding(keys=[], by="planner", claim="x", needs="human", subject="browser reproduction")
+        led.open_finding(keys=[], by="planner", claim="x", needs="human", subject="browser reproduction")
+        views = led.views()
+        assert views.findings[keyed.finding_id].status == "open"
+        assert views.findings[first_keyless.finding_id].status == "open"
+
+    def test_an_answer_written_as_fold_reads_as_amend(self, led):
+        # The word before `amend`; history carrying it means the same.
+        plant(led, "k.001")
+        f = led.open_finding(keys=["k.001"], by="planner", claim="x")
+        led.append("finding.answered", finding_id=f.finding_id, disposition="fold", text="the sentence", target_key="k.001")
+        assert apply_fold(led) >= 1
+        assert "the sentence" in led.views().nodes["k.001"].marks
 
 
 class TestViewsAreAFunctionOfTheEvents:
@@ -309,7 +337,7 @@ class TestFold:
     def test_fold_writes_an_answered_finding_under_its_target_and_closes_it(self, led):
         plant(led, "k.001")
         f = led.open_finding(keys=["k.001"], by="planner", claim="x", needs="human")
-        led.answer_finding(f.finding_id, disposition="fold", text="the constraint", target_key="k.001")
+        led.answer_finding(f.finding_id, disposition="amend", text="the constraint", target_key="k.001")
         apply_fold(led)
         views = led.views()
         assert views.nodes["k.001"].marks == ["the constraint"]

@@ -102,7 +102,7 @@ defmodule CodeGantryDaemon.Waiting do
 
   defp argv("accept", %{"about" => id}), do: {:ok, ["ledger", "accept", id, "--json"]}
 
-  defp argv("answer", %{"about" => id, "disposition" => disposition} = p) when disposition in ~w(fold discard debt raise),
+  defp argv("answer", %{"about" => id, "disposition" => disposition} = p) when disposition in ~w(amend discard debt raise),
     do: {:ok, ["ledger", "answer", id, disposition, "--json"] ++ flag("--text", p["text"]) ++ flag("--target", p["target"])}
 
   defp argv("ask", %{"about" => id, "text" => text}) when is_binary(text) and text != "",

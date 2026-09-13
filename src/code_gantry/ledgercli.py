@@ -503,19 +503,19 @@ def ledger_accept(about, as_json, config_path) -> None:
 
 @ledger.command("answer")
 @click.argument("finding_id")
-@click.argument("disposition", type=click.Choice(["fold", "discard", "debt", "raise"]))
-@click.option("--text", default=None, help="For `fold`, the sentence the plan carries; for `debt`, the entry; for `raise`, why a person must decide.")
-@click.option("--target", default=None, help="For `fold`, the key the text is written under (default: the finding's first key); for `debt`, the section the entry goes under.")
+@click.argument("disposition", type=click.Choice(["amend", "discard", "debt", "raise"]))
+@click.option("--text", default=None, help="For `amend`, the sentence the item carries; for `debt`, the entry; for `raise`, why a person must decide.")
+@click.option("--target", default=None, help="For `amend`, the key the text is written under (default: the finding's first key); for `debt`, the section the entry goes under.")
 @json_option
 @config_option
 def ledger_answer(finding_id, disposition, text, target, as_json, config_path) -> None:
-    """A disposition of one finding, in any order: `fold` writes the text
-    into the plan at the next fold; `discard` closes it; `debt` makes it an
+    """A disposition of one finding, in any order: `amend` writes the text
+    on the item at the next fold; `discard` closes it; `debt` makes it an
     item under the target section and closes it; `raise` keeps it open and
     hands it to a person."""
     _, _, led = _cfg_and_ledger(config_path, write=True)
-    if disposition == "fold" and not text:
-        raise click.ClickException("`fold` needs --text: the sentence the plan should carry")
+    if disposition == "amend" and not text:
+        raise click.ClickException("`amend` needs --text: the sentence the plan should carry")
     if target:
         _key(led, target)
     try:

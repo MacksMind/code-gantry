@@ -207,11 +207,11 @@ class TestLedgerCommands:
         writer.close()
         result = run("ledger", "findings", "--for-human")
         assert f.finding_id in result.output and "needs human" in result.output
-        assert run("ledger", "answer", f.finding_id, "fold").exit_code != 0  # fold needs text
-        result = run("ledger", "answer", f.finding_id, "fold", "--text", "Both callers are admin-only.")
+        assert run("ledger", "answer", f.finding_id, "amend").exit_code != 0  # amend needs text
+        result = run("ledger", "answer", f.finding_id, "amend", "--text", "Both callers are admin-only.")
         assert result.exit_code == 0
         assert run("ledger", "findings").output.strip() == ""
-        assert "fold — Both callers" in run("ledger", "findings", "--all").output
+        assert "amend — Both callers" in run("ledger", "findings", "--all").output
         result = run("ledger", "fold")
         assert result.exit_code == 0 and "mark(s) written" in result.output
         views = read_ledger(paths.ledger).views()
@@ -439,9 +439,9 @@ class TestAccept:
         imported(project)
         run("plan", "edit", "p.006", "--owner", "human")
         assert run("ledger", "accept", "p.006").exit_code != 0
-        run("ledger", "recommend", "p.006", "--card", self._card({"disposition": "fold", "text": "x"}))
+        run("ledger", "recommend", "p.006", "--card", self._card({"disposition": "amend", "text": "x"}))
         result = run("ledger", "accept", "p.006")
-        assert result.exit_code != 0 and "fold" in result.output
+        assert result.exit_code != 0 and "amend" in result.output
 
 
 class TestValidateSeesTheLedger:

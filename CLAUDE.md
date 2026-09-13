@@ -624,8 +624,10 @@ a person reads; `seq` is what happened.
   idiom applied to the whole record. Every event names the origin that wrote it,
   and the store assigns one sequence per ledger, so an id built from it is
   unique on its own and a replay is everything after N.
-- **A disposition means something in the views, never in a verb.** `fold`,
-  `discard`, `debt` and `raise` are interpreted by `_apply`, so the CLI, a
+- **A disposition means something in the views, never in a verb.** `amend`
+  (written as `fold` before the word was reserved for the rendering step;
+  history carrying it reads as `amend`), `discard`, `debt` and `raise` are
+  interpreted by `_apply`, so the CLI, a
   daemon, a phone and `claude -p` write one event and get one result; a
   `debt` answer is two events, the entry's upsert and the answer naming it,
   under one lock. Findings are answered one at a time in any order; the
@@ -636,6 +638,12 @@ a person reads; `seq` is what happened.
   key; the latest card is the recommendation, the thread keeps them all)
   and the questions a person put back (`thread.asked`). A card recommends
   a disposition, `move`, or for an item `landed`, `struck` or `pipeline`.
+  A keyed finding supersedes an older keyless one of the same subject: a
+  finding filed without a key cannot be closed or matched by anything,
+  so the subject is the only identity it has. Keys come from the
+  planner as `{#p.002}`, the marker as the plan renders it, and
+  `bare_key` takes the key out; every finding one project opened before
+  that was keyless.
   The card is what the buttons answer; a disposition offered without one
   is a person doing the investigation's job. `ledger accept <id>` applies what a
   card recommends as the events the answer would have been — a finding's

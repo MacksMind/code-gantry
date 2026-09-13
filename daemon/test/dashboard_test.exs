@@ -97,7 +97,7 @@ defmodule CodeGantryDaemon.DashboardTest do
     {:ok, view, html} = live(build_conn(), "/")
     assert html =~ "both admin-only" and html =~ "duplicate of p.002" and html =~ "which caller?"
     assert has_element?(view, "form#accept-f1 button", "accept: discard")
-    for disposition <- ~w(fold discard debt raise) do
+    for disposition <- ~w(amend discard debt raise) do
       assert has_element?(view, "form#answer-f1 button[value=#{disposition}]")
     end
   end

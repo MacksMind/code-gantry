@@ -88,7 +88,11 @@ KEY_STATE_KINDS = frozenset({CLAIMED, RELEASED, LANDED, STRUCK, BLOCKED, ANSWER}
 NODE_KINDS = frozenset({"document", "section", "item"})
 OWNERS = frozenset({"pipeline", "human"})
 NEEDS = frozenset({"pipeline", "human"})
-DISPOSITIONS = frozenset({"fold", "discard", "debt", "raise"})
+# `amend` writes a sentence on the item at the next fold; it was written as
+# `fold` before the word was reserved for the rendering step, and events
+# carrying the old word are read as `amend`.
+DISPOSITIONS = frozenset({"amend", "discard", "debt", "raise"})
+AMEND = frozenset({"amend", "fold"})
 # What a card may recommend: a finding's dispositions, a move to another
 # project, and for an item that a landing or a strike closes it, or that
 # the fleet can have it after all.
@@ -534,13 +538,17 @@ def _apply(views: Views, event: Event) -> None:
             run_id=event.run_id,
         )
         # Later wins: a fresh reading of the same subject on the same key
-        # supersedes the earlier one.
+        # supersedes the earlier one. A keyed reading also supersedes an
+        # older keyless one of the same subject: a finding filed without a
+        # key cannot be closed by a landing or matched by anything, so the
+        # subject is the only identity it has, and the keyed one is the
+        # same thing said properly.
         if finding.subject:
             for other in views.findings.values():
                 if (
                     other.status == "open"
                     and other.subject == finding.subject
-                    and set(other.keys) & set(finding.keys)
+                    and (set(other.keys) & set(finding.keys) or (not other.keys and finding.keys))
                 ):
                     other.status = "superseded"
                     other.superseded_by = finding.id
@@ -1124,7 +1132,7 @@ def fold_marks(views: Views) -> list[tuple[str, str, dict]]:
         if mark not in node.marks:
             out.append((NODE_MARKED, key, {"mark": mark}))
     for finding in sorted(views.findings.values(), key=lambda f: f.id):
-        if finding.status != "answered" or finding.disposition != "fold":
+        if finding.status != "answered" or finding.disposition not in AMEND:
             continue
         target = finding.target_key or (finding.keys[0] if finding.keys else None)
         if target and finding.answer_text:

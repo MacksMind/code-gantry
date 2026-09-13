@@ -78,7 +78,7 @@ class TestRenderProjection:
     def test_struck_and_answered_findings_render(self, led):
         led.append(STRUCK, key="p.004", reason="zero population")
         f = led.open_finding(keys=["p.003"], by="reviewer", claim="a claim")
-        led.answer_finding(f.finding_id, disposition="fold", text="file it", target_key="p.003")
+        led.answer_finding(f.finding_id, disposition="amend", text="file it", target_key="p.003")
         text = render_projection(led.views(), note_chars=200)
         assert "### Struck" in text and "zero population" in text
         # A `fold` waits here for the fold seam; the other dispositions close
