@@ -1540,7 +1540,10 @@ A session that adds to the plan says `bin/daemon wake <project>`.
 starts inherits the caller's group leader and the logger forwards its
 events to that node, so a function a peer asked for logged on the peer —
 read a `daemon.log` line about another host's bays as possibly that
-host's own before this was fixed.
+host's own before this was fixed. **A new remote entry point does not exist on
+the peer until the peer has taken the code that adds it**, so the nudge
+that carries it fails there in silence and that pickup goes by the tick
+or by `bin/daemon pickup` on the peer.
 
 `scripts/smoke.py` stands up one HTTP server for all three roles and no binary
 on `PATH`. A test asserts the old stub executable is gone, because that is the
