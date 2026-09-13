@@ -200,6 +200,20 @@ defmodule CodeGantryDaemon.DashboardTest do
     assert length(Regex.scan(~r/argv: ledger waiting/, calls(root))) == 1
   end
 
+  test "the queue keeps one refresh clock however many reads it does" do
+    # Each read armed another sixty-second timer; every action a person
+    # took added a reading a minute, and the page repainted every few seconds.
+    pid = Process.whereis(Waiting)
+    first = :sys.get_state(pid).timer
+    assert is_reference(first)
+    :ok = Waiting.refresh()
+    :ok = Waiting.refresh()
+    last = :sys.get_state(pid).timer
+    assert last != first
+    assert Process.read_timer(first) == false
+    assert is_integer(Process.read_timer(last))
+  end
+
   test "before the first reading there is nothing, not an error" do
     stop_supervised!(Waiting)
     assert Waiting.all() == []

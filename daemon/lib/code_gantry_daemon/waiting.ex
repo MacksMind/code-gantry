@@ -63,7 +63,7 @@ defmodule CodeGantryDaemon.Waiting do
   @impl true
   def init(host) do
     :ets.new(__MODULE__, [:named_table, :public, read_concurrency: true])
-    {:ok, %{host: host, projects: []}, {:continue, :refresh}}
+    {:ok, %{host: host, projects: [], timer: nil}, {:continue, :refresh}}
   end
 
   @impl true
@@ -169,7 +169,13 @@ defmodule CodeGantryDaemon.Waiting do
   end
 
   defp read(%{host: host} = state) do
-    Process.send_after(self(), :refresh, @refresh_ms)
+    # One clock, re-armed on every read. Arming another each time made
+    # every action a person took add a reading a minute for the life of
+    # the daemon, and the page repainted every few seconds.
+    # `Map.get`: a process hot-loaded into this code holds a state map
+    # from before the field existed.
+    if Map.get(state, :timer), do: Process.cancel_timer(state.timer)
+    timer = Process.send_after(self(), :refresh, @refresh_ms)
 
     projects =
       for {config, bay} <- placed(host) do
@@ -186,8 +192,11 @@ defmodule CodeGantryDaemon.Waiting do
       end
 
     :ets.insert(__MODULE__, {:projects, projects})
-    Phoenix.PubSub.broadcast(CodeGantryDaemon.PubSub, @topic, {:waiting, projects})
-    %{state | projects: projects}
+    # Local: the daemons are one Erlang cluster and PubSub spans it, so a
+    # cluster-wide broadcast repainted every host's page with this host's
+    # reading, whose paths are not that host's.
+    Phoenix.PubSub.local_broadcast(CodeGantryDaemon.PubSub, @topic, {:waiting, projects})
+    Map.merge(state, %{projects: projects, timer: timer})
   end
 
   # One read per project, however many bays work it: the same config in

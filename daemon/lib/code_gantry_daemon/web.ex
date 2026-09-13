@@ -35,6 +35,7 @@ defmodule CodeGantryDaemon.Web do
     # Before Phoenix starts: its request logging is a debug line per
     # request in `daemon.log`, which is the one log a person reads.
     Application.put_env(:phoenix, :logger, false)
+    Application.put_env(:phoenix_live_view, :logger, false)
     for app <- @dependencies, do: {:ok, _} = Application.ensure_all_started(app)
     Application.put_env(:code_gantry_daemon, CodeGantryDaemon.Web.Endpoint, config(host))
     CodeGantryDaemon.Web.Endpoint.child_spec([])
