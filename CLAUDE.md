@@ -664,7 +664,17 @@ a person reads; `seq` is what happened.
 - **A fold is a rendering policy, not a document edit.** Landings and answered
   findings move from the projection into the node bodies when the projection
   outgrows `ledger.fold_ratio` of the plan text; the run does it at the
-  derivation seam with no model and no commit.
+  derivation seam with no model and no commit, and `ledger fold` does it by
+  hand, with no runner stopped: a bay renders the plan from the ledger at
+  every derivation.
+- **Only a fold rewrites the plan text.** The plan text is the cacheable
+  block, so it is rendered from the nodes as they stood at the last fold
+  point (`plan.folded`, written by `apply_fold` when anything moved), and
+  everything since — items added, changed or retired, owners flipped, as
+  well as landings, strikes and answers — sits in the projection until the
+  next fold moves it in. An import folds; before any fold the plan renders
+  live. So answering cards while the fleet is idle costs nothing, and the
+  cheap order is answer everything, fold once, wake.
 - **The landing commit is the durable copy.** Its trailers carry the keys, the
   resolved findings, which model held which role, the config and the base; the
   gitignored ledger can be rebuilt from history.

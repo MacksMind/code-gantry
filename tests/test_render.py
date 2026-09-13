@@ -110,3 +110,52 @@ class TestTheProjectionShowsWhatIsDrawnAndHeld:
         fid = led.open_finding(keys=["p.003"], by="reviewer", claim="a loose end").finding_id
         led.append(FINDING_CLAIMED, run_id="r7", stage_id="s", finding_id=fid, pid=1)
         assert f"- `{fid}` on {{#p.003}} — by reviewer (held by r7): a loose end" in render_projection(led.views(), note_chars=600)
+
+
+class TestBlockZeroChangesOnlyAtAFold:
+    """The plan text is the cacheable block, so nothing but a fold may
+    rewrite it: an item added, edited, retired or handed over after the
+    last fold shows in the projection until the next fold moves it in."""
+
+    def test_an_item_added_after_the_fold_waits_in_the_projection(self, led):
+        apply_fold(led)
+        before = render_plan(led.views())
+        led.upsert_node("p.007", parent="p.002", position=2, kind="item", title="Tidy the helper", body="It lingers.", owner="human")
+        assert render_plan(led.views()) == before
+        projection = render_projection(led.views(), note_chars=200)
+        assert "### Added since the plan text was last folded" in projection
+        assert "- {#p.007} (human) **Tidy the helper** It lingers. — under {#p.002}" in projection
+        apply_fold(led)
+        assert "{#p.007}" in render_plan(led.views())
+        assert "Added since" not in render_projection(led.views(), note_chars=200)
+
+    def test_an_edit_or_a_retirement_after_the_fold_waits_in_the_projection(self, led):
+        from code_gantry.ledger import NODE_RETIRED
+
+        apply_fold(led)
+        before = render_plan(led.views())
+        node = led.views().nodes["p.003"]
+        led.upsert_node("p.003", parent=node.parent, position=node.position, kind="item", title="a.", body=node.body, owner="human", base_version=node.version)
+        assert render_plan(led.views()) == before
+        projection = render_projection(led.views(), note_chars=200)
+        assert "### Changed since the plan text was last folded" in projection
+        assert "- {#p.003} (human) **a.** body a — was: **a.** body a" in projection
+        led.append(NODE_RETIRED, key="p.004")
+        assert render_plan(led.views()) == before
+        projection = render_projection(led.views(), note_chars=200)
+        assert "### Retired since the plan text was last folded" in projection and "- {#p.004} **b.**" in projection
+
+    def test_a_fold_with_nothing_to_move_writes_nothing(self, led):
+        apply_fold(led)
+        seq = led.events()[-1].seq
+        assert apply_fold(led) == 0
+        assert led.events()[-1].seq == seq
+
+    def test_before_any_fold_the_plan_is_live(self, tmp_path):
+        # An import folds, so this is a ledger written by hand.
+        fresh = open_ledger(tmp_path / "fresh.db", origin="test", actor="test")
+        fresh.upsert_node("q.001", parent=None, position=0, kind="document", title="Plan")
+        fresh.upsert_node("q.002", parent="q.001", position=0, kind="item", title="Live")
+        assert fresh.views().folded is None
+        assert "{#q.002}" in render_plan(fresh.views())
+        assert "Added since" not in render_projection(fresh.views(), note_chars=200)

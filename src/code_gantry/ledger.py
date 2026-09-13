@@ -15,6 +15,8 @@ a field is left out of a record only on purpose.
 
 from __future__ import annotations
 
+import copy
+
 import contextlib
 import os
 import socket
@@ -46,6 +48,9 @@ FINDING_ANSWERED = "finding.answered"
 FINDING_RESOLVED = "finding.resolved"
 FINDING_SUPERSEDED = "finding.superseded"
 FINDING_FOLDED = "finding.folded"
+# The fold point: the plan text is rendered from the nodes as they stood
+# here, and everything since sits in the projection until the next one.
+PLAN_FOLDED = "plan.folded"
 FINDING_CLAIMED = "finding.claimed"
 FINDING_RELEASED = "finding.released"
 # The thread on a thing waiting for a person: the card an investigation
@@ -283,6 +288,35 @@ class Views:
     threads: dict[str, list[dict]] = field(default_factory=dict)
     # finding id or key -> the latest card, the one a person is answering.
     recommendations: dict[str, dict] = field(default_factory=dict)
+    # The nodes as they stood at the last fold, which is what the plan text
+    # renders: the cacheable block changes only there. None before the
+    # first fold, when the plan is rendered live.
+    folded: dict[str, "Node"] | None = None
+
+    def folded_views(self) -> "Views":
+        """A view over the nodes at the last fold, for rendering the plan text."""
+        return Views(nodes=self.folded) if self.folded is not None else self
+
+    def unfolded_nodes(self) -> tuple[list["Node"], list[tuple["Node", "Node"]], list["Node"]]:
+        """What has happened to the tree since the last fold: nodes added,
+        `(now, then)` pairs changed, and nodes retired. All empty before
+        the first fold, when there is nothing the plan text does not show."""
+        if self.folded is None:
+            return [], [], []
+        added, changed, retired = [], [], []
+        for node in self.walk():
+            then = self.folded.get(node.key)
+            if then is None or then.retired:
+                added.append(node)
+            elif (node.title, node.body, node.owner, node.blocking, node.parent, node.kind) != (
+                then.title, then.body, then.owner, then.blocking, then.parent, then.kind
+            ):
+                changed.append((node, then))
+        for key, then in self.folded.items():
+            now = self.nodes.get(key)
+            if not then.retired and now is not None and now.retired:
+                retired.append(now)
+        return added, changed, retired
 
     def waiting(self) -> list[Waiting]:
         """Everything waiting on a person: open human-owned items in tree
@@ -511,6 +545,8 @@ def _apply(views: Views, event: Event) -> None:
             marks=list(current.marks) if current else [],
         )
         views.nodes[key] = node
+    elif kind == PLAN_FOLDED:
+        views.folded = {key: copy.deepcopy(node) for key, node in views.nodes.items()}
     elif kind == NODE_RETIRED:
         node = views.nodes.get(event.key or "")
         if node:
@@ -1150,6 +1186,13 @@ def apply_fold(ledger: Ledger, *, actor: str | None = None) -> int:
         proposed = fold_marks(ledger.views())
         for kind, key, body in proposed:
             ledger.append(kind, key=key or None, actor=actor, **body)
+        # The fold point, when anything moved into the plan text: the
+        # marks just written, or nodes added, changed or retired since
+        # the last one. Nothing moved, nothing written, so folding twice
+        # is folding once.
+        views = ledger.views()
+        if proposed or any(views.unfolded_nodes()) or views.folded is None and views.nodes:
+            ledger.append(PLAN_FOLDED, actor=actor)
     return len(proposed)
 
 

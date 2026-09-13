@@ -31,7 +31,10 @@ def _flags(node: Node) -> str:
 
 
 def render_plan(views: Views) -> str:
-    """The tree as text."""
+    """The tree as text, as it stood at the last fold: this is the
+    cacheable block, and only a fold may rewrite it. Live before the
+    first fold."""
+    views = views.folded_views()
     out: list[str] = []
 
     def item_line(node: Node) -> str:
@@ -79,7 +82,8 @@ def render_projection(views: Views, *, note_chars: int) -> str:
         node = views.nodes.get(key)
         if node is None or node.retired:
             continue
-        if state.state in ("landed", "struck") and node.marks:
+        shown = (views.folded or {}).get(key, node) if views.folded is not None else node
+        if state.state in ("landed", "struck") and shown.marks:
             continue
         line = f"- {{#{key}}} **{node.title}**"
         if state.state == "landed":
@@ -114,7 +118,19 @@ def render_projection(views: Views, *, note_chars: int) -> str:
         for d in views.derived_waiting()
         ]
 
+    def node_line(node: Node) -> str:
+        line = f"- {{#{node.key}}}{_flags(node)} **{node.title}**"
+        return f"{line} {node.body}" if node.body else line
+
+    added_nodes, changed_nodes, retired_nodes = views.unfolded_nodes()
+    added = [f"{node_line(n)} — under {{#{n.parent}}}" if n.parent else node_line(n) for n in added_nodes]
+    changed = [f"{node_line(now)} — was:{_flags(then)} **{then.title}**" + (f" {then.body}" if then.body else "") for now, then in changed_nodes]
+    retired = [f"- {{#{n.key}}} **{n.title}**" for n in retired_nodes]
+
     sections: list[tuple[str, list[str]]] = [
+        ("Added since the plan text was last folded", added),
+        ("Changed since the plan text was last folded", changed),
+        ("Retired since the plan text was last folded", retired),
         ("Landed since the plan text was last folded", landed),
         ("Struck", struck),
         ("Claimed", claimed),
