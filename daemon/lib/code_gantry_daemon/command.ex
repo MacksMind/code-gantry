@@ -90,6 +90,19 @@ defmodule CodeGantryDaemon.Command do
          "(the path, its first line's interpreter, or the directory is missing)", 127}
   end
 
+  @doc """
+  Run `argv` for what it prints on stdout alone; returns `{stdout, status}`.
+  For a command whose output is parsed — the CLI's `--json` face — where
+  a diagnostic on stderr merged in would break the parse. Stderr goes
+  where the daemon's does.
+  """
+  def stdout(argv, cwd, env) do
+    [program | args] = argv
+    System.cmd(executable(program, cwd), args, cd: cwd, env: env)
+  rescue
+    e in ErlangError -> {"could not start #{Enum.join(argv, " ")} in #{cwd}: #{inspect(e.original)}", 127}
+  end
+
   # A program named with a path is taken from `cwd`; a bare name from PATH.
   defp executable(program, cwd) do
     cond do

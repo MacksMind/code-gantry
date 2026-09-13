@@ -9,7 +9,7 @@ defmodule CodeGantryDaemon.Application do
   """
   use Application
 
-  alias CodeGantryDaemon.{Bay, Host, Mesh, Pickup, Placements, Semaphore, Status}
+  alias CodeGantryDaemon.{Bay, Findings, Host, Mesh, Pickup, Placements, Semaphore, Status, Web}
 
   @impl true
   def start(_type, _args) do
@@ -43,7 +43,11 @@ defmodule CodeGantryDaemon.Application do
       {Pickup, host},
       # After the mesh, so the first run to ask sees whatever peers are
       # already reachable rather than only this host's own queue.
-      {Semaphore.Socket, host}
+      {Semaphore.Socket, host},
+      # The dashboard: what it announces on, what it shows, and the page.
+      {Phoenix.PubSub, name: CodeGantryDaemon.PubSub},
+      {Findings, host},
+      Web.child_spec(host)
     ]
   end
 

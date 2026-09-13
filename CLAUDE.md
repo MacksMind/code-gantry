@@ -197,19 +197,26 @@ copy, fronted by a skill in the target repository; a finding or item
 moved between projects of one repository as one event; the nudge after a
 push; the operator invocation; `bin/daemon` going through `mise`.
 
-**The dashboard (decided 2026-09-12).** The daemon serves a Phoenix
-LiveView page on every host, over Tailscale, rendering the `_hosts` and
-project ledgers: one row per bay across all hosts (host, repository,
-project, bay, state, stage in flight, since), a code line per host, and
-the findings that need a person with their dispositions as buttons. The
-daemon therefore takes dependencies — Phoenix, LiveView, Bandit, Plug,
-Jason, Phoenix.PubSub — which the pickup's `mix compile` builds once;
-only our own modules are hot-loaded. The `.tool-versions` pin (Erlang
-27.3.4, Elixir 1.18.4) is required, since Phoenix wants Elixir ≥ 1.15
-and the Spark's packaged Elixir is 1.14: the pinned toolchain is
-installed on both hosts under `mise` (precompiled, seconds), and
-`bin/daemon` must start the VM and run `mix` through `mise exec` — it
-does not yet.
+**The dashboard.** Every daemon serves one Phoenix LiveView page at
+`http://<address>:<dashboard_port>/` (host file; 4040; 0 serves none),
+on the Tailscale address, origins unchecked because the network is the
+boundary: every bay on every host from the shared records, what each
+semaphore holds, and the findings waiting on a person for every project
+placed on that host as cards with the four dispositions. The findings
+are read through `ledger findings --for-human --json` by
+`CodeGantryDaemon.Findings`, on a clock, on request and after every
+answer, and a card's answer is one `ledger answer` call, so a click
+writes the event the CLI would. The daemon therefore takes dependencies
+— Phoenix, LiveView, Bandit, Jason, Phoenix.PubSub, `lazy_html` for the
+tests — fetched by the pickup when `mix.lock` moves and built by its
+compile; only the daemon's own modules are hot-loaded, the dependencies
+only put on the path. The browser side is the two files the dependencies
+ship, served by `Plug.Static` from their `priv/`: no bundler, no node.
+The endpoint's configuration is written from the host file by
+`Web.child_spec/1`, which also starts the dependencies' applications,
+because a VM that took them on a hot load never started them. Hex and
+rebar are installed under the pinned toolchain on both hosts (`mix
+local.hex`, `mix local.rebar`), which `mise` does not do by itself.
 
 **Test bed.** The Spark (a DGX, hostname `spark`, origin `host-b`)
 and the operator's MacBook (hostname `host-a`, origin `host-a`),

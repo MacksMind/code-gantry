@@ -12,6 +12,7 @@ defmodule CodeGantryDaemon.Host do
         branch: "technical-debt",                # optional; what a new bay starts on
         code_branch: "elixir-daemon",            # optional; what the daemon picks its own code up from (default: the checkout's branch)
         pickup_seconds: 900,                     # optional; the fallback tick when no nudge came. 0 never ticks
+        dashboard_port: 4040,                    # optional; where the dashboard is served on `address`. 0 serves none
         address: "192.0.2.10",                 # optional; how other hosts reach this one (default: the hostname)
         peers: ["192.0.2.11"],                 # optional; the other hosts' addresses
         command: ["uv", "run", "code-gantry"],   # optional; what runs the CLI
@@ -23,7 +24,7 @@ defmodule CodeGantryDaemon.Host do
   """
 
   defstruct [:origin, :code_gantry, :primary, :config, :branch, :code_branch, :address,
-             pickup_seconds: 900, bays: [], peers: [], command: ["uv", "run", "code-gantry"]]
+             pickup_seconds: 900, dashboard_port: 4040, bays: [], peers: [], command: ["uv", "run", "code-gantry"]]
 
   @node_base "code_gantry_daemon"
 
@@ -81,6 +82,7 @@ defmodule CodeGantryDaemon.Host do
       branch: Keyword.get(terms, :branch),
       code_branch: Keyword.get(terms, :code_branch) || checkout_branch(Keyword.fetch!(terms, :code_gantry)),
       pickup_seconds: Keyword.get(terms, :pickup_seconds, 900),
+      dashboard_port: Keyword.get(terms, :dashboard_port, 4040),
       address: Keyword.get(terms, :address) || hostname(),
       peers: Keyword.get(terms, :peers, []),
       bays: bays
