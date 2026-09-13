@@ -150,15 +150,21 @@ carry (`r5.021`); the plan document is for the work the project is for. The
 ## When you are done
 
 ```sh
-cg ledger fold                                          # move what changed into the plan text, once
+cg ledger fold                                          # once; a cache matter, see below
 ~/projects/code-gantry/bin/daemon wake rails_5_migration_project   # if anything is now drawable
 ```
 
-Answers and additions cost nothing while the fleet is idle; the fold is the
-one thing that rewrites the plan text the planner caches, so do it once, at
-the end. `wake` clears the project's "nothing to draw" mark on every host and
-starts the idle bays; without it a project the fleet found complete stays
-idle, because the daemon cannot see the ledger change.
+**Everything written here reaches the planner at its next derivation, with no
+fold.** An item added, amended, unblocked or handed over is drawable the
+moment it is written; the planner is sent the plan text and everything that
+changed since together, every call. The fold only decides which of the two
+the planner is sent it in: the plan text is the block the model caches for an
+hour, so the fold rewrites it, and doing it once at the end of a session
+rather than after every answer is what keeps that cache warm. `wake` is the
+one thing that is not automatic: it clears the project's "nothing to draw"
+mark on every host and starts the idle bays, and without it a project the
+fleet found complete stays idle, because the daemon cannot see the ledger
+change.
 
 ## Rules
 
