@@ -139,12 +139,13 @@ defmodule CodeGantryDaemon.Waiting do
     %{state | projects: projects}
   end
 
-  # One read per project, however many bays work it.
+  # One read per project, however many bays work it: the same config in
+  # two bays is two paths and one project.
   defp placed(host) do
     host
     |> Placements.all()
+    |> Enum.uniq_by(&Host.project_of(host, &1))
     |> Enum.map(&{Host.bay_config(host, &1), &1})
-    |> Enum.uniq_by(fn {config, _} -> config end)
   end
 
   # The repository's other projects, as the checkout holds them: every

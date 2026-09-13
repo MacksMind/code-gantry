@@ -173,6 +173,16 @@ defmodule CodeGantryDaemon.DashboardTest do
     assert Task.await(task, 10_000) == :ok
   end
 
+  test "two bays on one project are one section, read once", %{root: root, host: host} do
+    File.mkdir_p!(Path.join([root, "repo-bay2", "docs", "p"]))
+    :ok = CodeGantryDaemon.Placements.put(%{name: "bay2", offset: 200})
+    File.rm!(Path.join(root, "calls"))
+    :ok = Waiting.refresh()
+    _ = host
+    assert length(Waiting.all()) == 1
+    assert length(Regex.scan(~r/argv: ledger waiting/, calls(root))) == 1
+  end
+
   test "before the first reading there is nothing, not an error" do
     stop_supervised!(Waiting)
     assert Waiting.all() == []
