@@ -21,12 +21,34 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
       :timer.send_interval(@tick_ms, :tick)
     end
 
-    {:ok, socket |> assign(projects: Waiting.all(), notice: nil) |> read_hosts()}
+    socket =
+      socket
+      |> assign(notice: nil)
+      |> stream_configure(:cards, dom_id: &"waiting-#{&1.id}")
+      |> cards(Waiting.all())
+      |> read_hosts()
+
+    {:ok, socket}
   end
 
   @impl true
-  def handle_info({:waiting, projects}, socket), do: {:noreply, assign(socket, projects: projects)}
+  def handle_info({:waiting, projects}, socket), do: {:noreply, cards(socket, projects)}
   def handle_info(:tick, socket), do: {:noreply, read_hosts(socket)}
+
+  # The cards are a stream, so a reading that changes one card patches
+  # one card: a page that repainted every card on every reading closed
+  # the dropdown a person was reading. Nothing inside a card reads the
+  # clock, for the same reason.
+  defp cards(socket, projects) do
+    entries =
+      for project <- projects, w <- project.waiting do
+        %{id: w["id"], w: w, project: project}
+      end
+
+    socket
+    |> assign(projects: Enum.map(projects, &Map.drop(&1, [:waiting])), cards: length(entries))
+    |> stream(:cards, entries, reset: true)
+  end
 
   @impl true
   def handle_event("act", %{"action" => action, "config" => config} = params, socket) do
@@ -81,23 +103,25 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
 
     <h2>Waiting on a person <button phx-click="refresh">read again</button></h2>
     <p :if={@notice} class="notice">{@notice}</p>
-    <div :for={project <- @projects}>
-      <h3>{project.project} <small class="empty">read {since(project.read_at, @now)}</small></h3>
-      <p :if={project.error} class="error">{project.error}</p>
-      <p :if={project.waiting == [] and !project.error} class="empty">nothing waiting</p>
-      <.card :for={w <- project.waiting} w={w} project={project} />
+    <p :for={project <- @projects} class="empty">
+      {project.project}: read at {DateTime.truncate(project.read_at, :second) |> DateTime.to_time() |> Time.to_string()} UTC<span :if={project.error} class="error"> — {project.error}</span>
+    </p>
+    <p :if={@cards == 0} class="empty">nothing waiting</p>
+    <div id="cards" phx-update="stream">
+      <.card :for={{dom_id, entry} <- @streams.cards} id={dom_id} w={entry.w} project={entry.project} />
     </div>
     """
   end
 
+  attr :id, :string, required: true
   attr :w, :map, required: true
   attr :project, :map, required: true
 
   defp card(assigns) do
     ~H"""
-    <div class="card" id={"waiting-#{@w["id"]}"}>
+    <div class="card" id={@id}>
       <div class="meta">
-        {@w["id"]} · {@w["kind"]}<span :if={@w["kind"] == "finding" and @w["keys"] != []}> · on {Enum.join(@w["keys"], ", ")}</span><span :if={@w["subject"]}> · {@w["subject"]}</span><span :if={@w["since"]}> · opened {@w["since"]}</span>
+        {@project.project} · {@w["id"]} · {@w["kind"]}<span :if={@w["kind"] == "finding" and @w["keys"] != []}> · on {Enum.join(@w["keys"], ", ")}</span><span :if={@w["subject"]}> · {@w["subject"]}</span><span :if={@w["since"]}> · opened {@w["since"]}</span>
       </div>
       <div class="title"><strong>{@w["title"]}</strong></div>
       <div :if={@w["text"] != "" and @w["text"] != @w["title"]} class="claim">{@w["text"]}</div>
