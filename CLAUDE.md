@@ -1552,8 +1552,12 @@ with `.code_gantry/` gitignored next to it for everything the run writes.
 `target_repo`, `work_dir` and `host` are absent: the first two are derived from
 where the file was read, the third became somebody's hostname the moment the
 file was tracked. `env_file` names a credentials file, resolved against the
-config's directory, parsed rather than sourced, applied with `setdefault` so the
-shell wins.
+config's directory, parsed rather than sourced, and **the file wins over the
+shell for the variables it names**, naming what it overrode. It was the
+other way round, so a one-off `export` could override the file; then a
+person's login shell carrying their own AWS key sent the ledger's reads to an
+account with no table, and the session that hit it went looking through
+credentials for why. What the file does not name is still the shell's.
 
 `executor.py` is only what shapes an attempt before it starts — read budget,
 excerpts, conventions — plus `run_script_stage`.

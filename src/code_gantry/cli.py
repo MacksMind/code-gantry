@@ -153,13 +153,15 @@ def _apply_env_file(cfg: ProjectConfig, config_path: Path, *, quiet: bool = Fals
     except ConfigError as e:
         click.echo(f"config problems in {config_path}:\n{e}", err=True)
         sys.exit(EXIT_FAILED)
-    if applied:
-        # What it contributed, not what it contained — the shell wins, so a
-        # line built from the file's contents would claim credit for a
-        # variable it never set. Names only; a credential must not be one
-        # `code-gantry status` away from a terminal transcript.
-        if not quiet:
-            click.echo(f"env_file supplied {', '.join(applied)}", err=True)
+    if applied.set and not quiet:
+        # Names only; a credential must not be one `code-gantry status`
+        # away from a terminal transcript. A shell value the file replaced
+        # is named so the override is visible, since the failure it guards
+        # against is a credential that is not the one you think.
+        line = f"env_file supplied {', '.join(applied.set)}"
+        if applied.overrode:
+            line += f"; overrode the shell's {', '.join(applied.overrode)}"
+        click.echo(line, err=True)
 
 
 def _resolve_run_id(project: ProjectPaths, run_id: str | None) -> str:

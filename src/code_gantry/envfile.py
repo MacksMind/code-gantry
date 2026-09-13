@@ -18,17 +18,20 @@ execution by another name, and argv-never-a-shell is the whole of this
 project's safety story; a file that can run a command can do anything the run
 can.
 
-**The shell wins.** Values are applied with `setdefault`, so an `export` for a
-one-off test still takes effect and a stale file can never silently shadow a
-deliberate override. The direction matters more than it looks: the failure it
-prevents is a credential that is not the one you think you are using, which is
-indistinguishable from the right one until a bill or an audit log says
-otherwise.
+**The file wins, for the variables it names.** The config decides what runs,
+and the credentials it points at are the project's; a person's login shell
+carries their own, which have nothing to do with it. It was the other way
+round once, so an `export` for a one-off test could override the file, and
+the ledger's reads then went out signed with a shell's own AWS key to an
+account with no table — a credential that is not the one you think you are
+using, which is the failure the old rule was written to prevent. What the
+file overrode is named, never valued, so the override is visible in the log.
 """
 
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 from code_gantry.config import ConfigError
@@ -67,16 +70,18 @@ def parse_env_file(text: str) -> dict[str, str]:
     return out
 
 
-def apply_env_file(path: Path | str, environ=None) -> list[str]:
-    """Load `path` into the environment, and say what it contributed.
+@dataclass
+class Applied:
+    """What the file did to the environment: every name it set, and the
+    ones whose shell value it replaced. Names only, never values, and no
+    caller should log one."""
 
-    Returns the names it actually set — not the names it contained. A log line
-    built from the file's contents would claim credit for a variable the shell
-    had already supplied, and the whole point of the precedence rule is that
-    those two are different.
+    set: list[str]
+    overrode: list[str]
 
-    Never returns values, and no caller should log one.
-    """
+
+def apply_env_file(path: Path | str, environ=None) -> Applied:
+    """Load `path` into the environment, and say what it did."""
     environ = os.environ if environ is None else environ
     path = Path(path)
     try:
@@ -87,9 +92,10 @@ def apply_env_file(path: Path | str, environ=None) -> list[str]:
              "a run cannot authenticate without it."]
         ) from e
 
-    applied = []
+    applied = Applied(set=[], overrode=[])
     for name, value in parse_env_file(text).items():
-        if name not in environ:
-            environ[name] = value
-            applied.append(name)
+        if name in environ and environ[name] != value:
+            applied.overrode.append(name)
+        environ[name] = value
+        applied.set.append(name)
     return applied

@@ -11,8 +11,11 @@ expansion, no command substitution. A sourced credentials file is arbitrary
 execution by another name, and argv-never-a-shell is the whole of this
 project's safety story.
 
-The shell wins over the file. An `export` for a one-off test still takes
-effect, and a stale file cannot silently shadow a deliberate override.
+The file wins over the shell for the variables it names, and says which
+shell values it overrode. A person's login shell carries their own AWS key,
+and with the shell winning the ledger's reads went out signed with it, to an
+account with no table: a credential that is not the one you think you are
+using, which is exactly the failure the old rule was written to prevent.
 """
 
 import os
@@ -76,17 +79,28 @@ class TestPrecedence:
         env.write_text("CG_TEST_KEY=from-file\n")
         applied = apply_env_file(env)
         assert os.environ["CG_TEST_KEY"] == "from-file"
-        assert applied == ["CG_TEST_KEY"]
+        assert applied.set == ["CG_TEST_KEY"] and applied.overrode == []
 
-    def test_the_shell_wins(self, tmp_path, monkeypatch):
+    def test_the_file_wins_and_names_what_it_overrode(self, tmp_path, monkeypatch):
         monkeypatch.setenv("CG_TEST_KEY", "from-shell")
+        monkeypatch.setenv("CG_TEST_SAME", "same")
+        monkeypatch.delenv("CG_TEST_NEW", raising=False)
+        env = tmp_path / "env"
+        env.write_text("CG_TEST_KEY=from-file\nCG_TEST_SAME=same\nCG_TEST_NEW=new\n")
+        applied = apply_env_file(env)
+        assert os.environ["CG_TEST_KEY"] == "from-file"
+        # Every name the file set, and separately the ones whose shell value
+        # it replaced, so the log line can say a shell value was overridden
+        # without ever saying what either value was.
+        assert applied.set == ["CG_TEST_KEY", "CG_TEST_SAME", "CG_TEST_NEW"]
+        assert applied.overrode == ["CG_TEST_KEY"]
+
+    def test_a_variable_the_file_does_not_name_is_the_shells(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CG_TEST_OTHER", "from-shell")
         env = tmp_path / "env"
         env.write_text("CG_TEST_KEY=from-file\n")
-        applied = apply_env_file(env)
-        assert os.environ["CG_TEST_KEY"] == "from-shell"
-        # Reported as not applied, so a log line can say what the file
-        # actually contributed rather than what it contained.
-        assert applied == []
+        apply_env_file(env)
+        assert os.environ["CG_TEST_OTHER"] == "from-shell"
 
     def test_a_missing_file_is_a_config_problem(self, tmp_path):
         with pytest.raises(ConfigError) as e:
