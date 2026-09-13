@@ -1,7 +1,27 @@
+---
+description: Work one CodeGantry project's ledger from this session — what is waiting on a person, decisions, new work. Takes the project as its argument.
+argument-hint: [project]
+---
+
 # Work the CodeGantry ledger from this session
 
 <!-- Lives in code-gantry/skills/code-gantry; a target repository links it
      from .claude/skills/code-gantry so one copy serves every repository. -->
+
+## The project
+
+This skill works one project, named by its argument: **$ARGUMENTS**. A
+project is a directory under `docs/` holding a `code_gantry.yaml`, and the
+name is that directory's. If the argument is empty, run
+
+```sh
+ls docs/*/code_gantry.yaml
+```
+
+and ask the person which project before doing anything else; never pick one.
+Everything below is scoped to that project: the queue it reads, the items it
+writes, the fold and the wake at the end. Another project's ledger is touched
+only by `move`, and only to send something there.
 
 CodeGantry runs a fleet of bays against this repository's projects. Each
 project is a directory with a `code_gantry.yaml` beside its plan, and its
@@ -27,14 +47,13 @@ written.
 Every verb below is spelled `cg …` for brevity and means, in full:
 
 ```sh
-uv run --project ~/projects/code-gantry code-gantry … --config docs/rails_5_migration_project/code_gantry.yaml
+uv run --project ~/projects/code-gantry code-gantry … --config docs/<project>/code_gantry.yaml
 ```
 
-Run it that way every time, from this repository's root: an alias or an
-exported variable set in one shell does not survive to the next command a
-tool runs. The config names the project; the other project here is
-`docs/technical_debt/code_gantry.yaml`. `--json` on any verb gives the whole
-record.
+with `<project>` the project named above. Run it that way every time, from
+this repository's root: an alias or an exported variable set in one shell
+does not survive to the next command a tool runs. `--json` on any verb gives
+the whole record.
 
 **The CLI is the only interface.** It loads the ledger's table name and the
 credentials itself, from the file the config points at. If a command fails,
@@ -77,7 +96,7 @@ cg ledger strike <key> "why"         # nothing to do: zero population, wrong pre
 cg plan edit <key> --owner pipeline  # the fleet can have it after all
 
 # either
-cg ledger move <id> --to docs/technical_debt/code_gantry.yaml [--under <section key there>]
+cg ledger move <id> --to docs/<other project>/code_gantry.yaml [--under <section key there>]
                                      # belongs to another project; general debt is a project
 cg ledger accept <id>                # apply whatever the card recommends, as the events above
 ```
@@ -140,18 +159,18 @@ ticket), what done looks like, and any constraint the work must respect. Facts,
 never instructions to the planner. `--owner human` keeps it off the fleet's
 list and on the dashboard's, for work that needs a decision or a person's
 hands first; `plan edit <key> --owner pipeline` hands it over later. The
-project is the branch the fix should land on, and the section is where in
-that project's documents it belongs. In this repository that is the Rails 5
-project for everything now: its `technical_debt.md` has a section for defects
-this project's work created and one for inherited defects the branch has to
-carry (`r5.021`); the plan document is for the work the project is for. The
+project is the branch the fix should land on — normally the one this skill
+was given — and the section is where in that project's documents it belongs:
+its `technical_debt.md` for defects, with a section for those the project's
+own work created and one for inherited ones the branch has to carry; the plan
+document for the work the project is for. In this repository the
 `technical_debt` project is closed to new work; nothing goes there.
 
 ## When you are done
 
 ```sh
 cg ledger fold                                          # once; a cache matter, see below
-~/projects/code-gantry/bin/daemon wake rails_5_migration_project   # if anything is now drawable
+~/projects/code-gantry/bin/daemon wake <project>        # if anything is now drawable
 ```
 
 **Everything written here reaches the planner at its next derivation, with no
