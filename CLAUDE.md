@@ -963,7 +963,11 @@ a person reads; `seq` is what happened.
   that carries new pickup code is run by the old module, so it cannot be
   the load that acts on it. A child present but not running is dropped
   and started again, so it repairs as well as adds. The other two are open, and `code_change` for a changed state
-  shape still needs a restart at idle.
+  shape still needs a restart at idle. A module with a process still
+  inside its old version is not reloaded — `:not_purged` in `daemon.log`
+  at every pickup — until that process leaves it; `Semaphore.Socket`'s
+  handlers are the holds, so a hard purge there would release every
+  hold on the host, and the soft one is right.
 - **A field removed from a model strands the run that persisted it.** `Stage` is
   `extra="forbid"`, so deleting a field raises on the next *resume*;
   `current_stage` filters to declared fields.
