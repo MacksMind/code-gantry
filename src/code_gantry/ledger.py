@@ -19,6 +19,7 @@ import copy
 
 import contextlib
 import os
+import re
 import socket
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -745,7 +746,21 @@ def _utcnow() -> str:
 
 
 def default_origin() -> str:
-    return socket.gethostname()
+    """The origin a writer names when nothing named one: the variable the
+    daemon sets, else the host file's `origin:`, else the short hostname.
+    The host file is what the daemon's runs name, so a session's CLI on
+    the same machine must land on the same name — one machine, one origin."""
+    named = os.environ.get("CODE_GANTRY_ORIGIN")
+    if named:
+        return named
+    host_file = Path(os.environ.get("CODE_GANTRY_HOST_FILE") or Path.home() / ".config" / "code_gantry" / "host.exs")
+    try:
+        found = re.search(r'^\s*origin:\s*"([^"]+)"', host_file.read_text(encoding="utf-8"), re.M)
+    except OSError:
+        found = None
+    if found:
+        return found.group(1)
+    return socket.gethostname().split(".")[0]
 
 
 class Ledger:

@@ -809,3 +809,30 @@ class TestMove:
         with pytest.raises(LedgerError):
             led.move("k.002", to=other, to_label="repo/debt", from_label="repo/rails-5", under="q.999")
         assert led.views().state("k.002").state == "open"
+
+
+class TestOrigin:
+    """Every event names the origin that wrote it, and the daemon's runs
+    name the host file's `origin:`. A session's CLI must name the same one,
+    or its findings get ids under a second name for the same host and the
+    claim-release logic compares two names for one machine."""
+
+    def test_the_variable_wins(self, monkeypatch):
+        from code_gantry.ledger import default_origin
+        monkeypatch.setenv("CODE_GANTRY_ORIGIN", "named")
+        assert default_origin() == "named"
+
+    def test_then_the_host_file(self, tmp_path, monkeypatch):
+        from code_gantry.ledger import default_origin
+        monkeypatch.delenv("CODE_GANTRY_ORIGIN", raising=False)
+        host = tmp_path / "host.exs"
+        host.write_text('[\n  origin: "host-b",\n  code_gantry: "/x",\n]\n')
+        monkeypatch.setenv("CODE_GANTRY_HOST_FILE", str(host))
+        assert default_origin() == "host-b"
+
+    def test_then_the_short_hostname(self, tmp_path, monkeypatch):
+        import socket
+        from code_gantry.ledger import default_origin
+        monkeypatch.delenv("CODE_GANTRY_ORIGIN", raising=False)
+        monkeypatch.setenv("CODE_GANTRY_HOST_FILE", str(tmp_path / "absent.exs"))
+        assert default_origin() == socket.gethostname().split(".")[0]
