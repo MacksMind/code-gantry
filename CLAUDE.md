@@ -199,8 +199,8 @@ push; the operator invocation; `bin/daemon` going through `mise`.
 
 **The dashboard.** Every daemon serves one Phoenix LiveView page at
 `http://<address>:<dashboard_port>/` (host file; 4040; 0 serves none),
-on the Tailscale address, origins unchecked because the network is the
-boundary: every bay on every host from the shared records, what each
+on the Tailscale address and again on loopback so `localhost` answers on
+the host itself, origins unchecked because the network is the boundary: every bay on every host from the shared records, what each
 semaphore holds, and the findings waiting on a person for every project
 placed on that host as cards with the four dispositions. The findings
 are read through `ledger findings --for-human --json` by

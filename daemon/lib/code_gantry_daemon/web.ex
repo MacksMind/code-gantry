@@ -40,6 +40,27 @@ defmodule CodeGantryDaemon.Web do
     CodeGantryDaemon.Web.Endpoint.child_spec([])
   end
 
+  @doc """
+  A second listener on loopback at the same port, so `localhost` answers
+  on the host itself as well as the tailnet name. Only when the endpoint
+  is bound to some other address: bound to loopback or to every
+  interface it already answers there, and a second bind would refuse.
+  """
+  def loopback_spec(%Host{} = host), do: loopback_spec(host, ip(host))
+
+  def loopback_spec(host, endpoint_ip) do
+    port = Map.get(host, :dashboard_port) || 4040
+
+    if port == 0 or endpoint_ip in [{127, 0, 0, 1}, {0, 0, 0, 0}] do
+      nil
+    else
+      Supervisor.child_spec(
+        {Bandit, plug: CodeGantryDaemon.Web.Endpoint, ip: {127, 0, 0, 1}, port: port},
+        id: CodeGantryDaemon.Web.Loopback
+      )
+    end
+  end
+
   defp config(host) do
     secret = secret(host)
     # `Map.get`, not the field: a daemon that took this code on a hot

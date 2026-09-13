@@ -104,6 +104,27 @@ defmodule CodeGantryDaemon.DashboardTest do
     assert :code.lib_dir(:public_key) != {:error, :bad_name}
   end
 
+  test "a loopback listener is added only when the endpoint is bound elsewhere", %{host: host} do
+    host = %{host | dashboard_port: 4321}
+    assert Web.loopback_spec(host, {100, 64, 0, 1}).id == CodeGantryDaemon.Web.Loopback
+    assert Web.loopback_spec(host, {127, 0, 0, 1}) == nil
+    assert Web.loopback_spec(host, {0, 0, 0, 0}) == nil
+    assert Web.loopback_spec(%{host | dashboard_port: 0}, {100, 64, 0, 1}) == nil
+  end
+
+  test "the loopback listener serves the dashboard", %{host: host} do
+    {:ok, probe} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+    {:ok, {_, port}} = :inet.sockname(probe)
+    :gen_tcp.close(probe)
+    host = %{host | dashboard_port: port}
+    start_supervised!(Web.loopback_spec(host, {100, 64, 0, 1}))
+    {:ok, socket} = :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false])
+    :ok = :gen_tcp.send(socket, "GET / HTTP/1.0\r\nHost: localhost\r\n\r\n")
+    {:ok, response} = :gen_tcp.recv(socket, 0, 5_000)
+    assert response =~ "200 OK"
+    :gen_tcp.close(socket)
+  end
+
   test "every bay on every host is a row", %{host: host} do
     Status.put("bay1", :running, "20260913-000000-bay1", Host.project_of(host, hd(host.bays)))
     {:ok, _view, html} = live(build_conn(), "/")

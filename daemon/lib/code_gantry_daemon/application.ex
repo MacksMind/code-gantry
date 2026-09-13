@@ -31,6 +31,10 @@ defmodule CodeGantryDaemon.Application do
   that exists everywhere except where it runs.
   """
   def children(host) do
+    Enum.reject(specs(host), &is_nil/1)
+  end
+
+  defp specs(host) do
     [
       {Registry, keys: :unique, name: CodeGantryDaemon.Registry},
       {Status, host},
@@ -47,7 +51,8 @@ defmodule CodeGantryDaemon.Application do
       # The dashboard: what it announces on, what it shows, and the page.
       {Phoenix.PubSub, name: CodeGantryDaemon.PubSub},
       {Findings, host},
-      Web.child_spec(host)
+      Web.child_spec(host),
+      Web.loopback_spec(host)
     ]
   end
 
