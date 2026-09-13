@@ -227,6 +227,23 @@ defmodule CodeGantryDaemonTest do
     end
   end
 
+  describe "what a peer asks for" do
+    test "runs as this host's own, whatever group leader the ask arrived with" do
+      # The logger forwards a process's events to its group leader's
+      # node, so a function a peer's rpc started logged on the peer.
+      foreign = spawn(fn -> Process.sleep(:infinity) end)
+      parent = self()
+
+      spawn(fn ->
+        Process.group_leader(self(), foreign)
+        Mesh.locally(Kernel, :send, [parent, {:leader, Process.group_leader()}])
+      end)
+
+      assert_receive {:leader, leader}
+      assert leader == Process.whereis(:user)
+    end
+  end
+
   describe "wind-down" do
     alias CodeGantryDaemon.{Complete, Control, Placements}
 

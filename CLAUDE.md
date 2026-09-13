@@ -1536,6 +1536,11 @@ cleared by a person's ask — `retry <bay>`, `place`, or `wake <project>`,
 which also starts every idle bay on it everywhere — and by the dashboard
 after an item is handed to the fleet or a thing is moved into a project.
 A session that adds to the plan says `bin/daemon wake <project>`.
+**What a peer asks for runs through `Mesh.locally/3`**: a process an rpc
+starts inherits the caller's group leader and the logger forwards its
+events to that node, so a function a peer asked for logged on the peer —
+read a `daemon.log` line about another host's bays as possibly that
+host's own before this was fixed.
 
 `scripts/smoke.py` stands up one HTTP server for all three roles and no binary
 on `PATH`. A test asserts the old stub executable is gone, because that is the

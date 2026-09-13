@@ -51,15 +51,28 @@ defmodule CodeGantryDaemon.Mesh do
   """
   def nudge do
     nodes = Node.list()
-    Enum.each(nodes, fn node -> :rpc.cast(node, Pickup, :nudged, []) end)
+    Enum.each(nodes, fn node -> :rpc.cast(node, __MODULE__, :locally, [Pickup, :nudged, []]) end)
     if nodes != [], do: Logger.info("mesh: nudged #{Enum.join(nodes, ", ")}")
     length(nodes)
+  end
+
+  @doc """
+  Run `module.function(args)` here as this host's own: what a peer's rpc
+  should reach. A process an rpc starts inherits the caller's group
+  leader, and the logger forwards a process's events to its group
+  leader's node, so a function a peer asked for logged on the peer — a
+  host's wind-down sat in the other host's `daemon.log`, which is the one
+  log a person reads.
+  """
+  def locally(module, function, args) do
+    Process.group_leader(self(), Process.whereis(:user))
+    apply(module, function, args)
   end
 
   @doc "Run `module.function(args)` on every connected peer, as a cast; how many were told."
   def tell_peers(module, function, args) do
     nodes = peers()
-    Enum.each(nodes, fn node -> :rpc.cast(node, module, function, args) end)
+    Enum.each(nodes, fn node -> :rpc.cast(node, __MODULE__, :locally, [module, function, args]) end)
     length(nodes)
   end
 
