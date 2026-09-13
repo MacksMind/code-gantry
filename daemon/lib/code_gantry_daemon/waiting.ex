@@ -23,10 +23,20 @@ defmodule CodeGantryDaemon.Waiting do
 
   def start_link(host), do: GenServer.start_link(__MODULE__, host, name: __MODULE__)
 
-  @doc "Every placed project: `[%{project, config, waiting, projects, read_at, error}]`; `projects` are the others in its repository."
-  def all, do: GenServer.call(__MODULE__, :all)
+  @doc """
+  Every placed project: `[%{project, config, waiting, projects, read_at,
+  error}]`; `projects` are the others in its repository. The last reading,
+  from a table rather than the server, so a page mounting never waits on
+  a read in progress: one read is a CLI call per project, seconds each.
+  """
+  def all do
+    case :ets.lookup(__MODULE__, :projects) do
+      [{:projects, projects}] -> projects
+      [] -> []
+    end
+  end
 
-  @doc "Read every project again now."
+  @doc "Read every project again now, and wait for it."
   def refresh, do: GenServer.call(__MODULE__, :refresh, 60_000)
 
   @doc """
@@ -43,7 +53,10 @@ defmodule CodeGantryDaemon.Waiting do
   def topic, do: @topic
 
   @impl true
-  def init(host), do: {:ok, %{host: host, projects: []}, {:continue, :refresh}}
+  def init(host) do
+    :ets.new(__MODULE__, [:named_table, :public, read_concurrency: true])
+    {:ok, %{host: host, projects: []}, {:continue, :refresh}}
+  end
 
   @impl true
   def handle_continue(:refresh, state), do: {:noreply, read(state)}
@@ -52,7 +65,6 @@ defmodule CodeGantryDaemon.Waiting do
   def handle_info(:refresh, state), do: {:noreply, read(state)}
 
   @impl true
-  def handle_call(:all, _from, state), do: {:reply, state.projects, state}
   def handle_call(:refresh, _from, state), do: {:reply, :ok, read(state)}
 
   def handle_call({:act, config, action, params}, _from, %{host: host} = state) do
@@ -117,6 +129,7 @@ defmodule CodeGantryDaemon.Waiting do
         }
       end
 
+    :ets.insert(__MODULE__, {:projects, projects})
     Phoenix.PubSub.broadcast(CodeGantryDaemon.PubSub, @topic, {:waiting, projects})
     %{state | projects: projects}
   end

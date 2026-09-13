@@ -77,6 +77,9 @@ defmodule CodeGantryDaemon.DashboardTest do
     web = Web.child_spec(host)
     start_supervised!({Phoenix.PubSub, name: CodeGantryDaemon.PubSub})
     start_supervised!({Waiting, host})
+    # The first read is under way when the server answers; a page reads
+    # the table, so wait for the reading the tests are about.
+    :ok = Waiting.refresh()
     start_supervised!(web)
     %{root: root, host: host, bay: bay}
   end
@@ -153,6 +156,21 @@ defmodule CodeGantryDaemon.DashboardTest do
     assert :code.lib_dir(:public_key) == {:error, :bad_name}
     _ = Web.child_spec(host)
     assert :code.lib_dir(:public_key) != {:error, :bad_name}
+  end
+
+  test "a page never waits on a read: the queue is the last reading, from a table", %{root: root} do
+    # A read is a CLI call per project, seconds each; a mount that waited
+    # on the server mid-read answered 500 after the call's timeout.
+    File.write!(Path.join(root, "hold-waiting"), "")
+    fake = Path.join(root, "fake-cli")
+    slow = ~s|"ledger waiting") while [ -f "#{root}/hold-waiting" ]; do sleep 0.1; done; cat|
+    File.write!(fake, String.replace(File.read!(fake), ~s|"ledger waiting") cat|, slow))
+    task = Task.async(fn -> Waiting.refresh() end)
+    {time, {:ok, _view, html}} = :timer.tc(fn -> live(build_conn(), "/") end)
+    assert html =~ "Delete the columns"
+    assert time < 2_000_000
+    File.rm!(Path.join(root, "hold-waiting"))
+    assert Task.await(task, 10_000) == :ok
   end
 
   test "every bay on every host is a row", %{host: host} do
