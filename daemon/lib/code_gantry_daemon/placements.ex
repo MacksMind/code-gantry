@@ -22,22 +22,29 @@ defmodule CodeGantryDaemon.Placements do
     end
   end
 
-  @doc "Every bay of this host: the host file's, then the placed ones."
+  @doc """
+  Every bay of this host: the host file's, then the placed ones. A
+  placement with a host-file bay's name stands in for the file's entry,
+  so what a bay works is changed by placing it again, never by editing
+  the file.
+  """
   def all(host) do
+    placed = load()
     seeded = Enum.map(host.bays, & &1.name)
-    host.bays ++ Enum.reject(load(), &(&1.name in seeded))
+
+    Enum.map(host.bays, fn bay -> Enum.find(placed, bay, &(&1.name == bay.name)) end) ++
+      Enum.reject(placed, &(&1.name in seeded))
   end
 
-  @doc "Remember a placement. `{:error, :exists}` when the name is taken."
-  def add(bay) do
+  @doc "Remember a placement, one per name: placing a bay again replaces what it had."
+  def put(bay) do
     placed = load()
 
-    if Enum.any?(placed, &(&1.name == bay.name)) do
-      {:error, :exists}
-    else
-      write(placed ++ [bay])
-      :ok
-    end
+    if Enum.any?(placed, &(&1.name == bay.name)),
+      do: write(Enum.map(placed, &if(&1.name == bay.name, do: bay, else: &1))),
+      else: write(placed ++ [bay])
+
+    :ok
   end
 
   defp bay(terms) do

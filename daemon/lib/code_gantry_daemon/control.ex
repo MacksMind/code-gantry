@@ -80,24 +80,30 @@ defmodule CodeGantryDaemon.Control do
   def reload(host \\ nil), do: Pickup.reload(host || Status.host())
 
   @doc """
-  Add a bay to this host: remembered for the next start, its checkout made
-  if it is missing, and a run started in it. A name the host already has —
-  from its host file or an earlier placement — is refused.
+  Place a bay on this host: remembered for the next start, its checkout
+  made if it is missing, and a run started in it. Placing a bay the host
+  already has — from its host file or an earlier placement — replaces
+  what it works, which is how a bay moves between projects; only a bay
+  with a run live is refused, because the run would finish on one project
+  while the record said another.
   """
   def place(name, offset, config \\ nil) do
     host = Status.host()
     bay = if config, do: %{name: name, offset: offset, config: config}, else: %{name: name, offset: offset}
     on = if config, do: " on #{config}", else: ""
 
-    if Enum.any?(Placements.all(host), &(&1.name == name)) do
-      "#{name} is already placed"
-    else
-      :ok = Placements.add(bay)
+    case Bay.live(name) do
+      {:running, run_id} ->
+        "#{name} is running #{run_id}; pause or stop it first"
 
-      case Application.start_bay(host, bay) do
-        {:ok, _} -> "#{name}: placed at offset #{offset}#{on}; making its checkout if it is missing, then starting a run"
-        {:error, reason} -> "#{name}: placed, but could not start: #{inspect(reason)}"
-      end
+      idle_or_absent ->
+        :ok = Placements.put(bay)
+        if idle_or_absent == :idle, do: Application.stop_bay(name)
+
+        case Application.start_bay(host, bay) do
+          {:ok, _} -> "#{name}: placed at offset #{offset}#{on}; making its checkout if it is missing, then starting a run"
+          {:error, reason} -> "#{name}: placed, but could not start: #{inspect(reason)}"
+        end
     end
   end
 

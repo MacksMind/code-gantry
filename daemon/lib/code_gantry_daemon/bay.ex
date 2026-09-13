@@ -61,6 +61,14 @@ defmodule CodeGantryDaemon.Bay do
     end
   end
 
+  @doc "Whether this bay has a run live: `{:running, run_id}`, `:idle` with a process and no run, `:absent` with none."
+  def live(name) do
+    case GenServer.whereis(via(name)) do
+      nil -> :absent
+      pid -> GenServer.call(pid, :live)
+    end
+  end
+
   @doc """
   Launch again. `{:ok, mode, run_id}` names what was started; a bay with a
   run live refuses with its id, since the run is the thing to talk to.
@@ -198,6 +206,9 @@ defmodule CodeGantryDaemon.Bay do
 
   @impl true
   def handle_call(:running?, _from, state), do: {:reply, is_port(state.port), state}
+
+  def handle_call(:live, _from, %{port: port} = state) when is_port(port), do: {:reply, {:running, state.run_id}, state}
+  def handle_call(:live, _from, state), do: {:reply, :idle, state}
 
   def handle_call(:pause_for_pickup, _from, %{port: port, host: host, bay: bay} = state) when is_port(port) do
     config = Host.bay_config(host, bay)

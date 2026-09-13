@@ -190,19 +190,18 @@ defmodule CodeGantryDaemonTest do
       assert Enum.map(Placements.all(host), & &1.name) == ["bay1", "bay3"]
     end
 
-    test "a name already placed, or in the host file, is refused", %{root: root, host: host} do
+    test "a bay with a run live keeps its placement", %{root: root, host: host} do
       File.write!(Path.join(root, "hold"), "")
       assert Control.place("bay3", 300) =~ ~r/^bay3: placed/
-      assert Control.place("bay3", 301) == "bay3 is already placed"
-      assert Control.place("bay1", 100) == "bay1 is already placed"
+      wait_for(fn -> "bay3" in Bay.running(host) end)
+      assert Control.place("bay3", 301) =~ ~r/^bay3 is running \d{8}-\d{6}-bay3; pause or stop it first$/
       assert Enum.map(Placements.load(), & &1.offset) == [300]
       File.rm!(Path.join(root, "hold"))
-      _ = host
     end
 
     test "a placement from an earlier start is a bay again", %{root: root, host: host, state: state} do
       File.write!(Path.join(root, "exit"), "0")
-      :ok = Placements.add(%{name: "bay4", offset: 400})
+      :ok = Placements.put(%{name: "bay4", offset: 400})
       CodeGantryDaemon.Application.start_bays(host)
       wait_for(fn -> String.contains?(status(state), "bay4 finished") end)
       assert calls(root) =~ "mk-bay bay4 400 work"
@@ -231,7 +230,7 @@ defmodule CodeGantryDaemonTest do
   describe "a placement's project" do
     alias CodeGantryDaemon.{Control, Placements}
 
-    test "a bay placed with a config works that project", %{root: root, host: host, state: state} do
+    test "a bay placed with a config works that project", %{root: root, state: state} do
       File.write!(Path.join(root, "exit"), "0")
       line = Control.place("bay6", 600, "docs/rails_6/code_gantry.yaml")
       assert line =~ ~r/^bay6: placed at offset 600 on docs\/rails_6\/code_gantry.yaml/
@@ -239,6 +238,26 @@ defmodule CodeGantryDaemonTest do
       assert calls(root) =~ ~r/argv: run \S+repo-bay6\/docs\/rails_6\/code_gantry.yaml --run-id/
       assert [%{name: "bay6", offset: 600, config: "docs/rails_6/code_gantry.yaml"}] = Placements.load()
       assert status(state) =~ ~r/^bay6 finished \S+ since \S+ rails_6$/m
+    end
+
+    test "a bay that is not running is placed again on another project", %{root: root, state: state} do
+      File.write!(Path.join(root, "exit"), "0")
+      assert Control.place("bay7", 700, "docs/a/code_gantry.yaml") =~ ~r/^bay7: placed/
+      wait_for(fn -> String.contains?(status(state), "bay7 finished") end)
+      assert Control.place("bay7", 700, "docs/b/code_gantry.yaml") =~ ~r/^bay7: placed at offset 700 on docs\/b\/code_gantry.yaml/
+      wait_for(fn -> calls(root) =~ ~r/argv: run \S+repo-bay7\/docs\/b\/code_gantry.yaml/ end)
+      # One placement per name, the latest, and the next start reads that one.
+      assert [%{name: "bay7", offset: 700, config: "docs/b/code_gantry.yaml"}] = Placements.load()
+      assert status(state) =~ ~r/^bay7 finished \S+ since \S+ b$/m
+    end
+
+    test "a host-file bay is placed on a project without editing the host file", %{root: root, host: host, state: state} do
+      File.write!(Path.join(root, "exit"), "0")
+      assert Control.place("bay1", 100, "docs/b/code_gantry.yaml") =~ ~r/^bay1: placed at offset 100 on docs\/b\/code_gantry.yaml/
+      wait_for(fn -> String.contains?(status(state), "bay1 finished") end)
+      assert calls(root) =~ ~r/argv: run \S+repo-bay1\/docs\/b\/code_gantry.yaml/
+      # The host file still seeds the bay; the placement says what it works.
+      assert [%{name: "bay1", offset: 100, config: "docs/b/code_gantry.yaml"}] = Placements.all(host)
     end
   end
 

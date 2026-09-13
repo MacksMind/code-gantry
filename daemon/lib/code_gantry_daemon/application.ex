@@ -113,4 +113,12 @@ defmodule CodeGantryDaemon.Application do
   def start_bay(host, bay) do
     DynamicSupervisor.start_child(CodeGantryDaemon.Bays, {Bay, {host, bay}})
   end
+
+  @doc "Take a bay's process down so it can be started again with a new placement. `:ok` when there was none."
+  def stop_bay(name) do
+    case GenServer.whereis(Bay.via(name)) do
+      nil -> :ok
+      pid -> DynamicSupervisor.terminate_child(CodeGantryDaemon.Bays, pid)
+    end
+  end
 end

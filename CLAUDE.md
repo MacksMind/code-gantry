@@ -153,7 +153,8 @@ operator role's model transport is a pluggable command. Anything a person
 or a session does by hand is a gap: log it below as a verb the daemon owes.
 Verbs it has: `retry`; `place <bay> <offset> [config]`, a placement
 naming the project it works so bays of one repository work different
-projects; `pickup`, one tick of the code pickup now; `reload`, the local
+projects — placing a bay again moves it to another project, the host
+file's entry included, and only a bay with a run live refuses; `pickup`, one tick of the code pickup now; `reload`, the local
 checkout compiled and loaded for a test on one host; `peers`, the hosts
 this daemon can see; `nudge`, telling them to pick code up now; `status`,
 every bay on every host; `holds`, what holds each semaphore and who is
