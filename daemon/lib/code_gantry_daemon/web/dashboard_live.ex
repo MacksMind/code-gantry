@@ -181,11 +181,12 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
   attr :project, :map, required: true
   attr :rec, :map, required: true
 
-  # The card's recommendation, and the one click that takes it: the same
-  # action the hand forms send, with the card's own text and target.
+  # The card's recommendation, and the one click that takes it: `ledger
+  # accept`, which applies whatever the card recommends as the events the
+  # answer would have been.
   defp recommendation(assigns) do
     rec = assigns.rec["recommend"] || %{}
-    assigns = assign(assigns, rec: rec, accept: accept(assigns.w, rec))
+    assigns = assign(assigns, rec: rec)
 
     ~H"""
     <div class="recommendation">
@@ -193,9 +194,10 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
       <div :if={is_list(@rec["anchors"]) and @rec["anchors"] != []}><em>anchors to:</em> {Enum.join(@rec["anchors"], ", ")}</div>
       <div :if={@rec["checked"]}><em>checked:</em> {@rec["checked"]}</div>
       <div><em>recommend:</em> <strong>{@rec["disposition"]}</strong><span :if={@rec["text"]}> — {@rec["text"]}</span><span :if={@rec["target"]}> under {@rec["target"]}</span><span :if={@rec["to"]}> to {@rec["to"]}</span><span :if={@rec["sha"]}> at {@rec["sha"]}</span></div>
+      <div :if={is_list(@rec["landings"]) and @rec["landings"] != []}><em>landings:</em> {Enum.map_join(@rec["landings"], ", ", &"#{&1["key"]} #{&1["sha"]}")}</div>
       <div :if={@rec["would_write"]}><em>would write:</em> {@rec["would_write"]}</div>
-      <form :if={@accept} id={"accept-#{@w["id"]}"} phx-submit="act">
-        <input :for={{name, value} <- @accept} type="hidden" name={name} value={value} />
+      <form id={"accept-#{@w["id"]}"} phx-submit="act">
+        <input type="hidden" name="action" value="accept" />
         <input type="hidden" name="about" value={@w["id"]} />
         <input type="hidden" name="config" value={@project.config} />
         <button type="submit" class="accept">accept: {@rec["disposition"]}</button>
@@ -203,17 +205,6 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
     </div>
     """
   end
-
-  # What accepting a card sends, by what it recommends; nil when the card
-  # recommends something the buttons cannot do from here.
-  defp accept(%{"kind" => "finding"}, %{"disposition" => d} = rec) when d in ~w(fold discard debt raise),
-    do: [{"action", "answer"}, {"disposition", d}, {"text", rec["text"] || ""}, {"target", rec["target"] || ""}]
-
-  defp accept(%{"kind" => "item"}, %{"disposition" => "landed", "sha" => sha}) when is_binary(sha), do: [{"action", "land"}, {"sha", sha}]
-  defp accept(%{"kind" => "item"}, %{"disposition" => "struck"} = rec), do: [{"action", "strike"}, {"text", rec["text"] || "struck as recommended"}]
-  defp accept(%{"kind" => "item"}, %{"disposition" => "pipeline"}), do: [{"action", "fleet"}]
-  defp accept(_w, %{"disposition" => "move", "to" => to} = rec) when is_binary(to), do: [{"action", "move"}, {"to", to}, {"under", rec["under"] || ""}]
-  defp accept(_w, _rec), do: nil
 
   defp rec_line(card) when is_map(card) do
     rec = card["recommend"] || %{}

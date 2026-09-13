@@ -47,7 +47,7 @@ defmodule CodeGantryDaemon.DashboardTest do
     echo "argv: $*" >> "#{root}/calls"
     case "$1 $2" in
       "ledger waiting") cat "#{root}/waiting.json" ;;
-      "ledger answer") echo '{"done": true}'; echo "[]" > "#{root}/waiting.json" ;;
+      "ledger answer"|"ledger accept") echo '{"about": "'"$3"'", "disposition": "discard", "applied": ["discard f1"]}'; echo "[]" > "#{root}/waiting.json" ;;
       "ledger move"|"ledger land"|"ledger strike"|"plan edit") echo '{"done": true}' ;;
       "ledger ask") echo '{"id": "'"$3"'"}' ;;
     esac
@@ -102,10 +102,10 @@ defmodule CodeGantryDaemon.DashboardTest do
     end
   end
 
-  test "accepting the card sends the card's own answer", %{root: root} do
+  test "accepting the card is one ledger accept call", %{root: root} do
     {:ok, view, _html} = live(build_conn(), "/")
     view |> form("form#accept-f1") |> render_submit()
-    assert calls(root) =~ ~r/argv: ledger answer f1 discard --json --text duplicate of p.002 --config \S+docs\/p\/code_gantry.yaml/
+    assert calls(root) =~ ~r/argv: ledger accept f1 --json --config \S+docs\/p\/code_gantry.yaml/
     refute render(view) =~ "Two callers remain"
   end
 

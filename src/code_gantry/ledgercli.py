@@ -439,6 +439,68 @@ def ledger_investigate(about, as_json, config_path) -> None:
         raise SystemExit(1)
 
 
+@ledger.command("accept")
+@click.argument("about")
+@json_option
+@config_option
+def ledger_accept(about, as_json, config_path) -> None:
+    """Apply what the card on a finding or an item recommends, as the events
+    the answer would have been: a finding's disposition; `landed` as a
+    landing per key it names and the finding closed; an item's landing,
+    strike or hand-over to the fleet; a move to the project it names.
+    One card, one transaction."""
+    from code_gantry.ledger import DISPOSITIONS
+
+    from_cfg, from_project, led = _cfg_and_ledger(config_path, write=True)
+    views = led.views()
+    card = views.recommendations.get(about)
+    if not card:
+        raise click.ClickException(f"{about} has no card to accept")
+    kind = "finding" if about in views.findings else "item"
+    rec = card.get("recommend") or {}
+    disposition = rec.get("disposition")
+    text = rec.get("text")
+    applied: list[str] = []
+    try:
+        with led.transaction():
+            if disposition in DISPOSITIONS and kind == "finding":
+                led.answer_finding(about, disposition=disposition, text=text, target_key=rec.get("target"))
+                applied.append(f"{disposition} {about}")
+            elif disposition == "landed":
+                landings = rec.get("landings") or ([{"key": rec.get("target") or about, "sha": rec["sha"]}] if rec.get("sha") else [])
+                if not landings:
+                    raise click.ClickException("the card recommends `landed` but names no sha")
+                for landing in landings:
+                    _key(led, landing["key"])
+                    led.append(LANDED, key=landing["key"], sha=landing["sha"], evidence=text)
+                    applied.append(f"landed {landing['key']} {landing['sha']}")
+                if kind == "finding":
+                    led.answer_finding(about, disposition="discard", text=", ".join(applied))
+                    applied.append(f"discard {about}")
+            elif disposition == "struck" and kind == "item":
+                led.append(STRUCK, key=about, reason=text or "struck as recommended")
+                applied.append(f"struck {about}")
+            elif disposition == "pipeline" and kind == "item":
+                node = _key(led, about)
+                led.upsert_node(
+                    about, parent=node.parent, position=node.position, kind=node.kind, title=node.title,
+                    body=node.body, owner="pipeline", blocking=node.blocking, path=node.path, base_version=node.version,
+                )
+                applied.append(f"pipeline {about}")
+            elif disposition == "move" and rec.get("to"):
+                to_cfg, to_project, to_led = _cfg_and_ledger(Path(rec["to"]), write=True)
+                label = lambda cfg, project: cfg.ledger.name or str(project.ledger)  # noqa: E731
+                opened = led.move(about, to=to_led, to_label=label(to_cfg, to_project), from_label=label(from_cfg, from_project), under=rec.get("target"))
+                applied.append(f"moved {about} to {label(to_cfg, to_project)} as {opened}")
+            else:
+                raise click.ClickException(f"the card recommends {disposition!r}, which cannot be applied to a {kind} from here")
+    except LedgerError as e:
+        raise click.ClickException(str(e))
+    if as_json:
+        return _emit_json({"about": about, "disposition": disposition, "applied": applied, "to": rec.get("to")})
+    click.echo(f"{about}: accepted {disposition}; " + "; ".join(applied))
+
+
 @ledger.command("answer")
 @click.argument("finding_id")
 @click.argument("disposition", type=click.Choice(["fold", "discard", "debt", "raise"]))

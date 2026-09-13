@@ -637,7 +637,11 @@ a person reads; `seq` is what happened.
   and the questions a person put back (`thread.asked`). A card recommends
   a disposition, `move`, or for an item `landed`, `struck` or `pipeline`.
   The card is what the buttons answer; a disposition offered without one
-  is a person doing the investigation's job.
+  is a person doing the investigation's job. `ledger accept <id>` applies what a
+  card recommends as the events the answer would have been — a finding's
+  disposition; `landed` as a landing per key in `landings` and the finding
+  closed; an item's landing, strike or hand-over; a move — in one
+  transaction, so the dashboard's accept is one call whatever the card.
 - **General debt is a project like any other**, so "make this general debt"
   is `move`: opened in the other project's ledger first, with a pointer
   back, then closed here naming where it went (`moved`; a finding becomes

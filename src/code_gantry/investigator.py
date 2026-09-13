@@ -36,7 +36,7 @@ MEANINGS = {
     "debt": "a defect this project's own work created: an item under `target`, a section of this project, with `text` as the entry",
     "raise": "you cannot settle it and it needs the person's call; `text` says what would settle it",
     "move": "belongs to another project — general debt is a project like any other; `to` is that project's config path, `target` a section there for an item",
-    "landed": "an item already done in the tree: `sha` is the commit that did it, checked with `git cat-file -e <sha>^{commit}`",
+    "landed": "already done in the tree: for an item, `sha` is the commit that did it; for a finding that says several items are done, `landings` names each key and its commit — every sha checked with `git cat-file -e <sha>^{commit}`",
     "struck": "an item with nothing to do — zero population, wrong premise; `text` says why",
     "pipeline": "an item a person owns that the fleet could draw after all",
 }

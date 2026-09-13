@@ -49,8 +49,9 @@ defmodule CodeGantryDaemon.Waiting do
   `answer` (a finding: `disposition`, `text`, `target`), `ask` (`text`),
   `move` (`to`, a config path; `under`, a section key for an item),
   `land` (an item: `sha`), `strike` (an item: `text`), `fleet` (an item
-  handed to the pipeline), `investigate` (the daemon starts the
-  investigator on it in an idle bay). Answers `{:ok, decoded}` or
+  handed to the pipeline), `accept` (the card's recommendation, applied as the events the answer
+  would have been), `investigate` (the daemon starts the investigator on
+  it in an idle bay). Answers `{:ok, decoded}` or
   `{:error, why}`.
   """
   def act(config, action, params) do
@@ -91,11 +92,15 @@ defmodule CodeGantryDaemon.Waiting do
     case {reply, action} do
       {{:ok, _}, "fleet"} -> CodeGantryDaemon.Control.wake(project_of(config))
       {{:ok, _}, "move"} -> CodeGantryDaemon.Control.wake(project_of(params["to"]))
+      {{:ok, %{"disposition" => "pipeline"}}, "accept"} -> CodeGantryDaemon.Control.wake(project_of(config))
+      {{:ok, %{"disposition" => "move", "to" => to}}, "accept"} when is_binary(to) -> CodeGantryDaemon.Control.wake(project_of(to))
       _ -> :ok
     end
 
     {:reply, reply, read(state)}
   end
+
+  defp argv("accept", %{"about" => id}), do: {:ok, ["ledger", "accept", id, "--json"]}
 
   defp argv("answer", %{"about" => id, "disposition" => disposition} = p) when disposition in ~w(fold discard debt raise),
     do: {:ok, ["ledger", "answer", id, disposition, "--json"] ++ flag("--text", p["text"]) ++ flag("--target", p["target"])}

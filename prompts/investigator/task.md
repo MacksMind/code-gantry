@@ -62,8 +62,13 @@ where `<json>` is one object:
                    "text": "one sentence why, or the exact text the disposition writes",
                    "target": "a key, where the disposition takes one",
                    "to": "a project's config path, for move",
-                   "sha": "a commit, for landed"},
+                   "sha": "a commit, for landed on an item",
+                   "landings": [{"key": "...", "sha": "..."}]},
      "would_write": "the exact text, if the disposition writes anything; else null"}
+
+For `landed` on a finding that says several items are already done, name every
+one in `landings`, each with the commit that did it; accepting the card lands
+each key and closes the finding.
 
 Quote the JSON carefully for the shell; a single quote inside it must be written
 as `'"'"'`, or write the JSON to a file and pass `--file <path>` instead of

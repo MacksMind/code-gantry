@@ -366,6 +366,84 @@ class TestWhatIsWaitingOnAPerson:
         assert "p.006 struck" in run("ledger", "show", "p.006").output
 
 
+class TestAccept:
+    """`accept` applies what a card recommends as the events the answer
+    would have been, so a click on the dashboard is the same answer a
+    person would have typed. One card, one transaction."""
+
+    def _card(self, recommend, **rest):
+        import json
+        return json.dumps({"says": "s", "anchors": [], "checked": "c", "recommend": recommend, "would_write": None, **rest})
+
+    def test_a_finding_takes_its_disposition(self, project):
+        import json
+        repo, config, paths, sha = project
+        imported(project)
+        writer = open_ledger(paths.ledger, origin="run-host", actor="run:1")
+        f = writer.open_finding(keys=["p.004"], by="planner", claim="dup", needs="human")
+        writer.close()
+        run("ledger", "recommend", f.finding_id, "--card", self._card({"disposition": "discard", "text": "duplicate of p.002"}))
+        result = run("ledger", "accept", f.finding_id, "--json")
+        assert result.exit_code == 0, result.output
+        out = json.loads(result.output)
+        assert out["about"] == f.finding_id and out["disposition"] == "discard"
+        assert f.finding_id not in run("ledger", "waiting").output
+        assert "discard — duplicate of p.002" in run("ledger", "findings", "--all").output
+
+    def test_a_finding_recommending_landings_lands_each_key_and_closes(self, project):
+        repo, config, paths, sha = project
+        imported(project)
+        writer = open_ledger(paths.ledger, origin="run-host", actor="run:1")
+        f = writer.open_finding(keys=[], by="planner", claim="already fixed", needs="human")
+        writer.close()
+        card = self._card({"disposition": "landed", "landings": [{"key": "p.004", "sha": "abc1234"}, {"key": "p.006", "sha": "def5678"}],
+                           "text": "two unrecorded landings"})
+        run("ledger", "recommend", f.finding_id, "--card", card)
+        result = run("ledger", "accept", f.finding_id)
+        assert result.exit_code == 0, result.output
+        shown = run("ledger", "show", "--landed").output
+        assert "p.004 landed" in shown and "abc1234" in shown and "p.006 landed" in shown
+        assert f.finding_id not in run("ledger", "waiting").output
+        assert "landed p.004 abc1234, landed p.006 def5678" in run("ledger", "findings", "--all").output
+
+    def test_an_item_is_landed_struck_or_handed_to_the_fleet(self, project):
+        repo, config, paths, sha = project
+        imported(project)
+        for key in ("p.004", "p.006", "p.008"):
+            run("plan", "edit", key, "--owner", "human")
+        run("ledger", "recommend", "p.004", "--card", self._card({"disposition": "landed", "sha": "abc1234"}))
+        run("ledger", "recommend", "p.006", "--card", self._card({"disposition": "struck", "text": "zero population"}))
+        run("ledger", "recommend", "p.008", "--card", self._card({"disposition": "pipeline"}))
+        for key in ("p.004", "p.006", "p.008"):
+            assert run("ledger", "accept", key).exit_code == 0
+        shown = run("ledger", "show").output
+        assert "p.004 landed" in shown and "p.006 struck" in shown
+        assert "p.008 open" in shown and "(human)" not in [line for line in shown.splitlines() if line.startswith("p.008")][0]
+        assert run("ledger", "waiting").output.strip() == ""
+
+    def test_a_move_goes_to_the_named_project(self, project, tmp_path):
+        repo, config, paths, sha = project
+        imported(project)
+        other = TestWhatIsWaitingOnAPerson()._second_project(project, tmp_path)
+        writer = open_ledger(paths.ledger, origin="run-host", actor="run:1")
+        f = writer.open_finding(keys=[], by="planner", claim="general", needs="human")
+        writer.close()
+        run("ledger", "recommend", f.finding_id, "--card", self._card({"disposition": "move", "to": str(other)}))
+        result = run("ledger", "accept", f.finding_id)
+        assert result.exit_code == 0, result.output
+        assert f.finding_id not in run("ledger", "waiting").output
+        assert "general" in run("ledger", "waiting", "--config", str(other)).output
+
+    def test_no_card_or_a_card_that_cannot_apply_is_refused(self, project):
+        repo, config, paths, sha = project
+        imported(project)
+        run("plan", "edit", "p.006", "--owner", "human")
+        assert run("ledger", "accept", "p.006").exit_code != 0
+        run("ledger", "recommend", "p.006", "--card", self._card({"disposition": "fold", "text": "x"}))
+        result = run("ledger", "accept", "p.006")
+        assert result.exit_code != 0 and "fold" in result.output
+
+
 class TestValidateSeesTheLedger:
     def test_validate_reports_the_imported_plan(self, project):
         imported(project)
