@@ -78,7 +78,6 @@ defmodule CodeGantryDaemon.Owned do
     :exit, _ -> :unreachable
   end
 
-  @doc "Bring a peer's tables into view, and ours into its."
   @doc """
   Forget a node that has gone: its tables leave this schema. A daemon
   that restarts makes its tables again with new identities, and a schema
@@ -93,6 +92,7 @@ defmodule CodeGantryDaemon.Owned do
     end
   end
 
+  @doc "Bring a peer's tables into view, and ours into its."
   def join(node) do
     case :mnesia.change_config(:extra_db_nodes, [node]) do
       {:ok, _} ->

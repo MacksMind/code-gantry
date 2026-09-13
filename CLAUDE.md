@@ -128,7 +128,12 @@ daemons', in Mnesia, each host the single writer of its own tables.
 everyone, so two hosts never define the same table and their schemas
 merge when they meet. A table made after a merge propagates to the peer,
 and a read of a table whose host is gone fails in milliseconds and is
-taken as no rows — which is what makes a dead host's holds disappear.
+taken as no rows — which is what makes a dead host's holds disappear. **A peer
+that leaves is forgotten** (`Owned.forget/1`, `del_table_copy(:schema,
+node)` on nodedown): a daemon that restarts makes its tables again with
+new identities, and a schema still holding the old ones refuses to merge
+with it — `Bad cookie in table definition` — which left a restarted peer's
+bays invisible for as long as the other host stayed up.
 
 **A hold dissolves the instant its holder dies, which is why holds are
 here and not in the table.** A run connects to a unix socket in the
