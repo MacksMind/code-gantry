@@ -81,9 +81,9 @@ class TestRenderProjection:
         led.answer_finding(f.finding_id, disposition="amend", text="file it", target_key="p.003")
         text = render_projection(led.views(), note_chars=200)
         assert "### Struck" in text and "zero population" in text
-        # A `fold` waits here for the fold seam; the other dispositions close
-        # the finding at once and it leaves the projection.
-        assert "### Answered findings not yet folded" in text and "→ fold: file it" in text
+        # An `amend` waits here for the fold seam; the other dispositions
+        # close the finding at once and it leaves the projection.
+        assert "### Answered findings not yet folded" in text and "→ amend: file it" in text
 
     def test_is_byte_identical_for_equal_views(self, led):
         led.append(LANDED, key="p.003", sha="abc")
