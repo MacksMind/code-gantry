@@ -201,12 +201,16 @@ push; the operator invocation; `bin/daemon` going through `mise`.
 `http://<address>:<dashboard_port>/` (host file; 4040; 0 serves none),
 on the Tailscale address and again on loopback so `localhost` answers on
 the host itself, origins unchecked because the network is the boundary: every bay on every host from the shared records, what each
-semaphore holds, and the findings waiting on a person for every project
-placed on that host as cards with the four dispositions. The findings
-are read through `ledger findings --for-human --json` by
-`CodeGantryDaemon.Findings`, on a clock, on request and after every
-answer, and a card's answer is one `ledger answer` call, so a click
-writes the event the CLI would. The daemon therefore takes dependencies
+semaphore holds, and what is waiting on a person for every project placed
+on that host — `ledger waiting --json`, read by `CodeGantryDaemon.Waiting`
+on a clock, on request and after every action. A card shows the thing,
+the recommendation an investigation attached with an accept button that
+sends the card's own answer, the thread since, and the hand actions: a
+finding's four dispositions, an item's landing, strike or hand-over to
+the fleet, a question for the next investigation, and a move to another
+project of the repository, which are the other `code_gantry.yaml` files
+in the bay's checkout. Every action is one CLI call, so a click writes
+the event the CLI would. The daemon therefore takes dependencies
 — Phoenix, LiveView, Bandit, Jason, Phoenix.PubSub, `lazy_html` for the
 tests — fetched by the pickup when `mix.lock` moves and built by its
 compile; only the daemon's own modules are hot-loaded, the dependencies

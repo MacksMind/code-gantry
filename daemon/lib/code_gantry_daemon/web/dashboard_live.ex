@@ -1,40 +1,43 @@
 defmodule CodeGantryDaemon.Web.DashboardLive do
   @moduledoc """
   One page: every bay on every host, what each semaphore is holding, and
-  the findings waiting on a person as cards, each with the four
-  dispositions. A card's answer goes through `Findings.answer/4`, which is
-  one `ledger answer` call; the page then shows what the ledger now says.
+  what is waiting on a person as cards. A card carries the thing, the
+  card an investigation attached with its recommendation as the one-click
+  answer, the thread since, and the ways to act by hand: a finding's
+  dispositions, an item's landing or strike or hand-over to the fleet, a
+  question for the next investigation, and a move to another project.
+  Every action goes through `Waiting.act/3`, one CLI call.
   """
   use Phoenix.LiveView
 
-  alias CodeGantryDaemon.{Findings, Records, Semaphore}
+  alias CodeGantryDaemon.{Records, Semaphore, Waiting}
 
   @tick_ms 5_000
 
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
-      Phoenix.PubSub.subscribe(CodeGantryDaemon.PubSub, Findings.topic())
+      Phoenix.PubSub.subscribe(CodeGantryDaemon.PubSub, Waiting.topic())
       :timer.send_interval(@tick_ms, :tick)
     end
 
-    {:ok, socket |> assign(projects: Findings.all(), notice: nil) |> read_hosts()}
+    {:ok, socket |> assign(projects: Waiting.all(), notice: nil) |> read_hosts()}
   end
 
   @impl true
-  def handle_info({:findings, projects}, socket), do: {:noreply, assign(socket, projects: projects)}
+  def handle_info({:waiting, projects}, socket), do: {:noreply, assign(socket, projects: projects)}
   def handle_info(:tick, socket), do: {:noreply, read_hosts(socket)}
 
   @impl true
-  def handle_event("answer", %{"finding" => id, "config" => config, "disposition" => disposition} = params, socket) do
-    case Findings.answer(config, id, disposition, text: params["text"], target: params["target"]) do
-      {:ok, finding} -> {:noreply, assign(socket, notice: "#{finding["id"]}: #{disposition}")}
+  def handle_event("act", %{"action" => action, "config" => config} = params, socket) do
+    case Waiting.act(config, action, params) do
+      {:ok, _} -> {:noreply, assign(socket, notice: "#{params["about"]}: #{action}")}
       {:error, why} -> {:noreply, assign(socket, notice: why)}
     end
   end
 
   def handle_event("refresh", _params, socket) do
-    Findings.refresh()
+    Waiting.refresh()
     {:noreply, socket |> read_hosts() |> assign(notice: nil)}
   end
 
@@ -75,32 +78,141 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
       </tr>
     </table>
 
-    <h2>For a person <button phx-click="refresh">read again</button></h2>
+    <h2>Waiting on a person <button phx-click="refresh">read again</button></h2>
     <p :if={@notice} class="notice">{@notice}</p>
     <div :for={project <- @projects}>
       <h3>{project.project} <small class="empty">read {since(project.read_at, @now)}</small></h3>
       <p :if={project.error} class="error">{project.error}</p>
-      <p :if={project.findings == [] and !project.error} class="empty">nothing waiting</p>
-      <div :for={f <- project.findings} class="card" id={"finding-#{f["id"]}"}>
-        <div class="meta">
-          {f["id"]} · on {Enum.join(f["keys"] || [], ", ")} · by {f["by"]}<span :if={f["subject"]}> · {f["subject"]}</span><span :if={f["opened_at"]}> · opened {f["opened_at"]}</span>
-        </div>
-        <div class="claim">{f["claim"]}</div>
-        <div :if={f["total"]} class="claim"><em>total:</em> {f["total"]}</div>
-        <form id={"answer-#{f["id"]}"} phx-submit="answer">
-          <input type="hidden" name="finding" value={f["id"]} />
-          <input type="hidden" name="config" value={project.config} />
-          <input type="text" name="text" placeholder="text: the sentence a fold carries, the debt entry, or why a person must decide" />
-          <input type="text" name="target" placeholder="target key (fold, debt)" size="14" />
-          <button type="submit" name="disposition" value="fold">fold</button>
-          <button type="submit" name="disposition" value="discard">discard</button>
-          <button type="submit" name="disposition" value="debt">debt</button>
-          <button type="submit" name="disposition" value="raise">raise</button>
-        </form>
-      </div>
+      <p :if={project.waiting == [] and !project.error} class="empty">nothing waiting</p>
+      <.card :for={w <- project.waiting} w={w} project={project} />
     </div>
     """
   end
+
+  attr :w, :map, required: true
+  attr :project, :map, required: true
+
+  defp card(assigns) do
+    ~H"""
+    <div class="card" id={"waiting-#{@w["id"]}"}>
+      <div class="meta">
+        {@w["id"]} · {@w["kind"]}<span :if={@w["kind"] == "finding" and @w["keys"] != []}> · on {Enum.join(@w["keys"], ", ")}</span><span :if={@w["subject"]}> · {@w["subject"]}</span><span :if={@w["since"]}> · opened {@w["since"]}</span>
+      </div>
+      <div class="title"><strong>{@w["title"]}</strong></div>
+      <div :if={@w["text"] != "" and @w["text"] != @w["title"]} class="claim">{@w["text"]}</div>
+      <div :if={@w["total"]} class="claim"><em>total:</em> {@w["total"]}</div>
+
+      <.recommendation :if={@w["recommendation"]} w={@w} project={@project} rec={@w["recommendation"]} />
+
+      <div :if={@w["thread"] != []} class="thread">
+        <div :for={entry <- @w["thread"]} class={"entry entry-#{entry["kind"]}"}>
+          <span class="meta">{entry["kind"]} · {entry["by"]} · {entry["at"]}</span>
+          <span :if={entry["kind"] == "asked"}> {entry["text"]}</span>
+          <span :if={entry["kind"] == "recommended"}> {rec_line(entry["card"])}</span>
+        </div>
+      </div>
+
+      <form :if={@w["kind"] == "finding"} id={"answer-#{@w["id"]}"} phx-submit="act" class="actions">
+        <input type="hidden" name="action" value="answer" />
+        <input type="hidden" name="about" value={@w["id"]} />
+        <input type="hidden" name="config" value={@project.config} />
+        <input type="text" name="text" placeholder="text: the sentence a fold carries, the debt entry, or why a person must decide" />
+        <input type="text" name="target" placeholder="target key (fold, debt)" size="14" />
+        <button type="submit" name="disposition" value="fold">fold</button>
+        <button type="submit" name="disposition" value="discard">discard</button>
+        <button type="submit" name="disposition" value="debt">debt</button>
+        <button type="submit" name="disposition" value="raise">raise</button>
+      </form>
+
+      <div :if={@w["kind"] == "item"} class="item-actions">
+        <form id={"land-#{@w["id"]}"} phx-submit="act">
+          <input type="hidden" name="action" value="land" />
+          <input type="hidden" name="about" value={@w["id"]} />
+          <input type="hidden" name="config" value={@project.config} />
+          <input type="text" name="sha" placeholder="commit sha" size="14" />
+          <button type="submit">landed</button>
+        </form>
+        <form id={"strike-#{@w["id"]}"} phx-submit="act">
+          <input type="hidden" name="action" value="strike" />
+          <input type="hidden" name="about" value={@w["id"]} />
+          <input type="hidden" name="config" value={@project.config} />
+          <input type="text" name="text" placeholder="why it is struck" />
+          <button type="submit">strike</button>
+        </form>
+        <form id={"fleet-#{@w["id"]}"} phx-submit="act">
+          <input type="hidden" name="action" value="fleet" />
+          <input type="hidden" name="about" value={@w["id"]} />
+          <input type="hidden" name="config" value={@project.config} />
+          <button type="submit">to the fleet</button>
+        </form>
+      </div>
+
+      <form id={"ask-#{@w["id"]}"} phx-submit="act">
+        <input type="hidden" name="action" value="ask" />
+        <input type="hidden" name="about" value={@w["id"]} />
+        <input type="hidden" name="config" value={@project.config} />
+        <input type="text" name="text" placeholder="a question for the next investigation" />
+        <button type="submit">ask</button>
+      </form>
+
+      <form :if={@project.projects != []} id={"move-#{@w["id"]}"} phx-submit="act">
+        <input type="hidden" name="action" value="move" />
+        <input type="hidden" name="about" value={@w["id"]} />
+        <input type="hidden" name="config" value={@project.config} />
+        <select name="to">
+          <option :for={p <- @project.projects} value={p.config}>{p.project}</option>
+        </select>
+        <input :if={@w["kind"] == "item"} type="text" name="under" placeholder="section key there" size="14" />
+        <button type="submit">move</button>
+      </form>
+    </div>
+    """
+  end
+
+  attr :w, :map, required: true
+  attr :project, :map, required: true
+  attr :rec, :map, required: true
+
+  # The card's recommendation, and the one click that takes it: the same
+  # action the hand forms send, with the card's own text and target.
+  defp recommendation(assigns) do
+    rec = assigns.rec["recommend"] || %{}
+    assigns = assign(assigns, rec: rec, accept: accept(assigns.w, rec))
+
+    ~H"""
+    <div class="recommendation">
+      <div :if={@rec["says"]}><em>says:</em> {@rec["says"]}</div>
+      <div :if={is_list(@rec["anchors"]) and @rec["anchors"] != []}><em>anchors to:</em> {Enum.join(@rec["anchors"], ", ")}</div>
+      <div :if={@rec["checked"]}><em>checked:</em> {@rec["checked"]}</div>
+      <div><em>recommend:</em> <strong>{@rec["disposition"]}</strong><span :if={@rec["text"]}> — {@rec["text"]}</span><span :if={@rec["target"]}> under {@rec["target"]}</span><span :if={@rec["to"]}> to {@rec["to"]}</span><span :if={@rec["sha"]}> at {@rec["sha"]}</span></div>
+      <div :if={@rec["would_write"]}><em>would write:</em> {@rec["would_write"]}</div>
+      <form :if={@accept} id={"accept-#{@w["id"]}"} phx-submit="act">
+        <input :for={{name, value} <- @accept} type="hidden" name={name} value={value} />
+        <input type="hidden" name="about" value={@w["id"]} />
+        <input type="hidden" name="config" value={@project.config} />
+        <button type="submit" class="accept">accept: {@rec["disposition"]}</button>
+      </form>
+    </div>
+    """
+  end
+
+  # What accepting a card sends, by what it recommends; nil when the card
+  # recommends something the buttons cannot do from here.
+  defp accept(%{"kind" => "finding"}, %{"disposition" => d} = rec) when d in ~w(fold discard debt raise),
+    do: [{"action", "answer"}, {"disposition", d}, {"text", rec["text"] || ""}, {"target", rec["target"] || ""}]
+
+  defp accept(%{"kind" => "item"}, %{"disposition" => "landed", "sha" => sha}) when is_binary(sha), do: [{"action", "land"}, {"sha", sha}]
+  defp accept(%{"kind" => "item"}, %{"disposition" => "struck"} = rec), do: [{"action", "strike"}, {"text", rec["text"] || "struck as recommended"}]
+  defp accept(%{"kind" => "item"}, %{"disposition" => "pipeline"}), do: [{"action", "fleet"}]
+  defp accept(_w, %{"disposition" => "move", "to" => to} = rec) when is_binary(to), do: [{"action", "move"}, {"to", to}, {"under", rec["under"] || ""}]
+  defp accept(_w, _rec), do: nil
+
+  defp rec_line(card) when is_map(card) do
+    rec = card["recommend"] || %{}
+    "#{rec["disposition"]}" <> if(rec["text"], do: " — #{rec["text"]}", else: "")
+  end
+
+  defp rec_line(_), do: ""
 
   @stale_after_seconds 600
 

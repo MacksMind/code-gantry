@@ -1,15 +1,15 @@
 defmodule CodeGantryDaemon.DashboardTest do
   @moduledoc """
-  The dashboard against a fake CLI: the findings it shows are what
-  `ledger findings --json` answers, and an answer is one `ledger answer`
-  call, so a person's click writes the same event the CLI would.
+  The dashboard against a fake CLI: what it shows is what `ledger waiting
+  --json` answers, and every action is one CLI call, so a person's click
+  writes the same event the CLI would.
   """
   use ExUnit.Case, async: false
 
   import Phoenix.ConnTest
   import Phoenix.LiveViewTest
 
-  alias CodeGantryDaemon.{Findings, Host, Status, Web}
+  alias CodeGantryDaemon.{Host, Status, Waiting, Web}
 
   @endpoint CodeGantryDaemon.Web.Endpoint
 
@@ -19,14 +19,25 @@ defmodule CodeGantryDaemon.DashboardTest do
     on_exit(fn -> File.rm_rf!(root) end)
     state = Path.join(root, "state")
     primary = Path.join(root, "repo")
-    File.mkdir_p!(Path.join([root, "repo-bay1", "docs", "p"]))
+    bay = Path.join(root, "repo-bay1")
+    File.mkdir_p!(Path.join([bay, "docs", "p"]))
+    File.mkdir_p!(Path.join([bay, "docs", "general"]))
+    File.write!(Path.join([bay, "docs", "general", "code_gantry.yaml"]), "project_branch: general\n")
+    File.mkdir_p!(Path.join([bay, "docs", "p", ".code_gantry", "runs"]))
+    File.write!(Path.join([bay, "docs", "p", ".code_gantry", "runs", "code_gantry.yaml"]), "not a project\n")
     File.mkdir_p!(state)
 
-    File.write!(Path.join(root, "findings.json"), """
+    File.write!(Path.join(root, "waiting.json"), """
     [
-      {"id": "f1", "keys": ["p.004"], "by": "planner", "claim": "Two callers remain, both admin-only.",
-       "needs": "human", "status": "open", "total": null, "opened_at": "2026-09-13T10:00:00+00:00",
-       "stage_id": null, "run_id": "r1", "subject": "callers", "disposition": null, "answer_text": null}
+      {"id": "p.006", "kind": "item", "title": "Delete the columns", "text": "They are unread.", "keys": ["p.006"],
+       "since": null, "subject": null, "total": null, "recommendation": null, "thread": []},
+      {"id": "f1", "kind": "finding", "title": "callers", "text": "Two callers remain, both admin-only.", "keys": ["p.004"],
+       "since": "2026-09-13T10:00:00+00:00", "subject": "callers", "total": null,
+       "recommendation": {"says": "two callers", "anchors": ["app/x.rb:12"], "checked": "both admin-only",
+                          "recommend": {"disposition": "discard", "text": "duplicate of p.002"}, "would_write": null},
+       "thread": [{"kind": "recommended", "by": "claude -p", "at": "2026-09-13T11:00:00+00:00",
+                   "card": {"recommend": {"disposition": "discard", "text": "duplicate of p.002"}}},
+                  {"kind": "asked", "by": "mack", "at": "2026-09-13T11:05:00+00:00", "text": "which caller?"}]}
     ]
     """)
 
@@ -35,8 +46,10 @@ defmodule CodeGantryDaemon.DashboardTest do
     #!/usr/bin/env bash
     echo "argv: $*" >> "#{root}/calls"
     case "$1 $2" in
-      "ledger findings") cat "#{root}/findings.json" ;;
-      "ledger answer") echo '{"id": "'"$3"'", "status": "discarded", "disposition": "'"$4"'"}'; echo "[]" > "#{root}/findings.json" ;;
+      "ledger waiting") cat "#{root}/waiting.json" ;;
+      "ledger answer") echo '{"done": true}'; echo "[]" > "#{root}/waiting.json" ;;
+      "ledger move"|"ledger land"|"ledger strike"|"plan edit") echo '{"done": true}' ;;
+      "ledger ask") echo '{"id": "'"$3"'"}' ;;
     esac
     exit 0
     """)
@@ -63,45 +76,54 @@ defmodule CodeGantryDaemon.DashboardTest do
     # them, and the tests run with none started.
     web = Web.child_spec(host)
     start_supervised!({Phoenix.PubSub, name: CodeGantryDaemon.PubSub})
-    start_supervised!({Findings, host})
+    start_supervised!({Waiting, host})
     start_supervised!(web)
-    %{root: root, host: host}
+    %{root: root, host: host, bay: bay}
   end
 
   defp calls(root), do: File.read!(Path.join(root, "calls"))
 
-  test "findings waiting on a person are cards with the four dispositions", %{root: root} do
-    {:ok, view, html} = live(build_conn(), "/")
-    assert html =~ "Two callers remain, both admin-only."
-    assert html =~ "p.004"
-    for disposition <- ~w(fold discard debt raise) do
-      assert has_element?(view, "form[phx-submit=answer] button[value=#{disposition}]")
-    end
-    # The findings came from the ledger's JSON face, for the placed project.
-    assert calls(root) =~ ~r/argv: ledger findings --for-human --json --config \S+repo-bay1\/docs\/p\/code_gantry.yaml/
+  test "what is waiting is read through the ledger's JSON face, for the placed project", %{root: root} do
+    {:ok, _view, html} = live(build_conn(), "/")
+    assert html =~ "Delete the columns" and html =~ "Two callers remain, both admin-only."
+    assert calls(root) =~ ~r/argv: ledger waiting --json --config \S+repo-bay1\/docs\/p\/code_gantry.yaml/
   end
 
-  test "an answer is one ledger answer call, and the cards are read again", %{root: root} do
+  test "a finding's card shows its recommendation, its thread, and the four dispositions", %{} do
+    {:ok, view, html} = live(build_conn(), "/")
+    assert html =~ "both admin-only" and html =~ "duplicate of p.002" and html =~ "which caller?"
+    assert has_element?(view, "form#accept-f1 button", "accept: discard")
+    for disposition <- ~w(fold discard debt raise) do
+      assert has_element?(view, "form#answer-f1 button[value=#{disposition}]")
+    end
+  end
+
+  test "accepting the card sends the card's own answer", %{root: root} do
     {:ok, view, _html} = live(build_conn(), "/")
-
-    view
-    |> form("form[phx-submit=answer][id='answer-f1']", %{"text" => ""})
-    |> render_submit(%{"disposition" => "discard"})
-
-    assert calls(root) =~ ~r/argv: ledger answer f1 discard --json --config \S+repo-bay1\/docs\/p\/code_gantry.yaml/
+    view |> form("form#accept-f1") |> render_submit()
+    assert calls(root) =~ ~r/argv: ledger answer f1 discard --json --text duplicate of p.002 --config \S+docs\/p\/code_gantry.yaml/
     refute render(view) =~ "Two callers remain"
   end
 
-  test "the endpoint's spec puts back the OTP applications a pruned code path lost", %{host: host} do
-    # Mix prunes the code path at boot to what the project declared then;
-    # a daemon that took its first dependencies on a hot load has no
-    # `public_key` on its path, and Phoenix will not start without it.
-    ebin = :code.lib_dir(:public_key) |> Path.join("ebin")
-    assert true == :code.del_path(String.to_charlist(ebin))
-    assert :code.lib_dir(:public_key) == {:error, :bad_name}
-    _ = Web.child_spec(host)
-    assert :code.lib_dir(:public_key) |> to_string() |> String.ends_with?("/ebin") == false
-    assert :code.lib_dir(:public_key) != {:error, :bad_name}
+  test "an item is landed, struck, or handed to the fleet", %{root: root} do
+    {:ok, view, _html} = live(build_conn(), "/")
+    view |> form("form[id=\'land-p.006\']", %{"sha" => "abc123"}) |> render_submit()
+    assert calls(root) =~ ~r/argv: ledger land p.006 abc123 --config /
+    view |> form("form[id=\'strike-p.006\']", %{"text" => "not doing it"}) |> render_submit()
+    assert calls(root) =~ ~r/argv: ledger strike p.006 not doing it --config /
+    view |> form("form[id=\'fleet-p.006\']") |> render_submit()
+    assert calls(root) =~ ~r/argv: plan edit p.006 --owner pipeline --config /
+  end
+
+  test "a question and a move are one call each, the move to another project of the repository", %{root: root, bay: bay} do
+    {:ok, view, html} = live(build_conn(), "/")
+    # The other project is found in the checkout; the run's own artifacts are not a project.
+    assert html =~ ~s(<option value="#{bay}/docs/general/code_gantry.yaml">general</option>)
+    refute html =~ "runs</option>"
+    view |> form("form#ask-f1", %{"text" => "and the other one?"}) |> render_submit()
+    assert calls(root) =~ ~r/argv: ledger ask f1 --text and the other one\? --json --config /
+    view |> form("form[id=\'move-p.006\']", %{"to" => "#{bay}/docs/general/code_gantry.yaml", "under" => "g.002"}) |> render_submit()
+    assert calls(root) =~ ~r/argv: ledger move p.006 --to \S+docs\/general\/code_gantry.yaml --json --under g.002 --config /
   end
 
   test "a loopback listener is added only when the endpoint is bound elsewhere", %{host: host} do
@@ -123,6 +145,14 @@ defmodule CodeGantryDaemon.DashboardTest do
     {:ok, response} = :gen_tcp.recv(socket, 0, 5_000)
     assert response =~ "200 OK"
     :gen_tcp.close(socket)
+  end
+
+  test "the endpoint's spec puts back the OTP applications a pruned code path lost", %{host: host} do
+    ebin = :code.lib_dir(:public_key) |> Path.join("ebin")
+    assert true == :code.del_path(String.to_charlist(ebin))
+    assert :code.lib_dir(:public_key) == {:error, :bad_name}
+    _ = Web.child_spec(host)
+    assert :code.lib_dir(:public_key) != {:error, :bad_name}
   end
 
   test "every bay on every host is a row", %{host: host} do

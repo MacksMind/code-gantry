@@ -396,6 +396,12 @@ defmodule CodeGantryDaemonTest do
       assert Process.whereis(Semaphore.Socket), "the pickup looked and left the child missing"
 
       refute Pickup.tick(host) =~ "started", "a tree that is already right is left alone"
+
+      # A child this version no longer declares — renamed, or gone — is
+      # taken down, or it runs on beside its replacement until a restart.
+      {:ok, _} = Supervisor.start_child(CodeGantryDaemon.Supervisor, %{id: :stray, start: {Agent, :start_link, [fn -> :old end]}})
+      assert Pickup.tick(host) =~ "stopped :stray"
+      refute Enum.any?(Supervisor.which_children(CodeGantryDaemon.Supervisor), fn {id, _, _, _} -> id == :stray end)
     end
 
     test "a commit made in this checkout is picked up, with origin never ahead", %{root: root, host: host, state: state} do

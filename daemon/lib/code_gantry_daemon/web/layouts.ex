@@ -28,6 +28,12 @@ defmodule CodeGantryDaemon.Web.Layouts do
           .card button { padding: 4px 10px; border: 1px solid #999; border-radius: 4px; background: #f4f4f2; cursor: pointer; }
           .card button:hover { background: #e8e8e4; }
           .error { color: #a32d2d; }
+          .recommendation { border-left: 3px solid #1f6f3f; padding: 6px 10px; margin: 8px 0; background: #f3f8f4; }
+          .recommendation button.accept { background: #1f6f3f; color: #fff; border-color: #1f6f3f; }
+          .thread { margin: 8px 0; font-size: 13px; }
+          .thread .entry { padding: 2px 0; }
+          .item-actions { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+          .card form { margin-top: 8px; }
           .empty { color: #666; }
         </style>
         <script src="/assets/phoenix/phoenix.min.js"></script>

@@ -187,8 +187,19 @@ defmodule CodeGantryDaemon.Pickup do
   # is already right, which is almost always.
   defp reconciled(host) do
     case CodeGantryDaemon.Application.reconcile(host) do
-      [] -> ""
-      started -> "; started #{Enum.map_join(started, ", ", &inspect/1)}"
+      [] ->
+        ""
+
+      changed ->
+        {stopped, started} = Enum.split_with(changed, &match?({:stopped, _}, &1))
+
+        Enum.join(
+          [
+            if(started != [], do: "; started #{Enum.map_join(started, ", ", &inspect/1)}", else: ""),
+            if(stopped != [], do: "; stopped #{Enum.map_join(stopped, ", ", fn {:stopped, id} -> inspect(id) end)}", else: "")
+          ],
+          ""
+        )
     end
   end
 

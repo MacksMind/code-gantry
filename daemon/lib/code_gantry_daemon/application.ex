@@ -9,7 +9,7 @@ defmodule CodeGantryDaemon.Application do
   """
   use Application
 
-  alias CodeGantryDaemon.{Bay, Findings, Host, Mesh, Pickup, Placements, Semaphore, Status, Web}
+  alias CodeGantryDaemon.{Bay, Host, Mesh, Pickup, Placements, Semaphore, Status, Waiting, Web}
 
   @impl true
   def start(_type, _args) do
@@ -50,7 +50,7 @@ defmodule CodeGantryDaemon.Application do
       {Semaphore.Socket, host},
       # The dashboard: what it announces on, what it shows, and the page.
       {Phoenix.PubSub, name: CodeGantryDaemon.PubSub},
-      {Findings, host},
+      {Waiting, host},
       Web.child_spec(host),
       Web.loopback_spec(host)
     ]
@@ -76,7 +76,21 @@ defmodule CodeGantryDaemon.Application do
     if Process.whereis(CodeGantryDaemon.Supervisor) == nil do
       []
     else
-      for spec <- children(host), started = start_missing(spec), started != nil, do: started
+      declared = children(host)
+      started = for spec <- declared, started = start_missing(spec), started != nil, do: started
+      started ++ stop_undeclared(Enum.map(declared, &Supervisor.child_spec(&1, []).id))
+    end
+  end
+
+  # A child this version no longer declares — renamed, or gone — is taken
+  # down, or the old one runs on beside the new for as long as the host
+  # stays up. Answered as `{:stopped, id}`.
+  defp stop_undeclared(declared_ids) do
+    for {id, _pid, _type, _mods} <- Supervisor.which_children(CodeGantryDaemon.Supervisor),
+        id not in declared_ids do
+      Supervisor.terminate_child(CodeGantryDaemon.Supervisor, id)
+      Supervisor.delete_child(CodeGantryDaemon.Supervisor, id)
+      {:stopped, id}
     end
   end
 
