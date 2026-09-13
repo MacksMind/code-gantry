@@ -105,6 +105,29 @@ def _project_for(config_path: Path) -> tuple[ProjectConfig, ProjectPaths]:
     return cfg, ProjectPaths.for_config(cfg)
 
 
+def _from_project_branch(config_path: Path) -> tuple[ProjectConfig, ProjectPaths]:
+    """The config as the project branch holds it, with the checkout on that branch.
+
+    A bay is a checkout, and a placement can hand it a project whose branch
+    is not the one checked out. The one fact the config on any branch can
+    be trusted for is which branch the project lives on, so that is read
+    first; the checkout is put there; and the config is read again from
+    it, because the copy preflight proves must be the copy the run is
+    judged by. A tree with changes in it is left where it is — preflight
+    refuses it and names the changes, which is what a person needs to see.
+    """
+    cfg, project = _project_for(config_path)
+    git = Git(cfg.target_repo)
+    if (
+        git.branch_exists(cfg.project_branch)
+        and git.current_branch() != cfg.project_branch
+        and git.is_clean()
+    ):
+        git.checkout(cfg.project_branch)
+        cfg, project = _project_for(config_path)
+    return cfg, project
+
+
 def _apply_env_file(cfg: ProjectConfig, config_path: Path) -> None:
     """Load the credentials the config points at, before anything needs them.
 
@@ -411,7 +434,7 @@ def run(
 ) -> None:
     """Start a run against a project."""
     config_path = _config_argument(config_path)
-    cfg, project = _project_for(config_path)
+    cfg, project = _from_project_branch(config_path)
     project.ensure()
     slug = project.slug
 
