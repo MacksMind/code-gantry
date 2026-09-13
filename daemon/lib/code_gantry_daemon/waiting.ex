@@ -30,9 +30,14 @@ defmodule CodeGantryDaemon.Waiting do
   a read in progress: one read is a CLI call per project, seconds each.
   """
   def all do
-    case :ets.lookup(__MODULE__, :projects) do
-      [{:projects, projects}] -> projects
-      [] -> []
+    # No table yet — the server is starting, or a daemon that took this
+    # code on a hot load still runs the process that never made one —
+    # is no reading yet, and the page fills in on the next broadcast.
+    with tid when tid != :undefined <- :ets.whereis(__MODULE__),
+         [{:projects, projects}] <- :ets.lookup(tid, :projects) do
+      projects
+    else
+      _ -> []
     end
   end
 

@@ -173,6 +173,11 @@ defmodule CodeGantryDaemon.DashboardTest do
     assert Task.await(task, 10_000) == :ok
   end
 
+  test "before the first reading there is nothing, not an error" do
+    stop_supervised!(Waiting)
+    assert Waiting.all() == []
+  end
+
   test "every bay on every host is a row", %{host: host} do
     Status.put("bay1", :running, "20260913-000000-bay1", Host.project_of(host, hd(host.bays)))
     {:ok, _view, html} = live(build_conn(), "/")
