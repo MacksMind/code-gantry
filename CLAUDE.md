@@ -166,7 +166,8 @@ every bay on every host; `holds`, what holds each semaphore and who is
 behind it; `runs`, which runs are alive on every host that answered — a
 host that could not be asked is named as such rather than shown with no
 runs. `wake <project>`, a complete project told it may have work
-again, here and on every peer. The pickup is nudged by the host that has just taken new code,
+again, here and on every peer. `investigate <project> <id>`, the investigator started on
+one thing waiting on a person, in a bay of the project with no run live. The pickup is nudged by the host that has just taken new code,
 with `pickup_seconds` (host file; 0 never) as the fallback tick and a
 catch-up when a host joins: fetch `code_branch`, and if
 origin is ahead of a clean checkout, fast-forward, compile `daemon/` and
@@ -213,10 +214,27 @@ on a clock, on request and after every action. A card shows the thing,
 the recommendation an investigation attached with an accept button that
 sends the card's own answer, the thread since, and the hand actions: a
 finding's four dispositions, an item's landing, strike or hand-over to
-the fleet, a question for the next investigation, and a move to another
+the fleet, a question for the next investigation, a move to another
 project of the repository, which are the other `code_gantry.yaml` files
-in the bay's checkout. Every action is one CLI call, so a click writes
-the event the CLI would. The daemon therefore takes dependencies
+in the bay's checkout, and `investigate`. Every action but the last is
+one CLI call, so a click writes the event the CLI would.
+
+**The investigator** is pass two of a fold by a model with a shell:
+`ledger investigate <id>` renders `prompts/investigator/task.md` around
+one thing waiting on a person — the thing, the others waiting beside it
+for consolidation on identity, how to investigate, and the one verb it
+may write — and runs `investigator.command` (`claude -p` with Bash, Read,
+Grep and Glob allowed) in the checkout with the prompt on stdin. The
+model writes its card through `ledger recommend` and nothing else;
+whether it did is read back from the ledger, never inferred from its
+output; the transcript is under `<work dir>/investigations/`. The
+daemon runs it as a task in a bay with no run live (`Bay.investigate/2`,
+preferring one whose last run finished), shows `investigating <id>` on
+the bay's row and puts the row back after, refuses a run in that bay
+meanwhile, and allows six an hour per bay — a model with a shell is not
+something to start in a loop. Started from the dashboard's button or
+`bin/daemon investigate`; nothing sweeps unattended yet, by decision,
+until a dozen real cards have been read. The daemon therefore takes dependencies
 — Phoenix, LiveView, Bandit, Jason, Phoenix.PubSub, `lazy_html` for the
 tests — fetched by the pickup when `mix.lock` moves and built by its
 compile; only the daemon's own modules are hot-loaded, the dependencies

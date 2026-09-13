@@ -130,6 +130,14 @@ defmodule CodeGantryDaemon.DashboardTest do
     assert calls(root) =~ ~r/argv: ledger move p.006 --to \S+docs\/general\/code_gantry.yaml --json --under g.002 --config /
   end
 
+  test "investigate asks the daemon for an idle bay on the project", %{} do
+    {:ok, view, _html} = live(build_conn(), "/")
+    assert has_element?(view, "form#investigate-f1 button", "investigate")
+    html = view |> form("form#investigate-f1") |> render_submit()
+    # No bay process is running in this test, so the daemon says so rather than starting anything.
+    assert html =~ "no idle bay on p"
+  end
+
   test "a loopback listener is added only when the endpoint is bound elsewhere", %{host: host} do
     host = %{host | dashboard_port: 4321}
     assert Web.loopback_spec(host, {100, 64, 0, 1}).id == CodeGantryDaemon.Web.Loopback

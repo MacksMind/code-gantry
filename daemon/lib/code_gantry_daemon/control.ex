@@ -149,11 +149,40 @@ defmodule CodeGantryDaemon.Control do
     "#{project}: woken; started #{if started == [], do: "nothing", else: Enum.join(started, ", ")}; #{peers} peer(s) told"
   end
 
+  @doc """
+  Have a bay on `project` with no run live investigate one thing waiting
+  on a person. A bay whose last run finished or found the project
+  complete is preferred, since its checkout is at the tip and holds no
+  stage; every idle bay is tried before giving up.
+  """
+  def investigate(project, about) do
+    host = Status.host()
+
+    idle =
+      for bay <- Placements.all(host),
+          Host.project_of(host, bay) == project,
+          Bay.live(bay.name) == :idle,
+          do: bay
+
+    rested = fn bay -> match?({s, _, _, _} when s in [:finished, :complete], Status.get(bay.name)) end
+
+    Enum.sort_by(idle, &(if rested.(&1), do: 0, else: 1))
+    |> Enum.reduce_while("no idle bay on #{project}: every bay has a run live, or none is placed on it", fn bay, why ->
+      case Bay.investigate(bay.name, about) do
+        {:ok, _} -> {:halt, "#{about}: investigating in #{bay.name}; the card arrives on the dashboard when it is written"}
+        {:error, :rate_limited} -> {:cont, "#{bay.name} has investigated its share this hour; " <> why}
+        {:error, {:investigating, other}} -> {:cont, "#{bay.name} is investigating #{other}; " <> why}
+        {:error, _} -> {:cont, why}
+      end
+    end)
+  end
+
   def retry(name) do
     case Bay.retry(name) do
       {:ok, :run, nil} -> "#{name}: making the checkout again"
       {:ok, mode, run_id} -> "#{name}: #{mode} #{run_id} started"
       {:error, {:running, run_id}} -> "#{name} is running #{run_id}; nothing to retry"
+      {:error, {:investigating, about}} -> "#{name} is investigating #{about}; wait for the card"
       {:error, :no_such_bay} -> "no bay named #{name} in the host file"
     end
   end

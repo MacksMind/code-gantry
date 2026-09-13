@@ -244,6 +244,68 @@ defmodule CodeGantryDaemonTest do
     end
   end
 
+  describe "the investigator" do
+    alias CodeGantryDaemon.{Control, Placements}
+
+    # A run that finishes at once, and an investigation that holds while
+    # `hold` exists and then says it wrote a card.
+    defp investigator_fake(root) do
+      fake = Path.join(root, "fake-cli")
+      File.write!(fake, """
+      #!/usr/bin/env bash
+      echo "argv: $*" >> "#{root}/calls"
+      case "$1 $2" in
+        "ledger investigate") while [ -f "#{root}/hold" ]; do sleep 0.1; done; echo "$3: card written (3s, exit 0)"; exit 0 ;;
+      esac
+      exit 0
+      """)
+      File.chmod!(fake, 0o755)
+      File.mkdir_p!(Path.join([root, "repo-bay2", "docs", "p"]))
+      :ok = Placements.put(%{name: "bay2", offset: 200, config: "docs/p/code_gantry.yaml"})
+    end
+
+    test "an idle bay investigates, shows it, refuses a run meanwhile, and shows its old state after", %{root: root, host: host, state: state} do
+      investigator_fake(root)
+      {:ok, _} = Application.start_bay(host, %{name: "bay2", offset: 200, config: "docs/p/code_gantry.yaml"})
+      wait_for(fn -> status(state) =~ "bay2 finished" end)
+      File.write!(Path.join(root, "hold"), "")
+      log = ExUnit.CaptureLog.capture_log(fn ->
+        assert Control.investigate("p", "f1") =~ ~r/^f1: investigating in bay2/
+        wait_for(fn -> status(state) =~ "bay2 investigating f1" end)
+        assert Control.retry("bay2") == "bay2 is investigating f1; wait for the card"
+        assert Control.investigate("p", "f2") =~ ~r/^bay2 is investigating f1; no idle bay on p/
+        File.rm!(Path.join(root, "hold"))
+        wait_for(fn -> status(state) =~ ~r/^bay2 finished \d{8}-\d{6}-bay2/m end)
+      end)
+      assert calls(root) =~ ~r/argv: ledger investigate f1 --config \S+repo-bay2\/docs\/p\/code_gantry.yaml/
+      assert log =~ "bay2: investigating f1"
+      assert log =~ "bay2: investigation of f1 exited 0: f1: card written (3s, exit 0)"
+    end
+
+    test "a bay with a run live is not used, and a project with no bay says so", %{root: root, host: host, state: state} do
+      investigator_fake(root)
+      File.write!(Path.join(root, "hold"), "")
+      fake = Path.join(root, "fake-cli")
+      File.write!(fake, String.replace(File.read!(fake), "exit 0\n", "case \"$1\" in run) while [ -f \"#{root}/hold\" ]; do sleep 0.1; done ;; esac\nexit 0\n"))
+      {:ok, _} = Application.start_bay(host, %{name: "bay2", offset: 200, config: "docs/p/code_gantry.yaml"})
+      wait_for(fn -> status(state) =~ "bay2 running" end)
+      assert Control.investigate("p", "f1") =~ ~r/^no idle bay on p/
+      assert Control.investigate("q", "f1") =~ ~r/^no idle bay on q/
+      File.rm!(Path.join(root, "hold"))
+    end
+
+    test "a bay investigates a bounded number of times an hour", %{root: root, host: host, state: state} do
+      investigator_fake(root)
+      {:ok, _} = Application.start_bay(host, %{name: "bay2", offset: 200, config: "docs/p/code_gantry.yaml"})
+      wait_for(fn -> status(state) =~ "bay2 finished" end)
+      for n <- 1..6 do
+        assert Control.investigate("p", "f#{n}") =~ ~r/investigating in bay2/
+        wait_for(fn -> not (status(state) =~ "investigating") end)
+      end
+      assert Control.investigate("p", "f7") =~ ~r/^bay2 has investigated its share this hour/
+    end
+  end
+
   describe "wind-down" do
     alias CodeGantryDaemon.{Complete, Control, Placements}
 

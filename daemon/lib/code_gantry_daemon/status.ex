@@ -31,6 +31,9 @@ defmodule CodeGantryDaemon.Status do
     end)
   end
 
+  @doc "One bay's row as this host last wrote it: `{state, detail, at, project}`, or nil."
+  def get(name), do: Agent.get(__MODULE__, &Map.get(&1.rows, name))
+
   def path, do: Path.join(Host.state_dir(), "status")
 
   @doc "The host this daemon runs, as loaded at start."

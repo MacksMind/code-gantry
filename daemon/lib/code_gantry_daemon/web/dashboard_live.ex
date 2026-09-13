@@ -31,6 +31,7 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
   @impl true
   def handle_event("act", %{"action" => action, "config" => config} = params, socket) do
     case Waiting.act(config, action, params) do
+      {:ok, line} when is_binary(line) -> {:noreply, assign(socket, notice: line)}
       {:ok, _} -> {:noreply, assign(socket, notice: "#{params["about"]}: #{action}")}
       {:error, why} -> {:noreply, assign(socket, notice: why)}
     end
@@ -146,6 +147,13 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
           <button type="submit">to the fleet</button>
         </form>
       </div>
+
+      <form id={"investigate-#{@w["id"]}"} phx-submit="act">
+        <input type="hidden" name="action" value="investigate" />
+        <input type="hidden" name="about" value={@w["id"]} />
+        <input type="hidden" name="config" value={@project.config} />
+        <button type="submit">investigate</button>
+      </form>
 
       <form id={"ask-#{@w["id"]}"} phx-submit="act">
         <input type="hidden" name="action" value="ask" />

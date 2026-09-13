@@ -88,6 +88,23 @@ defmodule CodeGantryDaemon.Bay do
     end
   end
 
+  @max_investigations_per_hour 6
+
+  @doc """
+  Investigate one thing waiting on a person, in this bay's checkout: the
+  CLI's `ledger investigate`, run as a task so the bay keeps answering.
+  Only a bay with no run live, and no investigation in flight, and fewer
+  than #{@max_investigations_per_hour} in the last hour — a model with a
+  shell is not something to start in a loop. `{:ok, about}` or
+  `{:error, reason}`.
+  """
+  def investigate(name, about) do
+    case GenServer.whereis(via(name)) do
+      nil -> {:error, :no_such_bay}
+      pid -> GenServer.call(pid, {:investigate, about})
+    end
+  end
+
   @doc "Whether this bay is idle because its project was found complete."
   def idle_complete?(name) do
     case GenServer.whereis(via(name)) do
@@ -102,7 +119,7 @@ defmodule CodeGantryDaemon.Bay do
     # the run this bay started outlives the daemon that started it. Three
     # of four did, and had to be killed by hand.
     Process.flag(:trap_exit, true)
-    state = %{host: host, bay: bay, port: nil, log: nil, run_id: nil, crashes: 0, mode: :run, last: nil, resume_after_pause: false, winding_down: false}
+    state = %{host: host, bay: bay, port: nil, log: nil, run_id: nil, crashes: 0, mode: :run, last: nil, resume_after_pause: false, winding_down: false, investigating: nil, investigations: []}
     Status.put(bay.name, :starting, nil, Host.project_of(host, bay))
     {:ok, state, {:continue, :ensure_checkout}}
   end
@@ -248,6 +265,22 @@ defmodule CodeGantryDaemon.Bay do
   # second run in the bay.
   def handle_info(:relaunch, %{port: port} = state) when is_port(port), do: {:noreply, state}
   def handle_info(:relaunch, state), do: {:noreply, state, {:continue, :launch}}
+
+  # The investigation ended: say how, and put the bay's row back to what
+  # it said before, since the bay itself did not change.
+  def handle_info({ref, {out, status}}, %{investigating: %{task: %Task{ref: ref}} = inv, bay: bay} = state) do
+    Process.demonitor(ref, [:flush])
+    last = out |> String.trim() |> String.split("\n") |> List.last() || ""
+    Logger.info("#{bay.name}: investigation of #{inv.about} exited #{status}: #{String.slice(last, 0, 200)}")
+    restore(state, inv)
+    {:noreply, %{state | investigating: nil}}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %{investigating: %{task: %Task{ref: ref}} = inv, bay: bay} = state) do
+    Logger.warning("#{bay.name}: investigation of #{inv.about} died: #{inspect(reason)}")
+    restore(state, inv)
+    {:noreply, %{state | investigating: nil}}
+  end
   def handle_info(_other, state), do: {:noreply, state}
 
   @impl true
@@ -267,6 +300,11 @@ defmodule CodeGantryDaemon.Bay do
 
   def handle_call(:retry, _from, %{port: port} = state) when is_port(port) do
     {:reply, {:error, {:running, state.run_id}}, state}
+  end
+
+  # A run starting under an investigation would switch the branch beneath it.
+  def handle_call(:retry, _from, %{investigating: %{about: about}} = state) do
+    {:reply, {:error, {:investigating, about}}, state}
   end
 
   # Never launched — the checkout could not be made, or the project was
@@ -291,7 +329,37 @@ defmodule CodeGantryDaemon.Bay do
     {:reply, {:ok, mode, run_id}, %{state | mode: mode, run_id: run_id, crashes: 0, last: :retrying}, {:continue, :launch}}
   end
 
-  def handle_call(:idle_complete?, _from, state), do: {:reply, state.port == nil and state.last == :complete, state}
+  def handle_call(:idle_complete?, _from, state), do: {:reply, state.port == nil and state.last == :complete and state.investigating == nil, state}
+
+  def handle_call({:investigate, about}, _from, %{host: host, bay: bay} = state) do
+    recent = Enum.filter(state.investigations, &(System.monotonic_time(:second) - &1 < 3600))
+
+    cond do
+      is_port(state.port) ->
+        {:reply, {:error, {:running, state.run_id}}, state}
+
+      state.investigating != nil ->
+        {:reply, {:error, {:investigating, state.investigating.about}}, state}
+
+      length(recent) >= @max_investigations_per_hour ->
+        {:reply, {:error, :rate_limited}, %{state | investigations: recent}}
+
+      true ->
+        project = Host.project_of(host, bay)
+        config = Host.bay_config(host, bay)
+        before = Status.get(bay.name)
+        Logger.info("#{bay.name}: investigating #{about}")
+        Status.put(bay.name, :investigating, about, project)
+
+        task =
+          Task.async(fn ->
+            Command.run(Command.code_gantry(host, ["ledger", "investigate", about, "--config", config]), host.code_gantry, Host.env(host))
+          end)
+
+        investigating = %{about: about, task: task, before: before}
+        {:reply, {:ok, about}, %{state | investigating: investigating, investigations: [System.monotonic_time(:second) | recent]}}
+    end
+  end
 
   @impl true
   def handle_cast(:wind_down, %{port: port, host: host, bay: bay} = state) when is_port(port) do
@@ -307,6 +375,13 @@ defmodule CodeGantryDaemon.Bay do
   # The exit code says which kind of end; the run's own output says why.
   # Its last lines travel into the daemon log beside the verdict, so a
   # failure is readable without opening the bay's log.
+  defp restore(%{host: host, bay: bay}, %{before: before}) do
+    case before do
+      {state, detail, _at, project} -> Status.put(bay.name, state, detail, project)
+      _ -> Status.put(bay.name, :idle, nil, Host.project_of(host, bay))
+    end
+  end
+
   defp last_lines(bay, count \\ 8) do
     case File.read(Path.join(Host.state_dir(), "#{bay.name}.log")) do
       {:ok, text} ->

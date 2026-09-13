@@ -49,7 +49,9 @@ defmodule CodeGantryDaemon.Waiting do
   `answer` (a finding: `disposition`, `text`, `target`), `ask` (`text`),
   `move` (`to`, a config path; `under`, a section key for an item),
   `land` (an item: `sha`), `strike` (an item: `text`), `fleet` (an item
-  handed to the pipeline). Answers `{:ok, decoded}` or `{:error, why}`.
+  handed to the pipeline), `investigate` (the daemon starts the
+  investigator on it in an idle bay). Answers `{:ok, decoded}` or
+  `{:error, why}`.
   """
   def act(config, action, params) do
     GenServer.call(__MODULE__, {:act, config, action, params}, 60_000)
@@ -71,6 +73,11 @@ defmodule CodeGantryDaemon.Waiting do
 
   @impl true
   def handle_call(:refresh, _from, state), do: {:reply, :ok, read(state)}
+
+  # Not a ledger write: the daemon starts the investigator in an idle bay.
+  def handle_call({:act, config, "investigate", %{"about" => about}}, _from, state) do
+    {:reply, {:ok, CodeGantryDaemon.Control.investigate(project_of(config), about)}, state}
+  end
 
   def handle_call({:act, config, action, params}, _from, %{host: host} = state) do
     reply =
