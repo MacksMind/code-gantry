@@ -183,6 +183,25 @@ def plan_show(key, config_path) -> None:
         click.echo(f"  finding {finding.id} [{finding.status}] by {finding.by}: {finding.claim}")
 
 
+@plan.command("sections")
+@json_option
+@config_option
+def plan_sections(as_json, config_path) -> None:
+    """Every document and section, in plan order with its depth: the places
+    an item can be added or moved under."""
+    _, _, led = _cfg_and_ledger(config_path, write=False)
+    views = led.views()
+    rows = []
+    for node in views.walk():
+        if node.kind in ("document", "section"):
+            rows.append({"key": node.key, "kind": node.kind, "title": node.title, "parent": node.parent,
+                         "depth": len(views.ancestors(node.key)), "owner": node.owner})
+    if as_json:
+        return _emit_json(rows)
+    for row in rows:
+        click.echo(f"{'  ' * row['depth']}{row['key']} {row['title']}")
+
+
 @plan.command("add")
 @click.option("--under", "parent", required=True, help="Parent key.")
 @click.option("--title", required=True)

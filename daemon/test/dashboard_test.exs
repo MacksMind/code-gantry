@@ -50,6 +50,8 @@ defmodule CodeGantryDaemon.DashboardTest do
       "ledger answer"|"ledger accept") echo '{"about": "'"$3"'", "disposition": "discard", "applied": ["discard f1"]}'; echo "[]" > "#{root}/waiting.json" ;;
       "ledger move"|"ledger land"|"ledger strike"|"plan edit") echo '{"done": true}' ;;
       "ledger ask") echo '{"id": "'"$3"'"}' ;;
+      "plan sections") echo '[{"key": "g.001", "kind": "document", "title": "General debt", "parent": null, "depth": 0}, {"key": "g.002", "kind": "section", "title": "Inherited", "parent": "g.001", "depth": 1}]' ;;
+      "plan add") echo "g.009" ;;
     esac
     exit 0
     """)
@@ -119,15 +121,21 @@ defmodule CodeGantryDaemon.DashboardTest do
     assert calls(root) =~ ~r/argv: plan edit p.006 --owner pipeline --config /
   end
 
-  test "a question and a move are one call each, the move to another project of the repository", %{root: root, bay: bay} do
+  test "a question and a move are one call each, the move to a section of another project", %{root: root, bay: bay} do
     {:ok, view, html} = live(build_conn(), "/")
-    # The other project is found in the checkout; the run's own artifacts are not a project.
-    assert html =~ ~s(<option value="#{bay}/docs/general/code_gantry.yaml">general</option>)
-    refute html =~ "runs</option>"
+    # The other project is found in the checkout, its sections are the
+    # choices, indented by depth; the run's own artifacts are not a project.
+    assert html =~ ~s(<optgroup label="general">)
+    assert html =~ ~s|<option value="#{bay}/docs/general/code_gantry.yaml\|g.002">\u00a0\u00a0Inherited (g.002)</option>|
+    refute html =~ ~s(label="runs")
     view |> form("form#ask-f1", %{"text" => "and the other one?"}) |> render_submit()
     assert calls(root) =~ ~r/argv: ledger ask f1 --text and the other one\? --json --config /
-    view |> form("form[id=\'move-p.006\']", %{"to" => "#{bay}/docs/general/code_gantry.yaml", "under" => "g.002"}) |> render_submit()
+    view |> form("form[id='move-p.006']", %{"to" => "#{bay}/docs/general/code_gantry.yaml|g.002"}) |> render_submit()
     assert calls(root) =~ ~r/argv: ledger move p.006 --to \S+docs\/general\/code_gantry.yaml --json --under g.002 --config /
+    # A new section titled in the box is made under the chosen one first.
+    view |> form("form[id='move-p.006']", %{"to" => "#{bay}/docs/general/code_gantry.yaml|g.001", "new_section" => "Later"}) |> render_submit()
+    assert calls(root) =~ ~r/argv: plan add --under g.001 --kind section --title Later --config \S+docs\/general\/code_gantry.yaml/
+    assert calls(root) =~ ~r/argv: ledger move p.006 --to \S+docs\/general\/code_gantry.yaml --json --under g.009 --config /
   end
 
   test "investigate asks the daemon for an idle bay on the project", %{} do

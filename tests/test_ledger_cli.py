@@ -366,6 +366,19 @@ class TestWhatIsWaitingOnAPerson:
         assert "p.006 struck" in run("ledger", "show", "p.006").output
 
 
+class TestSections:
+    def test_sections_are_the_documents_and_sections_in_plan_order_with_depth(self, project):
+        import json
+        imported(project)
+        rows = json.loads(run("plan", "sections", "--json").output)
+        assert [(r["key"], r["kind"], r["depth"]) for r in rows] == [
+            ("p.001", "document", 0), ("p.002", "section", 1), ("p.005", "section", 1), ("p.007", "document", 0),
+        ]
+        assert rows[1]["title"] == "Routes" and rows[1]["parent"] == "p.001"
+        text = run("plan", "sections").output
+        assert "p.001 Demo plan\n  p.002 Routes\n" in text
+
+
 class TestAccept:
     """`accept` applies what a card recommends as the events the answer
     would have been, so a click on the dashboard is the same answer a

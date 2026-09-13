@@ -83,6 +83,7 @@ defmodule CodeGantryDaemon.Waiting do
   def handle_call({:act, config, action, params}, _from, %{host: host} = state) do
     reply =
       case argv(action, params) do
+        {:ok, {:move_to, to_config, under, id, new_section}} -> move_to(host, config, to_config, under, id, new_section)
         {:ok, args} -> cli(host, args ++ ["--config", config])
         {:error, why} -> {:error, why}
       end
@@ -92,6 +93,7 @@ defmodule CodeGantryDaemon.Waiting do
     case {reply, action} do
       {{:ok, _}, "fleet"} -> CodeGantryDaemon.Control.wake(project_of(config))
       {{:ok, _}, "move"} -> CodeGantryDaemon.Control.wake(project_of(params["to"]))
+      {{:ok, _}, "move_to"} -> CodeGantryDaemon.Control.wake(params["to"] |> String.split("|") |> hd() |> project_of())
       {{:ok, %{"disposition" => "pipeline"}}, "accept"} -> CodeGantryDaemon.Control.wake(project_of(config))
       {{:ok, %{"disposition" => "move", "to" => to}}, "accept"} when is_binary(to) -> CodeGantryDaemon.Control.wake(project_of(to))
       _ -> :ok
@@ -111,6 +113,16 @@ defmodule CodeGantryDaemon.Waiting do
   defp argv("move", %{"about" => id, "to" => to} = p) when is_binary(to) and to != "",
     do: {:ok, ["ledger", "move", id, "--to", to, "--json"] ++ flag("--under", p["under"])}
 
+  # The dashboard's move: `to` is `<config>|<section key>`, and a new
+  # section's title, when given, is made under that key first and becomes
+  # the place the thing goes.
+  defp argv("move_to", %{"about" => id, "to" => to} = p) when is_binary(to) and to != "" do
+    case String.split(to, "|", parts: 2) do
+      [config, under] -> {:ok, {:move_to, config, under, id, p["new_section"]}}
+      _ -> {:error, "move needs a project and a section"}
+    end
+  end
+
   defp argv("land", %{"about" => id, "sha" => sha}) when is_binary(sha) and sha != "",
     do: {:ok, ["ledger", "land", id, sha]}
 
@@ -122,6 +134,23 @@ defmodule CodeGantryDaemon.Waiting do
   defp argv(action, params), do: {:error, "#{action} needs more than #{inspect(Map.keys(params))}"}
 
   defp project_of(config), do: config |> Path.dirname() |> Path.basename()
+
+  defp move_to(host, config, to_config, under, id, new_section) do
+    with {:ok, under} <- section_for(host, to_config, under, new_section),
+         {:ok, moved} <- cli(host, ["ledger", "move", id, "--to", to_config, "--json", "--under", under, "--config", config]) do
+      {:ok, Map.put(moved, "disposition", "move")}
+    end
+  end
+
+  defp section_for(_host, _to_config, under, title) when title in [nil, ""], do: {:ok, under}
+
+  defp section_for(host, to_config, under, title) do
+    case cli(host, ["plan", "add", "--under", under, "--kind", "section", "--title", title, "--config", to_config]) do
+      {:ok, key} when is_binary(key) -> {:ok, key |> String.split() |> hd()}
+      {:ok, other} -> {:error, "plan add answered #{inspect(other)}"}
+      {:error, why} -> {:error, why}
+    end
+  end
 
   defp flag(_name, value) when value in [nil, ""], do: []
   defp flag(name, value), do: [name, value]
@@ -181,8 +210,23 @@ defmodule CodeGantryDaemon.Waiting do
     ~w(*/code_gantry.yaml */*/code_gantry.yaml */*/*/code_gantry.yaml)
     |> Enum.flat_map(&Path.wildcard(Path.join(dir, &1)))
     |> Enum.reject(fn path -> path == config or Enum.any?(@skip, &String.contains?(path, &1)) end)
-    |> Enum.map(&%{project: &1 |> Path.dirname() |> Path.basename(), config: &1})
+    |> Enum.map(&%{project: &1 |> Path.dirname() |> Path.basename(), config: &1, sections: sections_of(host, &1)})
     |> Enum.sort_by(& &1.project)
+  end
+
+  # The places a thing can be moved under in another project: its
+  # documents and sections, in plan order, with depth for indenting.
+  defp sections_of(host, config) do
+    case Command.stdout(Command.code_gantry(host, ["plan", "sections", "--json", "--config", config]), host.code_gantry, Host.env(host)) do
+      {out, 0} ->
+        case Jason.decode(out) do
+          {:ok, rows} when is_list(rows) -> rows
+          _ -> []
+        end
+
+      _ ->
+        []
+    end
   end
 
   defp waiting_of(host, config) do

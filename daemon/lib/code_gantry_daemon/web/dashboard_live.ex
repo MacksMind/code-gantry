@@ -164,13 +164,15 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
       </form>
 
       <form :if={@project.projects != []} id={"move-#{@w["id"]}"} phx-submit="act">
-        <input type="hidden" name="action" value="move" />
+        <input type="hidden" name="action" value="move_to" />
         <input type="hidden" name="about" value={@w["id"]} />
         <input type="hidden" name="config" value={@project.config} />
         <select name="to">
-          <option :for={p <- @project.projects} value={p.config}>{p.project}</option>
+          <optgroup :for={p <- @project.projects} label={p.project}>
+            <option :for={s <- p.sections} value={"#{p.config}|#{s["key"]}"}>{String.duplicate("\u00a0\u00a0", s["depth"] || 0)}{s["title"]} ({s["key"]})</option>
+          </optgroup>
         </select>
-        <input :if={@w["kind"] == "item"} type="text" name="under" placeholder="section key there" size="14" />
+        <input type="text" name="new_section" placeholder="or a new section under it, titled…" size="28" />
         <button type="submit">move</button>
       </form>
     </div>
