@@ -605,6 +605,17 @@ class TestAClaimOutlivesARunThatMeansToComeBack:
         assert self._sweep(led) == 0
         assert led.views().state("p.001").state == "claimed"
 
+    def test_a_resumed_run_is_judged_by_the_pid_it_has_now(self, tmp_path):
+        # The claims a run took before a pause carry the pid it had then.
+        # Resumed, it is alive under a new pid, and a neighbour's sweep on
+        # the same host read the old one as dead and took its stage.
+        led = self._held(tmp_path, "paused")
+        led.append(RUN_BEGAN, run_id="r1", pid=424242, bay="host-a/target")
+        assert release_dead_holders(led, alive=lambda pid: pid == 424242, keep_run="r2") == 0
+        assert led.views().state("p.001").state == "claimed"
+        # And dead under its new pid, it is dead.
+        assert release_dead_holders(led, alive=lambda pid: False, keep_run="r2") == 2
+
     def test_a_run_that_simply_died_still_gives_its_stage_back(self, tmp_path):
         # No end recorded at all: killed, crashed, or the machine went. This
         # is what the sweep is for and it must keep working.

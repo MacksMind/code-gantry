@@ -280,6 +280,9 @@ class Views:
     # run_id -> how it last left, or None while it is running. A run that
     # paused or escalated keeps what it holds; see `release_dead_holders`.
     runs: dict[str, str | None] = field(default_factory=dict)
+    # run_id -> the pid of its latest start. A resumed run is alive under a
+    # new pid while its claims still carry the old one.
+    run_pids: dict[str, int] = field(default_factory=dict)
     # branch -> the candidate waiting on it, until it lands or is rejected.
     candidates: dict[str, "Candidate"] = field(default_factory=dict)
     # branch -> a candidate a composition found guilty, waiting for a bay to
@@ -531,6 +534,8 @@ def _apply(views: Views, event: Event) -> None:
         # that came back and then died is dead, and one pause must not spare
         # its claims for the life of the ledger.
         views.runs[event.run_id or ""] = None
+        if body.get("pid") is not None:
+            views.run_pids[event.run_id or ""] = int(body["pid"])
         return
     if kind == RUN_ENDED:
         views.runs[event.run_id or ""] = body.get("disposition") or "finished"
@@ -1259,6 +1264,9 @@ def release_dead_holders(
             if views.runs.get(run_id or "") in _COMING_BACK:
                 return False
             if origin == ledger.origin:
+                # The pid the run has now, not the one stamped on the claim:
+                # a resumed run holds what its earlier pid took.
+                pid = views.run_pids.get(run_id or "", pid)
                 return pid is not None and not alive(int(pid))
             # Another host. Only its own daemon can say, and only while it
             # is answering; silence is not an answer.

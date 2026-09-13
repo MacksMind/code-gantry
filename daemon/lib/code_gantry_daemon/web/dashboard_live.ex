@@ -35,19 +35,26 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
   def handle_info({:waiting, projects}, socket), do: {:noreply, cards(socket, projects)}
   def handle_info(:tick, socket), do: {:noreply, read_hosts(socket)}
 
-  # The cards are a stream, so a reading that changes one card patches
-  # one card: a page that repainted every card on every reading closed
-  # the dropdown a person was reading. Nothing inside a card reads the
-  # clock, for the same reason.
+  # The cards are a stream, and a reading is applied as a diff: a card
+  # whose record changed is inserted again and patched in place, a card
+  # that went is deleted, and a card that is the same is not touched at
+  # all — a reset would remove and re-add every one, and a dropdown a
+  # person is reading does not survive its element being replaced. A
+  # page that repainted every card on every reading is where this
+  # started. Nothing inside a card reads the clock, for the same reason.
   defp cards(socket, projects) do
-    entries =
-      for project <- projects, w <- project.waiting do
-        %{id: w["id"], w: w, project: project}
-      end
+    seen = Map.get(socket.assigns, :seen, %{})
+    entries = for project <- projects, w <- project.waiting, do: %{id: w["id"], w: w, project: Map.drop(project, [:waiting])}
+    now = Map.new(entries, &{&1.id, &1})
+    gone = for id <- Map.keys(seen), not Map.has_key?(now, id), do: id
+    changed = for entry <- entries, Map.get(seen, entry.id) != entry, do: entry
 
-    socket
-    |> assign(projects: Enum.map(projects, &Map.drop(&1, [:waiting])), cards: length(entries))
-    |> stream(:cards, entries, reset: true)
+    socket =
+      socket
+      |> assign(projects: Enum.map(projects, &Map.drop(&1, [:waiting])), cards: length(entries), seen: now)
+      |> stream(:cards, changed)
+
+    Enum.reduce(gone, socket, fn id, s -> stream_delete_by_dom_id(s, :cards, "waiting-#{id}") end)
   end
 
   @impl true
