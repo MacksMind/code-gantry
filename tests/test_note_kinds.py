@@ -96,6 +96,14 @@ class TestRouting:
         assert "7 of 24 remain" in finding.claim and "Seven sites remain" in finding.claim
         assert (finding.at_sha, finding.stage_id, finding.run_id) == ("abc1234def", "s1", "r1")
 
+    def test_a_key_written_as_its_plan_marker_is_the_key(self, led):
+        # The plan renders a key as `{#p.002}`, and the schema told the
+        # planner to copy the marker exactly; every finding of one project
+        # was filed keyless because the braces were looked up as the key.
+        opened = open_findings(led, FakeGit(), [note(key="{#p.002}"), note(key=" #p.002 ", subject="another")], by="planner", stage_id="s1", run_id="r1")
+        assert opened == 2
+        assert [f.keys for f in led.views().open_findings()] == [["p.002"], ["p.002"]]
+
     def test_a_human_finding_is_queued_intact(self, led):
         open_findings(led, FakeGit(), [note("out_of_scope", needs="human")], by="planner", stage_id="s1", run_id="r1")
         (finding,) = led.views().open_findings()

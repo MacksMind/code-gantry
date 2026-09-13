@@ -94,6 +94,13 @@ DISPOSITIONS = frozenset({"fold", "discard", "debt", "raise"})
 # the fleet can have it after all.
 RECOMMENDATIONS = DISPOSITIONS | frozenset({"move", "landed", "struck", "pipeline"})
 
+def bare_key(text: str | None) -> str:
+    """A key as the ledger names it, from however a model wrote it: the
+    plan renders `p.002` as the marker `{#p.002}`, and a model asked to
+    copy the marker copies the braces."""
+    return (text or "").strip().strip("{}").lstrip("#").strip()
+
+
 class LedgerError(RuntimeError):
     """A write the ledger refuses: a stale edit, an unknown key, a bad kind."""
 

@@ -40,6 +40,7 @@ from code_gantry.flake import adjudicate, append_flakes, predates_stage
 from code_gantry.gateway import resolve_policy
 from code_gantry.gitops import GitError
 from code_gantry.ledger import (
+    bare_key,
     CANDIDATE_PUSHED,
     REWORK_RELEASED,
     REWORK_TAKEN,
@@ -3014,7 +3015,7 @@ def open_findings(
         at_sha = None
     opened = 0
     for note in notes:
-        key = (note.get("key") or "").strip()
+        key = bare_key(note.get("key"))
         node = views.nodes.get(key)
         if node is None or node.retired:
             if log:

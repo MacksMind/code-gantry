@@ -246,9 +246,9 @@ class PlannedStage(BaseModel):
     plan_keys: list[str] = Field(
         min_length=1,
         description=(
-            "The keys of the plan items this stage is drawn from — the "
-            "`{#prefix.nnn}` markers on headings and items in the plan. At "
-            "least one, copied exactly. A landing on these keys is what closes "
+            "The keys of the plan items this stage is drawn from: `prefix.nnn`, "
+            "the text inside the `{#…}` markers on headings and items in the "
+            "plan. At least one. A landing on these keys is what closes "
             "them, so name the items the work completes, not the section it "
             "sits under, unless the section itself is the unit of work."
         ),
@@ -306,9 +306,9 @@ class PlanNote(BaseModel):
     )
     key: str = Field(
         description=(
-            "The key of the plan item this is about — its `{#prefix.nnn}` "
-            "marker, copied exactly. A heading's key when the finding is about "
-            "a section rather than one item."
+            "The key of the plan item this is about: `prefix.nnn`, the text "
+            "inside its `{#…}` marker. A heading's key when the finding is "
+            "about a section rather than one item."
         )
     )
     subject: str = Field(
