@@ -351,8 +351,13 @@ def ledger_waiting(as_json, config_path) -> None:
 @json_option
 @config_option
 def ledger_recommend(about, card_file, card_text, as_json, config_path) -> None:
-    """Attach a card to a finding or an item: `says`, `anchors`, `checked`,
-    `recommend` ({disposition, text, target, sha}) and `would_write`. The
+    """Attach a card to a finding or an item: `says`, `anchors` (a list),
+    `checked`, `recommend` and `would_write`. `recommend` is {disposition,
+    text, target, to, sha, landings}: disposition one of amend, discard,
+    debt, raise, move, landed, struck, pipeline; `target` a key (amend,
+    debt, or the section for a moved item); `to` a project's config path
+    (move); `sha` the commit (landed, an item); `landings` a list of
+    {key, sha} (landed, a finding that says several items are done). The
     latest card is the recommendation; the thread keeps them all."""
     if (card_file is None) == (card_text is None):
         raise click.ClickException("give the card once: --file or --card")
