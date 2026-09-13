@@ -299,9 +299,10 @@ daemon must behave the same.
    Elixir: a piece whose reason to change is the daemon's (locks, leases,
    the take-before-derive queue, status); not what is bound to a provider,
    a repository or a gate. The derivation of views stays in one language;
-   Elixir asks through the `--json` face on `ledger show`, `findings` and
-   `answer` — every field of the record as its dataclass declares it, never
-   a hand-written list of keys — until it is ported as a decision.
+   Elixir asks through the `--json` face on `ledger show`, `findings`,
+   `waiting`, `recommend`, `ask`, `move` and `answer` — every field of the
+   record as its dataclass declares it, never a hand-written list of keys —
+   until it is ported as a decision.
 4. The decision queue: every finding with `needs: human`, every escalated
    or paused run, every candidate waiting on a person, reachable from
    Telegram with the reply that answers it, writing the same events the
@@ -328,10 +329,9 @@ daemon must behave the same.
   measured run once the Spark is idle, or whether Luna stands.
 - Whether to enable `remote_landing` for the Rails 5 project and move its
   ledger into the table.
-- The dispositions. `fold`, `discard`, `debt` and `raise` each mean
-  something in the views; none has been used, and the operator wants to
-  discuss them first — in particular what `debt` should carry, which today
-  is the finding's text as a new item under a section named by the answer.
+- The dispositions have not been used on a real finding yet. Decided:
+  a card's `would_write` is what `debt` and `fold` carry, general debt is
+  a move to that project, and nothing is offered without a card.
 - A `checks` entry in the technical-debt config, backed by a script in the
   target's `bin/`, failing on a quoted path after an HTTP verb in an added
   line under `spec/requests/`: `forbidden_patterns` exempts test files by
@@ -587,6 +587,21 @@ a person reads; `seq` is what happened.
   `debt` answer is two events, the entry's upsert and the answer naming it,
   under one lock. Findings are answered one at a time in any order; the
   fold derives a set from the views, and nothing in the ledger is a cursor.
+- **What waits on a person is one queue**, `Views.waiting()`: findings that
+  need a human and open human-owned items, each carrying the card an
+  investigation attached (`thread.recommended`, `about` a finding id or a
+  key; the latest card is the recommendation, the thread keeps them all)
+  and the questions a person put back (`thread.asked`). A card recommends
+  a disposition, `move`, or for an item `landed`, `struck` or `pipeline`.
+  The card is what the buttons answer; a disposition offered without one
+  is a person doing the investigation's job.
+- **General debt is a project like any other**, so "make this general debt"
+  is `move`: opened in the other project's ledger first, with a pointer
+  back, then closed here naming where it went (`moved`; a finding becomes
+  `moved`, an item is struck), so a crash between the two leaves a
+  duplicate somebody can see rather than a loss. An item moves under a
+  section the caller names; a finding arrives with no keys, since keys are
+  a ledger's own.
 - **The event vocabulary is the contract between the languages.** Both
   write the table, so a kind or a field is added and never changes
   meaning; an unknown kind is ignored by an older reader, a changed one is

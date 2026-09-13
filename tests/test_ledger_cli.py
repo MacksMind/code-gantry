@@ -290,6 +290,82 @@ class TestTheJsonFace:
         assert row["status"] == "discarded" and row["disposition"] == "discard"
 
 
+class TestWhatIsWaitingOnAPerson:
+    """The verbs behind the cards: one queue, a card attached, a question
+    back, and a move to another project. Every one has a `--json` face,
+    since the dashboard, `claude -p` and a person's own session all call
+    these and nothing else."""
+
+    def _second_project(self, project, tmp_path):
+        repo, config, paths, sha = project
+        (repo / "docs" / "general.md").write_text("# General debt\n\n## Inherited\n\n- [ ] **An old one.**\n")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "general"], cwd=repo, check=True)
+        other = tmp_path / "general.yaml"
+        other.write_text(
+            config.read_text()
+            .replace("plan_root: docs/plan.md", "plan_root: docs/general.md")
+            .replace("ledger:\n  key_prefix: p\n", "ledger:\n  key_prefix: g\n  path: general/ledger.db\n")
+        )
+        result = run("plan", "import", "docs/general.md", "--config", str(other))
+        assert result.exit_code == 0, result.output
+        return other
+
+    def test_waiting_lists_human_items_and_findings_with_their_threads(self, project, tmp_path):
+        import json
+
+        repo, config, paths, sha = project
+        imported(project)
+        run("plan", "edit", "p.006", "--owner", "human")
+        writer = open_ledger(paths.ledger, origin="run-host", actor="run:1")
+        f = writer.open_finding(keys=["p.004"], by="planner", claim="Two callers remain.", needs="human")
+        writer.close()
+        card = tmp_path / "card.json"
+        card.write_text(json.dumps({
+            "says": "two callers", "anchors": ["app/thing.rb:1"], "checked": "both admin-only",
+            "recommend": {"disposition": "discard", "text": "duplicate"}, "would_write": None,
+        }))
+        result = run("ledger", "recommend", f.finding_id, "--file", str(card), "--json")
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["recommendation"]["recommend"]["disposition"] == "discard"
+        result = run("ledger", "ask", f.finding_id, "--text", "which caller?", "--json")
+        assert result.exit_code == 0, result.output
+        assert [e["kind"] for e in json.loads(result.output)["thread"]] == ["recommended", "asked"]
+
+        rows = json.loads(run("ledger", "waiting", "--json").output)
+        assert [(r["kind"], r["id"]) for r in rows] == [("item", "p.006"), ("finding", f.finding_id)]
+        assert rows[1]["recommendation"]["recommend"]["text"] == "duplicate"
+        assert rows[1]["thread"][1]["text"] == "which caller?"
+        text = run("ledger", "waiting").output
+        assert "p.006" in text and f.finding_id in text and "discard" in text
+
+    def test_move_takes_a_finding_or_an_item_to_another_project(self, project, tmp_path):
+        import json
+
+        repo, config, paths, sha = project
+        imported(project)
+        other = self._second_project(project, tmp_path)
+        run("plan", "edit", "p.006", "--owner", "human")
+        writer = open_ledger(paths.ledger, origin="run-host", actor="run:1")
+        f = writer.open_finding(keys=["p.004"], by="planner", claim="General, not ours.", needs="human")
+        writer.close()
+
+        result = run("ledger", "move", f.finding_id, "--to", str(other), "--json")
+        assert result.exit_code == 0, result.output
+        moved = json.loads(result.output)
+        assert moved["from"] == f.finding_id and moved["opened_as"].startswith("f-")
+        assert json.loads(run("ledger", "waiting", "--json", "--config", str(other)).output)[-1]["id"] == moved["opened_as"]
+        assert f.finding_id not in run("ledger", "waiting").output
+
+        # An item needs a section there; the document's key will do.
+        assert run("ledger", "move", "p.006", "--to", str(other)).exit_code != 0
+        result = run("ledger", "move", "p.006", "--to", str(other), "--under", "g.002", "--json")
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["opened_as"] == "g.004"
+        assert "g.004" in run("ledger", "show", "--open", "--config", str(other)).output
+        assert "p.006 struck" in run("ledger", "show", "p.006").output
+
+
 class TestValidateSeesTheLedger:
     def test_validate_reports_the_imported_plan(self, project):
         imported(project)

@@ -26,6 +26,7 @@ from code_gantry.ledger import (
     STRUCK,
     Ledger,
     LedgerError,
+    Waiting,
     apply_fold,
     import_old_file,
     ledger_for,
@@ -299,6 +300,115 @@ def ledger_findings(for_human, everything, as_json, config_path) -> None:
             click.echo(f"    total: {f.total}")
         if f.answer_text:
             click.echo(f"    answer: {f.disposition} — {f.answer_text}")
+
+
+# -- what is waiting on a person ----------------------------------------------
+
+
+def _waiting_row(w: Waiting) -> dict:
+    return dataclasses.asdict(w)
+
+
+def _thing_json(led: Ledger, about: str) -> dict:
+    """The one thing, as `waiting` would list it, or its bare thread once it
+    is no longer waiting."""
+    views = led.views()
+    for w in views.waiting():
+        if w.id == about:
+            return _waiting_row(w)
+    return {
+        "id": about, "recommendation": views.recommendations.get(about),
+        "thread": list(views.threads.get(about, [])),
+    }
+
+
+@ledger.command("waiting")
+@json_option
+@config_option
+def ledger_waiting(as_json, config_path) -> None:
+    """Everything waiting on a person: open human-owned items in plan
+    order, then findings that need a human, oldest first, each with the
+    card an investigation attached and the thread since."""
+    _, _, led = _cfg_and_ledger(config_path, write=False)
+    rows = led.views().waiting()
+    if as_json:
+        return _emit_json([_waiting_row(w) for w in rows])
+    for w in rows:
+        where = ", ".join(w.keys) if w.kind == "finding" else ""
+        click.echo(f"{w.id} [{w.kind}]{' on ' + where if where else ''}: {w.title}")
+        if w.recommendation:
+            rec = w.recommendation.get("recommend") or {}
+            click.echo(f"    recommend: {rec.get('disposition')}" + (f" — {rec['text']}" if rec.get("text") else ""))
+        for entry in w.thread:
+            if entry["kind"] == "asked":
+                click.echo(f"    asked by {entry.get('by')}: {entry.get('text')}")
+
+
+@ledger.command("recommend")
+@click.argument("about")
+@click.option("--file", "card_file", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None, help="The card, as JSON.")
+@click.option("--card", "card_text", default=None, help="The card, as JSON, inline.")
+@json_option
+@config_option
+def ledger_recommend(about, card_file, card_text, as_json, config_path) -> None:
+    """Attach a card to a finding or an item: `says`, `anchors`, `checked`,
+    `recommend` ({disposition, text, target, sha}) and `would_write`. The
+    latest card is the recommendation; the thread keeps them all."""
+    if (card_file is None) == (card_text is None):
+        raise click.ClickException("give the card once: --file or --card")
+    try:
+        card = json.loads(card_file.read_text() if card_file else card_text)
+    except json.JSONDecodeError as e:
+        raise click.ClickException(f"the card is not JSON: {e}")
+    _, _, led = _cfg_and_ledger(config_path, write=True)
+    try:
+        led.recommend(about, card=card)
+    except LedgerError as e:
+        raise click.ClickException(str(e))
+    if as_json:
+        return _emit_json(_thing_json(led, about))
+    click.echo(f"{about}: recommended {card['recommend']['disposition']}")
+
+
+@ledger.command("ask")
+@click.argument("about")
+@click.option("--text", required=True, help="The question, for the next investigation to read.")
+@json_option
+@config_option
+def ledger_ask(about, text, as_json, config_path) -> None:
+    """A person's question on a finding's or an item's thread."""
+    _, _, led = _cfg_and_ledger(config_path, write=True)
+    try:
+        led.ask(about, text=text)
+    except LedgerError as e:
+        raise click.ClickException(str(e))
+    if as_json:
+        return _emit_json(_thing_json(led, about))
+    click.echo(f"{about}: asked")
+
+
+@ledger.command("move")
+@click.argument("about")
+@click.option("--to", "to_config", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path), help="The other project's config.")
+@click.option("--under", default=None, help="For an item: the section key in the other project it goes under.")
+@json_option
+@config_option
+def ledger_move(about, to_config, under, as_json, config_path) -> None:
+    """Move a finding or an item to another project: opened there with a
+    pointer back, closed here naming where it went. General debt is a
+    project like any other, so this is how a thing becomes general debt."""
+    from_cfg, from_project, led = _cfg_and_ledger(config_path, write=True)
+    to_cfg, to_project, to_led = _cfg_and_ledger(to_config, write=True)
+    label = lambda cfg, project: cfg.ledger.name or str(project.ledger)  # noqa: E731
+    try:
+        opened = led.move(
+            about, to=to_led, to_label=label(to_cfg, to_project), from_label=label(from_cfg, from_project), under=under,
+        )
+    except LedgerError as e:
+        raise click.ClickException(str(e))
+    if as_json:
+        return _emit_json({"from": about, "to": label(to_cfg, to_project), "opened_as": opened})
+    click.echo(f"{about}: moved to {label(to_cfg, to_project)} as {opened}")
 
 
 @ledger.command("answer")

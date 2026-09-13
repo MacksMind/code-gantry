@@ -680,3 +680,104 @@ class TestTheOrderEventsAreApplied:
         two = open_ledger(tmp_path / "l.sqlite", origin="host-a", actor="run:r2")
         two.append(CLAIMED, key="p.001", stage_id="s2", run_id="r2", pid=43)
         assert two.views().state("p.001").run_id == "r2"
+
+
+class TestWaitingOnAPerson:
+    """One queue for everything a person has to act on: findings that need
+    a human and open human-owned items, each with the card an investigation
+    attached to it and the thread of questions and cards since."""
+
+    def test_waiting_is_human_findings_and_open_human_items(self, led):
+        plant(led, "k.001")
+        led.upsert_node("k.002", parent=None, position=1, kind="item", title="Check production data", owner="human")
+        led.upsert_node("k.003", parent=None, position=2, kind="item", title="Already done", owner="human")
+        led.append(LANDED, key="k.003", sha="abc")
+        for_person = led.open_finding(keys=["k.001"], by="planner", claim="needs a person", needs="human")
+        led.open_finding(keys=["k.001"], by="planner", claim="the pipeline's", needs="pipeline")
+        waiting = led.views().waiting()
+        assert [(w.kind, w.id) for w in waiting] == [("item", "k.002"), ("finding", for_person.finding_id)]
+        item, finding = waiting
+        assert item.title == "Check production data" and item.recommendation is None and item.thread == []
+        assert finding.text == "needs a person" and finding.keys == ["k.001"]
+
+    def test_a_card_and_a_question_travel_with_the_thing(self, led):
+        plant(led, "k.001")
+        f = led.open_finding(keys=["k.001"], by="planner", claim="two readings", needs="human")
+        card = {
+            "says": "two readings", "anchors": ["app/models/x.rb:12"], "checked": "both callers are admin-only",
+            "recommend": {"disposition": "discard", "text": "duplicate of k.002"}, "would_write": None,
+        }
+        led.recommend(f.finding_id, card=card, actor="claude -p")
+        led.ask(f.finding_id, text="which caller is the admin one?", actor="mack")
+        (w,) = led.views().waiting()
+        assert w.recommendation["recommend"]["disposition"] == "discard"
+        assert [(e["kind"], e["by"]) for e in w.thread] == [("recommended", "claude -p"), ("asked", "mack")]
+        assert w.thread[1]["text"] == "which caller is the admin one?"
+        # A later card is the recommendation; the thread keeps every one.
+        led.recommend(f.finding_id, card={**card, "recommend": {"disposition": "raise", "text": "a person decides"}})
+        (w,) = led.views().waiting()
+        assert w.recommendation["recommend"]["disposition"] == "raise" and len(w.thread) == 3
+
+    def test_a_card_needs_a_thing_that_exists_and_a_disposition_that_means_something(self, led):
+        plant(led, "k.001")
+        with pytest.raises(LedgerError):
+            led.recommend("f-nobody-9", card={"recommend": {"disposition": "discard"}})
+        with pytest.raises(LedgerError):
+            led.recommend("k.001", card={"recommend": {"disposition": "burn"}})
+        with pytest.raises(LedgerError):
+            led.recommend("k.001", card={"says": "no recommendation at all"})
+        led.recommend("k.001", card={"recommend": {"disposition": "landed", "sha": "abc"}})
+        assert led.views().recommendations["k.001"]["recommend"]["sha"] == "abc"
+
+    def test_an_answer_or_a_landing_takes_it_off_the_queue(self, led):
+        led.upsert_node("k.002", parent=None, position=1, kind="item", title="Decide", owner="human")
+        f = led.open_finding(keys=[], by="planner", claim="needs a person", needs="human")
+        assert len(led.views().waiting()) == 2
+        led.answer_finding(f.finding_id, disposition="discard")
+        led.append(STRUCK, key="k.002", reason="not doing it")
+        assert led.views().waiting() == []
+
+
+class TestMove:
+    """General debt is a project like any other, so moving a thing there is
+    a move between ledgers: opened there with a pointer back, closed here
+    naming where it went. The destination is written first, so a crash
+    between the two leaves a duplicate somebody can see rather than a loss."""
+
+    @pytest.fixture
+    def other(self, tmp_path):
+        other = open_ledger(tmp_path / "other.db", origin="host-a", actor="test", clock=ticking())
+        other.upsert_node("q.001", parent=None, position=0, kind="document", title="General debt")
+        other.upsert_node("q.002", parent="q.001", position=0, kind="section", title="Inherited")
+        return other
+
+    def test_a_finding_moved_opens_there_and_closes_here(self, led, other):
+        plant(led, "k.001")
+        f = led.open_finding(keys=["k.001"], by="planner", claim="belongs to general debt", needs="human", subject="s", total="landed")
+        opened = led.move(f.finding_id, to=other, to_label="repo/debt", from_label="repo/rails-5")
+        here = led.views().findings[f.finding_id]
+        assert (here.status, here.moved_to) == ("moved", "repo/debt")
+        there = other.views().findings[opened]
+        assert (there.status, there.needs, there.keys, there.subject, there.total) == ("open", "human", [], "s", "landed")
+        assert there.by == "moved from repo/rails-5"
+        assert "belongs to general debt" in there.claim and "k.001" in there.claim and "repo/rails-5" in there.claim
+        assert f.finding_id not in [w.id for w in led.views().waiting()]
+        assert opened in [w.id for w in other.views().waiting()]
+
+    def test_an_item_moved_becomes_an_item_there_and_is_struck_here(self, led, other):
+        led.upsert_node("k.002", parent=None, position=1, kind="item", title="Delete the columns", body="They are unread.", owner="human")
+        opened = led.move("k.002", to=other, to_label="repo/debt", from_label="repo/rails-5", under="q.002")
+        node = other.views().nodes[opened]
+        assert (node.parent, node.kind, node.title, node.owner) == ("q.002", "item", "Delete the columns", "human")
+        assert "They are unread." in node.body and "repo/rails-5" in node.body and "k.002" in node.body
+        state = led.views().state("k.002")
+        assert state.state == "struck" and state.reason == "moved to repo/debt as q.003"
+        assert "k.002" not in [w.id for w in led.views().waiting()]
+
+    def test_an_item_needs_a_section_to_go_under(self, led, other):
+        led.upsert_node("k.002", parent=None, position=1, kind="item", title="Delete the columns", owner="human")
+        with pytest.raises(LedgerError):
+            led.move("k.002", to=other, to_label="repo/debt", from_label="repo/rails-5")
+        with pytest.raises(LedgerError):
+            led.move("k.002", to=other, to_label="repo/debt", from_label="repo/rails-5", under="q.999")
+        assert led.views().state("k.002").state == "open"

@@ -48,6 +48,13 @@ FINDING_SUPERSEDED = "finding.superseded"
 FINDING_FOLDED = "finding.folded"
 FINDING_CLAIMED = "finding.claimed"
 FINDING_RELEASED = "finding.released"
+# The thread on a thing waiting for a person: the card an investigation
+# attached (`about` a finding id or a key), and a person's question back.
+THREAD_RECOMMENDED = "thread.recommended"
+THREAD_ASKED = "thread.asked"
+# A finding or an item moved to another project's ledger: closed here,
+# naming where it went and what it became there.
+MOVED = "moved"
 # A stage the planner drew, from derivation until a run lands or drops it.
 STAGE_DERIVED = "stage.derived"
 STAGE_TAKEN = "stage.taken"
@@ -82,6 +89,10 @@ NODE_KINDS = frozenset({"document", "section", "item"})
 OWNERS = frozenset({"pipeline", "human"})
 NEEDS = frozenset({"pipeline", "human"})
 DISPOSITIONS = frozenset({"fold", "discard", "debt", "raise"})
+# What a card may recommend: a finding's dispositions, a move to another
+# project, and for an item that a landing or a strike closes it, or that
+# the fleet can have it after all.
+RECOMMENDATIONS = DISPOSITIONS | frozenset({"move", "landed", "struck", "pipeline"})
 
 class LedgerError(RuntimeError):
     """A write the ledger refuses: a stale edit, an unknown key, a bad kind."""
@@ -161,6 +172,26 @@ class Finding:
     claimed_origin: str | None = None
     claimed_pid: int | None = None
     superseded_by: str | None = None
+    # Where a `moved` finding went: the other ledger's label.
+    moved_to: str | None = None
+
+
+@dataclass
+class Waiting:
+    """One thing a person has to act on: a finding that needs a human, or
+    an open item a person owns, with the card an investigation attached
+    and the thread since. `id` is the finding's id or the item's key."""
+
+    id: str
+    kind: str  # finding | item
+    title: str
+    text: str
+    keys: list[str]
+    since: str | None
+    subject: str | None = None
+    total: str | None = None
+    recommendation: dict | None = None
+    thread: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -237,6 +268,30 @@ class Views:
     # branch -> a candidate a composition found guilty, waiting for a bay to
     # rebase it onto what has landed since and put it right.
     rejected: dict[str, "Rejection"] = field(default_factory=dict)
+    # finding id or key -> every card and question on it, oldest first.
+    threads: dict[str, list[dict]] = field(default_factory=dict)
+    # finding id or key -> the latest card, the one a person is answering.
+    recommendations: dict[str, dict] = field(default_factory=dict)
+
+    def waiting(self) -> list[Waiting]:
+        """Everything waiting on a person: open human-owned items in tree
+        order, then findings that need a human, oldest first."""
+        out: list[Waiting] = []
+        for node in self.walk():
+            if node.kind == "item" and node.owner == "human" and self.is_open(node.key):
+                out.append(Waiting(
+                    id=node.key, kind="item", title=node.title, text=node.body, keys=[node.key],
+                    since=None, recommendation=self.recommendations.get(node.key),
+                    thread=list(self.threads.get(node.key, [])),
+                ))
+        for f in sorted(self.findings.values(), key=lambda f: f.opened_at):
+            if f.status == "open" and f.needs == "human":
+                out.append(Waiting(
+                    id=f.id, kind="finding", title=f.subject or f.claim.splitlines()[0][:80], text=f.claim,
+                    keys=list(f.keys), since=f.opened_at, subject=f.subject, total=f.total,
+                    recommendation=self.recommendations.get(f.id), thread=list(self.threads.get(f.id, [])),
+                ))
+        return out
 
     # -- tree -------------------------------------------------------------
 
@@ -502,6 +557,30 @@ def _apply(views: Views, event: Event) -> None:
                 finding.needs = "human"
             else:
                 finding.status = "answered"
+    elif kind == THREAD_RECOMMENDED:
+        about = body.get("about", "")
+        entry = {"kind": "recommended", "by": body.get("actor"), "at": event.at, "card": body.get("card") or {}}
+        views.threads.setdefault(about, []).append(entry)
+        views.recommendations[about] = entry["card"]
+    elif kind == THREAD_ASKED:
+        about = body.get("about", "")
+        views.threads.setdefault(about, []).append(
+            {"kind": "asked", "by": body.get("actor"), "at": event.at, "text": body.get("text", "")}
+        )
+    elif kind == MOVED:
+        about = body.get("about", "")
+        to = body.get("to")
+        opened_as = body.get("opened_as")
+        finding = views.findings.get(about)
+        if finding is not None:
+            if finding.status == "open":
+                finding.status = "moved"
+                finding.moved_to = to
+        elif about in views.nodes:
+            views.key_states[about] = KeyState(
+                key=about, state="struck", actor=body.get("actor"), since=event.at,
+                reason=f"moved to {to} as {opened_as}", evidence=opened_as,
+            )
     elif kind == FINDING_RESOLVED:
         finding = views.findings.get(body.get("finding_id", ""))
         if finding and finding.status in ("open", "answered"):
@@ -824,6 +903,85 @@ class Ledger:
                 FINDING_ANSWERED, actor=actor, finding_id=finding_id,
                 disposition=disposition, text=text, target_key=target_key, entry_key=entry_key,
             )
+
+    # -- the thread on a thing waiting for a person ------------------------
+
+    def _about(self, about: str) -> tuple[str, "Finding | Node"]:
+        views = self.views()
+        if about in views.findings:
+            return "finding", views.findings[about]
+        node = views.nodes.get(about)
+        if node is not None and not node.retired:
+            return "item", node
+        raise LedgerError(f"nothing waiting is called {about}")
+
+    def recommend(self, about: str, *, card: dict, actor: str | None = None) -> Event:
+        """Attach a card to a finding or an item: what it says, what it
+        anchors to, what was checked, what to do and what that would
+        write. The latest card is the recommendation; the thread keeps
+        them all."""
+        self._about(about)
+        recommend = card.get("recommend") if isinstance(card, dict) else None
+        disposition = recommend.get("disposition") if isinstance(recommend, dict) else None
+        if disposition not in RECOMMENDATIONS:
+            raise LedgerError(
+                f"a card recommends one of {', '.join(sorted(RECOMMENDATIONS))} under `recommend.disposition`, "
+                f"not {disposition!r}"
+            )
+        return self.append(THREAD_RECOMMENDED, actor=actor, about=about, card=card)
+
+    def ask(self, about: str, *, text: str, actor: str | None = None) -> Event:
+        """A person's question on the thread, for the next investigation to read."""
+        self._about(about)
+        if not text or not text.strip():
+            raise LedgerError("a question needs text")
+        return self.append(THREAD_ASKED, actor=actor, about=about, text=text.strip())
+
+    def move(
+        self,
+        about: str,
+        *,
+        to: "Ledger",
+        to_label: str,
+        from_label: str,
+        under: str | None = None,
+        actor: str | None = None,
+    ) -> str:
+        """Move a finding or an item to another project's ledger. Opened
+        there first, with a pointer back, then closed here naming where it
+        went — a crash between the two leaves a duplicate somebody can see
+        rather than a loss. Returns what it became there: a finding id, or
+        the item's new key under `under`, which an item needs."""
+        kind, thing = self._about(about)
+        if kind == "finding":
+            finding = thing
+            if finding.status != "open":
+                raise LedgerError(f"{about} is {finding.status}, not open")
+            claim = f"{finding.claim}\n\nMoved from {from_label}, where it was {about}" + (
+                f" on {', '.join(finding.keys)}." if finding.keys else "."
+            )
+            opened = to.open_finding(
+                keys=[], by=f"moved from {from_label}", claim=claim, needs="human",
+                subject=finding.subject, total=finding.total, actor=actor,
+            ).finding_id
+        else:
+            node = thing
+            if not under:
+                raise LedgerError("an item needs `under`: the section in the other ledger it goes under")
+            with to.transaction():
+                views = to.views()
+                target = views.nodes.get(under)
+                if target is None or target.retired or target.kind not in ("section", "document"):
+                    raise LedgerError(f"{under} is not a section in the other ledger")
+                prefix = under.rpartition(".")[0] or under
+                opened = views.next_key(prefix)
+                body = (node.body + "\n\n" if node.body else "") + f"Moved from {from_label}, where it was {about}."
+                to.upsert_node(
+                    opened, parent=under, position=len(views.children(under)), kind="item",
+                    title=node.title, body=body, owner="human", actor=actor,
+                )
+        self.append(MOVED, actor=actor, about=about, to=to_label, opened_as=opened)
+        return opened
 
     def close(self) -> None:
         self.store.close()
