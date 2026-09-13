@@ -237,7 +237,14 @@ version window and the machines' own packages are too far apart to see
 each other at all.
 Both hosts run the daemon from `~/projects/code-gantry` on `elixir-daemon`,
 host file `~/.config/code_gantry/host.exs`, state under
-`~/.local/state/code_gantry/daemon/`. The node name is long, built from
+`~/.local/state/code_gantry/daemon/`. On the Spark the daemon is a user
+systemd unit, `~/.config/systemd/user/code-gantry-daemon.service`,
+enabled with lingering so it starts at boot: `Type=forking` around
+`bin/daemon start|stop` with the pid file, restarted on failure, and a
+`PATH` that names `~/.local/bin` for `mise` and `uv` and `/snap/bin` for
+`bundle`, because a unit inherits no login shell and the preflight's
+checks run host scripts. `systemctl --user restart code-gantry-daemon`
+is how the Spark's daemon is restarted now. The Mac has no such unit. The node name is long, built from
 `address:` in the host file, so nothing tracked names a host; the cookie
 is the only credential and both hosts hold the same one. **The dial is
 one-way and need not be symmetric:** the Mac accepts nothing inbound, so
