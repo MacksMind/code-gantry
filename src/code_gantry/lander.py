@@ -80,6 +80,45 @@ def _bay(rt) -> str:
 
 
 def _compose_holding(rt) -> Composition | None:
+    """Land what is pending, and keep landing until nothing is.
+
+    A bay that finishes a stage while this one is holding the semaphore
+    pushes its candidate, offers to land it, is refused, and goes on — and
+    this one has already read the list it is landing. Nobody looks again,
+    and that candidate waits for the next bay to finish a stage anywhere in
+    the fleet. When the planner has run out of work, no bay finishes
+    another stage, so it waits forever: measured, with one candidate pushed
+    at 18:32 into a landing that started at 18:30, and four bays stopped
+    within nine minutes because the key it was holding was the one they
+    needed.
+
+    So the holder asks again before it lets go. This is the landing step
+    finishing its own job rather than a second place that lands, and it
+    costs a read of the ledger in the ordinary case where nothing arrived.
+    """
+    landed, rejected, suites = [], [], 0
+    while True:
+        turn = _compose_once(rt, budget=rt.cfg.limits.max_compose_suites - suites)
+        if turn is None:
+            break
+        landed.extend(turn.landed)
+        rejected.extend(turn.rejected)
+        suites += turn.suites
+        if turn.escalation or suites >= rt.cfg.limits.max_compose_suites:
+            return Composition(landed, rejected, turn.sha, suites, turn.escalation)
+    if not landed and not rejected:
+        return None
+    return Composition(landed, rejected, _tip(rt), suites)
+
+
+def _tip(rt) -> str | None:
+    try:
+        return rt.git.rev_parse(f"origin/{rt.cfg.project_branch}")
+    except GitError:  # pragma: no cover - defensive
+        return None
+
+
+def _compose_once(rt, *, budget: int) -> Composition | None:
     git = rt.git
     branch = rt.cfg.project_branch
     git.fetch()
@@ -99,7 +138,6 @@ def _compose_holding(rt) -> Composition | None:
     remaining = list(pending)
     rejected: list[tuple[Candidate, str]] = []
     suites = 0
-    budget = rt.cfg.limits.max_compose_suites
 
     while True:
         applied, refused = _replay(rt, remaining)
