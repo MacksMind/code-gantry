@@ -99,9 +99,12 @@ def _config_argument(value: Path | None) -> Path:
     )
 
 
-def _project_for(config_path: Path) -> tuple[ProjectConfig, ProjectPaths]:
+def _project_for(config_path: Path, *, quiet: bool = False) -> tuple[ProjectConfig, ProjectPaths]:
+    """`quiet` for the ledger commands: a daemon reads the ledger every
+    minute, and a line per read naming the credentials it loaded is what
+    its log would fill with."""
     cfg = _load(config_path)
-    _apply_env_file(cfg, config_path)
+    _apply_env_file(cfg, config_path, quiet=quiet)
     return cfg, ProjectPaths.for_config(cfg)
 
 
@@ -128,7 +131,7 @@ def _from_project_branch(config_path: Path) -> tuple[ProjectConfig, ProjectPaths
     return cfg, project
 
 
-def _apply_env_file(cfg: ProjectConfig, config_path: Path) -> None:
+def _apply_env_file(cfg: ProjectConfig, config_path: Path, *, quiet: bool = False) -> None:
     """Load the credentials the config points at, before anything needs them.
 
     Here rather than in `parse_config`, which must stay a reader: a config that
@@ -155,7 +158,8 @@ def _apply_env_file(cfg: ProjectConfig, config_path: Path) -> None:
         # line built from the file's contents would claim credit for a
         # variable it never set. Names only; a credential must not be one
         # `code-gantry status` away from a terminal transcript.
-        click.echo(f"env_file supplied {', '.join(applied)}", err=True)
+        if not quiet:
+            click.echo(f"env_file supplied {', '.join(applied)}", err=True)
 
 
 def _resolve_run_id(project: ProjectPaths, run_id: str | None) -> str:

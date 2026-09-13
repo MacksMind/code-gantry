@@ -236,7 +236,7 @@ defmodule CodeGantryDaemonTest do
 
       spawn(fn ->
         Process.group_leader(self(), foreign)
-        Mesh.locally(Kernel, :send, [parent, {:leader, Process.group_leader()}])
+        send(parent, {:leader, Mesh.locally(Process, :group_leader, [])})
       end)
 
       assert_receive {:leader, leader}

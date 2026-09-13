@@ -51,7 +51,7 @@ def origin() -> str | None:
 def _cfg_and_ledger(config_path, *, write: bool) -> tuple:
     from code_gantry.cli import _config_argument, _project_for
 
-    cfg, project = _project_for(_config_argument(config_path))
+    cfg, project = _project_for(_config_argument(config_path), quiet=True)
     if cfg.ledger is None:
         raise click.ClickException(
             "no `ledger:` section in the config; set `ledger.key_prefix` first"
