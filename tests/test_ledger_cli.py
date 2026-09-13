@@ -228,6 +228,68 @@ class TestLedgerCommands:
         assert "### Claimed" in projection and "p.004" in projection
 
 
+class TestTheJsonFace:
+    """What another process reads: every field of the record, as the type
+    declares it, so a reader in another language sees what a reader here sees.
+    The writer is the dataclass, never a hand-written list of keys."""
+
+    def test_findings_carry_every_field_of_the_type(self, project):
+        import dataclasses
+        import json
+        from code_gantry.ledger import Finding
+
+        repo, config, paths, sha = project
+        imported(project)
+        writer = open_ledger(paths.ledger, origin="run-host", actor="run:1")
+        f = writer.open_finding(keys=["p.004"], by="planner", claim="Two callers remain.", needs="human")
+        writer.open_finding(keys=["p.005"], by="planner", claim="For the pipeline.", needs="pipeline")
+        writer.close()
+        result = run("ledger", "findings", "--for-human", "--json")
+        assert result.exit_code == 0, result.output
+        rows = json.loads(result.output)
+        assert [row["id"] for row in rows] == [f.finding_id]
+        assert set(rows[0]) == {field.name for field in dataclasses.fields(Finding)}
+        assert rows[0]["needs"] == "human" and rows[0]["keys"] == ["p.004"]
+
+    def test_show_carries_the_node_and_its_state(self, project):
+        import dataclasses
+        import json
+        from code_gantry.ledger import KeyState, Node
+
+        repo, config, paths, sha = project
+        imported(project)
+        run("ledger", "claim", "p.004")
+        rows = json.loads(run("ledger", "show", "--json").output)
+        by_key = {row["key"]: row for row in rows}
+        # The same rows the text face prints, one per item.
+        printed = [line.split()[0] for line in run("ledger", "show").output.splitlines()]
+        assert list(by_key) == printed and len(printed) == 4
+        node_fields = {field.name for field in dataclasses.fields(Node)}
+        assert set(by_key["p.004"]) == node_fields | {"state"}
+        assert set(by_key["p.004"]["state"]) == {field.name for field in dataclasses.fields(KeyState)}
+        assert by_key["p.004"]["state"]["state"] == "claimed"
+        assert by_key["p.003"]["state"]["state"] == "landed"
+        only_open = json.loads(run("ledger", "show", "--open", "--json").output)
+        assert [row["key"] for row in only_open] == [
+            line.split()[0] for line in run("ledger", "show", "--open").output.splitlines()
+        ]
+        assert 0 < len(only_open) < len(rows)
+
+    def test_an_answer_returns_the_finding_it_changed(self, project):
+        import json
+
+        repo, config, paths, sha = project
+        imported(project)
+        writer = open_ledger(paths.ledger, origin="run-host", actor="run:1")
+        f = writer.open_finding(keys=["p.004"], by="planner", claim="Two callers remain.", needs="human")
+        writer.close()
+        result = run("ledger", "answer", f.finding_id, "discard", "--json")
+        assert result.exit_code == 0, result.output
+        row = json.loads(result.output)
+        assert row["id"] == f.finding_id
+        assert row["status"] == "discarded" and row["disposition"] == "discard"
+
+
 class TestValidateSeesTheLedger:
     def test_validate_reports_the_imported_plan(self, project):
         imported(project)

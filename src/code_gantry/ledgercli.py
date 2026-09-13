@@ -7,7 +7,9 @@ name; origin from `CODE_GANTRY_ORIGIN`, falling back to the hostname.
 
 from __future__ import annotations
 
+import dataclasses
 import getpass
+import json
 import os
 from pathlib import Path
 
@@ -62,6 +64,16 @@ def _key(led: Ledger, key: str):
     if node is None or node.retired:
         raise click.ClickException(f"no such key {key}")
     return node
+
+
+# The face another process reads. Every field of the record, as the type
+# declares it, so a reader in another language sees what a reader here
+# sees; the writer is the dataclass, never a hand-written list of keys.
+json_option = click.option("--json", "as_json", is_flag=True, help="Machine-readable: every field of each record.")
+
+
+def _emit_json(rows) -> None:
+    click.echo(json.dumps(rows, indent=2, sort_keys=True))
 
 
 config_option = click.option(
@@ -244,16 +256,18 @@ def ledger() -> None:
 @click.option("--claimed", "only", flag_value="claimed")
 @click.option("--blocked", "only", flag_value="blocked")
 @click.option("--landed", "only", flag_value="landed")
+@json_option
 @config_option
-def ledger_show(key, only, config_path) -> None:
+def ledger_show(key, only, as_json, config_path) -> None:
     """Every item's state, or one key's."""
     _, _, led = _cfg_and_ledger(config_path, write=False)
     views = led.views()
     nodes = [_key(led, key)] if key else [n for n in views.walk() if n.kind == "item"]
-    for node in nodes:
-        state = views.state(node.key)
-        if only and state.state != only:
-            continue
+    rows = [(node, views.state(node.key)) for node in nodes]
+    rows = [(node, state) for node, state in rows if not only or state.state == only]
+    if as_json:
+        return _emit_json([{**dataclasses.asdict(node), "state": dataclasses.asdict(state)} for node, state in rows])
+    for node, state in rows:
         extra = f" `{state.sha}`" if state.sha else ""
         if state.state == "claimed":
             extra = f" by {state.actor or state.run_id}"
@@ -266,17 +280,19 @@ def ledger_show(key, only, config_path) -> None:
 @ledger.command("findings")
 @click.option("--for-human", is_flag=True, help="Only findings waiting on a person.")
 @click.option("--all", "everything", is_flag=True, help="Closed ones too.")
+@json_option
 @config_option
-def ledger_findings(for_human, everything, config_path) -> None:
+def ledger_findings(for_human, everything, as_json, config_path) -> None:
     """Open findings, oldest first."""
     _, _, led = _cfg_and_ledger(config_path, write=False)
     views = led.views()
-    findings = sorted(views.findings.values(), key=lambda f: f.opened_at)
+    findings = [
+        f for f in sorted(views.findings.values(), key=lambda f: f.opened_at)
+        if (everything or f.status == "open") and (not for_human or f.needs == "human")
+    ]
+    if as_json:
+        return _emit_json([dataclasses.asdict(f) for f in findings])
     for f in findings:
-        if not everything and f.status != "open":
-            continue
-        if for_human and f.needs != "human":
-            continue
         keys = ", ".join(f.keys) or "-"
         click.echo(f"{f.id} [{f.status}] on {keys} by {f.by} (needs {f.needs}): {f.claim}")
         if f.total:
@@ -290,8 +306,9 @@ def ledger_findings(for_human, everything, config_path) -> None:
 @click.argument("disposition", type=click.Choice(["fold", "discard", "debt", "raise"]))
 @click.option("--text", default=None, help="For `fold`, the sentence the plan carries; for `debt`, the entry; for `raise`, why a person must decide.")
 @click.option("--target", default=None, help="For `fold`, the key the text is written under (default: the finding's first key); for `debt`, the section the entry goes under.")
+@json_option
 @config_option
-def ledger_answer(finding_id, disposition, text, target, config_path) -> None:
+def ledger_answer(finding_id, disposition, text, target, as_json, config_path) -> None:
     """A disposition of one finding, in any order: `fold` writes the text
     into the plan at the next fold; `discard` closes it; `debt` makes it an
     item under the target section and closes it; `raise` keeps it open and
@@ -305,6 +322,8 @@ def ledger_answer(finding_id, disposition, text, target, config_path) -> None:
         led.answer_finding(finding_id, disposition=disposition, text=text, target_key=target)
     except LedgerError as e:
         raise click.ClickException(str(e))
+    if as_json:
+        return _emit_json(dataclasses.asdict(led.views().findings[finding_id]))
     click.echo(f"{finding_id} {disposition}")
 
 

@@ -292,8 +292,9 @@ daemon must behave the same.
    Elixir: a piece whose reason to change is the daemon's (locks, leases,
    the take-before-derive queue, status); not what is bound to a provider,
    a repository or a gate. The derivation of views stays in one language;
-   Elixir asks through a `--json` face on the ledger commands until it is
-   ported as a decision.
+   Elixir asks through the `--json` face on `ledger show`, `findings` and
+   `answer` — every field of the record as its dataclass declares it, never
+   a hand-written list of keys — until it is ported as a decision.
 4. The decision queue: every finding with `needs: human`, every escalated
    or paused run, every candidate waiting on a person, reachable from
    Telegram with the reply that answers it, writing the same events the
@@ -906,6 +907,16 @@ a person reads; `seq` is what happened.
 
 ## State, resumes and branches
 
+- **A run reads its config from the project branch.** A bay is a checkout
+  and a placement can hand it a project whose branch is not checked out;
+  the only fact a config on any branch can be trusted for is which branch
+  the project lives on. `run` reads that, puts a clean checkout there, and
+  reads the config again before preflight — three bays once preflighted
+  another branch's copy of a project's config and refused it. A dirty tree
+  is left where it is for preflight to name. A local project branch behind
+  origin is still the copy read: without `remote_landing` it is this host's
+  own, so moving a project onto `remote_landing` fast-forwards each bay's
+  branch once, by hand.
 - **A resume is not a fresh process with the old state.** `resume_fields` is
   what a resume merges over the checkpoint. `step` counts from zero inside one
   `drive` call and the key is `(run_id, step)`, so a resumed session can
