@@ -368,6 +368,95 @@ def ledger_waiting(as_json, config_path) -> None:
                 click.echo(f"    asked by {entry.get('by')}: {entry.get('text')}")
 
 
+def _history(led, about: str, payload: dict) -> list[dict]:
+    """Everything that happened to one thing, oldest first: the events on
+    its key, on the findings about it, and on its thread. The origin is
+    the first entry; a person reads down from there like a ticket."""
+    finding_ids = {f["id"] for f in payload.get("findings", [])}
+    if payload["kind"] == "finding":
+        finding_ids.add(about)
+    keys = {about} if payload["kind"] != "finding" else set(payload["finding"]["keys"])
+    out = []
+    for e in led.events():
+        body = e.body
+        fid = body.get("finding_id") or (e.finding_id if e.kind == "finding.opened" else None)
+        touches = (
+            (e.key in keys and e.kind != "finding.opened")
+            or (e.kind == "finding.opened" and (e.finding_id in finding_ids or (e.key in keys)))
+            or (fid in finding_ids)
+            or body.get("about") in ({about} | keys)
+            or body.get("derived_id") and about in (body.get("keys") or [])
+        )
+        if not touches:
+            continue
+        summary = body.get("mark") or body.get("claim") or body.get("text") or body.get("reason") or body.get("question") or body.get("title") or ""
+        if e.kind == "finding.answered":
+            summary = f"{body.get('disposition')}: {body.get('text') or ''}"
+        if e.kind == "thread.recommended":
+            rec = (body.get("card") or {}).get("recommend") or {}
+            summary = f"recommends {rec.get('disposition')}: {rec.get('text') or ''}"
+        out.append({
+            "seq": e.seq, "at": e.at, "origin": e.origin, "actor": body.get("actor"), "run_id": e.run_id,
+            "kind": e.kind, "key": e.key, "finding_id": fid, "sha": e.sha, "summary": summary[:600],
+        })
+    return out
+
+
+@ledger.command("thing")
+@click.argument("about")
+@json_option
+@config_option
+def ledger_thing(about, as_json, config_path) -> None:
+    """The whole of one thing, for a person reading it: an item with where
+    it sits, its state, marks, the findings on it and its thread; or a
+    finding with the items it is about. What a card summarises."""
+    _, _, led = _cfg_and_ledger(config_path, write=False)
+    views = led.views()
+
+    def node_row(node):
+        return {**dataclasses.asdict(node), "state": dataclasses.asdict(views.state(node.key))}
+
+    if about in views.findings:
+        finding = views.findings[about]
+        payload = {
+            "kind": "finding",
+            "finding": dataclasses.asdict(finding),
+            "items": [node_row(views.nodes[k]) for k in finding.keys if k in views.nodes],
+            "ancestors": [dataclasses.asdict(a) for a in (views.ancestors(finding.keys[0]) if finding.keys and finding.keys[0] in views.nodes else [])],
+        }
+    else:
+        node = _key(led, about)
+        payload = {
+            "kind": "item" if node.kind == "item" else node.kind,
+            "item": node_row(node),
+            "ancestors": [dataclasses.asdict(a) for a in reversed(views.ancestors(about))],
+            "children": [node_row(c) for c in views.children(about)],
+            "findings": [dataclasses.asdict(f) for f in sorted(views.findings_on(about), key=lambda f: f.opened_at)],
+        }
+    payload["recommendation"] = views.recommendations.get(about)
+    payload["thread"] = list(views.threads.get(about, []))
+    payload["history"] = _history(led, about, payload)
+    if as_json:
+        return _emit_json(payload)
+    if payload["kind"] == "finding":
+        f = payload["finding"]
+        click.echo(f"{f['id']} [{f['status']}] by {f['by']} (needs {f['needs']}) on {', '.join(f['keys']) or '-'}")
+        click.echo(f["claim"])
+        for item in payload["items"]:
+            click.echo(f"  item {item['key']} [{item['state']['state']}] {item['title']}")
+    else:
+        item = payload["item"]
+        click.echo(f"{item['key']} [{item['kind']}, {item['owner']}] {item['state']['state']}: {item['title']}")
+        if payload["ancestors"]:
+            click.echo("  under: " + " > ".join(a["title"] for a in payload["ancestors"]))
+        if item["body"]:
+            click.echo(item["body"])
+        for f in payload["findings"]:
+            click.echo(f"  finding {f['id']} [{f['status']}] by {f['by']}: {f['claim'][:160]}")
+    for h in payload["history"]:
+        click.echo(f"  {h['at'][:19]} {h['kind']:22} {h['actor'] or h['run_id'] or '-'}: {h['summary'][:120]}")
+
+
 @ledger.command("recommend")
 @click.argument("about")
 @click.option("--file", "card_file", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None, help="The card, as JSON.")

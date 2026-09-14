@@ -52,6 +52,7 @@ defmodule CodeGantryDaemon.DashboardTest do
       "ledger ask") echo '{"id": "'"$3"'"}' ;;
       "plan sections") echo '[{"key": "g.001", "kind": "document", "title": "General debt", "parent": null, "depth": 0}, {"key": "g.002", "kind": "section", "title": "Inherited", "parent": "g.001", "depth": 1}]' ;;
       "plan add") echo "g.009" ;;
+      "ledger thing") echo '{"kind": "item", "item": {"key": "p.006", "kind": "item", "title": "Delete the columns", "body": "They are unread.", "owner": "human", "marks": [], "state": {"state": "open", "question": null}}, "ancestors": [{"title": "Demo plan"}, {"title": "Later"}], "children": [], "findings": [], "recommendation": null, "thread": [], "history": [{"seq": 1, "at": "2026-09-13T10:00:00+00:00", "kind": "node.upserted", "actor": "mack", "run_id": null, "origin": "web-host", "sha": null, "summary": "Delete the columns"}, {"seq": 9, "at": "2026-09-13T11:00:00+00:00", "kind": "claimed", "actor": null, "run_id": "r1", "origin": "web-host", "sha": null, "summary": ""}]}' ;;
       "ledger show") case "$*" in *docs/p/*) echo '[{"key": "p.004", "title": "Add the new route", "owner": "pipeline", "state": {"state": "open"}}, {"key": "p.008", "title": "A stray N+1", "owner": "pipeline", "state": {"state": "open"}}]' ;; *) echo "[]" ;; esac ;;
     esac
     exit 0
@@ -244,9 +245,25 @@ defmodule CodeGantryDaemon.DashboardTest do
     assert html =~ "2 drawable" and html =~ "0 drawable"
     refute html =~ "Add the new route"
     html = view |> element("button.linkish[phx-value-project=p]") |> render_click()
-    assert html =~ "<code>p.004</code> Add the new route" and html =~ "A stray N+1"
+    assert html =~ "<code>p.004</code></a> Add the new route" and html =~ "A stray N+1"
     html = view |> element("button.linkish[phx-value-project=p]") |> render_click()
     refute html =~ "Add the new route"
+  end
+
+  test "a thing reads like a ticket, and every action is on it", %{root: root} do
+    {:ok, view, html} = live(build_conn(), "/thing?project=p&id=p.006")
+    assert calls(root) =~ ~r/argv: ledger thing p.006 --json --config \S+docs\/p\/code_gantry.yaml/
+    assert html =~ "<h1>Delete the columns</h1>" and html =~ "They are unread." and html =~ "under Demo plan › Later"
+    assert html =~ "node.upserted" and html =~ "claimed"
+    view |> form("form#strike", %{"text" => "never doing this"}) |> render_submit()
+    assert calls(root) =~ ~r/argv: ledger strike p.006 never doing this --config /
+    view |> form("form#edit", %{"title" => "Keep the columns", "body" => "Decided: they stay.\n\nBecause."}) |> render_submit()
+    assert calls(root) =~ ~r/argv: plan edit p.006 --title Keep the columns --body-file (\S+)/
+    [_, path] = Regex.run(~r/--body-file (\S+)/, calls(root))
+    assert File.read!(path) == "Decided: they stay.\n\nBecause."
+    # The cards and the drawable list link here.
+    {:ok, _view, home} = live(build_conn(), "/")
+    assert home =~ ~s(<a href="/thing?project=p&amp;id=p.006">p.006</a>)
   end
 
   test "before the first reading there is nothing, not an error" do

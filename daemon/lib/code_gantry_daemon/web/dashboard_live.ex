@@ -180,7 +180,7 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
         <button phx-click="project" phx-value-project={project.project} phx-value-verb="hold" data-confirm={"Hold #{project.project}: stop every running bay on it at its seam, on every host?"}>hold</button><span :if={project.error} class="error"> — {project.error}</span>
       </p>
       <ul :if={@listing == project.project} class="drawable">
-        <li :for={item <- Map.get(project, :drawable, [])}><code>{item["key"]}</code> {item["title"]}</li>
+        <li :for={item <- Map.get(project, :drawable, [])}><a href={"/thing?project=#{project.project}&id=#{item["key"]}"}><code>{item["key"]}</code></a> {item["title"]}</li>
         <li :if={Map.get(project, :drawable, []) == []} class="empty">nothing the fleet can draw</li>
       </ul>
     </div>
@@ -199,7 +199,7 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
     ~H"""
     <div class="card" id={@id}>
       <div class="meta">
-        {@project.project} · {@w["id"]} · {@w["kind"]}<span :if={@w["kind"] == "finding" and @w["keys"] != []}> · on {Enum.join(@w["keys"], ", ")}</span><span :if={@w["subject"]}> · {@w["subject"]}</span><span :if={@w["since"]}> · opened {@w["since"]}</span>
+        {@project.project} · <a href={"/thing?project=#{@project.project}&id=#{@w["id"]}"}>{@w["id"]}</a> · {@w["kind"]}<span :if={@w["kind"] == "finding" and @w["keys"] != []}> · on {Enum.join(@w["keys"], ", ")}</span><span :if={@w["subject"]}> · {@w["subject"]}</span><span :if={@w["since"]}> · opened {@w["since"]}</span>
       </div>
       <div class="title"><strong>{@w["title"]}</strong></div>
       <div :if={@w["text"] != "" and @w["text"] != @w["title"]} class="claim">{@w["text"]}</div>

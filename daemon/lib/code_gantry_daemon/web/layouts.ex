@@ -35,6 +35,18 @@ defmodule CodeGantryDaemon.Web.Layouts do
           .item-actions { display: flex; flex-wrap: wrap; gap: 6px 18px; }
           .card form { margin-top: 8px; }
           .empty { color: #666; }
+          .thing { max-width: 900px; }
+          .thing h1 { font-size: 20px; margin: 4px 0 10px; }
+          .thing .mark { color: #1f6f3f; font-size: 13px; margin: 2px 0; }
+          ol.history { padding-left: 18px; }
+          ol.history li { margin: 6px 0; }
+          ol.history .meta { color: #666; font-size: 12px; }
+          form.edit { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+          form.edit input[type=text], form.edit textarea { width: 100%; padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px; font: inherit; }
+          .thing form { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+          .thing form.edit { flex-direction: column; align-items: stretch; }
+          .thing input[type=text] { flex: 1 1 320px; padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px; }
+          .thing button { padding: 4px 10px; border: 1px solid #999; border-radius: 4px; background: #f4f4f2; cursor: pointer; }
           td.controls button { padding: 1px 7px; margin-right: 4px; border: 1px solid #999; border-radius: 4px; background: #f4f4f2; cursor: pointer; font-size: 12px; }
           form.filter { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0 10px; }
           form.filter input[type=text] { flex: 1 1 260px; padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px; }

@@ -60,6 +60,22 @@ defmodule CodeGantryDaemon.Waiting do
 
   def topic, do: @topic
 
+  @doc "The whole of one thing, as `ledger thing --json` answers it; read outside the server, since a read is a CLI call."
+  def thing(config, id) do
+    host = CodeGantryDaemon.Status.host()
+
+    case Command.stdout(Command.code_gantry(host, ["ledger", "thing", id, "--json", "--config", config]), host.code_gantry, Host.env(host)) do
+      {out, 0} ->
+        case Jason.decode(out) do
+          {:ok, thing} -> {:ok, thing}
+          _ -> {:error, "ledger thing printed something other than a record"}
+        end
+
+      {out, status} ->
+        {:error, "ledger thing exited #{status}: #{String.trim(out)}"}
+    end
+  end
+
   @impl true
   def init(host) do
     :ets.new(__MODULE__, [:named_table, :public, read_concurrency: true])
@@ -130,6 +146,15 @@ defmodule CodeGantryDaemon.Waiting do
     do: {:ok, ["ledger", "strike", id, text]}
 
   defp argv("fleet", %{"about" => id}), do: {:ok, ["plan", "edit", id, "--owner", "pipeline"]}
+  defp argv("person", %{"about" => id}), do: {:ok, ["plan", "edit", id, "--owner", "human"]}
+
+  # An item's title and body, edited by a person: the body travels in a
+  # file the daemon writes, since a body is paragraphs and argv is not.
+  defp argv("edit", %{"about" => id, "title" => title, "body" => body}) when is_binary(title) and title != "" do
+    path = Path.join(System.tmp_dir!(), "code-gantry-edit-#{id}-#{System.unique_integer([:positive])}.md")
+    File.write!(path, body || "")
+    {:ok, ["plan", "edit", id, "--title", title, "--body-file", path]}
+  end
 
   defp argv(action, params), do: {:error, "#{action} needs more than #{inspect(Map.keys(params))}"}
 

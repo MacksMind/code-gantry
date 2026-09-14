@@ -378,6 +378,39 @@ class TestDrawable:
         assert run("ledger", "show", "--drawable").output.startswith("p.004 open")
 
 
+class TestTheWholeThing:
+    def test_an_item_comes_with_where_it_sits_its_findings_and_its_thread(self, project):
+        import json
+        repo, config, paths, sha = project
+        imported(project)
+        writer = open_ledger(paths.ledger, origin="run-host", actor="run:1")
+        f = writer.open_finding(keys=["p.004"], by="planner", claim="Two callers remain.", needs="human")
+        writer.close()
+        run("ledger", "ask", "p.004", "--text", "which two?")
+        row = json.loads(run("ledger", "thing", "p.004", "--json").output)
+        assert row["kind"] == "item" and row["item"]["title"].startswith("Add the new route") and row["item"]["state"]["state"] == "open"
+        assert [a["title"] for a in row["ancestors"]] == ["Demo plan", "Routes"]
+        assert [x["id"] for x in row["findings"]] == [f.finding_id]
+        assert row["thread"][0]["text"] == "which two?"
+        # The history reads like a ticket: the origin first, then what happened.
+        kinds = [h["kind"] for h in row["history"]]
+        assert kinds[0] == "node.upserted" and "finding.opened" in kinds and "thread.asked" in kinds
+        text = run("ledger", "thing", "p.004").output
+        assert "under: Demo plan > Routes" in text and f.finding_id in text and "thread.asked" in text
+
+    def test_a_finding_comes_with_the_items_it_is_about(self, project):
+        import json
+        repo, config, paths, sha = project
+        imported(project)
+        writer = open_ledger(paths.ledger, origin="run-host", actor="run:1")
+        f = writer.open_finding(keys=["p.004"], by="planner", claim="Two callers remain.", needs="human")
+        writer.close()
+        row = json.loads(run("ledger", "thing", f.finding_id, "--json").output)
+        assert row["kind"] == "finding" and row["finding"]["claim"] == "Two callers remain."
+        assert [i["key"] for i in row["items"]] == ["p.004"]
+        assert run("ledger", "thing", "nope").exit_code != 0
+
+
 class TestSections:
     def test_sections_are_the_documents_and_sections_in_plan_order_with_depth(self, project):
         import json

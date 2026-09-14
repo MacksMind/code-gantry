@@ -14,5 +14,6 @@ defmodule CodeGantryDaemon.Web.Router do
   scope "/", CodeGantryDaemon.Web do
     pipe_through :browser
     live "/", DashboardLive
+    live "/thing", ThingLive
   end
 end
