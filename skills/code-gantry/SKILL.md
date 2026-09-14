@@ -166,14 +166,14 @@ project is the branch the fix should land on — normally the one this skill
 was given — and the section is where in that project's documents it belongs:
 its `technical_debt.md` for defects, with a section for those the project's
 own work created and one for inherited ones the branch has to carry; the plan
-document for the work the project is for. In this repository the
-`technical_debt` project is closed to new work; nothing goes there.
+document for the work the project is for. The project and the section
+are the person's choice: put it where they said. If that project is one
+no bay is placed on, say so in one line, and put it there anyway.
 
 ## When you are done
 
 ```sh
 cg ledger fold                                          # once; a cache matter, see below
-~/projects/code-gantry/bin/daemon wake <project>        # if anything is now drawable
 ```
 
 **Everything written here reaches the planner at its next derivation, with no
@@ -182,11 +182,12 @@ moment it is written; the planner is sent the plan text and everything that
 changed since together, every call. The fold only decides which of the two
 the planner is sent it in: the plan text is the block the model caches for an
 hour, so the fold rewrites it, and doing it once at the end of a session
-rather than after every answer is what keeps that cache warm. `wake` is the
-one thing that is not automatic: it clears the project's "nothing to draw"
-mark on every host and starts the idle bays, and without it a project the
-fleet found complete stays idle, because the daemon cannot see the ledger
-change.
+rather than after every answer is what keeps that cache warm. **The fleet
+is not started from here.** A project the fleet found complete, or one a
+person held, stays idle until the person says `bin/daemon wake <project>`
+on a host running the daemon. Say that there is new drawable work and
+leave the wake to them: a hold is a person's decision, and a session
+cannot tell a held project from a finished one.
 
 ## Rules
 
