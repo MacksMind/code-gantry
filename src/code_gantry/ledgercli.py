@@ -679,13 +679,16 @@ _state_command("unblock", ANSWER, "Answer a blocked key: KEY TEXT.", text_option
 
 @ledger.command("derived")
 @click.option("--all", "everything", is_flag=True, help="Taken, done and dropped ones too.")
+@json_option
 @config_option
-def ledger_derived(everything, config_path) -> None:
+def ledger_derived(everything, as_json, config_path) -> None:
     """Stages the planner has drawn: waiting, or with --all every one."""
     _, _, led = _cfg_and_ledger(config_path, write=False)
     views = led.views()
-    rows = views.derived.values() if everything else views.derived_waiting()
-    for d in sorted(rows, key=lambda d: (d.at, d.id)):
+    rows = sorted(views.derived.values() if everything else views.derived_waiting(), key=lambda d: (d.at, d.id))
+    if as_json:
+        return _emit_json([{**dataclasses.asdict(d), "fields": {k: d.fields.get(k) for k in ("id", "instruction", "plan_keys")}} for d in rows])
+    for d in rows:
         who = f" by {d.taken_run}" if d.status == "taken" and d.taken_run else ""
         why = f": {d.reason}" if d.reason else ""
         refs = " ".join([*d.keys, *d.findings]) or "-"

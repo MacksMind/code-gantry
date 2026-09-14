@@ -52,6 +52,8 @@ defmodule CodeGantryDaemon.DashboardTest do
       "ledger ask") echo '{"id": "'"$3"'"}' ;;
       "plan sections") echo '[{"key": "g.001", "kind": "document", "title": "General debt", "parent": null, "depth": 0}, {"key": "g.002", "kind": "section", "title": "Inherited", "parent": "g.001", "depth": 1}]' ;;
       "plan add") echo "g.009" ;;
+      "ledger candidates") case "$*" in *docs/p/*) echo '{"pending": [{"stage_id": "s-pending", "branch": "work-stage/003-s", "sha": "abcdef1234567890", "landing": {"keys": ["p.008"]}}], "rejected": [{"stage_id": "s-rejected", "branch": "work-stage/001-x", "sha": "1234567890abcdef", "reason": "would not replay", "landing": {"keys": ["p.004"]}}]}' ;; *) echo '{"pending": [], "rejected": []}' ;; esac ;;
+      "ledger derived") case "$*" in *docs/p/*) echo '[{"id": "d-1", "stage_id": "s-drawn", "keys": ["p.004"], "status": "derived", "by_run": "r9", "fields": {"id": "s-drawn", "instruction": "Do the thing", "plan_keys": ["p.004"]}}]' ;; *) echo "[]" ;; esac ;;
       "ledger thing") echo '{"kind": "item", "item": {"key": "p.006", "kind": "item", "title": "Delete the columns", "body": "They are unread.", "owner": "human", "marks": [], "state": {"state": "open", "question": null}}, "ancestors": [{"title": "Demo plan"}, {"title": "Later"}], "children": [], "findings": [], "recommendation": null, "thread": [], "history": [{"seq": 1, "at": "2026-09-13T10:00:00+00:00", "kind": "node.upserted", "actor": "mack", "run_id": null, "origin": "web-host", "sha": null, "summary": "Delete the columns"}, {"seq": 9, "at": "2026-09-13T11:00:00+00:00", "kind": "claimed", "actor": null, "run_id": "r1", "origin": "web-host", "sha": null, "summary": ""}]}' ;;
       "ledger show") case "$*" in *docs/p/*) echo '[{"key": "p.004", "title": "Add the new route", "owner": "pipeline", "state": {"state": "open"}}, {"key": "p.008", "title": "A stray N+1", "owner": "pipeline", "state": {"state": "open"}}]' ;; *) echo "[]" ;; esac ;;
     esac
@@ -244,10 +246,23 @@ defmodule CodeGantryDaemon.DashboardTest do
     assert calls(root) =~ ~r/argv: ledger show --drawable --json --config \S+docs\/p\/code_gantry.yaml/
     assert html =~ "2 drawable" and html =~ "0 drawable"
     refute html =~ "Add the new route"
-    html = view |> element("button.linkish[phx-value-project=p]") |> render_click()
+    html = view |> element(~s(button.linkish[phx-value-project=p][phx-value-which=drawable])) |> render_click()
     assert html =~ "<code>p.004</code></a> Add the new route" and html =~ "A stray N+1"
-    html = view |> element("button.linkish[phx-value-project=p]") |> render_click()
+    html = view |> element(~s(button.linkish[phx-value-project=p][phx-value-which=drawable])) |> render_click()
     refute html =~ "Add the new route"
+  end
+
+  test "a project shows what a run does before it draws: rework, drawn and waiting, pending", %{root: root} do
+    {:ok, view, html} = live(build_conn(), "/")
+    assert calls(root) =~ ~r/argv: ledger candidates --json --config \S+docs\/p\/code_gantry.yaml/
+    assert calls(root) =~ ~r/argv: ledger derived --json --config \S+docs\/p\/code_gantry.yaml/
+    assert html =~ "1 to rework" and html =~ "1 drawn and waiting" and html =~ "1 candidate(s) pending"
+    html = view |> element(~s(button.linkish[phx-value-project=p][phx-value-which=drawn])) |> render_click()
+    assert html =~ "<code>s-drawn</code>" and html =~ "drawn by r9: Do the thing" and html =~ ~s(<a href="/thing?project=p&amp;id=p.004">p.004</a>)
+    html = view |> element(~s(button.linkish[phx-value-project=p][phx-value-which=rework])) |> render_click()
+    assert html =~ "<code>s-rejected</code>" and html =~ "would not replay"
+    html = view |> element(~s(button.linkish[phx-value-project=p][phx-value-which=pending])) |> render_click()
+    assert html =~ "<code>s-pending</code>" and html =~ "work-stage/003-s abcdef123456"
   end
 
   test "a thing reads like a ticket, and every action is on it", %{root: root} do

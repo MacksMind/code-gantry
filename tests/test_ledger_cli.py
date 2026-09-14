@@ -502,6 +502,19 @@ class TestAccept:
         assert result.exit_code != 0 and "amend" in result.output
 
 
+class TestDerivedJson:
+    def test_derived_carries_the_record_and_the_stage_it_names(self, project):
+        import json
+        repo, config, paths, sha = project
+        imported(project)
+        writer = open_ledger(paths.ledger, origin="run-host", actor="run:1")
+        writer.append("stage.derived", stage_id="s1", keys=["p.004"], fields={"id": "s1", "instruction": "do it", "plan_keys": ["p.004"], "constraints": "x"}, rank=0)
+        writer.close()
+        rows = json.loads(run("ledger", "derived", "--json").output)
+        assert len(rows) == 1 and rows[0]["stage_id"] == "s1" and rows[0]["status"] == "derived" and rows[0]["keys"] == ["p.004"]
+        assert rows[0]["fields"] == {"id": "s1", "instruction": "do it", "plan_keys": ["p.004"]}
+
+
 class TestCandidates:
     def test_dismiss_takes_a_rejected_candidate_off_the_rework_list(self, project):
         import json

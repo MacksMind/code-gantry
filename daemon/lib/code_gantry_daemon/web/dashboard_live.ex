@@ -95,9 +95,11 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
     {:noreply, push_patch(socket, to: "/?" <> URI.encode_query(query))}
   end
 
-  # The drawable list of one project, opened and closed by its count.
-  def handle_event("drawable", %{"project" => project}, socket) do
-    {:noreply, assign(socket, listing: if(socket.assigns.listing == project, do: nil, else: project))}
+  # One of a project's lists — rework, drawn, pending, drawable — opened
+  # and closed by its count.
+  def handle_event("drawable", %{"project" => project} = params, socket) do
+    which = {project, params["which"] || "drawable"}
+    {:noreply, assign(socket, listing: if(socket.assigns.listing == which, do: nil, else: which))}
   end
 
   # A verb on one bay, reaching the daemon of the host the row belongs to.
@@ -173,21 +175,47 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
     </form>
     <p :if={@notice} class="notice">{@notice}</p>
     <div :for={project <- @projects}>
+      <% nxt = Map.get(project, :next, %{rework: [], drawn: [], pending: []}) %>
       <p class="empty">
         {project.project}: read at {DateTime.truncate(project.read_at, :second) |> DateTime.to_time() |> Time.to_string()} UTC
-        · <button phx-click="drawable" phx-value-project={project.project} class="linkish">{length(Map.get(project, :drawable, []))} drawable</button>
+        · a run does, in order:
+        <button phx-click="drawable" phx-value-project={project.project} phx-value-which="rework" class="linkish">{length(nxt.rework)} to rework</button>,
+        <button phx-click="drawable" phx-value-project={project.project} phx-value-which="drawn" class="linkish">{length(nxt.drawn)} drawn and waiting</button>,
+        then draws from <button phx-click="drawable" phx-value-project={project.project} phx-value-which="drawable" class="linkish">{length(Map.get(project, :drawable, []))} drawable</button>;
+        <button phx-click="drawable" phx-value-project={project.project} phx-value-which="pending" class="linkish">{length(nxt.pending)} candidate(s) pending</button>
         · <button phx-click="project" phx-value-project={project.project} phx-value-verb="wake">wake</button>
         <button phx-click="project" phx-value-project={project.project} phx-value-verb="hold" data-confirm={"Hold #{project.project}: stop every running bay on it at its seam, on every host?"}>hold</button><span :if={project.error} class="error"> — {project.error}</span>
       </p>
-      <ul :if={@listing == project.project} class="drawable">
+      <ul :if={@listing == {project.project, "rework"}} class="drawable">
+        <li :for={r <- nxt.rework}><code>{r["stage_id"]}</code> on <.keys keys={r["landing"]["keys"] || []} project={project.project} /> — {r["reason"]}</li>
+        <li :if={nxt.rework == []} class="empty">nothing to rework</li>
+      </ul>
+      <ul :if={@listing == {project.project, "drawn"}} class="drawable">
+        <li :for={d <- nxt.drawn}><code>{d["stage_id"]}</code> on <.keys keys={d["keys"]} project={project.project} /> — drawn by {d["by_run"]}: {String.slice(d["fields"]["instruction"] || "", 0, 160)}</li>
+        <li :if={nxt.drawn == []} class="empty">nothing drawn and waiting</li>
+      </ul>
+      <ul :if={@listing == {project.project, "drawable"}} class="drawable">
         <li :for={item <- Map.get(project, :drawable, [])}><a href={"/thing?project=#{project.project}&id=#{item["key"]}"}><code>{item["key"]}</code></a> {item["title"]}</li>
         <li :if={Map.get(project, :drawable, []) == []} class="empty">nothing the fleet can draw</li>
+      </ul>
+      <ul :if={@listing == {project.project, "pending"}} class="drawable">
+        <li :for={c <- nxt.pending}><code>{c["stage_id"]}</code> on <.keys keys={c["landing"]["keys"] || []} project={project.project} /> — {c["branch"]} {String.slice(c["sha"], 0, 12)}</li>
+        <li :if={nxt.pending == []} class="empty">no candidate pending</li>
       </ul>
     </div>
     <p :if={@cards == 0} class="empty">nothing waiting</p>
     <div id="cards" phx-update="stream">
       <.card :for={{dom_id, entry} <- @streams.cards} id={dom_id} w={entry.w} project={entry.project} />
     </div>
+    """
+  end
+
+  attr :keys, :list, required: true
+  attr :project, :string, required: true
+
+  defp keys(assigns) do
+    ~H"""
+    <span :for={key <- @keys}><a href={"/thing?project=#{@project}&id=#{key}"}>{key}</a> </span>
     """
   end
 

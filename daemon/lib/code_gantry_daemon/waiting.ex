@@ -211,6 +211,7 @@ defmodule CodeGantryDaemon.Waiting do
           config: config,
           waiting: waiting,
           drawable: drawable_of(host, config),
+          next: next_of(host, config),
           projects: other_projects(host, bay, config),
           read_at: DateTime.utc_now(),
           error: error
@@ -280,6 +281,40 @@ defmodule CodeGantryDaemon.Waiting do
 
       _ ->
         []
+    end
+  end
+
+  # What a run on this project does before it draws anything: rejected
+  # candidates it would rework, stages already drawn and waiting to be
+  # taken, and candidates pushed and not yet composed. The drawable list
+  # is the third place a run looks, and a person reading only that one
+  # was surprised by the first two.
+  defp next_of(host, config) do
+    candidates =
+      case json_of(host, ["ledger", "candidates", "--json", "--config", config]) do
+        %{"pending" => pending, "rejected" => rejected} -> %{pending: pending, rework: rejected}
+        _ -> %{pending: [], rework: []}
+      end
+
+    drawn =
+      case json_of(host, ["ledger", "derived", "--json", "--config", config]) do
+        rows when is_list(rows) -> rows
+        _ -> []
+      end
+
+    Map.put(candidates, :drawn, drawn)
+  end
+
+  defp json_of(host, args) do
+    case Command.stdout(Command.code_gantry(host, args), host.code_gantry, Host.env(host)) do
+      {out, 0} ->
+        case Jason.decode(out) do
+          {:ok, decoded} -> decoded
+          _ -> nil
+        end
+
+      _ ->
+        nil
     end
   end
 
