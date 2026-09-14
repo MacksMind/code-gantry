@@ -591,11 +591,11 @@ class TestEndpointAddressing:
     """
 
     def test_resolves_from_the_environment(self, monkeypatch):
-        monkeypatch.setenv("SPARK_API_BASE", "http://spark.internal:8080/v1")
+        monkeypatch.setenv("LOCAL_API_BASE", "http://gpubox.internal:8080/v1")
         cfg = parse_config(
-            minimal(executor={"model": "openai/local", "api_base_env": "SPARK_API_BASE"})
+            minimal(executor={"model": "openai/local", "api_base_env": "LOCAL_API_BASE"})
         )
-        assert cfg.executor.resolve_api_base() == "http://spark.internal:8080/v1"
+        assert cfg.executor.resolve_api_base() == "http://gpubox.internal:8080/v1"
 
     def test_a_literal_api_base_still_works(self):
         cfg = parse_config(
@@ -615,7 +615,7 @@ class TestEndpointAddressing:
                     executor={
                         "model": "openai/local",
                         "api_base": "http://literal/v1",
-                        "api_base_env": "SPARK_API_BASE",
+                        "api_base_env": "LOCAL_API_BASE",
                     }
                 )
             )
@@ -624,13 +624,13 @@ class TestEndpointAddressing:
     def test_an_unset_variable_raises_at_use_not_at_load(self, monkeypatch):
         # Loading must keep working with the variable absent, or `status` could
         # not read a report on a machine that never exports it.
-        monkeypatch.delenv("SPARK_API_BASE", raising=False)
+        monkeypatch.delenv("LOCAL_API_BASE", raising=False)
         cfg = parse_config(
-            minimal(executor={"model": "openai/local", "api_base_env": "SPARK_API_BASE"})
+            minimal(executor={"model": "openai/local", "api_base_env": "LOCAL_API_BASE"})
         )
         with pytest.raises(KeyError) as e:
             cfg.executor.resolve_api_base()
-        assert "SPARK_API_BASE" in str(e.value)
+        assert "LOCAL_API_BASE" in str(e.value)
 
     def test_available_on_every_endpoint(self, monkeypatch):
         # A gateway in front of a paid model is an infrastructure value too.

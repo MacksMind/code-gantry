@@ -12,7 +12,7 @@ def _cfg(**over):
         "project_branch": "proj",
         "plan_root": "PLAN.md",
         "full_test_command": "true",
-        "executor": {"model": "openai/local", "api_base": "http://spark:8080/v1"},
+        "executor": {"model": "openai/local", "api_base": "http://gpubox:8080/v1"},
         "planner": {"model": "claude-opus-5"},
         "reviewer": {"model": "gpt-5.5"},
     }

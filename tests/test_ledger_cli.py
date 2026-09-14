@@ -643,7 +643,7 @@ class TestImportOnTheCommandLine:
         )
         conn.execute(
             "INSERT INTO events (origin, seq, at, kind, key, body) VALUES (?, ?, ?, ?, ?, ?)",
-            ("spark", 1, "2026-01-01T00:00:00+00:00", "node.upserted", "p.001",
+            ("host-b", 1, "2026-01-01T00:00:00+00:00", "node.upserted", "p.001",
              json.dumps({"parent": None, "position": 0, "node_kind": "document", "title": "Plan"})),
         )
         conn.commit()

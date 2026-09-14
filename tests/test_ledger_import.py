@@ -39,40 +39,40 @@ def old_file(tmp_path, rows):
 class TestImport:
     def test_rows_keep_their_replay_order_and_take_one_sequence(self, tmp_path):
         path = old_file(tmp_path, [
-            ("spark", 1, "2026-01-01T00:00:01+00:00", "a", {}),
-            ("spark", 2, "2026-01-01T00:00:03+00:00", "c", {}),
-            ("mac", 1, "2026-01-01T00:00:02+00:00", "b", {}),
+            ("host-b", 1, "2026-01-01T00:00:01+00:00", "a", {}),
+            ("host-b", 2, "2026-01-01T00:00:03+00:00", "c", {}),
+            ("host-a", 1, "2026-01-01T00:00:02+00:00", "b", {}),
         ])
-        led = open_ledger(tmp_path / "new.db", origin="mac")
+        led = open_ledger(tmp_path / "new.db", origin="host-a")
         assert import_old_file(led, path) == 3
         assert [(e.origin, e.seq, e.kind) for e in led.events()] == [
-            ("spark", 1, "a"), ("mac", 2, "b"), ("spark", 3, "c"),
+            ("host-b", 1, "a"), ("host-a", 2, "b"), ("host-b", 3, "c"),
         ]
 
     def test_ids_a_body_names_follow_the_row_they_named(self, tmp_path):
         path = old_file(tmp_path, [
-            ("mac", 1, "2026-01-01T00:00:01+00:00", "x", {}),
-            ("spark", 1, "2026-01-01T00:00:02+00:00", FINDING_OPENED, {"keys": ["p.001"], "by": "planner", "claim": "c"}),
-            ("spark", 2, "2026-01-01T00:00:03+00:00", "finding.answered", {"finding_id": "f-spark-1", "text": "ok"}),
-            ("spark", 3, "2026-01-01T00:00:04+00:00", "stage.taken", {"derived_id": "d-spark-9"}),
+            ("host-a", 1, "2026-01-01T00:00:01+00:00", "x", {}),
+            ("host-b", 1, "2026-01-01T00:00:02+00:00", FINDING_OPENED, {"keys": ["p.001"], "by": "planner", "claim": "c"}),
+            ("host-b", 2, "2026-01-01T00:00:03+00:00", "finding.answered", {"finding_id": "f-host-b-1", "text": "ok"}),
+            ("host-b", 3, "2026-01-01T00:00:04+00:00", "stage.taken", {"derived_id": "d-host-b-9"}),
         ])
-        led = open_ledger(tmp_path / "new.db", origin="mac")
+        led = open_ledger(tmp_path / "new.db", origin="host-a")
         import_old_file(led, path)
         opened, answered, taken = led.events()[1:]
-        assert opened.finding_id == "f-spark-2"
+        assert opened.finding_id == "f-host-b-2"
         assert answered.body["finding_id"] == opened.finding_id, "the answer still names the finding"
-        assert taken.body["derived_id"] == "d-spark-9", "an id naming no row is left alone"
+        assert taken.body["derived_id"] == "d-host-b-9", "an id naming no row is left alone"
 
     def test_an_old_file_cannot_simply_be_opened(self, tmp_path):
         from code_gantry.ledgerstore import StoreError
 
-        path = old_file(tmp_path, [("spark", 1, "2026-01-01T00:00:01+00:00", "a", {})])
+        path = old_file(tmp_path, [("host-b", 1, "2026-01-01T00:00:01+00:00", "a", {})])
         with pytest.raises(StoreError, match="ledger import"):
-            open_ledger(path, origin="mac")
+            open_ledger(path, origin="host-a")
 
     def test_a_ledger_that_holds_events_refuses_an_import(self, tmp_path):
-        path = old_file(tmp_path, [("spark", 1, "2026-01-01T00:00:01+00:00", "a", {})])
-        led = open_ledger(tmp_path / "new.db", origin="mac")
+        path = old_file(tmp_path, [("host-b", 1, "2026-01-01T00:00:01+00:00", "a", {})])
+        led = open_ledger(tmp_path / "new.db", origin="host-a")
         led.append("already")
         with pytest.raises(LedgerError, match="already holds"):
             import_old_file(led, path)

@@ -676,9 +676,9 @@ which names this machine and what it holds:
 
 ```elixir
 [
-  origin: "spark",
+  origin: "host-a",
   code_gantry: "/home/you/projects/code-gantry",
-  primary: "/home/you/projects/app/acme_app",
+  primary: "/home/you/projects/myapp",
   config: "docs/technical_debt/code_gantry.yaml",
   bays: [
     [name: "bay1", offset: 100],

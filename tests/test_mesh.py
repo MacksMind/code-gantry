@@ -286,7 +286,7 @@ class TestWhoIsAlive:
     def test_the_live_runs_of_every_host_come_back_with_who_answered(self, daemon_state):
         daemon = FakeDaemon(
             mesh.socket_path(),
-            runs=["host-a 20260912-1-bay1", "host-b 20260912-2-bay1", "unreachable dgx-2"],
+            runs=["host-a 20260912-1-bay1", "host-b 20260912-2-bay1", "unreachable host-c"],
         )
         try:
             answered, live = mesh.live_runs()
@@ -294,7 +294,7 @@ class TestWhoIsAlive:
             daemon.stop()
         assert live == {("host-a", "20260912-1-bay1"), ("host-b", "20260912-2-bay1")}
         assert answered == {"host-a", "host-b"}
-        assert "dgx-2" not in answered, (
+        assert "host-c" not in answered, (
             "a host that could not be asked must not be reported as having no runs"
         )
 

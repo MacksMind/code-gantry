@@ -40,7 +40,7 @@ def cfg_with(stage_overrides=None, **cfg_overrides):
         "full_test_command": "pytest -q",
         "executor": {
             "model": "openai/local-model",
-            "api_base": "http://spark:8080/v1",
+            "api_base": "http://gpubox:8080/v1",
         },
         "reviewer": {"model": "gpt-5.5"},
     }
@@ -389,7 +389,7 @@ class TestTheStagesModelTravelsWithTheAttempt:
         monkeypatch.setenv("EXECUTOR_TEST_KEY", "k")
         cfg, stage = cfg_with(executor={
             "model": "openrouter/some-policy",
-            "api_base": "http://spark:8080/v1",
+            "api_base": "http://gpubox:8080/v1",
             "api_key_env": "EXECUTOR_TEST_KEY",
         })
         cfg = cfg.model_copy(update={"target_repo": Path(tmp_path)})

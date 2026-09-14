@@ -1,0 +1,30 @@
+#!/bin/sh
+# This repository's pre-commit hook, selected per clone with
+# `git config core.hooksPath .githooks`. It refuses a commit whose staged
+# blobs carry a name from `.git/info/forbidden_names` — the target
+# repository, a host, a person's path — which is never tracked, one token
+# per line, `#` for a comment, matched case-insensitively as a fixed
+# string. It then hands over to the account's own hooks, if any.
+set -e
+
+names=$(git rev-parse --git-path info/forbidden_names)
+if [ -f "$names" ]; then
+  patterns=$(mktemp)
+  grep -v '^#' "$names" | grep -v '^[[:space:]]*$' > "$patterns" || true
+  if [ -s "$patterns" ] && git diff --cached --quiet --diff-filter=ACM -- . ; then
+    : # nothing staged that could carry one
+  elif [ -s "$patterns" ]; then
+    if hits=$(git diff --cached --name-only -z --diff-filter=ACM | xargs -0 git grep -i -n -F --cached -f "$patterns" --); then
+      echo "forbidden names in the staged changes (see $names):" >&2
+      echo "$hits" >&2
+      rm -f "$patterns"
+      exit 1
+    fi
+  fi
+  rm -f "$patterns"
+fi
+
+account=$(git config --global --type=path core.hooksPath || true)
+if [ -n "$account" ] && [ -x "$account/pre-commit" ]; then
+  exec "$account/pre-commit" "$@"
+fi

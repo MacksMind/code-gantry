@@ -48,3 +48,6 @@ daemon/.elixir_ls/
 infra/cdk.out/
 infra/cdk.context.json
 infra/.venv/
+
+# This deployment: hosts, paths, ledger names. Never tracked; copy by hand to a new host.
+CLAUDE.local.md

@@ -482,7 +482,7 @@ def build_views(events: list[Event]) -> Views:
     result. Two origins do write the same *key*: one host releases a claim
     another host's dead run left, and two hosts can claim one key in the
     same second. Under the clock order the release sorted before the claim
-    it was releasing — `host-a` before `host-b` — and the key stayed
+    it was releasing — one host's name sorting before the other's — and the key stayed
     held by a run that was gone; a race between two claims was settled by
     which machine was named first in the alphabet. `at` is what a person
     reads; `seq` is what happened.

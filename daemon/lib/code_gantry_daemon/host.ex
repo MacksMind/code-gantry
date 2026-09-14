@@ -5,9 +5,9 @@ defmodule CodeGantryDaemon.Host do
   outside every checkout and is never tracked.
 
       [
-        origin: "spark",
+        origin: "host-a",
         code_gantry: "/home/you/projects/code-gantry",
-        primary: "/home/you/projects/app/acme_app",
+        primary: "/home/you/projects/myapp",
         config: "docs/technical_debt/code_gantry.yaml",
         branch: "technical-debt",                # optional; what a new bay starts on
         code_branch: "elixir-daemon",            # optional; what the daemon picks its own code up from (default: the checkout's branch)

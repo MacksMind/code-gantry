@@ -48,8 +48,8 @@ one append-only sequence of events; a project's ledger is one name,
 `ledger.name` (`<repo>/<project>`), in a DynamoDB table every host writes.
 `ledger.path` names a SQLite file instead, for a project on one host. An
 *origin* names the host that wrote an event, set by `CODE_GANTRY_ORIGIN`
-from the host file and equal to the hostname; rows written under the
-Mac's earlier label `host-a-old` keep it.
+from the host file and equal to the hostname; rows written under a
+host's earlier label keep it.
 There is no scope: every derivation fans out to every bay on every host,
 and claims in the table are what keep two bays off one key.
 
@@ -252,8 +252,19 @@ because a VM that took them on a hot load never started them. Hex and
 rebar are installed under the pinned toolchain on both hosts (`mix
 local.hex`, `mix local.rebar`), which `mise` does not do by itself.
 
-**Test bed.** The Spark (a DGX, hostname `spark`, origin `host-b`)
-and the operator's MacBook (hostname `host-a`, origin `host-a`),
+**Nothing tracked names the target repository, a host, or a person.**
+This repository will be published. The names live in
+`.git/info/forbidden_names` of each clone, one token per line, never
+tracked; `tests/test_nothing_names_the_target.py` sweeps every tracked and
+addable file against it, and `.githooks/pre-commit`, selected per clone
+with `git config core.hooksPath .githooks`, refuses a staged blob carrying
+one and then hands over to the account's own hooks. Examples and tests use
+placeholders (`host-a`, `repo`, `/home/you`, `192.0.2.10`); fixtures are
+generic text with the markdown shapes the parser reads. `CLAUDE.local.md`,
+untracked and copied by hand to a new host, holds this deployment's
+hostnames, origins, paths, bays and ledger names; a session reads both.
+
+**Test bed.** Two hosts: the Spark, a DGX, and the operator's MacBook,
 reaching each other over Tailscale; the Spark holds no private keys, so
 SSH is Mac-to-Spark only. `.tool-versions` pins Erlang 27.3.4 and Elixir
 1.18.4, installed on both hosts under `mise`, and `bin/daemon` runs the
@@ -280,31 +291,27 @@ its own and drops it a moment later, and `Host.daemon_node?/1` on the
 base name is what keeps a control node from merging Mnesia schemas and
 setting off a pickup on every command a person types. The test is the
 name, not the host file's `peers:`, because a host that names no peers
-still accepts the dial of one that does. On the Spark:
-`/home/you/projects/app/acme_app` is the primary copy, handed
-back to the person on `technical-debt`; `acme_app-bay1` (offset 200)
-and `acme_app-bay2` (offset 100) are its bays. On the Mac: the primary
-copy is the person's working tree on another branch and carries no
-`bin/mk-bay`; `acme_app-bay1` (offset 100) and `acme_app-bay2`
-(offset 200, placed) are its bays. Credentials are per repository, one file
+still accepts the dial of one that does. Each host holds the target's
+primary copy and two bays; on the Spark the primary copy is handed back
+to the person on the technical-debt project's branch, on the Mac it is
+the person's working tree on another branch and carries no `bin/mk-bay`.
+Credentials are per repository, one file
 at the target's root, `<repo>/.code_gantry/env`, ignored there and named by
 every project's config as `../../.code_gantry/env`; on the Mac's primary
 the branch checked out predates that ignore line, so `.code_gantry/` is in
-its `.git/info/exclude`. The technical-debt project's ledger is
-`acme_app/technical-debt` in the table; its config names it with
-`ledger.name`, and `remote_landing` is on. **The technical-debt project is
-closed to the fleet.** Nothing moves between the two projects in bulk:
-a planner's "not drawable" verdict lives in findings, which a move does
-not carry, so moved items arrive clean and get drawn. What moves, and
-when, is an open decision. The Rails 5 project's ledger is `acme_app/rails-5`,
-landing through a composing bay; every bay is placed on it. The Rails 5 project still keeps a
-SQLite ledger under its work dir with `remote_landing` off. The Claude Code
-CLI is installed and authenticated on both hosts. No ledger refs exist on
+its `.git/info/exclude`. The target has two projects, both with their
+ledgers in the table under `ledger.name` and `remote_landing` on: the
+technical-debt project and the Rails 5 project. **The technical-debt
+project is closed to the fleet.** Nothing moves between the two projects
+in bulk: a planner's "not drawable" verdict lives in findings, which a
+move does not carry, so moved items arrive clean and get drawn. What
+moves, and when, is an open decision. The Rails 5 project lands through
+a composing bay; every bay is placed on it. The Claude Code CLI is
+installed and authenticated on both hosts. No ledger refs exist on
 GitHub; the old SQLite files are inert copies. In the target: the Spark's
-primary copy holds stage branch `technical-debt-stage/021-…` (an attempt on
-`td.015`, the person's to keep or delete), its bay2 holds
-`technical-debt-stage/004-…` from a crashed run, and `PORT_REDIS_SESSIONS`
-is an unused variable in every bay's `.env`.
+primary copy holds a stage branch from an attempt on `td.015`, the
+person's to keep or delete, its bay2 holds one from a crashed run, and
+`PORT_REDIS_SESSIONS` is an unused variable in every bay's `.env`.
 
 **Sequence.** Landed: the ledger holds the plan; bays behind one ledger
 with the suite and planner locks, drawn stages, leases; the per-host daemon
@@ -626,7 +633,7 @@ every origin. It was `(at, origin, seq)` on the argument that no two
 origins write the same node — but two origins do write the same *key*: one
 host releasing a claim another host's dead run left, and two hosts claiming
 one key in the same second. A release sorted before the claim it released,
-because `host-a` precedes `host-b`, and a race between two claims
+because one host's name precedes the other's, and a race between two claims
 was settled by which machine was named first in the alphabet. `at` is what
 a person reads; `seq` is what happened.
 - **State is derived from events, never stored.** The ledger's tree, key states

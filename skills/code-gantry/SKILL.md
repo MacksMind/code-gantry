@@ -193,7 +193,7 @@ change.
 - The record is the ledger. Do not edit `PLAN.md`, `technical_debt.md`,
   `human_in_the_loop.md` or `progress_log.md` to change what is done or open;
   they are rendered from the ledger for the fleet and imported from it only once.
-- Never write to a bay's checkout (`../acme_app-bay*`); a run may be live in it.
+- Never write to a bay's checkout (`../<repo>-bayN` beside this checkout); a run may be live in it.
 - One thing at a time, and the recommendation is a recommendation: a person
   decides, and a discard is not re-raised.
 - The dashboard at `http://localhost:4040/` (on a host running the daemon)

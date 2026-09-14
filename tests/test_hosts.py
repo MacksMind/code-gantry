@@ -21,26 +21,26 @@ class TestHosts:
     def test_the_latest_row_per_origin_is_the_state(self):
         table = MemoryTable()
         s = store(table, hosts.HOSTS)
-        hosts.put(s, origin="spark", node="d@host-b", code="aaaaaaaaaaaa", at="2026-01-01T00:00:00+00:00",
-                  bays=[hosts.Bay("bay1", "acme_app", "technical_debt", "running", "r1", "2026-01-01T00:00:00+00:00")])
-        hosts.put(s, origin="mac", node="d@mac", code="bbbbbbbbbbbb", at="2026-01-01T00:01:00+00:00", bays=[])
-        hosts.put(s, origin="spark", node="d@host-b", code="cccccccccccc", at="2026-01-01T00:02:00+00:00",
-                  bays=[hosts.Bay("bay1", "acme_app", "technical_debt", "finished", "r1", "2026-01-01T00:02:00+00:00"),
-                        hosts.Bay("bay2", "acme_app", "rails_6", "running", "r2", "2026-01-01T00:02:00+00:00")])
+        hosts.put(s, origin="host-b", node="d@host-b", code="aaaaaaaaaaaa", at="2026-01-01T00:00:00+00:00",
+                  bays=[hosts.Bay("bay1", "repo", "technical_debt", "running", "r1", "2026-01-01T00:00:00+00:00")])
+        hosts.put(s, origin="host-a", node="d@host-a", code="bbbbbbbbbbbb", at="2026-01-01T00:01:00+00:00", bays=[])
+        hosts.put(s, origin="host-b", node="d@host-b", code="cccccccccccc", at="2026-01-01T00:02:00+00:00",
+                  bays=[hosts.Bay("bay1", "repo", "technical_debt", "finished", "r1", "2026-01-01T00:02:00+00:00"),
+                        hosts.Bay("bay2", "repo", "rails_6", "running", "r2", "2026-01-01T00:02:00+00:00")])
         latest = hosts.latest(s)
-        assert [h.origin for h in latest] == ["mac", "spark"]
-        spark = next(h for h in latest if h.origin == "spark")
-        assert spark.code == "cccccccccccc"
-        assert [(b.name, b.project, b.state) for b in spark.bays] == [("bay1", "technical_debt", "finished"), ("bay2", "rails_6", "running")]
+        assert [h.origin for h in latest] == ["host-a", "host-b"]
+        second = next(h for h in latest if h.origin == "host-b")
+        assert second.code == "cccccccccccc"
+        assert [(b.name, b.project, b.state) for b in second.bays] == [("bay1", "technical_debt", "finished"), ("bay2", "rails_6", "running")]
 
     def test_rendering_names_every_host_repository_project_and_bay_with_age(self):
         table = MemoryTable()
         s = store(table, hosts.HOSTS)
-        hosts.put(s, origin="spark", node="d@host-b", code="aaaaaaaaaaaa", at="2026-01-01T00:00:00+00:00",
-                  bays=[hosts.Bay("bay1", "acme_app", "technical_debt", "running", "r1", "2026-01-01T00:00:00+00:00")])
+        hosts.put(s, origin="host-b", node="d@host-b", code="aaaaaaaaaaaa", at="2026-01-01T00:00:00+00:00",
+                  bays=[hosts.Bay("bay1", "repo", "technical_debt", "running", "r1", "2026-01-01T00:00:00+00:00")])
         text = hosts.render(hosts.latest(s), now="2026-01-01T00:05:30+00:00")
-        assert "spark  d@host-b  code aaaaaaaaaaaa  written 5m ago" in text
-        assert "  acme_app/technical_debt  bay1  running  r1  since 2026-01-01T00:00:00+00:00" in text
+        assert "host-b  d@host-b  code aaaaaaaaaaaa  written 5m ago" in text
+        assert "  repo/technical_debt  bay1  running  r1  since 2026-01-01T00:00:00+00:00" in text
 
     def test_a_host_that_stopped_writing_is_marked_stale(self):
         table = MemoryTable()
@@ -54,14 +54,14 @@ class TestEvents:
     def test_events_from_every_host_are_one_sequence(self):
         table = MemoryTable()
         s = store(table, hosts.EVENTS)
-        hosts.event(s, origin="spark", at="2026-01-01T00:00:00+00:00", text="bay1: run r1 started")
-        hosts.event(s, origin="mac", at="2026-01-01T00:00:01+00:00", text="code: a -> b; daemon: 8 module(s) loaded")
+        hosts.event(s, origin="host-b", at="2026-01-01T00:00:00+00:00", text="bay1: run r1 started")
+        hosts.event(s, origin="host-a", at="2026-01-01T00:00:01+00:00", text="code: a -> b; daemon: 8 module(s) loaded")
         lines = hosts.events_after(s, 0)
         assert [(e.seq, e.origin, e.text) for e in lines] == [
-            (1, "spark", "bay1: run r1 started"), (2, "mac", "code: a -> b; daemon: 8 module(s) loaded"),
+            (1, "host-b", "bay1: run r1 started"), (2, "host-a", "code: a -> b; daemon: 8 module(s) loaded"),
         ]
         assert hosts.events_after(s, 1)[0].seq == 2
-        assert hosts.render_event(lines[0]) == "2026-01-01T00:00:00+00:00 [spark] bay1: run r1 started"
+        assert hosts.render_event(lines[0]) == "2026-01-01T00:00:00+00:00 [host-b] bay1: run r1 started"
 
 
 class TestTheCommands:
@@ -82,14 +82,14 @@ class TestTheCommands:
         cfg.write_text("")
         monkeypatch.setattr(hosts, "config_for", lambda path: None)
         r = CliRunner().invoke(cli.main, [
-            "hosts", "put", "--config", str(cfg), "--origin", "spark", "--node", "d@host-b", "--code", "aaaaaaaaaaaa",
-            "--bay", "bay1|acme_app|technical_debt|running|r1|2026-01-01T00:00:00+00:00",
+            "hosts", "put", "--config", str(cfg), "--origin", "host-b", "--node", "d@host-b", "--code", "aaaaaaaaaaaa",
+            "--bay", "bay1|repo|technical_debt|running|r1|2026-01-01T00:00:00+00:00",
         ], catch_exceptions=False)
         assert r.exit_code == 0, r.output
         r = CliRunner().invoke(cli.main, ["hosts", "--config", str(cfg)], catch_exceptions=False)
         assert r.exit_code == 0, r.output
-        assert "spark  d@host-b  code aaaaaaaaaaaa" in r.output
-        assert "acme_app/technical_debt  bay1  running  r1" in r.output
+        assert "host-b  d@host-b  code aaaaaaaaaaaa" in r.output
+        assert "repo/technical_debt  bay1  running  r1" in r.output
 
     def test_events_put_and_list(self, monkeypatch, tmp_path):
         from code_gantry import cli
@@ -99,8 +99,8 @@ class TestTheCommands:
         monkeypatch.setattr(hosts, "config_for", lambda path: None)
         cfg = tmp_path / "cfg.yaml"
         cfg.write_text("")
-        r = CliRunner().invoke(cli.main, ["events", "put", "--config", str(cfg), "--origin", "mac", "--text", "bay2: placed"], catch_exceptions=False)
+        r = CliRunner().invoke(cli.main, ["events", "put", "--config", str(cfg), "--origin", "host-a", "--text", "bay2: placed"], catch_exceptions=False)
         assert r.exit_code == 0, r.output
         r = CliRunner().invoke(cli.main, ["events", "--config", str(cfg), "--after", "0"], catch_exceptions=False)
         assert r.exit_code == 0, r.output
-        assert r.output.strip().endswith("[mac] bay2: placed")
+        assert r.output.strip().endswith("[host-a] bay2: placed")
