@@ -829,6 +829,27 @@ class TestMove:
         assert state.state == "struck" and state.reason == "moved to repo/debt as q.003"
         assert "k.002" not in [w.id for w in led.views().waiting()]
 
+    def test_an_item_takes_its_open_findings_with_it_re_keyed(self, led, other):
+        # A finding is about its item; left behind it points at a key that
+        # is struck as moved, and sits on the wrong project's queue.
+        led.upsert_node("k.002", parent=None, position=1, kind="item", title="Delete the columns", owner="human")
+        f = led.open_finding(keys=["k.002"], by="planner", claim="needs a decision", needs="human", subject="decision")
+        closed = led.open_finding(keys=["k.002"], by="planner", claim="old", needs="pipeline")
+        led.answer_finding(closed.finding_id, disposition="discard")
+        opened = led.move("k.002", to=other, to_label="repo/debt", from_label="repo/rails-5", under="q.002")
+        here = led.views().findings[f.finding_id]
+        assert (here.status, here.moved_to) == ("moved", "repo/debt")
+        there = [x for x in other.views().findings.values() if x.status == "open"]
+        assert [x.keys for x in there] == [[opened]] and there[0].subject == "decision" and there[0].needs == "human"
+        assert [w.id for w in led.views().waiting()] == []
+
+    def test_a_finding_moved_after_its_item_lands_on_the_new_key(self, led, other):
+        led.upsert_node("k.002", parent=None, position=1, kind="item", title="Delete the columns", owner="pipeline")
+        opened = led.move("k.002", to=other, to_label="repo/debt", from_label="repo/rails-5", under="q.002")
+        f = led.open_finding(keys=["k.002"], by="planner", claim="late reading", needs="human", subject="late")
+        moved = led.move(f.finding_id, to=other, to_label="repo/debt", from_label="repo/rails-5")
+        assert other.views().findings[moved].keys == [opened]
+
     def test_a_moved_item_keeps_its_owner(self, led, other):
         # A pipeline item moved to the project whose branch the fix lands on
         # is still the fleet's; a person's item is still the person's.

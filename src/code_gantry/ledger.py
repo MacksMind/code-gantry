@@ -1054,8 +1054,11 @@ class Ledger:
             claim = f"{finding.claim}\n\nMoved from {from_label}, where it was {about}" + (
                 f" on {', '.join(finding.keys)}." if finding.keys else "."
             )
+            # Keys are a ledger's own, except where the item itself went to
+            # the same ledger before: then the finding lands on what it became.
+            keys = [self._moved_as(k, to_label) for k in finding.keys]
             opened = to.open_finding(
-                keys=[], by=f"moved from {from_label}", claim=claim, needs="human",
+                keys=[k for k in keys if k], by=f"moved from {from_label}", claim=claim, needs="human",
                 subject=finding.subject, total=finding.total, actor=actor,
             ).finding_id
         else:
@@ -1075,7 +1078,19 @@ class Ledger:
                     title=node.title, body=body, owner=node.owner, actor=actor,
                 )
         self.append(MOVED, actor=actor, about=about, to=to_label, opened_as=opened)
+        if kind == "item":
+            # An item's open findings are about it and go where it goes.
+            for f in list(self.views().findings_on(about)):
+                if f.status == "open":
+                    self.move(f.id, to=to, to_label=to_label, from_label=from_label, actor=actor)
         return opened
+
+    def _moved_as(self, key: str, to_label: str) -> str | None:
+        """What `key` became in `to_label`, if it was moved there, else None."""
+        state = self.views().state(key)
+        if state.state == "struck" and (state.reason or "").startswith(f"moved to {to_label} as ") and state.evidence:
+            return state.evidence
+        return None
 
     def close(self) -> None:
         self.store.close()
