@@ -10,6 +10,10 @@ defmodule CodeGantryDaemon.Web.Endpoint do
   plug Plug.Static, at: "/assets/phoenix", from: {:phoenix, "priv/static"}, only: ~w(phoenix.min.js)
   plug Plug.Static, at: "/assets/live_view", from: {:phoenix_live_view, "priv/static"}, only: ~w(phoenix_live_view.min.js)
 
+  # Query and form parameters reach a LiveView's mount only through this;
+  # the test conn fills them in by itself, which is why their absence
+  # showed on the live page and not in the suite.
+  plug Plug.Parsers, parsers: [:urlencoded, :multipart], pass: ["*/*"]
   plug Plug.Session, @session_options
   plug CodeGantryDaemon.Web.Router
 end
