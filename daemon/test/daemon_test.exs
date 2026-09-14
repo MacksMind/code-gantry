@@ -368,6 +368,50 @@ defmodule CodeGantryDaemonTest do
       assert Control.wake("p") =~ ~r/^p: woken; started bay2 \d{8}-\d{6}-bay2/
     end
 
+    test "a person's kill ends the run, shows killed, and retry resumes it", %{root: root, host: host, state: state} do
+      File.write!(Path.join(root, "hold"), "")
+      {:ok, _} = Application.start_bay(host, %{name: "bay2", offset: 200, config: "docs/p/code_gantry.yaml"})
+      wait_for(fn -> status(state) =~ "bay2 running" end)
+      assert Control.kill("bay2") == "bay2: run killed; retry resumes it"
+      wait_for(fn -> status(state) =~ ~r/^bay2 killed/m end)
+      Process.sleep(1_500)
+      assert status(state) =~ ~r/^bay2 killed/m, "a killed run resumed on its own"
+      File.rm!(Path.join(root, "hold"))
+      assert Control.retry("bay2") =~ ~r/^bay2: resume \d{8}-\d{6}-bay2 started/
+      assert Control.kill("bay1") == "bay1 has no run live" or Control.kill("bay1") == "no bay named bay1"
+    end
+
+    test "a person's pause asks the run to stop at its seam", %{root: root, host: host, state: state} do
+      wind_down_fake(root)
+      {:ok, _} = Application.start_bay(host, %{name: "bay2", offset: 200, config: "docs/p/code_gantry.yaml"})
+      wait_for(fn -> status(state) =~ "bay2 running" end)
+      assert Control.pause("bay2") == "bay2: pausing at its next seam"
+      wait_for(fn -> status(state) =~ ~r/^bay2 paused/m end)
+      assert calls(root) =~ ~r/argv: pause \S+ \d{8}-\d{6}-bay2 --note asked from the dashboard/
+      assert Control.pause("bay2") == "bay2 has no run live"
+    end
+
+    test "run starts one bay whatever the project's mark, and leaves the mark", %{root: root, host: host, state: state} do
+      wind_down_fake(root)
+      Complete.mark("p", "held-by-hand")
+      {:ok, _} = Application.start_bay(host, %{name: "bay2", offset: 200, config: "docs/p/code_gantry.yaml"})
+      wait_for(fn -> status(state) =~ "bay2 complete" end)
+      assert Control.run("bay2") =~ ~r/^bay2: run \d{8}-\d{6}-bay2 started/
+      wait_for(fn -> status(state) =~ "bay2 running" end)
+      assert Complete.complete?("p"), "starting one bay is not waking the project"
+      assert Control.run("bay2") =~ ~r/^bay2 is running/
+    end
+
+    test "hold marks the project and stops its running bays at their seams", %{root: root, host: host, state: state} do
+      wind_down_fake(root)
+      {:ok, _} = Application.start_bay(host, %{name: "bay2", offset: 200, config: "docs/p/code_gantry.yaml"})
+      wait_for(fn -> status(state) =~ "bay2 running" end)
+      assert Control.hold("p") =~ ~r/^p: held; 0 peer\(s\) told$/
+      wait_for(fn -> status(state) =~ "bay2 complete" end)
+      assert Complete.complete?("p") and Complete.since("p") =~ ~r/^held-by-hand /
+      assert calls(root) =~ ~r/argv: pause \S+repo-bay2\/docs\/p\/code_gantry.yaml \d{8}-\d{6}-bay2 --note project complete/
+    end
+
     test "a peer's verdict winds this host's bays down, and wake starts them again everywhere", %{root: root, host: host, state: state} do
       wind_down_fake(root)
       {:ok, _} = Application.start_bay(host, %{name: "bay2", offset: 200, config: "docs/p/code_gantry.yaml"})

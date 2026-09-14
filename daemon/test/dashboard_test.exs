@@ -75,6 +75,7 @@ defmodule CodeGantryDaemon.DashboardTest do
     on_exit(fn -> System.delete_env("CODE_GANTRY_DAEMON_STATE") end)
     {:ok, _} = Status.start_link(host)
     start_supervised!({Registry, keys: :unique, name: CodeGantryDaemon.Registry})
+    start_supervised!({DynamicSupervisor, name: CodeGantryDaemon.Bays, strategy: :one_for_one})
     # Built first, as `Application.children/1` builds it: the endpoint's
     # spec is what starts the dependencies' applications, PubSub's among
     # them, and the tests run with none started.
@@ -242,15 +243,34 @@ defmodule CodeGantryDaemon.DashboardTest do
     assert calls(root) =~ ~r/argv: ledger show --drawable --json --config \S+docs\/p\/code_gantry.yaml/
     assert html =~ "2 drawable" and html =~ "0 drawable"
     refute html =~ "Add the new route"
-    html = view |> element("button[phx-value-project=p]") |> render_click()
+    html = view |> element("button.linkish[phx-value-project=p]") |> render_click()
     assert html =~ "<code>p.004</code> Add the new route" and html =~ "A stray N+1"
-    html = view |> element("button[phx-value-project=p]") |> render_click()
+    html = view |> element("button.linkish[phx-value-project=p]") |> render_click()
     refute html =~ "Add the new route"
   end
 
   test "before the first reading there is nothing, not an error" do
     stop_supervised!(Waiting)
     assert Waiting.all() == []
+  end
+
+  test "a bay row carries the verbs for its state, and they reach the daemon", %{root: root, host: host} do
+    Status.put("bay1", :finished, "20260913-000000-bay1", "p")
+    {:ok, view, html} = live(build_conn(), "/")
+    assert html =~ ~s(phx-value-bay="bay1" phx-value-verb="run")
+    refute html =~ ~s(phx-value-bay="bay1" phx-value-verb="kill")
+    # No Bay process is running for bay1 here, so the daemon says so.
+    html = view |> element(~s(button[phx-value-bay="bay1"][phx-value-verb="run"])) |> render_click()
+    assert html =~ "no bay named bay1"
+    # With a Bay process, run starts one: the fake CLI records it.
+    {:ok, _} = CodeGantryDaemon.Application.start_bay(host, hd(host.bays))
+    html = view |> element(~s(button[phx-value-bay="bay1"][phx-value-verb="run"])) |> render_click()
+    assert html =~ ~r/bay1: run \d{8}-\d{6}-bay1 started|bay1 is running/
+    wait = fn f -> Enum.find_value(1..50, fn _ -> f.() || (Process.sleep(100) && nil) end) end
+    assert wait.(fn -> calls(root) =~ ~r/argv: run / end), "the bay never started a run"
+    # And a project line offers hold and wake.
+    assert has_element?(view, ~s(button[phx-value-project="p"][phx-value-verb="hold"]))
+    assert has_element?(view, ~s(button[phx-value-project="p"][phx-value-verb="wake"]))
   end
 
   test "every bay on every host is a row", %{host: host} do

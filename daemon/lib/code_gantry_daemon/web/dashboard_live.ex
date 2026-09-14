@@ -100,6 +100,18 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
     {:noreply, assign(socket, listing: if(socket.assigns.listing == project, do: nil, else: project))}
   end
 
+  # A verb on one bay, reaching the daemon of the host the row belongs to.
+  def handle_event("bay", %{"origin" => origin, "bay" => bay, "verb" => verb}, socket) when verb in ~w(run retry pause kill) do
+    line = CodeGantryDaemon.Control.on(origin, String.to_existing_atom(verb), [bay])
+    {:noreply, socket |> assign(notice: line) |> read_hosts()}
+  end
+
+  # A verb on a project: hold and wake speak to every peer themselves.
+  def handle_event("project", %{"project" => project, "verb" => verb}, socket) when verb in ~w(hold wake) do
+    line = apply(CodeGantryDaemon.Control, String.to_existing_atom(verb), [project])
+    {:noreply, socket |> assign(notice: line) |> read_hosts()}
+  end
+
   def handle_event("refresh", _params, socket) do
     Waiting.refresh()
     {:noreply, socket |> read_hosts() |> assign(notice: nil)}
@@ -116,7 +128,7 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
 
     <h2>Bays</h2>
     <table>
-      <tr><th>host</th><th>repository</th><th>bay</th><th>project</th><th>state</th><th>detail</th><th>since</th></tr>
+      <tr><th>host</th><th>repository</th><th>bay</th><th>project</th><th>state</th><th>detail</th><th>since</th><th></th></tr>
       <tr :for={row <- @rows} class={if stale?(row, @now), do: "stale", else: ""}>
         <td>{row.origin}</td>
         <td>{row.repo || "-"}</td>
@@ -125,6 +137,9 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
         <td class={"state-#{row.state}"}>{row.state}</td>
         <td class="detail">{row.detail || "-"}</td>
         <td>{since(row.since, @now)}</td>
+        <td class="controls">
+          <button :for={verb <- verbs_for(row)} phx-click="bay" phx-value-origin={row.origin} phx-value-bay={row.name} phx-value-verb={verb} data-confirm={if verb == "kill", do: "Kill the run in #{row.origin}/#{row.name}?"}>{verb}</button>
+        </td>
       </tr>
     </table>
     <p :if={@rows == []} class="empty">no bays recorded</p>
@@ -160,7 +175,9 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
     <div :for={project <- @projects}>
       <p class="empty">
         {project.project}: read at {DateTime.truncate(project.read_at, :second) |> DateTime.to_time() |> Time.to_string()} UTC
-        · <button phx-click="drawable" phx-value-project={project.project} class="linkish">{length(Map.get(project, :drawable, []))} drawable</button><span :if={project.error} class="error"> — {project.error}</span>
+        · <button phx-click="drawable" phx-value-project={project.project} class="linkish">{length(Map.get(project, :drawable, []))} drawable</button>
+        · <button phx-click="project" phx-value-project={project.project} phx-value-verb="wake">wake</button>
+        <button phx-click="project" phx-value-project={project.project} phx-value-verb="hold" data-confirm={"Hold #{project.project}: stop every running bay on it at its seam, on every host?"}>hold</button><span :if={project.error} class="error"> — {project.error}</span>
       </p>
       <ul :if={@listing == project.project} class="drawable">
         <li :for={item <- Map.get(project, :drawable, [])}><code>{item["key"]}</code> {item["title"]}</li>
@@ -299,6 +316,14 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
   end
 
   defp rec_line(_), do: ""
+
+  # What a person can do to a bay in its state. `code` rows are the host's
+  # code line, not a bay.
+  defp verbs_for(%{name: "code"}), do: []
+  defp verbs_for(%{state: state}) when state in ["running", "investigating", "winding_down", "pausing"], do: ~w(pause kill)
+  defp verbs_for(%{state: state}) when state in ["paused", "escalated", "crashed", "killed"], do: ~w(retry)
+  defp verbs_for(%{state: state}) when state in ["finished", "complete", "failed", "idle"], do: ~w(run)
+  defp verbs_for(_), do: []
 
   @stale_after_seconds 600
 

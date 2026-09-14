@@ -165,7 +165,13 @@ every bay on every host; `holds`, what holds each semaphore and who is
 behind it; `runs`, which runs are alive on every host that answered — a
 host that could not be asked is named as such rather than shown with no
 runs. `wake <project>`, a complete project told it may have work
-again, here and on every peer. `investigate <project> <id>`, the investigator started on
+again, here and on every peer; `hold <project>`, its inverse — the mark
+written and every running bay on it asked to stop at its seam, on every
+host; `run <bay>`, a run started in one bay whatever the mark says;
+`pause <bay>`, its run asked to stop at its seam; `kill <bay>`, its run's
+process tree ended now, shown `killed`, resumed only by `retry`. The
+dashboard offers each of these on the row or line it belongs to, reaching
+the daemon of the host the row belongs to through `Control.on/3`. `investigate <project> <id>`, the investigator started on
 one thing waiting on a person, in a bay of the project with no run live. The pickup is nudged by the host that has just taken new code,
 with `pickup_seconds` (host file; 0 never) as the fallback tick and a
 catch-up when a host joins: fetch `code_branch`, and if

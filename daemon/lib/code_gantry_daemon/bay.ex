@@ -69,6 +69,38 @@ defmodule CodeGantryDaemon.Bay do
     end
   end
 
+  @doc "Ask this bay's run to stop at its next seam, by a person's ask; `:idle` when none is live."
+  def pause(name) do
+    case GenServer.whereis(via(name)) do
+      nil -> :absent
+      pid -> GenServer.call(pid, :pause)
+    end
+  end
+
+  @doc """
+  End this bay's run now: its whole process tree, TERM then KILL. The bay
+  shows `killed` and does not resume on its own; `retry` resumes it, from
+  the checkpoint the run left. `:idle` when none is live.
+  """
+  def kill(name) do
+    case GenServer.whereis(via(name)) do
+      nil -> :absent
+      pid -> GenServer.call(pid, :kill, 30_000)
+    end
+  end
+
+  @doc """
+  Start a run in this bay now, whatever the project's mark says: one bay,
+  by a person's ask, with the mark left for the others. `retry/1` is the
+  ask that also clears the mark.
+  """
+  def run(name) do
+    case GenServer.whereis(via(name)) do
+      nil -> {:error, :no_such_bay}
+      pid -> GenServer.call(pid, :run)
+    end
+  end
+
   @doc """
   Launch again. `{:ok, mode, run_id}` names what was started; a bay with a
   run live refuses with its id, since the run is the thing to talk to.
@@ -124,7 +156,7 @@ defmodule CodeGantryDaemon.Bay do
     # the run this bay started outlives the daemon that started it. Three
     # of four did, and had to be killed by hand.
     Process.flag(:trap_exit, true)
-    state = %{host: host, bay: bay, port: nil, log: nil, run_id: nil, crashes: 0, mode: :run, last: nil, resume_after_pause: false, winding_down: false, investigating: nil, investigations: []}
+    state = %{host: host, bay: bay, port: nil, log: nil, run_id: nil, crashes: 0, mode: :run, last: nil, resume_after_pause: false, winding_down: false, investigating: nil, investigations: [], killed: false}
     Status.put(bay.name, :starting, nil, Host.project_of(host, bay))
     {:ok, state, {:continue, :ensure_checkout}}
   end
@@ -257,6 +289,13 @@ defmodule CodeGantryDaemon.Bay do
         Status.put(bay.name, :paused, state.run_id, Host.project_of(host, bay))
         {:noreply, %{state | last: :paused}}
 
+      other when :erlang.map_get(:killed, state) == true ->
+        # Ended by a person, not by itself: shown as such, resumed only
+        # when asked, from the checkpoint it left.
+        Logger.info("#{bay.name}: run #{state.run_id} killed (exit #{other})")
+        Status.put(bay.name, :killed, state.run_id, Host.project_of(host, bay))
+        {:noreply, %{state | last: :crashed, mode: :resume} |> Map.put(:killed, false)}
+
       other ->
         wait = Enum.at(@backoff_seconds, min(state.crashes, length(@backoff_seconds) - 1))
         Logger.warning("#{bay.name}: run #{state.run_id} died (exit #{other}); resuming in #{wait}s")
@@ -336,6 +375,36 @@ defmodule CodeGantryDaemon.Bay do
 
   # `Map.get` on the investigation fields: a bay process started before
   # they existed holds a state map without them until its next restart.
+  def handle_call(:pause, _from, %{port: port, host: host, bay: bay} = state) when is_port(port) do
+    config = Host.bay_config(host, bay)
+    {out, status} = Command.run(Command.code_gantry(host, ["pause", config, state.run_id, "--note", "asked from the dashboard"]), host.code_gantry, Host.env(host))
+    if status != 0, do: Logger.warning("#{bay.name}: pause exited #{status}: #{String.trim(out)}")
+    Status.put(bay.name, :pausing, state.run_id, Host.project_of(host, bay))
+    {:reply, if(status == 0, do: :pausing, else: {:error, String.trim(out)}), state}
+  end
+
+  def handle_call(:pause, _from, state), do: {:reply, :idle, state}
+
+  def handle_call(:kill, _from, %{port: port, bay: bay} = state) when is_port(port) do
+    Logger.info("#{bay.name}: killing run #{state.run_id} at a person's ask")
+    Command.stop_tree(port, @grace_ms)
+    {:reply, :killed, Map.put(state, :killed, true)}
+  end
+
+  def handle_call(:kill, _from, state), do: {:reply, :idle, state}
+
+  def handle_call(:run, _from, %{port: port} = state) when is_port(port), do: {:reply, {:error, {:running, state.run_id}}, state}
+  def handle_call(:run, _from, %{investigating: %{about: about}} = state), do: {:reply, {:error, {:investigating, about}}, state}
+
+  def handle_call(:run, _from, %{bay: bay} = state) do
+    {mode, run_id} =
+      if state.last in [:escalated, :paused, :crashed] or (state.last == :complete and state.mode == :resume and state.run_id),
+        do: {:resume, state.run_id},
+        else: {:run, new_run_id(bay, state.run_id)}
+
+    {:reply, {:ok, mode, run_id}, %{state | mode: mode, run_id: run_id, crashes: 0, last: :retrying}, {:continue, :launch}}
+  end
+
   def handle_call(:idle_complete?, _from, state),
     do: {:reply, state.port == nil and state.last in [:complete, :finished] and Map.get(state, :investigating) == nil, state}
 

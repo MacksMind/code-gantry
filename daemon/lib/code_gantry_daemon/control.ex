@@ -177,6 +177,76 @@ defmodule CodeGantryDaemon.Control do
     end)
   end
 
+  @doc "Ask one bay's run to stop at its next seam."
+  def pause(name) do
+    case Bay.pause(name) do
+      :pausing -> "#{name}: pausing at its next seam"
+      :idle -> "#{name} has no run live"
+      :absent -> "no bay named #{name}"
+      {:error, why} -> "#{name}: could not pause: #{why}"
+    end
+  end
+
+  @doc "End one bay's run now; `retry` resumes it from where it stopped."
+  def kill(name) do
+    case Bay.kill(name) do
+      :killed -> "#{name}: run killed; retry resumes it"
+      :idle -> "#{name} has no run live"
+      :absent -> "no bay named #{name}"
+    end
+  end
+
+  @doc """
+  A verb spoken to the daemon of `origin`: this one when it is ours,
+  else the peer whose host file names that origin, run there as its own
+  (`Mesh.locally/3`). The dashboard shows every host's bays, so a button
+  on another host's row has to reach that host.
+  """
+  def on(origin, verb, args) do
+    host = Status.host()
+
+    if origin == host.origin do
+      apply(__MODULE__, verb, args)
+    else
+      case Enum.find(Mesh.peers(), fn node -> origin_of(node) == origin end) do
+        nil -> "no daemon answering for #{origin}"
+        node ->
+          case :rpc.call(node, Mesh, :locally, [__MODULE__, verb, args], 60_000) do
+            {:badrpc, why} -> "#{origin} did not answer: #{inspect(why)}"
+            line -> line
+          end
+      end
+    end
+  end
+
+  defp origin_of(node) do
+    case :rpc.call(node, Status, :host, [], 5_000) do
+      %{origin: origin} -> origin
+      _ -> nil
+    end
+  end
+
+  @doc "Start a run in one bay now, whatever its project's mark; the mark stays for the others."
+  def run(name) do
+    case Bay.run(name) do
+      {:ok, mode, run_id} -> "#{name}: #{mode} #{run_id} started"
+      {:error, {:running, run_id}} -> "#{name} is running #{run_id}"
+      {:error, {:investigating, about}} -> "#{name} is investigating #{about}; wait for the card"
+      {:error, :no_such_bay} -> "no bay named #{name}"
+    end
+  end
+
+  @doc """
+  Hold a project: mark it so no daemon starts a run on it, and ask every
+  running bay on it to stop at its seam, here and on every peer. The
+  inverse of `wake/1`; a wind-down a person asked for.
+  """
+  def hold(project, told_peers \\ false) do
+    wind_down(project, "held-by-hand", Status.host().origin)
+    peers = if told_peers, do: 0, else: Mesh.tell_peers(__MODULE__, :hold, [project, true])
+    "#{project}: held; #{peers} peer(s) told"
+  end
+
   def retry(name) do
     case Bay.retry(name) do
       {:ok, :run, nil} -> "#{name}: making the checkout again"
