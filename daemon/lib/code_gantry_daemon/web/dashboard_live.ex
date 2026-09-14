@@ -23,7 +23,7 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
 
     socket =
       socket
-      |> assign(notice: nil, filter: %{"project" => "", "kind" => "", "q" => ""}, latest: Waiting.all(), listing: nil)
+      |> assign(notice: nil, filter: %{"project" => "", "kind" => "", "q" => ""}, latest: Waiting.all(), listing: nil, picked: %{})
       |> stream_configure(:cards, dom_id: &"waiting-#{&1.id}")
       |> read_hosts()
 
@@ -84,11 +84,32 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
   @impl true
   def handle_event("act", %{"action" => action, "config" => config} = params, socket) do
     case Waiting.act(config, action, params) do
-      {:ok, line} when is_binary(line) -> {:noreply, assign(socket, notice: line)}
-      {:ok, _} -> {:noreply, assign(socket, notice: "#{params["about"] || "#{length(params["keys"] || [])} item(s)"}: #{action}")}
+      {:ok, line} when is_binary(line) -> {:noreply, socket |> assign(notice: line) |> unpick(params)}
+      {:ok, _} -> {:noreply, socket |> assign(notice: "#{params["about"] || "#{length(params["keys"] || [])} item(s)"}: #{action}") |> unpick(params)}
       {:error, why} -> {:noreply, assign(socket, notice: why)}
     end
   end
+
+  # What is checked on a drawable list is state here, rendered as
+  # `checked`, because a checkbox's own check is a property of the DOM
+  # that the next reading's repaint of the project line takes away.
+  def handle_event("pick", %{"project" => project} = params, socket),
+    do: {:noreply, update(socket, :picked, &Map.put(&1, project, MapSet.new(params["keys"] || [])))}
+
+  def handle_event("pick_all", %{"project" => project}, socket) do
+    keys = for p <- socket.assigns.projects, p.project == project, item <- Map.get(p, :drawable, []), do: item["key"]
+    {:noreply, update(socket, :picked, &Map.put(&1, project, MapSet.new(keys)))}
+  end
+
+  def handle_event("pick_none", %{"project" => project}, socket),
+    do: {:noreply, update(socket, :picked, &Map.delete(&1, project))}
+
+  defp unpick(socket, %{"keys" => keys, "project" => project}) when is_list(keys),
+    do: update(socket, :picked, &Map.delete(&1, project))
+
+  defp unpick(socket, _), do: socket
+
+  defp picked?(picked, project, key), do: MapSet.member?(Map.get(picked, project, MapSet.new()), key)
 
   def handle_event("filter", params, socket) do
     query = for k <- ~w(project kind q), v = params[k], v not in [nil, ""], do: {k, v}
@@ -194,19 +215,20 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
         <li :for={d <- nxt.drawn}><code>{d["stage_id"]}</code> on <.keys keys={d["keys"]} project={project.project} /> — drawn by {d["by_run"]}: {String.slice(d["fields"]["instruction"] || "", 0, 160)}</li>
         <li :if={nxt.drawn == []} class="empty">nothing drawn and waiting</li>
       </ul>
-      <form :if={@listing == {project.project, "drawable"}} id={"drawable-#{project.project}"} phx-submit="act" class="drawable">
+      <form :if={@listing == {project.project, "drawable"}} id={"drawable-#{project.project}"} phx-submit="act" phx-change="pick" class="drawable">
         <input type="hidden" name="config" value={project.config} />
+        <input type="hidden" name="project" value={project.project} />
         <input type="hidden" name="owner" value="human" />
         <ul class="drawable">
           <li :for={item <- Map.get(project, :drawable, [])}>
-            <input type="checkbox" name="keys[]" value={item["key"]} id={"pick-#{project.project}-#{item["key"]}"} />
+            <input type="checkbox" name="keys[]" value={item["key"]} id={"pick-#{project.project}-#{item["key"]}"} checked={picked?(@picked, project.project, item["key"])} />
             <a href={"/thing?project=#{project.project}&id=#{item["key"]}"}><code>{item["key"]}</code></a> {item["title"]}
           </li>
           <li :if={Map.get(project, :drawable, []) == []} class="empty">nothing the fleet can draw</li>
         </ul>
         <p :if={Map.get(project, :drawable, []) != []} class="bulk">
-          <button type="button" onclick="this.form.querySelectorAll('input[type=checkbox]').forEach(c => c.checked = true)">all</button>
-          <button type="button" onclick="this.form.querySelectorAll('input[type=checkbox]').forEach(c => c.checked = false)">none</button>
+          <button type="button" phx-click="pick_all" phx-value-project={project.project}>all</button>
+          <button type="button" phx-click="pick_none" phx-value-project={project.project}>none</button>
           · the checked items:
           <button type="submit" name="action" value="owner" data-confirm="Make every checked item human-owned, off the fleet's list?">make human-owned</button>
           <span :if={Map.get(project, :projects, []) != []}>

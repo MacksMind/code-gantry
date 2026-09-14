@@ -278,6 +278,30 @@ defmodule CodeGantryDaemon.DashboardTest do
     refute String.replace(calls(root), before, "") =~ ~r/plan edit|ledger move/
   end
 
+  test "what is checked on a drawable list survives the next reading", %{root: root} do
+    {:ok, view, _html} = live(build_conn(), "/")
+    view |> element(~s(button.linkish[phx-value-project=p][phx-value-which=drawable])) |> render_click()
+    html = view |> form("form#drawable-p", %{"keys" => ["p.004"]}) |> render_change()
+    assert html =~ ~r/<input[^>]*value="p.004"[^>]*checked/
+    refute html =~ ~r/<input[^>]*value="p.008"[^>]*checked/
+    # Another reading repaints the project line; the check is state, not a
+    # property the patch can lose.
+    :ok = Waiting.refresh()
+    html = render(view)
+    assert html =~ ~r/<input[^>]*value="p.004"[^>]*checked/
+    refute html =~ ~r/<input[^>]*value="p.008"[^>]*checked/
+    html = view |> element(~s(button[phx-click=pick_all][phx-value-project=p])) |> render_click()
+    assert html =~ ~r/<input[^>]*value="p.004"[^>]*checked/
+    assert html =~ ~r/<input[^>]*value="p.008"[^>]*checked/
+    html = view |> element(~s(button[phx-click=pick_none][phx-value-project=p])) |> render_click()
+    refute html =~ ~r/<input[^>]*value="p.00[48]"[^>]*checked/
+    # An action on the checked set clears it.
+    view |> form("form#drawable-p", %{"keys" => ["p.004"]}) |> render_change()
+    html = view |> form("form#drawable-p", %{"keys" => ["p.004"]}) |> put_submitter("button[name=action][value=owner]") |> render_submit()
+    assert calls(root) =~ ~r/argv: plan edit p.004 --owner human/
+    refute html =~ ~r/<input[^>]*value="p.004"[^>]*checked/
+  end
+
   test "a project shows what a run does before it draws: rework, drawn and waiting, pending", %{root: root} do
     {:ok, view, html} = live(build_conn(), "/")
     assert calls(root) =~ ~r/argv: ledger candidates --json --config \S+docs\/p\/code_gantry.yaml/
