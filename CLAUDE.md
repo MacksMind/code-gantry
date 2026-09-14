@@ -289,11 +289,13 @@ its `.git/info/exclude`. The technical-debt project's ledger is
 `acme_app/technical-debt` in the table; its config names it with
 `ledger.name`, and `remote_landing` is on. **The technical-debt project is
 closed to the fleet (2026-09-13):** its automatable work was the proof of
-concept and is done, every open pipeline-owned item was moved into the
-Rails 5 project under `r5.021` in subsections named for where they came
-from, and anything there that becomes the fleet's is moved the same way
-rather than worked on that branch. Its human-owned items and findings stay
-there for now. The Rails 5 project's ledger is `acme_app/rails-5`,
+concept and is done. Its 36 open pipeline-owned items were moved into the
+Rails 5 project in bulk that evening and 23 moved back the same night,
+because the planners' "nothing drawable" verdict on them lived in
+findings, which a move does not carry, and the Rails 5 fleet drew general
+cleanups as upgrade work. What moves between the two projects, and when,
+is under discussion; until then nothing moves in bulk. Its human-owned
+items and findings stay there. The Rails 5 project's ledger is `acme_app/rails-5`,
 landing through a composing bay; every bay is placed on it. The Rails 5 project still keeps a
 SQLite ledger under its work dir with `remote_landing` off. The Claude Code
 CLI is installed and authenticated on both hosts. No ledger refs exist on
