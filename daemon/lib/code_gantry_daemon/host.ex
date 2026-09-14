@@ -10,7 +10,7 @@ defmodule CodeGantryDaemon.Host do
         primary: "/home/you/projects/myapp",
         config: "docs/technical_debt/code_gantry.yaml",
         branch: "technical-debt",                # optional; what a new bay starts on
-        code_branch: "elixir-daemon",            # optional; what the daemon picks its own code up from (default: the checkout's branch)
+        code_branch: "main",                     # optional; what the daemon picks its own code up from (default: the checkout's branch)
         pickup_seconds: 900,                     # optional; the fallback tick when no nudge came. 0 never ticks
         dashboard_port: 4040,                    # optional; where the dashboard is served on `address`. 0 serves none
         address: "192.0.2.10",                 # optional; how other hosts reach this one (default: the hostname)

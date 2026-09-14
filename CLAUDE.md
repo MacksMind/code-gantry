@@ -271,7 +271,7 @@ SSH is Mac-to-Spark only. `.tool-versions` pins Erlang 27.3.4 and Elixir
 VM and `mix` through it: distributed Erlang connects across a narrow
 version window and the machines' own packages are too far apart to see
 each other at all.
-Both hosts run the daemon from `~/projects/code-gantry` on `elixir-daemon`,
+Both hosts run the daemon from `~/projects/code-gantry` on `main`,
 host file `~/.config/code_gantry/host.exs`, state under
 `~/.local/state/code_gantry/daemon/`. On the Spark the daemon is a user
 systemd unit, `~/.config/systemd/user/code-gantry-daemon.service`,
