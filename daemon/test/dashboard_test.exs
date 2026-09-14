@@ -264,6 +264,8 @@ defmodule CodeGantryDaemon.DashboardTest do
     # The cards and the drawable list link here.
     {:ok, _view, home} = live(build_conn(), "/")
     assert home =~ ~s(<a href="/thing?project=p&amp;id=p.006">p.006</a>)
+    # A finding's keys link to the items it is about.
+    assert home =~ ~s(<a href="/thing?project=p&amp;id=p.004">p.004</a>)
   end
 
   test "before the first reading there is nothing, not an error" do

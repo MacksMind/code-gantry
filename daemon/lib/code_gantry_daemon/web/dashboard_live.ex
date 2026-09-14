@@ -199,7 +199,7 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
     ~H"""
     <div class="card" id={@id}>
       <div class="meta">
-        {@project.project} · <a href={"/thing?project=#{@project.project}&id=#{@w["id"]}"}>{@w["id"]}</a> · {@w["kind"]}<span :if={@w["kind"] == "finding" and @w["keys"] != []}> · on {Enum.join(@w["keys"], ", ")}</span><span :if={@w["subject"]}> · {@w["subject"]}</span><span :if={@w["since"]}> · opened {@w["since"]}</span>
+        {@project.project} · <a href={"/thing?project=#{@project.project}&id=#{@w["id"]}"}>{@w["id"]}</a> · {@w["kind"]}<span :if={@w["kind"] == "finding" and @w["keys"] != []}> · on <span :for={key <- @w["keys"]}><a href={"/thing?project=#{@project.project}&id=#{key}"}>{key}</a> </span></span><span :if={@w["subject"]}> · {@w["subject"]}</span><span :if={@w["since"]}> · opened {@w["since"]}</span>
       </div>
       <div class="title"><strong>{@w["title"]}</strong></div>
       <div :if={@w["text"] != "" and @w["text"] != @w["title"]} class="claim">{@w["text"]}</div>
