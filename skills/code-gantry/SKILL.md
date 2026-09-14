@@ -172,22 +172,26 @@ no bay is placed on, say so in one line, and put it there anyway.
 
 ## When you are done
 
+Nothing. Everything written here reaches the planner at its next
+derivation: an item added, amended, unblocked or handed over is drawable
+the moment it is written, and the planner is sent the plan text and
+everything that changed since together, every call.
+
+Two things happen only when the person asks for them, in as many words:
+
 ```sh
-cg ledger fold                                          # once; a cache matter, see below
+cg ledger fold                                          # only when asked
+~/projects/code-gantry/bin/daemon wake <project>        # only when asked
 ```
 
-**Everything written here reaches the planner at its next derivation, with no
-fold.** An item added, amended, unblocked or handed over is drawable the
-moment it is written; the planner is sent the plan text and everything that
-changed since together, every call. The fold only decides which of the two
-the planner is sent it in: the plan text is the block the model caches for an
-hour, so the fold rewrites it, and doing it once at the end of a session
-rather than after every answer is what keeps that cache warm. **The fleet
-is not started from here.** A project the fleet found complete, or one a
-person held, stays idle until the person says `bin/daemon wake <project>`
-on a host running the daemon. Say that there is new drawable work and
-leave the wake to them: a hold is a person's decision, and a session
-cannot tell a held project from a finished one.
+**A fold rewrites the plan text**, which is the block the model caches for
+an hour, so it is the person's call when to pay that: it moves what has
+landed or been answered since the last fold out of the projection and into
+the plan text, and changes nothing about what is drawable. **The fleet is
+not started from here.** A project the fleet found complete, or one a
+person held, stays idle until the person says `wake`; a hold is a person's
+decision, and a session cannot tell a held project from a finished one.
+When there is new drawable work, say so, and leave both to them.
 
 ## Rules
 
