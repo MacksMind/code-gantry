@@ -716,7 +716,10 @@ hand behaves the same without it. The toolchain is pinned in
 Every standing sentence a model is sent lives in the repository's top-level
 `prompts/` directory as Markdown, one file per block: `prompts/planner/`,
 `prompts/reviewer/`, `prompts/executor/`, and `prompts/shared/` for what more
-than one role carries. Edit them by hand. The code decides which files a
+than one role carries. Edit them by hand. An installed wheel carries a
+copy of the directory inside the package and reads that, so a `pip install`
+with no checkout renders the same files; a checkout reads the top level.
+`CODE_GANTRY_PROMPTS` names another directory over both. The code decides which files a
 call carries and in what order, and fills each file's `$name` placeholders
 with what is generated from config or state — a cap, a list of files, a
 diff. A file may not name a placeholder the code does not supply: the first

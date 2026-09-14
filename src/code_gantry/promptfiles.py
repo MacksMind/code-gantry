@@ -1,5 +1,9 @@
 """The prompts, read from the repository's top-level `prompts/` directory.
 
+A wheel carries a copy of that directory inside the package, so an install
+with no checkout renders the same files; a checkout has no copy and reads
+the top level, which is the one a person edits.
+
 Every sentence a model is sent as standing instruction lives in a Markdown
 file there, one file per block, so it can be edited by hand. The code owns
 what is generated from config or state — lists, counts, names, diffs — and
@@ -19,12 +23,19 @@ from string import Template
 
 PROMPTS_ENV = "CODE_GANTRY_PROMPTS"
 
+# The copy the wheel carries, absent in a checkout.
+PACKAGED = Path(__file__).resolve().parent / "prompts"
+# The repository's own, the one a person edits.
+TOP_LEVEL = Path(__file__).resolve().parents[2] / "prompts"
+
 
 def prompts_dir() -> Path:
     override = os.environ.get(PROMPTS_ENV)
     if override:
         return Path(override)
-    return Path(__file__).resolve().parents[2] / "prompts"
+    if PACKAGED.is_dir():
+        return PACKAGED
+    return TOP_LEVEL
 
 
 def names() -> list[str]:
