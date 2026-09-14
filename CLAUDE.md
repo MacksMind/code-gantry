@@ -319,7 +319,7 @@ with the suite and planner locks, drawn stages, leases; the per-host daemon
 CLI and running on both hosts; the ledger in the table with `ledger
 import` for the old files; preflight pulling the project branch first and
 skipping a tip any origin proved green; the code pickup, proven across hosts; `advance` recording the pushed tip
-green at every landing (5666c5e), so preflight on any host skips a tip
+green at every landing (98948d8), so preflight on any host skips a tip
 another host landed — every landing before it had left the row unwritten;
 `code-gantry hosts` and `events`.
 Next: (5) placements as the daemon's record in place of the host file's
