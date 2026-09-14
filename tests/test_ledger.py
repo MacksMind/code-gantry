@@ -813,6 +813,12 @@ class TestMove:
         assert f.finding_id not in [w.id for w in led.views().waiting()]
         assert opened in [w.id for w in other.views().waiting()]
 
+    def test_a_moved_finding_refuses_an_answer_and_says_where_it_went(self, led, other):
+        f = led.open_finding(keys=[], by="planner", claim="x", needs="human")
+        led.move(f.finding_id, to=other, to_label="repo/debt", from_label="repo/rails-5")
+        with pytest.raises(LedgerError, match="is moved, not open; it went to repo/debt"):
+            led.answer_finding(f.finding_id, disposition="raise", text="y")
+
     def test_an_item_moved_becomes_an_item_there_and_is_struck_here(self, led, other):
         led.upsert_node("k.002", parent=None, position=1, kind="item", title="Delete the columns", body="They are unread.", owner="human")
         opened = led.move("k.002", to=other, to_label="repo/debt", from_label="repo/rails-5", under="q.002")

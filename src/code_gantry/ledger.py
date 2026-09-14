@@ -958,8 +958,15 @@ class Ledger:
     ) -> Event:
         if disposition not in DISPOSITIONS:
             raise LedgerError(f"unknown disposition {disposition!r}")
-        if finding_id not in self.views().findings:
+        finding = self.views().findings.get(finding_id)
+        if finding is None:
             raise LedgerError(f"no finding {finding_id}")
+        if finding.status != "open":
+            # The views ignore an answer on anything but an open finding, so
+            # accepting one here is a write that changes nothing and a person
+            # who believes they answered. A moved finding names where it went.
+            where = f"; it went to {finding.moved_to}" if finding.moved_to else ""
+            raise LedgerError(f"{finding_id} is {finding.status}, not open{where}")
         if disposition != "debt":
             return self.append(
                 FINDING_ANSWERED, actor=actor, finding_id=finding_id,
