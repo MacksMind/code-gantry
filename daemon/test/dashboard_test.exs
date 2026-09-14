@@ -252,6 +252,32 @@ defmodule CodeGantryDaemon.DashboardTest do
     refute html =~ "Add the new route"
   end
 
+  test "a drawable list takes a bulk owner change and a bulk move, each one call", %{root: root, bay: bay} do
+    {:ok, view, _html} = live(build_conn(), "/")
+    html = view |> element(~s(button.linkish[phx-value-project=p][phx-value-which=drawable])) |> render_click()
+    assert html =~ ~s(name="keys[]" value="p.004") and html =~ ~s(name="keys[]" value="p.008")
+
+    view
+    |> form("form#drawable-p", %{"keys" => ["p.004", "p.008"]})
+    |> put_submitter("button[name=action][value=owner]")
+    |> render_submit()
+
+    assert calls(root) =~ ~r/argv: plan edit p.004 p.008 --owner human --config \S+docs\/p\/code_gantry.yaml/
+
+    view
+    |> form("form#drawable-p", %{"keys" => ["p.008"], "to" => "#{bay}/docs/general/code_gantry.yaml|g.002"})
+    |> put_submitter("button[name=action][value=move_to]")
+    |> render_submit()
+
+    assert calls(root) =~ ~r/argv: ledger move p.008 --to \S+docs\/general\/code_gantry.yaml --json --under g.002 --config /
+
+    # Nothing checked is refused on the page, and no call is made.
+    before = calls(root)
+    html = view |> form("form#drawable-p", %{}) |> put_submitter("button[name=action][value=owner]") |> render_submit()
+    assert html =~ "check at least one item"
+    refute String.replace(calls(root), before, "") =~ ~r/plan edit|ledger move/
+  end
+
   test "a project shows what a run does before it draws: rework, drawn and waiting, pending", %{root: root} do
     {:ok, view, html} = live(build_conn(), "/")
     assert calls(root) =~ ~r/argv: ledger candidates --json --config \S+docs\/p\/code_gantry.yaml/

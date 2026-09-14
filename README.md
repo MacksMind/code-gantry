@@ -567,7 +567,7 @@ Operator commands:
 
 - `plan import <paths…> [--follow-links] [--owner human] [--blocking]`,
   `plan export <key>`, `plan show <key>`, `plan add --under <key> --title …`,
-  `plan edit <key> [--owner pipeline]`, `plan retire <key>`.
+  `plan edit <key>… [--owner pipeline]`, `plan retire <key>`.
 - `ledger show [--open|--claimed|--blocked|--landed] [key]`,
   `ledger findings [--for-human]`, `ledger answer <id> fold|discard|debt|raise
   [--text …] [--target …]` — `fold` writes the text into the plan at the next

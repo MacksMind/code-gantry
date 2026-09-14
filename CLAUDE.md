@@ -222,7 +222,9 @@ sends the card's own answer, the thread since, and the hand actions: a
 finding's four dispositions, an item's landing, strike or hand-over to
 the fleet, a question for the next investigation, a move to another
 project of the repository, which are the other `code_gantry.yaml` files
-in the bay's checkout, and `investigate`. Every action but the last is
+in the bay's checkout, and `investigate`. A project's drawable list takes
+the same owner change and move on every checked item, as one `plan edit`
+or one `ledger move` with every key. Every action but the last is
 one CLI call, so a click writes the event the CLI would.
 
 **The investigator** is pass two of a fold by a model with a shell:

@@ -93,10 +93,10 @@ cg ledger answer <id> raise --text "what would settle it, and who decides"
 # an item
 cg ledger land <key> <sha>           # already done in the tree: the commit that did it
 cg ledger strike <key> "why"         # nothing to do: zero population, wrong premise
-cg plan edit <key> --owner pipeline  # the fleet can have it after all
+cg plan edit <key>… --owner pipeline  # the fleet can have it after all; several keys at once
 
 # either
-cg ledger move <id> --to docs/<other project>/code_gantry.yaml [--under <section key there>]
+cg ledger move <id>… --to docs/<other project>/code_gantry.yaml [--under <section key there>]
                                      # belongs to another project; general debt is a project
 cg ledger accept <id>                # apply whatever the card recommends, as the events above
 ```

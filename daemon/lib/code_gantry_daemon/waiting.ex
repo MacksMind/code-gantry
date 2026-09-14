@@ -108,6 +108,7 @@ defmodule CodeGantryDaemon.Waiting do
     # complete may not be any more.
     case {reply, action} do
       {{:ok, _}, "fleet"} -> CodeGantryDaemon.Control.wake(project_of(config))
+      {{:ok, _}, "owner"} -> if params["owner"] == "pipeline", do: CodeGantryDaemon.Control.wake(project_of(config)), else: :ok
       {{:ok, _}, "move"} -> CodeGantryDaemon.Control.wake(project_of(params["to"]))
       {{:ok, _}, "move_to"} -> CodeGantryDaemon.Control.wake(params["to"] |> String.split("|") |> hd() |> project_of())
       {{:ok, %{"disposition" => "pipeline"}}, "accept"} -> CodeGantryDaemon.Control.wake(project_of(config))
@@ -132,12 +133,18 @@ defmodule CodeGantryDaemon.Waiting do
   # The dashboard's move: `to` is `<config>|<section key>`, and a new
   # section's title, when given, is made under that key first and becomes
   # the place the thing goes.
-  defp argv("move_to", %{"about" => id, "to" => to} = p) when is_binary(to) and to != "" do
+  defp argv("move_to", %{"about" => id, "to" => to} = p) when is_binary(to) and to != "",
+    do: argv("move_to", p |> Map.delete("about") |> Map.put("keys", [id]))
+
+  # The same from a drawable list: every checked key in one `ledger move`.
+  defp argv("move_to", %{"keys" => keys, "to" => to} = p) when is_list(keys) and keys != [] and is_binary(to) and to != "" do
     case String.split(to, "|", parts: 2) do
-      [config, under] -> {:ok, {:move_to, config, under, id, p["new_section"]}}
+      [config, under] -> {:ok, {:move_to, config, under, keys, p["new_section"]}}
       _ -> {:error, "move needs a project and a section"}
     end
   end
+
+  defp argv("move_to", %{"keys" => keys}) when keys in [nil, []], do: {:error, "check at least one item"}
 
   defp argv("land", %{"about" => id, "sha" => sha}) when is_binary(sha) and sha != "",
     do: {:ok, ["ledger", "land", id, sha]}
@@ -147,6 +154,14 @@ defmodule CodeGantryDaemon.Waiting do
 
   defp argv("fleet", %{"about" => id}), do: {:ok, ["plan", "edit", id, "--owner", "pipeline"]}
   defp argv("person", %{"about" => id}), do: {:ok, ["plan", "edit", id, "--owner", "human"]}
+
+  # Several items at once, checked on a project's drawable list: one
+  # `plan edit` with every key, since a call per key is a ledger read per
+  # key and the page waits on the whole.
+  defp argv("owner", %{"keys" => keys, "owner" => owner}) when is_list(keys) and keys != [] and owner in ~w(human pipeline),
+    do: {:ok, ["plan", "edit"] ++ keys ++ ["--owner", owner]}
+
+  defp argv("owner", _), do: {:error, "check at least one item"}
 
   # An item's title and body, edited by a person: the body travels in a
   # file the daemon writes, since a body is paragraphs and argv is not.
@@ -160,10 +175,9 @@ defmodule CodeGantryDaemon.Waiting do
 
   defp project_of(config), do: config |> Path.dirname() |> Path.basename()
 
-  defp move_to(host, config, to_config, under, id, new_section) do
-    with {:ok, under} <- section_for(host, to_config, under, new_section),
-         {:ok, moved} <- cli(host, ["ledger", "move", id, "--to", to_config, "--json", "--under", under, "--config", config]) do
-      {:ok, Map.put(moved, "disposition", "move")}
+  defp move_to(host, config, to_config, under, ids, new_section) when is_list(ids) do
+    with {:ok, under} <- section_for(host, to_config, under, new_section) do
+      cli(host, ["ledger", "move"] ++ ids ++ ["--to", to_config, "--json", "--under", under, "--config", config])
     end
   end
 

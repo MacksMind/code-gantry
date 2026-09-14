@@ -224,29 +224,34 @@ def plan_add(parent, title, body_file, kind, owner, blocking, config_path) -> No
 
 
 @plan.command("edit")
-@click.argument("key")
+@click.argument("keys", nargs=-1, required=True)
 @click.option("--title", default=None)
 @click.option("--body-file", type=click.Path(exists=True, path_type=Path), default=None)
 @click.option("--owner", type=click.Choice(["pipeline", "human"]), default=None)
 @click.option("--blocking/--not-blocking", default=None)
 @config_option
-def plan_edit(key, title, body_file, owner, blocking, config_path) -> None:
+def plan_edit(keys, title, body_file, owner, blocking, config_path) -> None:
     """Change a node's title, body, owner or blocking flag. Flipping owner to
-    `pipeline` is what makes a human-answered item drawable."""
+    `pipeline` is what makes a human-answered item drawable. Several keys
+    take the same owner or blocking flag at once; a title or a body is one
+    node's and is refused for more than one."""
+    if len(keys) > 1 and (title is not None or body_file is not None):
+        raise click.ClickException("a title or a body belongs to one node; give one key")
     _, _, led = _cfg_and_ledger(config_path, write=True)
-    node = _key(led, key)
-    try:
-        led.upsert_node(
-            key, parent=node.parent, position=node.position, kind=node.kind,
-            title=title if title is not None else node.title,
-            body=body_file.read_text().strip() if body_file else node.body,
-            owner=owner or node.owner,
-            blocking=node.blocking if blocking is None else blocking,
-            path=node.path, base_version=node.version,
-        )
-    except LedgerError as e:
-        raise click.ClickException(str(e))
-    click.echo(f"{key} v{node.version + 1}")
+    for key in keys:
+        node = _key(led, key)
+        try:
+            led.upsert_node(
+                key, parent=node.parent, position=node.position, kind=node.kind,
+                title=title if title is not None else node.title,
+                body=body_file.read_text().strip() if body_file else node.body,
+                owner=owner or node.owner,
+                blocking=node.blocking if blocking is None else blocking,
+                path=node.path, base_version=node.version,
+            )
+        except LedgerError as e:
+            raise click.ClickException(str(e))
+        click.echo(f"{key} v{node.version + 1}")
 
 
 @plan.command("retire")
@@ -506,27 +511,34 @@ def ledger_ask(about, text, as_json, config_path) -> None:
 
 
 @ledger.command("move")
-@click.argument("about")
+@click.argument("abouts", nargs=-1, required=True)
 @click.option("--to", "to_config", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path), help="The other project's config.")
 @click.option("--under", default=None, help="For an item: the section key in the other project it goes under.")
 @json_option
 @config_option
-def ledger_move(about, to_config, under, as_json, config_path) -> None:
-    """Move a finding or an item to another project: opened there with a
-    pointer back, closed here naming where it went. General debt is a
-    project like any other, so this is how a thing becomes general debt."""
+def ledger_move(abouts, to_config, under, as_json, config_path) -> None:
+    """Move findings or items to another project: each opened there with a
+    pointer back, then closed here naming where it went. General debt is a
+    project like any other, so this is how a thing becomes general debt.
+    Several things move one after another, each its own transaction, so a
+    stop part-way leaves the ones done moved and the rest where they were.
+    `--json` answers a list, one record per thing, in the order given."""
     from_cfg, from_project, led = _cfg_and_ledger(config_path, write=True)
     to_cfg, to_project, to_led = _cfg_and_ledger(to_config, write=True)
     label = lambda cfg, project: cfg.ledger.name or str(project.ledger)  # noqa: E731
-    try:
-        opened = led.move(
-            about, to=to_led, to_label=label(to_cfg, to_project), from_label=label(from_cfg, from_project), under=under,
-        )
-    except LedgerError as e:
-        raise click.ClickException(str(e))
+    moved = []
+    for about in abouts:
+        try:
+            opened = led.move(
+                about, to=to_led, to_label=label(to_cfg, to_project), from_label=label(from_cfg, from_project), under=under,
+            )
+        except LedgerError as e:
+            raise click.ClickException(str(e))
+        moved.append({"from": about, "to": label(to_cfg, to_project), "opened_as": opened})
     if as_json:
-        return _emit_json({"from": about, "to": label(to_cfg, to_project), "opened_as": opened})
-    click.echo(f"{about}: moved to {label(to_cfg, to_project)} as {opened}")
+        return _emit_json(moved)
+    for m in moved:
+        click.echo(f"{m['from']}: moved to {m['to']} as {m['opened_as']}")
 
 
 @ledger.command("investigate")

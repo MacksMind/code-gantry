@@ -85,7 +85,7 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
   def handle_event("act", %{"action" => action, "config" => config} = params, socket) do
     case Waiting.act(config, action, params) do
       {:ok, line} when is_binary(line) -> {:noreply, assign(socket, notice: line)}
-      {:ok, _} -> {:noreply, assign(socket, notice: "#{params["about"]}: #{action}")}
+      {:ok, _} -> {:noreply, assign(socket, notice: "#{params["about"] || "#{length(params["keys"] || [])} item(s)"}: #{action}")}
       {:error, why} -> {:noreply, assign(socket, notice: why)}
     end
   end
@@ -194,10 +194,33 @@ defmodule CodeGantryDaemon.Web.DashboardLive do
         <li :for={d <- nxt.drawn}><code>{d["stage_id"]}</code> on <.keys keys={d["keys"]} project={project.project} /> — drawn by {d["by_run"]}: {String.slice(d["fields"]["instruction"] || "", 0, 160)}</li>
         <li :if={nxt.drawn == []} class="empty">nothing drawn and waiting</li>
       </ul>
-      <ul :if={@listing == {project.project, "drawable"}} class="drawable">
-        <li :for={item <- Map.get(project, :drawable, [])}><a href={"/thing?project=#{project.project}&id=#{item["key"]}"}><code>{item["key"]}</code></a> {item["title"]}</li>
-        <li :if={Map.get(project, :drawable, []) == []} class="empty">nothing the fleet can draw</li>
-      </ul>
+      <form :if={@listing == {project.project, "drawable"}} id={"drawable-#{project.project}"} phx-submit="act" class="drawable">
+        <input type="hidden" name="config" value={project.config} />
+        <input type="hidden" name="owner" value="human" />
+        <ul class="drawable">
+          <li :for={item <- Map.get(project, :drawable, [])}>
+            <input type="checkbox" name="keys[]" value={item["key"]} id={"pick-#{project.project}-#{item["key"]}"} />
+            <a href={"/thing?project=#{project.project}&id=#{item["key"]}"}><code>{item["key"]}</code></a> {item["title"]}
+          </li>
+          <li :if={Map.get(project, :drawable, []) == []} class="empty">nothing the fleet can draw</li>
+        </ul>
+        <p :if={Map.get(project, :drawable, []) != []} class="bulk">
+          <button type="button" onclick="this.form.querySelectorAll('input[type=checkbox]').forEach(c => c.checked = true)">all</button>
+          <button type="button" onclick="this.form.querySelectorAll('input[type=checkbox]').forEach(c => c.checked = false)">none</button>
+          · the checked items:
+          <button type="submit" name="action" value="owner" data-confirm="Make every checked item human-owned, off the fleet's list?">make human-owned</button>
+          <span :if={Map.get(project, :projects, []) != []}>
+            · move under
+            <select name="to">
+              <optgroup :for={p <- project.projects} label={p.project}>
+                <option :for={s <- p.sections} value={"#{p.config}|#{s["key"]}"}>{String.duplicate("\u00a0\u00a0", s["depth"] || 0)}{s["title"]} ({s["key"]})</option>
+              </optgroup>
+            </select>
+            <input type="text" name="new_section" placeholder="or a new section under it, titled…" size="28" />
+            <button type="submit" name="action" value="move_to" data-confirm="Move every checked item there?">move</button>
+          </span>
+        </p>
+      </form>
       <ul :if={@listing == {project.project, "pending"}} class="drawable">
         <li :for={c <- nxt.pending}><code>{c["stage_id"]}</code> on <.keys keys={c["landing"]["keys"] || []} project={project.project} /> — {c["branch"]} {String.slice(c["sha"], 0, 12)}</li>
         <li :if={nxt.pending == []} class="empty">no candidate pending</li>

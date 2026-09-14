@@ -157,6 +157,17 @@ class TestPlanCommands:
         assert run("plan", "retire", "p.009").exit_code == 0
         assert read_ledger(paths.ledger).views().nodes["p.009"].retired
 
+    def test_edit_takes_several_keys_for_an_owner_and_one_for_a_title(self, project):
+        repo, config, paths, sha = project
+        imported(project)
+        result = run("plan", "edit", "p.006", "p.007", "--owner", "human")
+        assert result.exit_code == 0 and "p.006 v2" in result.output and "p.007 v2" in result.output
+        nodes = read_ledger(paths.ledger).views().nodes
+        assert (nodes["p.006"].owner, nodes["p.007"].owner) == ("human", "human")
+        result = run("plan", "edit", "p.006", "p.007", "--title", "One title for two")
+        assert result.exit_code != 0 and "one key" in result.output
+        assert read_ledger(paths.ledger).views().nodes["p.006"].title != "One title for two"
+
     def test_an_unknown_key_is_refused(self, project):
         imported(project)
         for args in (("plan", "show", "p.999"), ("plan", "retire", "p.999"), ("ledger", "claim", "p.999")):
@@ -352,7 +363,7 @@ class TestWhatIsWaitingOnAPerson:
 
         result = run("ledger", "move", f.finding_id, "--to", str(other), "--json")
         assert result.exit_code == 0, result.output
-        moved = json.loads(result.output)
+        (moved,) = json.loads(result.output)
         assert moved["from"] == f.finding_id and moved["opened_as"].startswith("f-")
         assert json.loads(run("ledger", "waiting", "--json", "--config", str(other)).output)[-1]["id"] == moved["opened_as"]
         assert f.finding_id not in run("ledger", "waiting").output
@@ -361,8 +372,24 @@ class TestWhatIsWaitingOnAPerson:
         assert run("ledger", "move", "p.006", "--to", str(other)).exit_code != 0
         result = run("ledger", "move", "p.006", "--to", str(other), "--under", "g.002", "--json")
         assert result.exit_code == 0, result.output
-        assert json.loads(result.output)["opened_as"] == "g.004"
+        (moved,) = json.loads(result.output)
+        assert (moved["from"], moved["opened_as"]) == ("p.006", "g.004")
         assert "g.004" in run("ledger", "show", "--open", "--config", str(other)).output
+
+    def test_several_things_move_in_one_call_in_the_order_given(self, project, tmp_path):
+        import json
+
+        repo, config, paths, sha = project
+        imported(project)
+        other = self._second_project(project, tmp_path)
+        run("plan", "edit", "p.006", "p.007", "--owner", "human")
+        result = run("ledger", "move", "p.006", "p.007", "--to", str(other), "--under", "g.002", "--json")
+        assert result.exit_code == 0, result.output
+        assert [m["from"] for m in json.loads(result.output)] == ["p.006", "p.007"]
+        assert [m["opened_as"] for m in json.loads(result.output)] == ["g.004", "g.005"]
+        shown = run("ledger", "show", "--open", "--config", str(other)).output
+        assert "g.004" in shown and "g.005" in shown
+        assert "p.006" not in run("ledger", "show", "--open").output
         assert "p.006 struck" in run("ledger", "show", "p.006").output
 
 
