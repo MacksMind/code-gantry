@@ -132,8 +132,7 @@ taken as no rows — which is what makes a dead host's holds disappear. **A peer
 that leaves is forgotten** (`Owned.forget/1`, `del_table_copy(:schema,
 node)` on nodedown): a daemon that restarts makes its tables again with
 new identities, and a schema still holding the old ones refuses to merge
-with it — `Bad cookie in table definition` — which left a restarted peer's
-bays invisible for as long as the other host stayed up.
+with it (`Bad cookie in table definition`).
 
 **A hold dissolves the instant its holder dies, which is why holds are
 here and not in the table.** A run connects to a unix socket in the
@@ -234,8 +233,8 @@ preferring one whose last run finished), shows `investigating <id>` on
 the bay's row and puts the row back after, refuses a run in that bay
 meanwhile, and allows six an hour per bay — a model with a shell is not
 something to start in a loop. Started from the dashboard's button or
-`bin/daemon investigate`; nothing sweeps unattended yet, by decision,
-until a dozen real cards have been read. The daemon therefore takes dependencies
+`bin/daemon investigate`; nothing sweeps unattended, by decision, until
+a dozen real cards have been read. The daemon therefore takes dependencies
 — Phoenix, LiveView, Bandit, Jason, Phoenix.PubSub, `lazy_html` for the
 tests — fetched by the pickup when `mix.lock` moves and built by its
 compile; only the daemon's own modules are hot-loaded, the dependencies
@@ -288,14 +287,10 @@ the branch checked out predates that ignore line, so `.code_gantry/` is in
 its `.git/info/exclude`. The technical-debt project's ledger is
 `acme_app/technical-debt` in the table; its config names it with
 `ledger.name`, and `remote_landing` is on. **The technical-debt project is
-closed to the fleet (2026-09-13):** its automatable work was the proof of
-concept and is done. Its 36 open pipeline-owned items were moved into the
-Rails 5 project in bulk that evening and 23 moved back the same night,
-because the planners' "nothing drawable" verdict on them lived in
-findings, which a move does not carry, and the Rails 5 fleet drew general
-cleanups as upgrade work. What moves between the two projects, and when,
-is under discussion; until then nothing moves in bulk. Its human-owned
-items and findings stay there. The Rails 5 project's ledger is `acme_app/rails-5`,
+closed to the fleet.** Nothing moves between the two projects in bulk:
+a planner's "not drawable" verdict lives in findings, which a move does
+not carry, so moved items arrive clean and get drawn. What moves, and
+when, is an open decision. The Rails 5 project's ledger is `acme_app/rails-5`,
 landing through a composing bay; every bay is placed on it. The Rails 5 project still keeps a
 SQLite ledger under its work dir with `remote_landing` off. The Claude Code
 CLI is installed and authenticated on both hosts. No ledger refs exist on
@@ -652,8 +647,7 @@ a person reads; `seq` is what happened.
   finding filed without a key cannot be closed or matched by anything,
   so the subject is the only identity it has. Keys come from the
   planner as `{#p.002}`, the marker as the plan renders it, and
-  `bare_key` takes the key out; every finding one project opened before
-  that was keyless.
+  `bare_key` takes the key out.
   The card is what the buttons answer; a disposition offered without one
   is a person doing the investigation's job. `ledger accept <id>` applies what a
   card recommends as the events the answer would have been — a finding's
@@ -1563,11 +1557,10 @@ with `.code_gantry/` gitignored next to it for everything the run writes.
 where the file was read, the third became somebody's hostname the moment the
 file was tracked. `env_file` names a credentials file, resolved against the
 config's directory, parsed rather than sourced, and **the file wins over the
-shell for the variables it names**, naming what it overrode. It was the
-other way round, so a one-off `export` could override the file; then a
-person's login shell carrying their own AWS key sent the ledger's reads to an
-account with no table, and the session that hit it went looking through
-credentials for why. What the file does not name is still the shell's.
+shell for the variables it names**, naming what it overrode: a person's
+login shell carries their own AWS key, and with the shell winning the
+ledger's reads go to that account. What the file does not name is still
+the shell's.
 
 `executor.py` is only what shapes an attempt before it starts — read budget,
 excerpts, conventions — plus `run_script_stage`.
@@ -1600,12 +1593,11 @@ after an item is handed to the fleet or a thing is moved into a project.
 A session that adds to the plan says `bin/daemon wake <project>`.
 **What a peer asks for runs through `Mesh.locally/3`**: a process an rpc
 starts inherits the caller's group leader and the logger forwards its
-events to that node, so a function a peer asked for logged on the peer —
-read a `daemon.log` line about another host's bays as possibly that
-host's own before this was fixed. **A new remote entry point does not exist on
-the peer until the peer has taken the code that adds it**, so the nudge
-that carries it fails there in silence and that pickup goes by the tick
-or by `bin/daemon pickup` on the peer.
+events to that node, so without it a function a peer asked for logs on
+the peer. **A new remote entry point does not exist on the peer until the
+peer has taken the code that adds it**, so the nudge that carries it fails
+there in silence and that pickup goes by the tick or by `bin/daemon
+pickup` on the peer.
 
 `scripts/smoke.py` stands up one HTTP server for all three roles and no binary
 on `PATH`. A test asserts the old stub executable is gone, because that is the
