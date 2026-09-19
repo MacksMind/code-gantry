@@ -303,13 +303,15 @@ every project's config as `../../.code_gantry/env`; on the Mac's primary
 the branch checked out predates that ignore line, so `.code_gantry/` is in
 its `.git/info/exclude`. The target has two projects, both with their
 ledgers in the table under `ledger.name` and `remote_landing` on: the
-technical-debt project and the Rails 5 project. **The technical-debt
-project is closed to the fleet.** Nothing moves between the two projects
-in bulk: a planner's "not drawable" verdict lives in findings, which a
-move does not carry, so moved items arrive clean and get drawn. What
-moves, and when, is an open decision. The Rails 5 project lands through
-a composing bay; every bay is placed on it. The Claude Code CLI is
-installed and authenticated on both hosts. No ledger refs exist on
+technical-debt project and the Rails 5 project. Nothing moves between the
+two projects in bulk: a planner's "not drawable" verdict lives in
+findings, which a move does not carry, so moved items arrive clean and
+get drawn. What moves, and when, is an open decision. Both projects land
+through a composing bay. Every bay on both hosts is placed on the
+technical-debt project and the project is held, so nothing runs until
+`bin/daemon wake technical_debt`; the Rails 5 project carries its own
+wind-down mark and no bay. The Claude Code CLI is installed and
+authenticated on both hosts. No ledger refs exist on
 GitHub; the old SQLite files are inert copies. In the target: the Spark's
 primary copy holds a stage branch from an attempt on `td.015`, the
 person's to keep or delete, its bay2 holds one from a crashed run, and
