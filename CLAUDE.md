@@ -203,7 +203,13 @@ events to those two ledgers on every change (the CLI is there; the
 daemon does not call it yet); `status` and `events --follow` across
 every host from `bin/daemon`; `pause`, `resume` and `stop` per bay and per
 host; putting down the suite workers a killed run leaves in its container
-(`docker compose exec` survives its client); `ingest`, a finding or an
+(`docker compose exec` survives its client); a `retry` that starts a fresh run when the run it would
+resume left no checkpoint — a kill or a crash in preflight — rather than
+resuming into `no checkpoint` and showing `failed` until asked again;
+a failed preflight check's raw output kept under the work dir the way
+`preflight-suite.log` keeps the suite's, because the check line is
+`truncate_middle`d and a failed image build's error fell in the dropped
+middle; `ingest`, a finding or an
 item handed to a project from a Claude session in the person's primary
 copy — done as the CLI's own verbs, fronted by `skills/code-gantry/SKILL.md`
 here, which a target repository links from `.claude/skills/code-gantry`; a finding or item
