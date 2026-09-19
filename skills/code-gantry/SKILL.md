@@ -124,9 +124,12 @@ cg plan add --under <section key> --title "…" --body-file notes.md
                                      # the decision is new work
 ```
 
-A decision stays in the project it was made in. Which projects have bays
-is the daemon's record and changes without this file knowing; `move` is
-for a thing that belongs to another project, never for reaching a fleet.
+Handing a thing to the fleet is a change of *state*, not of *project*:
+`--owner pipeline` on the item, where it is. A project is the branch the
+work lands on; which projects have bays is the daemon's record and changes
+without this file knowing. `move` changes the project — where the work
+lands — and is for a thing that belongs elsewhere, never for reaching a
+fleet. A decision stays in the project it was made in.
 
 Write facts, never instructions: "the columns are deleted, not landed" is a
 fact the planner draws a stage from; "delete the columns" is an instruction
