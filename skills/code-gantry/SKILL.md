@@ -110,18 +110,23 @@ who decides what; if you cannot name both, it is work rather than a decision
 and goes back to the fleet. Then write their answer as the event it is:
 
 ```sh
-cg ledger unblock <key> "the decision, as a fact the planner can act on"
-                                     # a key held on a question (`cg ledger block <key> "…"` is how one is held)
+cg plan edit <key> --body-file decision.md
+                                     # the decision, as facts on the item's own body;
+                                     # `cg ledger thing <key>` shows the body to carry forward
 cg ledger answer <id> amend --text "the constraint the decision sets" --target <key>
-                                     # the decision changes what an item says
-cg plan edit <key> --owner pipeline  # and now the fleet can do it — but in the
-                                     # technical_debt project, `move` it to the
-                                     # Rails 5 project instead: the fleet works
-                                     # that branch only, and human items stay
+                                     # the decision answers a finding and changes what its item says
+cg ledger unblock <key> "the decision, as a fact the planner can act on"
+                                     # only a key held on a question (`cg ledger block <key> "…"`);
+                                     # on an open key this writes the decision where nothing reads it
+cg plan edit <key> --owner pipeline  # and now the fleet can do it, in this project
 cg ledger strike <key> "decided: not doing it"
 cg plan add --under <section key> --title "…" --body-file notes.md
                                      # the decision is new work
 ```
+
+A decision stays in the project it was made in. Which projects have bays
+is the daemon's record and changes without this file knowing; `move` is
+for a thing that belongs to another project, never for reaching a fleet.
 
 Write facts, never instructions: "the columns are deleted, not landed" is a
 fact the planner draws a stage from; "delete the columns" is an instruction
