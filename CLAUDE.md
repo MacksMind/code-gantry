@@ -279,9 +279,9 @@ host file `~/.config/code_gantry/host.exs`, state under
 systemd unit, `~/.config/systemd/user/code-gantry-daemon.service`,
 enabled with lingering so it starts at boot: `Type=forking` around
 `bin/daemon start|stop` with the pid file, restarted on failure, and a
-`PATH` that names `~/.local/bin` for `mise` and `uv` and `/snap/bin` for
-`bundle`, because a unit inherits no login shell and the preflight's
-checks run host scripts. `systemctl --user restart code-gantry-daemon`
+`PATH` that names `~/.local/bin` for `mise` and `uv` and whatever the
+target's host scripts need, because a unit inherits no login shell and
+the preflight's checks run them. `systemctl --user restart code-gantry-daemon`
 is how the Spark's daemon is restarted now. The Mac has no such unit. The node name is long, built from
 `address:` in the host file, so nothing tracked names a host; the cookie
 is the only credential and both hosts hold the same one. **The dial is
@@ -294,28 +294,16 @@ base name is what keeps a control node from merging Mnesia schemas and
 setting off a pickup on every command a person types. The test is the
 name, not the host file's `peers:`, because a host that names no peers
 still accepts the dial of one that does. Each host holds the target's
-primary copy and two bays; on the Spark the primary copy is handed back
-to the person on the technical-debt project's branch, on the Mac it is
-the person's working tree on another branch and carries no `bin/mk-bay`.
-Credentials are per repository, one file
-at the target's root, `<repo>/.code_gantry/env`, ignored there and named by
-every project's config as `../../.code_gantry/env`; on the Mac's primary
-the branch checked out predates that ignore line, so `.code_gantry/` is in
-its `.git/info/exclude`. The target has two projects, both with their
-ledgers in the table under `ledger.name` and `remote_landing` on: the
-technical-debt project and the Rails 5 project. Nothing moves between the
-two projects in bulk: a planner's "not drawable" verdict lives in
-findings, which a move does not carry, so moved items arrive clean and
-get drawn. What moves, and when, is an open decision. Both projects land
-through a composing bay. Every bay on both hosts is placed on the
-technical-debt project and the project is held, so nothing runs until
-`bin/daemon wake technical_debt`; the Rails 5 project carries its own
-wind-down mark and no bay. The Claude Code CLI is installed and
-authenticated on both hosts. No ledger refs exist on
-GitHub; the old SQLite files are inert copies. In the target: the Spark's
-primary copy holds a stage branch from an attempt on `td.015`, the
-person's to keep or delete, its bay2 holds one from a crashed run, and
-`PORT_REDIS_SESSIONS` is an unused variable in every bay's `.env`.
+primary copy and its bays. Credentials are per repository, one file at
+the target's root, `<repo>/.code_gantry/env`, ignored there and named by
+every project's config as `../../.code_gantry/env`. A planner's "not
+drawable" verdict lives in findings, which a move does not carry, so a
+moved item arrives clean and gets drawn; nothing moves between projects
+in bulk, and what moves, and when, is an open decision. The Claude Code
+CLI is installed and authenticated on both hosts. No ledger refs exist on
+GitHub; the old SQLite files are inert copies. **Which projects the
+target has, where each bay is placed, and what is left in its trees are
+`CLAUDE.local.md`'s, never this file's.**
 
 **Sequence.** Landed: the ledger holds the plan; bays behind one ledger
 with the suite and planner locks, drawn stages, leases; the per-host daemon
@@ -392,15 +380,13 @@ daemon must behave the same.
   host — starting with an AWS test runner before anything else moves.
 - Whether the executor comparison, Flash-Next against Luna, is worth a
   measured run once the Spark is idle, or whether Luna stands.
-- Whether to enable `remote_landing` for the Rails 5 project and move its
-  ledger into the table.
 - The dispositions have not been used on a real finding yet. Decided:
   a card's `would_write` is what `debt` and `fold` carry, general debt is
   a move to that project, and nothing is offered without a card.
-- A `checks` entry in the technical-debt config, backed by a script in the
-  target's `bin/`, failing on a quoted path after an HTTP verb in an added
-  line under `spec/requests/`: `forbidden_patterns` exempts test files by
-  design, and the reviewer reworks that convention by hand.
+- A `checks` entry for a convention the reviewer today reworks by hand:
+  `forbidden_patterns` exempts test files by design, so a convention
+  about test files needs a script in the target's `bin/`. Which
+  convention is in `CLAUDE.local.md`.
 
 **Measured facts worth keeping.** Through OpenRouter, Fable 5.1 on the
 Messages wire drops the schema and refuses tools; on Responses it carries
@@ -408,16 +394,13 @@ both and never caches; on chat completions it carries schema, strict tools,
 effort and a one-hour cache, and it serves the full planner prompt. The
 local Flash-Next executor took about four times Luna's median wall clock
 per attempt on one stage and serves one request at a time, which makes it
-the wrong executor for more than one bay; the technical-debt project runs
-Luna. Two bays on one host share a derivation, hold the suite and planner
-locks on first contention, and a bay takes a drawn stage after waiting on
-the other's derivation. The reviewer reworks the route-helper convention
-by hand; the fix is a mechanical check, listed above. The Mac's full suite
-is 8 minutes on a 14-cpu, 16 GB Docker VM with the machine to itself, 13
-sharing it with one more suite, 25 sharing it with a fourteen-worker one;
-the Spark's is about 13. Selenium's grid drops a session after 300 s idle
-by default; a worker's non-browser stretch under contention outlasts that,
-so the target's compose sets `SE_NODE_SESSION_TIMEOUT: 3600`. Preflight's
+the wrong executor for more than one bay. Two bays on one host share a
+derivation, hold the suite and planner locks on first contention, and a
+bay takes a drawn stage after waiting on the other's derivation. A
+suite's wall clock under contention is a fact about the host and the
+target, kept in `CLAUDE.local.md`; a browser grid's idle timeout is
+shorter than a worker's non-browser stretch under contention, so the
+target's compose has to raise it. Preflight's
 flake adjudication fires and says so on the check line, up to
 `flake_rerun_max_files` files. `preflight-suite.log` under the work dir is
 a failed preflight's raw capture and the only place its `Failures:` blocks
@@ -727,8 +710,8 @@ a person reads; `seq` is what happened.
   `git grep -E` silently matches nothing; `File\.exists?` matches the
   already-converted `File.exist?` because `?` quantifies the `s`. `str.index()`
   on a repeated heading is the same bet with different syntax.
-- **A repeated heading returns the wrong instance.** `parallel_rspec` prints a
-  full report per worker and again as an aggregate; take the last, or anchor
+- **A repeated heading returns the wrong instance.** A parallel runner prints
+  a full report per worker and again as an aggregate; take the last, or anchor
   deliberately.
 - **Cut code with a parser, not a pattern.** `ast.parse` accepts a `return`
   outside a function and `compile` does not, so a bad deletion can pass a syntax
@@ -864,8 +847,8 @@ a person reads; `seq` is what happened.
   4,000-character budget several times over; it is simply at neither end. **A
   weighting cannot reach it; an anchor can** — `^Failures:$` forward, where
   `clip_report_for_model`'s tail weighting does not. The runners
-  differ: `bin/parallel_rspec` buries the report under tens of thousands of
-  characters of teardown, a scoped `bin/rspec` trails about 900.
+  differ: the parallel one buries the report under tens of thousands of
+  characters of teardown, a scoped one trails a few hundred.
 - **A test that forbids a name is not the same as a test that pins a decision.**
   Ban the second application, not the word: assert the constant is spent exactly
   once. Worth a deliberate sweep — parse every module and list names defined in
@@ -936,7 +919,7 @@ a person reads; `seq` is what happened.
   `core.hooksPath` set **globally**, so it is not the target repository's
   property at all.
 - **A ceiling on the model's argument is not a ceiling on the pipeline's
-  call.** `max_values` bounds one `rspec` call of the executor's; the gate's
+  call.** `max_values` bounds one test-runner call of the executor's; the gate's
   scoped run through the same `build_argv` was refused at twelve files. So
   `capped` is a required keyword — each caller says whose call it is — and
   **a gate that cannot be built escalates rather than raises**: the
@@ -1311,9 +1294,10 @@ a person reads; `seq` is what happened.
   terminal. Both are conditions to recheck. A bounded wait is the fallback for
   when you cannot name the ordering.
 - **A check that loads part of a thing has certified part of it.** A declared
-  `bundle_install` proves the app boots in the *test* environment only. Loading the file is
-  the only instrument that separates a gem's metadata from its source, and the
-  group list comes from bundler rather than hand-written.
+  dependency install proves the app boots in the *test* environment only.
+  Loading the file is the only instrument that separates a package's metadata
+  from its source, and the group list comes from the package manager rather
+  than hand-written.
 - **Watch the process, not only its log.** Two watches, never one: liveness on
   the pid, and a narrow filter for rare events. Never mix a per-cycle signal
   into the rare-event filter, and re-read the log after the process exits —
