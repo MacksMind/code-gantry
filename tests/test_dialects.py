@@ -346,6 +346,31 @@ class TestBlocksTheEndpointWillActuallyAccept:
         assert "input_text" not in self._accepted()
         assert "text" in self._accepted()
 
+    def test_responses_translates_the_text_type_and_the_marker(self):
+        """The planner's builders write `text` blocks with `cache_control`,
+        the chat shape, and the first planner call on Responses through the
+        gateway answered 400 `invalid_prompt`: no matching discriminator for
+        the block type. The translation runs both ways."""
+        from code_gantry.dialects import RESPONSES
+
+        conv = [{"role": "user", "content": [
+            {"type": "text", "text": "PLAN", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+            {"type": "text", "text": "CHURN"},
+        ]}]
+        out = RESPONSES.normalise(conv)
+        assert out[0]["content"] == [
+            {"type": "input_text", "text": "PLAN", "prompt_cache_breakpoint": {"mode": "explicit"}},
+            {"type": "input_text", "text": "CHURN"},
+        ]
+
+    def test_responses_leaves_its_own_output_text_alone(self):
+        # A model turn echoed back carries `output_text`; rewriting it to
+        # `input_text` would make the model's own words the user's.
+        from code_gantry.dialects import RESPONSES
+
+        conv = [{"role": "assistant", "content": [{"type": "output_text", "text": "I did"}]}]
+        assert RESPONSES.normalise(conv) == conv
+
     def test_messages_translates_the_text_type(self):
         conv = [{"role": "user", "content": [{"type": "input_text", "text": "GO"}]}]
         out = MESSAGES.normalise(conv)

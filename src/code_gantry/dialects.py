@@ -165,6 +165,11 @@ class Dialect:
     # Responses vocabulary it is built in. False where it *is* that
     # vocabulary, so the common path stays an identity.
     _translates_blocks: bool = False
+    # Text types that are this wire's own and pass through `normalise`
+    # untouched: on Responses a model turn is echoed as `output_text`, and
+    # rewriting that to the input type would make the model's words the
+    # user's. Empty means only `_text_type` is native.
+    _native_text_types: tuple = ()
     # Whether this wire's native effort parameter is one a gateway can
     # route. Responses spells it `reasoning` at the top level, which both
     # OpenAI and OpenRouter take; Messages spells it `output_config`,
@@ -325,6 +330,11 @@ class Dialect:
         into those would break what the dialect already gets right.
         """
         if not isinstance(block, dict) or block.get("type") not in _TEXT_TYPES:
+            return block
+        native = self._native_text_types or (self._text_type,)
+        if block["type"] in native and self._cache_key in block or (
+            block["type"] in native and not any(k in block for k in CACHE_MARKER_FIELDS)
+        ):
             return block
         out = {k: v for k, v in block.items() if k not in CACHE_MARKER_FIELDS}
         out["type"] = self._text_type
@@ -1145,6 +1155,11 @@ RESPONSES = Dialect(
     _cache_marker=lambda _ttl: {"mode": "explicit"},
     _request_cache_options={"prompt_cache_options": {"mode": "explicit"}},
     _cache_key_param="prompt_cache_key",
+    # The planner's builders write the chat shape, `text` with
+    # `cache_control`; the first planner call on this wire was refused for
+    # it. Both directions translate, and the wire's own types pass through.
+    _translates_blocks=True,
+    _native_text_types=("input_text", "output_text"),
     _transport_errors=_responses_transport_errors,
     _turn_end=_responses_turn_end,
     _parsed=_responses_parsed,
