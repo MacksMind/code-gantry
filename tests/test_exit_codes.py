@@ -5,7 +5,9 @@ has its own: a pause and an escalation both stop the run and want opposite
 things afterwards.
 """
 
-from code_gantry.cli import EXIT_ESCALATED, EXIT_FAILED, EXIT_OK, EXIT_PAUSED, _exit_code
+from code_gantry.cli import (
+    EXIT_ESCALATED, EXIT_FAILED, EXIT_NOTHING_TO_RESUME, EXIT_OK, EXIT_PAUSED, _exit_code,
+)
 
 
 def test_each_end_has_its_own_code():
@@ -17,4 +19,4 @@ def test_each_end_has_its_own_code():
 
 
 def test_the_codes_are_distinct_and_documented():
-    assert len({EXIT_OK, EXIT_FAILED, EXIT_ESCALATED, EXIT_PAUSED}) == 4
+    assert len({EXIT_OK, EXIT_FAILED, EXIT_ESCALATED, EXIT_PAUSED, EXIT_NOTHING_TO_RESUME}) == 5

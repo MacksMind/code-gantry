@@ -23,6 +23,7 @@ from test_config import runner_script, as_test_tools
 from code_gantry.config import parse_config
 from code_gantry.flake import FLAKES_FILENAME, recent_flakes
 from code_gantry.preflight import (
+    PREFLIGHT_CHECKS_LOG,
     PREFLIGHT_SUITE_LOG,
     check_executor_endpoint,
     run_preflight,
@@ -1134,3 +1135,60 @@ class TestTwoBaysDoNotProveTheSameTreeTwice:
         assert not marker.exists()
         skipped = next(c for c in out[0] if "full_test_command passes" in c.name)
         assert skipped.ok and "while this host waited" not in skipped.detail
+
+
+class TestAFailedCheckKeepsItsOutput:
+    """A failed `setup_command` or `checks` entry leaves its whole output.
+
+    The check line is `truncate_middle`d to a few thousand characters, and a
+    failed image build's error sat in the dropped middle: the bay log held
+    the Dockerfile echo on both sides and nothing that said why. The suite
+    has `preflight-suite.log` for exactly this; the checks have this.
+    """
+
+    def _cfg(self, repo, *, setup_command="true", checks=()):
+        return parse_config(
+            as_test_tools({
+                "target_repo": str(repo),
+                "base_ref": "main",
+                "project_branch": "proj",
+                "plan_root": "PLAN.md",
+                "full_test_command": "true",
+                "setup_command": setup_command,
+                "stage_defaults": {"checks": list(checks)},
+                "executor": {"model": "m"},
+                "planner": {"model": "claude-opus-5"},
+                "reviewer": {"model": "gpt-5.6-sol"},
+            })
+        )
+
+    def _run(self, repo, project_dir, **cfg):
+        _commit_a_plan(repo)
+        return run_preflight(
+            self._cfg(repo, **cfg), project_dir=project_dir,
+            check_models=False, check_approval=False, check_endpoint=False,
+        )
+
+    # Long enough that the excerpt drops its middle, with the diagnosis there.
+    _noisy = "for i in $(seq 1 400); do echo 'step line padding padding padding'; done; " \
+             "echo 'E: the real reason'; for i in $(seq 1 400); do echo 'teardown line'; done; exit 1"
+
+    def test_a_failed_setup_command_is_kept_whole(self, repo, tmp_path):
+        project_dir = tmp_path / "proj"
+        checks = self._run(repo, project_dir, setup_command=self._noisy)
+        line = next(c for c in checks if c.name == "setup_command succeeds")
+        assert not line.ok and "E: the real reason" not in line.detail, "the excerpt drops the middle"
+        kept = (project_dir / PREFLIGHT_CHECKS_LOG).read_text()
+        assert "setup_command succeeds" in kept and "E: the real reason" in kept
+        assert "exit 1" in kept
+
+    def test_a_failed_declared_check_is_kept_whole(self, repo, tmp_path):
+        project_dir = tmp_path / "proj"
+        self._run(repo, project_dir, checks=[self._noisy])
+        kept = (project_dir / PREFLIGHT_CHECKS_LOG).read_text()
+        assert "check runs:" in kept and "E: the real reason" in kept
+
+    def test_green_checks_write_nothing(self, repo, tmp_path):
+        project_dir = tmp_path / "proj"
+        self._run(repo, project_dir, setup_command="true", checks=["true"])
+        assert not (project_dir / PREFLIGHT_CHECKS_LOG).exists()

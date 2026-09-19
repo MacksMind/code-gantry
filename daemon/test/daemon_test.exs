@@ -702,6 +702,26 @@ defmodule CodeGantryDaemonTest do
       assert first != id
     end
 
+    test "a resume with nothing to resume starts a fresh run", %{root: root, host: host, state: state} do
+      # Killed in preflight, the run left no checkpoint; `retry` resumes it,
+      # the CLI answers 4, and the bay starts a fresh run rather than
+      # showing `failed` until asked a second time.
+      fake = Path.join(root, "fake-cli")
+      File.write!(fake, String.replace(File.read!(fake), "case \"$1\" in pause) exit 0 ;; esac\n", "case \"$1\" in pause) exit 0 ;; resume) exit 4 ;; esac\n"))
+      File.write!(Path.join(root, "hold"), "")
+      {:ok, _} = Bay.start_link({host, hd(host.bays)})
+      wait_for(fn -> status(state) =~ "bay1 running" end)
+      assert Control.kill("bay1") == "bay1: run killed; retry resumes it"
+      wait_for(fn -> status(state) =~ ~r/^bay1 killed/m end)
+      File.rm!(Path.join(root, "hold"))
+      assert {:ok, :resume, id} = Bay.retry("bay1")
+      wait_for(fn -> status(state) =~ ~r/^bay1 finished/m end)
+      # The first `run` may be killed before the fake logs its argv; the
+      # resume and what followed it are the claim.
+      assert [{"resume", ^id}, {"run", fresh}] = Enum.take(launches(root), -2)
+      assert fresh != id
+    end
+
     test "an escalated run told to try again is resumed under its id", %{root: root, host: host, state: state} do
       File.write!(Path.join(root, "exit"), "2")
       {:ok, _} = Bay.start_link({host, hd(host.bays)})

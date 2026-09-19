@@ -203,13 +203,7 @@ events to those two ledgers on every change (the CLI is there; the
 daemon does not call it yet); `status` and `events --follow` across
 every host from `bin/daemon`; `pause`, `resume` and `stop` per bay and per
 host; putting down the suite workers a killed run leaves in its container
-(`docker compose exec` survives its client); a `retry` that starts a fresh run when the run it would
-resume left no checkpoint — a kill or a crash in preflight — rather than
-resuming into `no checkpoint` and showing `failed` until asked again;
-a failed preflight check's raw output kept under the work dir the way
-`preflight-suite.log` keeps the suite's, because the check line is
-`truncate_middle`d and a failed image build's error fell in the dropped
-middle; `ingest`, a finding or an
+(`docker compose exec` survives its client); `ingest`, a finding or an
 item handed to a project from a Claude session in the person's primary
 copy — done as the CLI's own verbs, fronted by `skills/code-gantry/SKILL.md`
 here, which a target repository links from `.claude/skills/code-gantry`; a finding or item
@@ -410,7 +404,9 @@ target's compose has to raise it. Preflight's
 flake adjudication fires and says so on the check line, up to
 `flake_rerun_max_files` files. `preflight-suite.log` under the work dir is
 a failed preflight's raw capture and the only place its `Failures:` blocks
-survive; it is appended across preflights, so anchor to the run.
+survive, and `preflight-checks.log` beside it is the same for a failed
+`setup_command` or `checks` entry, whose check line is clipped in the
+middle; both are appended across preflights, so anchor to the run.
 DynamoDB's `ItemCount` in `describe-table` and the console lags by hours;
 a `Query` is the live count.
 
@@ -1581,7 +1577,9 @@ node and cookie. It carries no ledger state. It drives the CLI
 through `host.command` and never through anything else, so its tests run
 against a fake CLI. The CLI's exit codes are its contract: 0 complete — the planner
 found nothing left to draw, 1 failed before or outside a stage, 2
-escalated, 3 paused; anything else is a crash and is resumed.
+escalated, 3 paused, 4 nothing to resume — a run that died before its
+first checkpoint, answered with a fresh run; anything else is a crash and
+is resumed.
 
 **The wind-down.** A run exiting 0 is the verdict that its project has
 nothing left to draw, and every other bay on that project, here and on

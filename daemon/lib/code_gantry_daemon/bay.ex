@@ -289,6 +289,13 @@ defmodule CodeGantryDaemon.Bay do
         Status.put(bay.name, :paused, state.run_id, Host.project_of(host, bay))
         {:noreply, %{state | last: :paused}}
 
+      4 when state.mode == :resume ->
+        # Nothing to resume: the run died before it wrote a checkpoint, in
+        # preflight. The next step is a fresh run, not a person; shown as
+        # `failed` it waited for two asks.
+        Logger.info("#{bay.name}: run #{state.run_id} left no checkpoint; starting a fresh run")
+        {:noreply, %{state | mode: :run, run_id: new_run_id(bay, state.run_id), crashes: 0, last: :retrying}, {:continue, :launch}}
+
       other when :erlang.map_get(:killed, state) == true ->
         # Ended by a person, not by itself: shown as such, resumed only
         # when asked, from the checkpoint it left.

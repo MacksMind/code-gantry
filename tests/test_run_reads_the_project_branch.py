@@ -172,3 +172,17 @@ def test_without_remote_landing_the_branch_is_this_hosts_own(repo, origin, monke
     assert seen["branch"] == "work"
     assert seen["tip"] != theirs
     assert seen["planner"] == "claude-opus-5"
+
+
+def test_a_resume_with_nothing_to_resume_says_so_with_its_own_code(repo):
+    # A run killed or crashed in preflight left no checkpoint. The daemon
+    # decides what to do next from the exit code alone, and "nothing to
+    # resume" wants a fresh run where "failed" wants a person; they were
+    # one code, and a killed bay showed `failed` until asked twice.
+    from code_gantry.cli import EXIT_NOTHING_TO_RESUME
+
+    result = CliRunner().invoke(
+        cli.main, ["resume", "target/docs/p/code_gantry.yaml", "20260101-000000-bay1"],
+    )
+    assert result.exit_code == EXIT_NOTHING_TO_RESUME, result.output
+    assert "no checkpoint for run 20260101-000000-bay1" in result.output

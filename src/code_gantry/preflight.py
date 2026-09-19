@@ -478,7 +478,7 @@ def _ledger_check(cfg: ProjectConfig, project_dir) -> Check:
     )
 
 
-def _declared_checks(cfg: ProjectConfig, runner: CommandRunner) -> list[Check]:
+def _declared_checks(cfg: ProjectConfig, runner: CommandRunner, project_dir=None) -> list[Check]:
     """Every `stage_defaults.checks` entry, run here rather than by stage 000.
 
     These are operator-declared host commands exactly as `setup_command` is,
@@ -527,6 +527,8 @@ def _declared_checks(cfg: ProjectConfig, runner: CommandRunner) -> list[Check]:
                 "" if result.ok else _excerpt(result.output),
             )
         )
+        if not result.ok:
+            _keep_check_output(project_dir, f"check runs: {label}", command, result)
 
     if was_clean and not git.is_clean():
         dirtied = git.diff_names(git.head_sha())
@@ -556,6 +558,7 @@ def _environment_checks(
         first = runner.run(cfg.setup_command)
         checks.append(Check("setup_command succeeds", first.ok, _excerpt(first.output)))
         if not first.ok:
+            _keep_check_output(project_dir, "setup_command succeeds", cfg.setup_command, first)
             return checks
 
         # It runs at least twice per stage — once before the executor, once
@@ -573,9 +576,10 @@ def _environment_checks(
             )
         )
         if not second.ok:
+            _keep_check_output(project_dir, "setup_command is idempotent", cfg.setup_command, second)
             return checks
 
-    checks.extend(_declared_checks(cfg, runner))
+    checks.extend(_declared_checks(cfg, runner, project_dir))
     if any(c.blocking for c in checks):
         # Said out loud rather than quietly omitted, for the reason the
         # top-level skip is: a check that renders as nothing is
@@ -734,6 +738,25 @@ def _environment_checks(
 
 
 PREFLIGHT_SUITE_LOG = "preflight-suite.log"
+PREFLIGHT_CHECKS_LOG = "preflight-checks.log"
+
+
+def _keep_check_output(project_dir, label: str, command: str, result: CommandResult) -> None:
+    """Append a failed check's whole output, the way the suite's is kept.
+
+    The check line carries `_excerpt`, which drops the middle, and a failed
+    image build's error is in the middle: the bay log held the Dockerfile
+    echoed on both sides of it and nothing that said why. Only a failure is
+    written, so a green preflight never grows this file, and nothing is
+    written without a project dir to write under.
+    """
+    if project_dir is None:
+        return
+    root = Path(_project_root(project_dir))
+    root.mkdir(parents=True, exist_ok=True)
+    when = datetime.now().astimezone().isoformat(timespec="seconds")
+    with (root / PREFLIGHT_CHECKS_LOG).open("a") as fh:
+        fh.write(f"\n=== {when} {label} ===\n$ {command}\n  exit {result.exit_code}\n{result.output}")
 
 
 def _keep_suite_output(

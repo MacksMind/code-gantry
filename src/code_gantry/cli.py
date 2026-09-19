@@ -64,6 +64,7 @@ EXIT_OK = 0          # the plan is complete
 EXIT_FAILED = 1      # stopped before or outside a stage: preflight, config, no plan
 EXIT_ESCALATED = 2   # a stage stopped for a person
 EXIT_PAUSED = 3      # the operator asked it to stop between stages
+EXIT_NOTHING_TO_RESUME = 4  # `resume` found no checkpoint: a fresh run is the next step, not a person
 
 
 @click.group()
@@ -665,8 +666,11 @@ def resume(config_path: Path | None, run_id: str | None, reset_progress_budget: 
         click.echo(f"cannot resume {run_id}: {exc}", err=True)
         sys.exit(EXIT_FAILED)
     if saved is None:
+        # A run that died in preflight never wrote one. Its own code, because
+        # the daemon reads nothing else: a resume with nothing to resume wants
+        # a fresh run, where a failure wants a person.
         click.echo(f"no checkpoint for run {run_id}", err=True)
-        sys.exit(EXIT_FAILED)
+        sys.exit(EXIT_NOTHING_TO_RESUME)
 
     # A run reads one config for its whole life. If the file has moved on,
     # this is not the run that config describes — the stages already landed
