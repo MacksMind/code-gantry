@@ -24,13 +24,14 @@ def _git(repo, *args):
     subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
 
 
-def _config(planner_model):
+def _config(planner_model, remote_landing=False):
     return (
         f"""
 base_ref: main
 project_branch: work
 plan_root: PLAN.md
 full_test_command: "true"
+remote_landing: {str(remote_landing).lower()}
 """
         + SCOPED_TOOL_YAML
         + f"""
@@ -102,3 +103,72 @@ def test_a_dirty_checkout_is_left_for_preflight_to_report(repo, monkeypatch):
     monkeypatch.setattr(cli, "run_preflight", boom)
     CliRunner().invoke(cli.main, ["run", "target/docs/p/code_gantry.yaml"], catch_exceptions=True)
     assert seen["branch"] == "other"
+
+
+@pytest.fixture
+def origin(repo, tmp_path):
+    """A bare origin whose `work` carries a newer config than the checkout's
+    own `work`: another host landed a field change the run must honour."""
+    bare = tmp_path / "origin.git"
+    _git(tmp_path, "init", "-q", "--bare", str(bare))
+    _git(repo, "remote", "add", "origin", str(bare))
+    _git(repo, "push", "-q", "origin", "main", "work")
+    other = tmp_path / "other"
+    _git(tmp_path, "clone", "-q", "-b", "work", str(bare), str(other))
+    _git(other, "config", "user.email", "o@example.com")
+    _git(other, "config", "user.name", "O")
+    _git(other, "config", "commit.gpgsign", "false")
+    return bare, other
+
+
+def _other_lands(other, planner_model, remote_landing):
+    (other / "docs" / "p" / "code_gantry.yaml").write_text(_config(planner_model, remote_landing))
+    _git(other, "commit", "-q", "-am", "the planner changes")
+    _git(other, "push", "-q", "origin", "work")
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=other, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+
+def _reach_preflight(repo, monkeypatch, seen):
+    def boom(cfg, **kwargs):
+        seen["branch"] = _current_branch(repo)
+        seen["tip"] = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        seen["planner"] = cfg.planner.model
+        raise RuntimeError("preflight reached")
+
+    monkeypatch.setattr(cli, "run_preflight", boom)
+    result = CliRunner().invoke(
+        cli.main, ["run", "target/docs/p/code_gantry.yaml"], catch_exceptions=True,
+    )
+    assert isinstance(result.exception, RuntimeError), result.output
+
+
+def test_under_remote_landing_the_config_read_is_origins_copy(repo, origin, monkeypatch):
+    # Three bays behind origin each read the config their own `work` held,
+    # then preflight pulled the branch under them: the run planned with the
+    # old models while its checkpoint named the new blob. The pull comes
+    # before the read.
+    _git(repo, "checkout", "-q", "work")
+    (repo / "docs" / "p" / "code_gantry.yaml").write_text(_config("claude-opus-5", remote_landing=True))
+    _git(repo, "commit", "-q", "-am", "remote landing on")
+    _git(repo, "push", "-q", "origin", "work")
+    _git(repo, "checkout", "-q", "other")
+    bare, other = origin
+    _git(other, "pull", "-q", "--rebase", "origin", "work")
+    theirs = _other_lands(other, "claude-fable-5-1", remote_landing=True)
+    seen = {}
+    _reach_preflight(repo, monkeypatch, seen)
+    assert seen == {"branch": "work", "tip": theirs, "planner": "claude-fable-5-1"}
+
+
+def test_without_remote_landing_the_branch_is_this_hosts_own(repo, origin, monkeypatch):
+    bare, other = origin
+    theirs = _other_lands(other, "claude-fable-5-1", remote_landing=False)
+    seen = {}
+    _reach_preflight(repo, monkeypatch, seen)
+    assert seen["branch"] == "work"
+    assert seen["tip"] != theirs
+    assert seen["planner"] == "claude-opus-5"

@@ -109,17 +109,22 @@ def _project_for(config_path: Path, *, quiet: bool = False) -> tuple[ProjectConf
 
 
 def _from_project_branch(config_path: Path) -> tuple[ProjectConfig, ProjectPaths]:
-    """The config as the project branch holds it, with the checkout on that branch.
+    """The config as the project branch holds it at origin, with the checkout there.
 
     A bay is a checkout, and a placement can hand it a project whose branch
     is not the one checked out. The one fact the config on any branch can
     be trusted for is which branch the project lives on, so that is read
-    first; the checkout is put there; and the config is read again from
-    it, because the copy preflight proves must be the copy the run is
-    judged by. A tree with changes in it is left where it is — preflight
-    refuses it and names the changes, which is what a person needs to see.
+    first; the checkout is put there; under `remote_landing` the branch is
+    brought to origin's tip; and the config is read again from it, because
+    the copy preflight proves must be the copy the run is judged by. The
+    pull is here and not only in preflight because preflight runs after
+    this read: a bay behind origin once planned and reviewed on the models
+    its own copy named while the pull moved the branch under it, and the
+    checkpoint then recorded the blob it was not running. A tree with
+    changes in it is left where it is, and a pull that fails is left for
+    preflight, which asks the same thing and names what went wrong.
     """
-    cfg, project = _project_for(config_path)
+    cfg, project = _project_for(config_path, quiet=True)
     git = Git(cfg.target_repo)
     if (
         git.branch_exists(cfg.project_branch)
@@ -127,8 +132,13 @@ def _from_project_branch(config_path: Path) -> tuple[ProjectConfig, ProjectPaths
         and git.is_clean()
     ):
         git.checkout(cfg.project_branch)
-        cfg, project = _project_for(config_path)
-    return cfg, project
+        cfg, project = _project_for(config_path, quiet=True)
+    if cfg.remote_landing and git.current_branch() == cfg.project_branch and git.is_clean():
+        try:
+            git.sync_branch(cfg.project_branch)
+        except GitError:
+            pass
+    return _project_for(config_path)
 
 
 def _apply_env_file(cfg: ProjectConfig, config_path: Path, *, quiet: bool = False) -> None:
