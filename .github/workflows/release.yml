@@ -1,0 +1,43 @@
+# Publishes to PyPI through a Trusted Publisher: PyPI trusts this workflow's
+# OIDC identity, so no token is stored anywhere. A tag `vX.Y.Z` releases the
+# version pyproject.toml declares, and refuses when the two disagree, because
+# a version uploaded once can never be uploaded again.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Tag names the declared version
+        run: |
+          declared=$(uv version --short)
+          test "${GITHUB_REF_NAME}" = "v${declared}" || {
+            echo "tag ${GITHUB_REF_NAME} does not match pyproject version ${declared}"
+            exit 1
+          }
+      - run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/code-gantry
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
